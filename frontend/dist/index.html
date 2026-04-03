@@ -313,8 +313,8 @@
             <!-- Input Area -->
             <div class="input-container">
               <div
-                id="recovery-banner-host"
-                class="recovery-banner-host"
+                id="recovery-approval-host"
+                class="recovery-approval-host"
                 style="display: none"
               ></div>
               <form id="chat-form">
@@ -331,15 +331,24 @@
                     class="prompt-mention-menu"
                     hidden
                   ></div>
-                  <div
-                    id="main-context-indicator"
-                    class="context-indicator"
-                    data-state="idle"
-                    title="Latest provider context usage"
-                    data-i18n-title="composer.context_title"
+                  <button
+                    type="button"
+                    id="resume-run-btn"
+                    class="composer-resume-btn"
+                    title="Resume run"
+                    data-i18n-title="recovery.action.resume_run"
+                    style="display: none"
                   >
-                    -- / --
-                  </div>
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path
+                        d="M8 6.5v11l9-5.5-9-5.5Z"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                    <span data-i18n="recovery.action.resume_run">Resume Run</span>
+                  </button>
                   <button
                     type="submit"
                     id="send-btn"
@@ -503,14 +512,25 @@
                     </span>
                   </span>
                 </label>
-                <div
-                  id="session-token-usage"
-                  class="session-token-usage"
-                  title="Session token usage"
-                  data-i18n-title="composer.tokens_title"
-                  data-i18n="composer.tokens"
-                >
-                  Tokens --
+                <div class="composer-usage-strip">
+                  <div
+                    id="main-context-indicator"
+                    class="context-indicator composer-context-indicator composer-usage-pill"
+                    data-state="idle"
+                    title="Prompt / context window"
+                    data-i18n-title="context_indicator.latest_title"
+                  >
+                    -- / --
+                  </div>
+                  <div
+                    id="session-token-usage"
+                    class="session-token-usage composer-usage-pill"
+                    title="Session token usage"
+                    data-i18n-title="composer.tokens_title"
+                    data-i18n="composer.tokens"
+                  >
+                    ↑ -- ↓ --
+                  </div>
                 </div>
               </div>
             </div>

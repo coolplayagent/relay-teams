@@ -89,8 +89,14 @@ function renderUsage(usage) {
     if (!target) return;
     target.dataset.state = 'ready';
     target.innerHTML = `
-        <span class="session-token-usage-label">${t('token_usage.label')}</span>
-        <span class="session-token-usage-value">${formatCompact(usage.total_input_tokens)} / ${formatCompact(usage.total_output_tokens)}</span>
+        <span class="session-token-usage-pair">
+            <span class="session-token-usage-arrow session-token-usage-arrow-up" aria-hidden="true">↑</span>
+            <span class="session-token-usage-value">${formatCompact(usage.total_input_tokens)}</span>
+        </span>
+        <span class="session-token-usage-pair">
+            <span class="session-token-usage-arrow session-token-usage-arrow-down" aria-hidden="true">↓</span>
+            <span class="session-token-usage-value">${formatCompact(usage.total_output_tokens)}</span>
+        </span>
     `;
     target.title = buildDetailTitle(usage);
 }

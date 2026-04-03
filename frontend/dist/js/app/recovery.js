@@ -2,12 +2,11 @@
  * app/recovery.js
  * Session recovery snapshot loading, banner rendering, and explicit resume actions.
  */
-import { focusSubagent, refreshSubagentRail } from '../components/subagentRail.js';
+import { refreshSubagentRail } from '../components/subagentRail.js';
 import { refreshVisibleContextIndicators } from '../components/contextIndicators.js';
 import {
     loadSessionRounds,
     overlayRoundRecoveryState,
-    selectRound,
 } from '../components/rounds.js';
 import { scheduleSessionsRefresh } from '../components/sidebar.js';
 import {
@@ -929,28 +928,16 @@ function isLocallyStreaming(runId) {
 
 function renderRecoveryBanner() {
     renderBackgroundTaskPanel();
-    const host = ensureRecoveryBannerHost();
-    if (!host) return;
-
     const snapshot = state.currentRecoverySnapshot;
     const activeRun = getActiveRecoveryRun();
     const pausedSubagent = state.pausedSubagent || snapshot?.pausedSubagent || null;
     const approvals = snapshot?.pendingToolApprovals || [];
-    const hideBanner = (
-        !activeRun
-        || (
-            approvals.length === 0
-            && !pausedSubagent
-            && activeRun.status !== 'stopping'
-            && activeRun.phase !== 'stopping'
-            && (
-                isLocallyStreaming(activeRun.run_id)
-                || !activeRun.should_show_recover
-            )
-        )
-    );
+    const approvalsHost = ensureRecoveryApprovalHost();
+    const resumeBtn = ensureResumeRunButton();
+    const showResumeAction = shouldShowResumeAction(activeRun, approvals, pausedSubagent);
+    const showApprovals = approvals.length > 0;
     const nextSignature = recoveryBannerSignature({
-        hideBanner,
+        showResumeAction,
         activeRun,
         approvals,
         backgroundTasks: [],
@@ -961,85 +948,46 @@ function renderRecoveryBanner() {
     }
     recoveryBannerRenderSignature = nextSignature;
 
-    if (hideBanner) {
-        host.style.display = 'none';
-        host.innerHTML = '';
-        syncRecoveryRailMode({
-            approvals: [],
-            pausedSubagent: null,
-        });
-        return;
+    if (approvalsHost) {
+        if (showApprovals && activeRun?.run_id) {
+            approvalsHost.style.display = 'flex';
+            approvalsHost.innerHTML = renderApprovalList(activeRun, approvals);
+            approvalsHost.querySelectorAll('[data-approval-action]').forEach(button => {
+                const toolCallId = String(button.dataset.toolCallId || '');
+                const action = String(button.dataset.approvalAction || '');
+                if (!toolCallId || !action) return;
+                const approval = approvals.find(item => item.tool_call_id === toolCallId);
+                if (!approval) return;
+                button.onclick = () => {
+                    void handleApprovalAction(activeRun.run_id, approval, action);
+                };
+            });
+        } else {
+            approvalsHost.style.display = 'none';
+            approvalsHost.innerHTML = '';
+        }
     }
 
-    const footerActions = getFooterActions(activeRun, approvals, pausedSubagent);
-    const hasBody = approvals.length > 0 || !!pausedSubagent;
-    const pillTone = stateTone(activeRun);
-    host.style.display = 'block';
-    host.innerHTML = `
-        <div class="recovery-banner recovery-tone-${pillTone}">
-            <div class="recovery-banner-copy">
-                <div class="recovery-banner-label">${t('recovery.banner_label')}</div>
-                <div class="recovery-banner-title">
-                    <span>Run ${shortRunId(activeRun.run_id)}</span>
-                    <span class="recovery-status-pill recovery-status-${pillTone}">
-                        ${stateLabel(activeRun)}
-                    </span>
-                </div>
-                <div class="recovery-banner-text">${describeRecoveryState(activeRun, approvals, pausedSubagent)}</div>
-            </div>
-            ${hasBody
-        ? `<div class="recovery-banner-body">
-                    ${approvals.length > 0 ? renderApprovalList(activeRun, approvals) : ''}
-                    ${pausedSubagent ? renderPausedSubagentCallout(pausedSubagent) : ''}
-                </div>`
-        : ''
+    if (resumeBtn) {
+        if (showResumeAction && activeRun?.run_id) {
+            resumeBtn.style.display = 'inline-flex';
+            resumeBtn.disabled = recoveryActionBusy;
+            resumeBtn.onclick = () => {
+                void handleRecoveryAction(
+                    { action: 'resume-run' },
+                    activeRun,
+                    null,
+                );
+            };
+        } else {
+            resumeBtn.style.display = 'none';
+            resumeBtn.disabled = false;
+            resumeBtn.onclick = null;
+        }
     }
-            ${footerActions.length > 0
-        ? `<div class="recovery-banner-actions">
-                    ${footerActions
-            .map(action => `
-                            <button
-                                type="button"
-                                class="${action.kind === 'primary' ? 'primary-btn' : 'secondary-btn'} recovery-action-btn"
-                                data-recovery-action="${action.action}"
-                                ${recoveryActionBusy ? 'disabled' : ''}
-                            >
-                                ${action.label}
-                            </button>
-                        `)
-            .join('')}
-                </div>`
-        : ''
-    }
-        </div>
-    `;
-
-    host.querySelectorAll('[data-recovery-action]').forEach(button => {
-        const action = footerActions.find(item => item.action === button.dataset.recoveryAction);
-        if (!action) return;
-        button.onclick = () => {
-            void handleRecoveryAction(action, activeRun, pausedSubagent);
-        };
-    });
-
-    host.querySelectorAll('[data-approval-action]').forEach(button => {
-        const toolCallId = String(button.dataset.toolCallId || '');
-        const action = String(button.dataset.approvalAction || '');
-        if (!toolCallId || !action) return;
-        const approval = approvals.find(item => item.tool_call_id === toolCallId);
-        if (!approval) return;
-        button.onclick = () => {
-            void handleApprovalAction(activeRun.run_id, approval, action);
-        };
-    });
-
-    syncRecoveryRailMode({
-        approvals,
-        pausedSubagent,
-    });
 }
 
-function recoveryBannerSignature({ hideBanner, activeRun, approvals, backgroundTasks, pausedSubagent }) {
+function recoveryBannerSignature({ showResumeAction, activeRun, approvals, backgroundTasks, pausedSubagent }) {
     const busyIds = Array.from(approvalActionBusyIds).sort();
     const errorEntries = Array.from(approvalActionErrors.entries())
         .map(([toolCallId, message]) => [String(toolCallId), String(message || '')])
@@ -1049,7 +997,7 @@ function recoveryBannerSignature({ hideBanner, activeRun, approvals, backgroundT
         .map(([backgroundTaskId, message]) => [String(backgroundTaskId), String(message || '')])
         .sort((left, right) => left[0].localeCompare(right[0]));
     return JSON.stringify({
-        hidden: !!hideBanner,
+        showResumeAction: !!showResumeAction,
         activeRun: signatureActiveRun(activeRun),
         approvals: Array.isArray(approvals) ? approvals.map(signatureApproval) : [],
         backgroundTasks: Array.isArray(backgroundTasks)
@@ -1067,17 +1015,25 @@ function recoveryBannerSignature({ hideBanner, activeRun, approvals, backgroundT
     });
 }
 
-function ensureRecoveryBannerHost() {
-    if (els.recoveryBannerHost) return els.recoveryBannerHost;
+function ensureRecoveryApprovalHost() {
+    if (els.recoveryApprovalHost) return els.recoveryApprovalHost;
     const inputContainer = document.querySelector('.input-container');
     if (!inputContainer) return null;
     const host = document.createElement('div');
-    host.id = 'recovery-banner-host';
-    host.className = 'recovery-banner-host';
+    host.id = 'recovery-approval-host';
+    host.className = 'recovery-approval-host';
     host.style.display = 'none';
     inputContainer.insertBefore(host, inputContainer.firstChild);
-    els.recoveryBannerHost = host;
+    els.recoveryApprovalHost = host;
     return host;
+}
+
+function ensureResumeRunButton() {
+    if (els.resumeRunBtn) return els.resumeRunBtn;
+    const button = document.getElementById('resume-run-btn');
+    if (!button) return null;
+    els.resumeRunBtn = button;
+    return button;
 }
 
 function ensureBackgroundTaskHost() {
@@ -1094,50 +1050,18 @@ function ensureBackgroundTaskHost() {
     return host;
 }
 
-function syncRecoveryRailMode({ approvals = [], pausedSubagent = null } = {}) {
-    const rightRail = els.rightRail || document.getElementById('right-rail');
-    if (!rightRail) return;
-    const hasPendingApprovals = Array.isArray(approvals) && approvals.length > 0;
-    const hasPausedSubagent = !!pausedSubagent;
-
-    rightRail.classList.toggle('right-rail-recovery-priority', hasPendingApprovals);
-    rightRail.classList.toggle(
-        'right-rail-followup-priority',
-        !hasPendingApprovals && hasPausedSubagent,
-    );
-}
-
-function getFooterActions(activeRun, approvals, pausedSubagent) {
-    const actions = [];
-    if (!activeRun?.is_recoverable) return actions;
-    if (isLocallyStreaming(activeRun.run_id)) return actions;
-    if (
+function shouldShowResumeAction(activeRun, approvals, pausedSubagent) {
+    if (!activeRun?.is_recoverable) return false;
+    if (!activeRun?.run_id || isLocallyStreaming(activeRun.run_id)) return false;
+    if (Array.isArray(approvals) && approvals.length > 0) return false;
+    if (pausedSubagent) return false;
+    if (activeRun.status === 'stopping' || activeRun.phase === 'stopping') return false;
+    return (
         activeRun.status === 'stopped'
         || activeRun.phase === 'stopped'
         || activeRun.status === 'paused'
         || activeRun.phase === 'awaiting_recovery'
-    ) {
-        actions.push({
-            action: 'resume-run',
-            label: t('recovery.action.resume_run'),
-            kind: 'primary',
-        });
-    }
-    if (pausedSubagent?.instanceId) {
-        actions.push({
-            action: 'open-subagent',
-            label: t('recovery.action.open_subagent'),
-            kind: 'secondary',
-        });
-    }
-    if (approvals.length > 0) {
-        actions.push({
-            action: 'review-round',
-            label: t('recovery.action.view_round'),
-            kind: 'secondary',
-        });
-    }
-    return actions;
+    );
 }
 
 async function handleRecoveryAction(actionDef, activeRun, pausedSubagent) {
@@ -1148,22 +1072,6 @@ async function handleRecoveryAction(actionDef, activeRun, pausedSubagent) {
             reason: `recovery ${activeRun.status || activeRun.phase || 'resume'}`,
         });
         return;
-    }
-    if (actionDef.action === 'review-round') {
-        if (snapshotRoundFor(activeRun.run_id)) {
-            selectRound(snapshotRoundFor(activeRun.run_id));
-        } else {
-            document
-                .querySelector(`.session-round-section[data-run-id="${activeRun.run_id}"]`)
-                ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-        return;
-    }
-    if (actionDef.action === 'open-subagent' && pausedSubagent?.instanceId) {
-        focusSubagent(
-            pausedSubagent.instanceId,
-            pausedSubagent.roleId || pausedSubagent.instanceId,
-        );
     }
 }
 
@@ -1310,31 +1218,6 @@ function snapshotRoundFor(runId) {
     return null;
 }
 
-function describeRecoveryState(activeRun, approvals, pausedSubagent) {
-    if (pausedSubagent) {
-        return formatMessage('recovery.paused_state', {
-            actor: pausedSubagent.roleId || pausedSubagent.instanceId,
-        });
-    }
-    if (activeRun.status === 'stopping' || activeRun.phase === 'stopping') {
-        return t('recovery.stop_requested');
-    }
-    if (approvals.length > 0) {
-        return approvals.length === 1
-            ? t('recovery.waiting_approval_one')
-            : formatMessage('recovery.waiting_approval_many', { count: approvals.length });
-    }
-    if (activeRun.status === 'running' || activeRun.status === 'queued') {
-        return isLocallyStreaming(activeRun.run_id)
-            ? t('recovery.following_live_stream')
-            : t('recovery.recoverable_run_active');
-    }
-    if (activeRun.status === 'stopped') {
-        return t('recovery.execution_stopped');
-    }
-    return t('recovery.recoverable_run_available');
-}
-
 function renderBackgroundTaskPanel() {
     const host = ensureBackgroundTaskHost();
     if (!host) return;
@@ -1385,64 +1268,6 @@ function renderBackgroundTaskPanel() {
 
 function describeBackgroundTaskPanel(backgroundTasks) {
     return `${backgroundTasks.length} active`;
-}
-
-function stateLabel(activeRun) {
-    if (!activeRun) return t('recovery.state.unknown');
-    switch (activeRun.phase) {
-        case 'awaiting_tool_approval':
-            return t('recovery.state.awaiting_approval');
-        case 'awaiting_subagent_followup':
-            return t('recovery.state.awaiting_followup');
-        case 'running':
-            return t('recovery.state.running');
-        case 'stopping':
-            return t('recovery.state.stopping');
-        case 'stopped':
-            return t('recovery.state.stopped');
-        case 'queued':
-            return t('recovery.state.queued');
-        default:
-            break;
-    }
-    switch (activeRun.status) {
-        case 'running':
-            return t('recovery.state.running');
-        case 'stopping':
-            return t('recovery.state.stopping');
-        case 'paused':
-            return t('recovery.state.paused');
-        case 'stopped':
-            return t('recovery.state.stopped');
-        case 'queued':
-            return t('recovery.state.queued');
-        case 'completed':
-            return t('recovery.state.completed');
-        case 'failed':
-            return t('recovery.state.failed');
-        default:
-            return t('recovery.state.recoverable');
-    }
-}
-
-function stateTone(activeRun) {
-    if (!activeRun) return 'idle';
-    if (activeRun.phase === 'awaiting_tool_approval') return 'warning';
-    if (activeRun.phase === 'awaiting_subagent_followup') return 'warning';
-    switch (activeRun.status) {
-        case 'running':
-            return 'running';
-        case 'stopping':
-            return 'warning';
-        case 'stopped':
-            return 'stopped';
-        case 'failed':
-            return 'danger';
-        case 'completed':
-            return 'success';
-        default:
-            return 'idle';
-    }
 }
 
 function shortRunId(runId) {
@@ -1544,7 +1369,6 @@ function renderApprovalItem(activeRun, approval) {
     const toolCallId = String(approval?.tool_call_id || '');
     const busy = approvalActionBusyIds.has(toolCallId);
     const error = approvalActionErrors.get(toolCallId) || '';
-    const statusClass = error ? 'is-error' : busy ? 'is-busy' : '';
     const statusText = error || (busy ? t('recovery.applying') : '');
     const actor = humanizeRoleLabel(approval?.role_id || approval?.instance_id || 'Agent');
     const title = approvalTitle(approval);
@@ -1556,50 +1380,37 @@ function renderApprovalItem(activeRun, approval) {
     ].filter(Boolean).join(' · ');
 
     return `
-        <section class="recovery-approval-item">
+        <section class="recovery-approval-card">
             <div class="recovery-approval-copy">
+                <div class="recovery-approval-eyebrow">${escapeHtml(t('stream.approval_required'))}</div>
                 <div class="recovery-approval-title">${escapeHtml(title)}</div>
-                <div class="recovery-approval-text">${escapeHtml(subtitle)}</div>
+                ${subtitle ? `<div class="recovery-approval-meta">${escapeHtml(subtitle)}</div>` : ''}
             </div>
             <div class="recovery-approval-actions">
+                <button
+                    type="button"
+                    class="recovery-approval-action recovery-approval-action-approve"
+                    data-approval-action="approve"
+                    data-tool-call-id="${escapeAttribute(toolCallId)}"
+                    ${busy || recoveryActionBusy ? 'disabled' : ''}
+                >
+                    ${escapeHtml(t('recovery.approve'))}
+                </button>
+                <button
+                    type="button"
+                    class="recovery-approval-action recovery-approval-action-deny"
+                    data-approval-action="deny"
+                    data-tool-call-id="${escapeAttribute(toolCallId)}"
+                    ${busy || recoveryActionBusy ? 'disabled' : ''}
+                >
+                    ${escapeHtml(t('recovery.deny'))}
+                </button>
                 ${statusText
-        ? `<span class="recovery-approval-status ${statusClass}">${escapeHtml(statusText)}</span>`
-        : '<span class="recovery-approval-status"></span>'
+        ? `<span class="recovery-approval-status ${error ? 'is-error' : ''}">${escapeHtml(statusText)}</span>`
+        : ''
     }
-                <div class="recovery-approval-buttons">
-                    <button
-                        type="button"
-                        class="recovery-choice-btn recovery-choice-approve"
-                        data-approval-action="approve"
-                        data-tool-call-id="${escapeAttribute(toolCallId)}"
-                        ${busy || recoveryActionBusy ? 'disabled' : ''}
-                    >
-                        ${escapeHtml(t('recovery.approve'))}
-                    </button>
-                    <button
-                        type="button"
-                        class="recovery-choice-btn recovery-choice-deny"
-                        data-approval-action="deny"
-                        data-tool-call-id="${escapeAttribute(toolCallId)}"
-                        ${busy || recoveryActionBusy ? 'disabled' : ''}
-                    >
-                        ${escapeHtml(t('recovery.deny'))}
-                    </button>
-                </div>
             </div>
         </section>
-    `;
-}
-
-function renderPausedSubagentCallout(pausedSubagent) {
-    const actor = pausedSubagent.roleId || pausedSubagent.instanceId;
-    return `
-        <div class="recovery-subagent-callout">
-            <div class="recovery-subagent-copy">
-                <div class="recovery-subagent-title">${escapeHtml(actor || t('recovery.paused_subagent'))}</div>
-                <div class="recovery-subagent-text">${escapeHtml(t('recovery.waiting_followup_paused_subagent'))}</div>
-            </div>
-        </div>
     `;
 }
 

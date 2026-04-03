@@ -47,6 +47,12 @@ def test_streaming_messages_render_a_terminal_cursor_until_finalize() -> None:
     assert "const STREAMING_CURSOR_CLASS = 'streaming-cursor';" in helper_block_script
     assert "export function syncStreamingCursor(textEl, active)" in helper_block_script
     assert "function resolveStreamingCursorHost(root)" in helper_block_script
+    assert "const terminalSelector = [" in helper_block_script
+    assert "'pre code'," in helper_block_script
+    assert "'blockquote > :last-child'," in helper_block_script
+    assert "'li:last-child'," in helper_block_script
+    assert "function findLastRenderableElement(root)" in helper_block_script
+    assert "function hasRenderableTerminalContent(node)" in helper_block_script
     assert "updateMessageText," in helper_facade_script
     assert "syncStreamingCursor," in helper_facade_script
     assert (

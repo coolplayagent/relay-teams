@@ -23,6 +23,11 @@ import {
     updateSession,
 } from '../core/api.js';
 import { state } from '../core/state.js';
+import { detachActiveStreamForSessionSwitch } from '../core/stream.js';
+import { clearSessionRecovery, stopSessionContinuity } from '../app/recovery.js';
+import { clearAllStreamState } from './messageRenderer.js';
+import { clearAllPanels } from './agentPanel.js';
+import { clearContextIndicators } from './contextIndicators.js';
 import { formatMessage, t } from '../utils/i18n.js';
 import { hideProjectView, openAutomationProjectView, openWorkspaceProjectView } from './projectView.js';
 
@@ -42,6 +47,24 @@ let languageRefreshBound = false;
 
 export function setSelectSessionHandler(handler) {
     selectSessionHandler = handler;
+}
+
+function clearActiveSessionView() {
+    const sessionId = state.currentSessionId;
+    if (state.activeEventSource) {
+        detachActiveStreamForSessionSwitch({ focusPrompt: false });
+    }
+    if (sessionId) {
+        stopSessionContinuity(sessionId);
+    }
+    state.currentSessionId = null;
+    clearSessionRecovery();
+    clearAllPanels();
+    clearContextIndicators();
+    clearAllStreamState();
+    if (els.chatMessages) {
+        els.chatMessages.innerHTML = '';
+    }
 }
 
 function escapeHtml(value) {
@@ -646,6 +669,9 @@ function bindProjectCard(card, group) {
             });
             if (!shouldDelete) return;
             await deleteSession(sessionId);
+            if (state.currentSessionId === sessionId) {
+                clearActiveSessionView();
+            }
             await loadProjects();
         });
     });
@@ -894,6 +920,9 @@ export async function handleRemoveWorkspaceClick(workspace) {
     try {
         const sessions = await fetchSessions();
         const workspaceSessions = Array.isArray(sessions) ? sessions.filter(session => String(session?.workspace_id || '') === workspaceId) : [];
+        const shouldClearView = workspaceSessions.some(
+            session => session.session_id === state.currentSessionId,
+        );
         for (const session of workspaceSessions) {
             await deleteSession(session.session_id);
         }
@@ -902,6 +931,7 @@ export async function handleRemoveWorkspaceClick(workspace) {
         expandedProjectSessionIds.delete(groupKey('workspace', workspaceId));
         initializedProjectIds.delete(groupKey('workspace', workspaceId));
         openProjectMenuId = null;
+        if (shouldClearView) clearActiveSessionView();
         if (state.currentProjectViewWorkspaceId === workspaceId) hideProjectView();
         if (state.currentWorkspaceId === workspaceId) state.currentWorkspaceId = null;
         await loadProjects();

@@ -10,7 +10,7 @@ export const roundsState = {
     activeVisibility: 0,
     pendingScrollTargetRunId: null,
     pendingScrollUnlockAt: 0,
-    pageSize: 8,
+    pageSize: 3,
     paging: {
         hasMore: false,
         nextCursor: null,
