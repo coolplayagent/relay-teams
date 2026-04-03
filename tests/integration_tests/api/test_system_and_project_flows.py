@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from agent_teams.env.web_config_models import DEFAULT_SEARXNG_INSTANCE_SEEDS
 
 from integration_tests.support.api_helpers import stream_run_until_terminal
 
@@ -49,6 +50,7 @@ def test_system_config_roundtrips_and_prompt_preview(
         "exa_api_key": exa_web_api_key,
         "fallback_provider": "searxng",
         "searxng_instance_url": "https://search.example.test/",
+        "searxng_instance_seeds": list(DEFAULT_SEARXNG_INSTANCE_SEEDS),
     }
 
     github_token = f"ghp_{uuid4().hex[:12]}"

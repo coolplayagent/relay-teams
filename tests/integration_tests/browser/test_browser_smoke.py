@@ -12,7 +12,10 @@ from typing import cast
 from uuid import uuid4
 
 import httpx
-from agent_teams.env.web_config_models import DEFAULT_SEARXNG_INSTANCE_URL
+from agent_teams.env.web_config_models import (
+    DEFAULT_SEARXNG_INSTANCE_SEEDS,
+    DEFAULT_SEARXNG_INSTANCE_URL,
+)
 from agent_teams.gateway.acp_stdio import AcpGatewayServer, _AcpRequestContext
 from agent_teams.gateway.gateway_cli import _build_acp_stdio_runtime
 from pydantic import JsonValue
@@ -36,11 +39,6 @@ _LANG_PATTERN = re.compile(r"^(en|en-US|zh-CN)$")
 _VIEWPORT_WIDTH = 1600
 _VIEWPORT_HEIGHT = 1200
 _WAIT_TIMEOUT_MS = 30_000
-_BUILTIN_SEARXNG_INSTANCE_URLS = [
-    DEFAULT_SEARXNG_INSTANCE_URL,
-    "https://search.seddens.net/",
-    "https://search.wdpserver.com/",
-]
 
 
 @pytest.fixture()
@@ -1563,12 +1561,9 @@ def _open_web_settings_panel(
 
 
 def _assert_builtin_searxng_instances(page: Page) -> None:
-    assert (
-        _locator_texts(
-            page.locator("#web-searxng-builtins-list .trigger-readonly-value")
-        )
-        == _BUILTIN_SEARXNG_INSTANCE_URLS
-    )
+    assert _locator_texts(
+        page.locator("#web-searxng-builtins-list .trigger-readonly-value")
+    ) == list(DEFAULT_SEARXNG_INSTANCE_SEEDS)
 
 
 def _create_session_via_sidebar(page: Page) -> str:

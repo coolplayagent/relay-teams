@@ -4,9 +4,20 @@ from __future__ import annotations
 from enum import Enum
 
 import httpx
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
-DEFAULT_SEARXNG_INSTANCE_URL = "https://search.mdosch.de/"
+DEFAULT_SEARXNG_INSTANCE_SEEDS = (
+    "https://search.mdosch.de/",
+    "https://search.seddens.net/",
+    "https://search.wdpserver.com/",
+)
+DEFAULT_SEARXNG_INSTANCE_URL = DEFAULT_SEARXNG_INSTANCE_SEEDS[0]
 
 
 class WebProvider(str, Enum):
@@ -26,6 +37,11 @@ class WebConfig(BaseModel):
     exa_api_key: str | None = None
     fallback_provider: WebFallbackProvider | None = None
     searxng_instance_url: str | None = None
+
+    @computed_field(return_type=tuple[str, ...])
+    @property
+    def searxng_instance_seeds(self) -> tuple[str, ...]:
+        return DEFAULT_SEARXNG_INSTANCE_SEEDS
 
     @field_validator("provider")
     @classmethod

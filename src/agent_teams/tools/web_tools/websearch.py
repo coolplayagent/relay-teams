@@ -20,6 +20,7 @@ from pydantic import (
 from pydantic_ai import Agent
 
 from agent_teams.env.web_config_models import (
+    DEFAULT_SEARXNG_INSTANCE_SEEDS,
     DEFAULT_SEARXNG_INSTANCE_URL,
     WebConfig,
     WebFallbackProvider,
@@ -45,11 +46,6 @@ SEARXNG_PUBLIC_INSTANCES_URL = "https://searx.space/data/instances.json"
 SEARXNG_INSTANCE_CACHE_TTL_SECONDS = 24 * 60 * 60
 SEARXNG_INSTANCE_COOLDOWN_SECONDS = 30 * 60
 SEARXNG_PUBLIC_INSTANCE_LIMIT = 10
-DEFAULT_SEARXNG_INSTANCE_SEEDS = (
-    DEFAULT_SEARXNG_INSTANCE_URL,
-    "https://search.seddens.net/",
-    "https://search.wdpserver.com/",
-)
 DEFAULT_NUM_RESULTS = 8
 DEFAULT_EXA_SEARCH_TYPE = "auto"
 DEFAULT_TIMEOUT_SECONDS = 25.0

@@ -8,7 +8,10 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from agent_teams.env.web_config_models import DEFAULT_SEARXNG_INSTANCE_URL
+from agent_teams.env.web_config_models import (
+    DEFAULT_SEARXNG_INSTANCE_SEEDS,
+    DEFAULT_SEARXNG_INSTANCE_URL,
+)
 
 
 def test_web_settings_panel_saves_exa_key_and_fallback_settings(
@@ -68,9 +71,12 @@ console.log(JSON.stringify({
     assert payload["defaultInstanceValue"] == DEFAULT_SEARXNG_INSTANCE_URL
     assert payload["revealedDisplay"] == "grid"
     assert payload["builtinsDisplay"] == "grid"
-    assert "https://search.mdosch.de/" in str(payload["builtinsHtml"])
-    assert "https://search.seddens.net/" in str(payload["builtinsHtml"])
-    assert "https://search.wdpserver.com/" in str(payload["builtinsHtml"])
+    builtins_html = str(payload["builtinsHtml"])
+    assert builtins_html.count("trigger-readonly-value-mono") == len(
+        DEFAULT_SEARXNG_INSTANCE_SEEDS
+    )
+    for instance_url in DEFAULT_SEARXNG_INSTANCE_SEEDS:
+        assert instance_url in builtins_html
     assert payload["savePayload"] == {
         "provider": "exa",
         "exa_api_key": "draft-exa-key",
@@ -283,7 +289,8 @@ console.log(JSON.stringify({
     assert payload["hiddenDisabled"] is True
     assert payload["hiddenValue"] == DEFAULT_SEARXNG_INSTANCE_URL
     assert payload["hiddenBuiltinsDisplay"] == "none"
-    assert "https://search.mdosch.de/" in str(payload["hiddenBuiltinsHtml"])
+    for instance_url in DEFAULT_SEARXNG_INSTANCE_SEEDS:
+        assert instance_url in str(payload["hiddenBuiltinsHtml"])
     assert payload["revealedDisplay"] == "grid"
     assert payload["revealedDisabled"] is False
     assert payload["revealedValue"] == DEFAULT_SEARXNG_INSTANCE_URL
@@ -313,12 +320,15 @@ def _run_web_settings_script(
     mock_logger_path = tmp_path / "mockLogger.mjs"
     module_under_test_path = tmp_path / "webSettings.mjs"
     runner_path = tmp_path / "runner.mjs"
-    fetch_web_config = fetch_config or {
+    fetch_web_config = {
         "provider": "exa",
         "exa_api_key": None,
         "fallback_provider": "searxng",
         "searxng_instance_url": None,
+        "searxng_instance_seeds": list(DEFAULT_SEARXNG_INSTANCE_SEEDS),
     }
+    if fetch_config is not None:
+        fetch_web_config.update(fetch_config)
     fetch_web_config_json = json.dumps(fetch_web_config)
 
     mock_api_path.write_text(
@@ -331,7 +341,10 @@ export async function fetchWebConfig() {
 
 export async function saveWebConfig(payload) {
     globalThis.__saveWebPayload = payload;
-    currentConfig = payload;
+    currentConfig = {
+        ...payload,
+        searxng_instance_seeds: currentConfig.searxng_instance_seeds || [],
+    };
     return { status: "ok" };
 }
 """.replace("__FETCH_WEB_CONFIG__", fetch_web_config_json).strip(),
@@ -354,6 +367,7 @@ const translations = {
     "settings.web.save_failed": "Save Failed",
     "settings.web.api_key_placeholder": "Optional for higher rate limits",
     "settings.web.exa_api_key": "Exa API Key",
+    "settings.web.searxng_instance_url_placeholder": "Default: {default}",
     "settings.model.show_api_key": "Show API key",
     "settings.model.hide_api_key": "Hide API key",
 };

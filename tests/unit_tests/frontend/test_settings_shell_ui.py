@@ -309,9 +309,7 @@ console.log(JSON.stringify({
     assert 'id="web-searxng-instance-url-field"' in modal_html
     assert 'id="web-searxng-builtins-field"' in modal_html
     assert 'id="web-searxng-builtins-list"' in modal_html
-    assert "https://search.mdosch.de/" in modal_html
-    assert "https://search.seddens.net/" in modal_html
-    assert "https://search.wdpserver.com/" in modal_html
+    assert 'placeholder="默认值：{default}"' in modal_html
     assert modal_html.count('<option value="searxng">SearXNG</option>') == 1
     assert modal_html.count('<option value="disabled">Disabled</option>') == 1
     assert 'id="edit-profile-name-btn"' not in modal_html

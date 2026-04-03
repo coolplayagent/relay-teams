@@ -18,6 +18,7 @@ from agent_teams.env.github_config_models import GitHubConfig
 from agent_teams.env.github_connectivity import GitHubConnectivityProbeRequest
 from agent_teams.env.github_connectivity import GitHubConnectivityProbeResult
 from agent_teams.env.web_config_models import (
+    DEFAULT_SEARXNG_INSTANCE_SEEDS,
     DEFAULT_SEARXNG_INSTANCE_URL,
     WebConfig,
     WebFallbackProvider,
@@ -176,7 +177,10 @@ class _FakeSystemService:
         return self.external_agents[agent_id]
 
     def save_web_config(self, config: WebConfig) -> None:
-        self.saved_web_config = config.model_dump(mode="json")
+        self.saved_web_config = config.model_dump(
+            mode="json",
+            exclude={"searxng_instance_seeds"},
+        )
 
     def get_github_config(self) -> GitHubConfig:
         return GitHubConfig(token=None)
@@ -673,6 +677,7 @@ def test_get_web_config() -> None:
         "exa_api_key": None,
         "fallback_provider": "searxng",
         "searxng_instance_url": DEFAULT_SEARXNG_INSTANCE_URL,
+        "searxng_instance_seeds": list(DEFAULT_SEARXNG_INSTANCE_SEEDS),
     }
 
 

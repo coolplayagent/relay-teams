@@ -784,15 +784,11 @@ function createModal() {
                                             </div>
                                             <div class="form-group proxy-inline-field" id="web-searxng-instance-url-field" style="display:none;">
                                                 <label for="web-searxng-instance-url" data-i18n="settings.web.searxng_instance_url">SearXNG 实例 URL</label>
-                                                <input type="text" id="web-searxng-instance-url" placeholder="默认值： https://search.mdosch.de/" data-i18n-placeholder="settings.web.searxng_instance_url_placeholder" autocomplete="off">
+                                                <input type="text" id="web-searxng-instance-url" placeholder="默认值：{default}" data-i18n-placeholder="settings.web.searxng_instance_url_placeholder" autocomplete="off">
                                             </div>
                                             <div class="form-group proxy-inline-field" id="web-searxng-builtins-field" style="display:none;">
                                                 <span class="web-searxng-builtins-label" data-i18n="settings.web.searxng_builtin_instances">内置实例</span>
-                                                <div class="web-searxng-builtins-list" id="web-searxng-builtins-list">
-                                                    <div class="trigger-readonly-value trigger-readonly-value-mono">https://search.mdosch.de/</div>
-                                                    <div class="trigger-readonly-value trigger-readonly-value-mono">https://search.seddens.net/</div>
-                                                    <div class="trigger-readonly-value trigger-readonly-value-mono">https://search.wdpserver.com/</div>
-                                                </div>
+                                                <div class="web-searxng-builtins-list" id="web-searxng-builtins-list"></div>
                                             </div>
                                         </div>
                                         <div class="form-group proxy-inline-field web-provider-inline-field">

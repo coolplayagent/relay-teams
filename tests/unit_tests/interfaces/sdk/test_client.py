@@ -102,6 +102,11 @@ def test_get_web_config_calls_expected_endpoint(monkeypatch) -> None:
             "exa_api_key": None,
             "fallback_provider": "searxng",
             "searxng_instance_url": "https://search.mdosch.de/",
+            "searxng_instance_seeds": [
+                "https://search.mdosch.de/",
+                "https://search.seddens.net/",
+                "https://search.wdpserver.com/",
+            ],
         }
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
@@ -113,6 +118,11 @@ def test_get_web_config_calls_expected_endpoint(monkeypatch) -> None:
         "exa_api_key": None,
         "fallback_provider": "searxng",
         "searxng_instance_url": "https://search.mdosch.de/",
+        "searxng_instance_seeds": [
+            "https://search.mdosch.de/",
+            "https://search.seddens.net/",
+            "https://search.wdpserver.com/",
+        ],
     }
     assert captured == {
         "method": "GET",
