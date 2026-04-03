@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from agent_teams.env.web_config_models import DEFAULT_SEARXNG_INSTANCE_SEEDS
 
 from integration_tests.support.api_helpers import stream_run_until_terminal
 
@@ -32,12 +33,12 @@ def test_system_config_roundtrips_and_prompt_preview(
     assert notifications_payload["run_stopped"]["enabled"] is True
     assert notifications_payload["run_stopped"]["channels"] == ["browser"]
 
-    web_api_key = f"web-{uuid4().hex[:8]}"
+    exa_web_api_key = f"web-exa-{uuid4().hex[:8]}"
     web_response = api_client.put(
         "/api/system/configs/web",
         json={
             "provider": "exa",
-            "api_key": web_api_key,
+            "exa_api_key": exa_web_api_key,
             "fallback_provider": "searxng",
             "searxng_instance_url": "https://search.example.test/",
         },
@@ -46,9 +47,10 @@ def test_system_config_roundtrips_and_prompt_preview(
     web_payload = api_client.get("/api/system/configs/web").json()
     assert web_payload == {
         "provider": "exa",
-        "api_key": web_api_key,
+        "exa_api_key": exa_web_api_key,
         "fallback_provider": "searxng",
         "searxng_instance_url": "https://search.example.test/",
+        "searxng_instance_seeds": list(DEFAULT_SEARXNG_INSTANCE_SEEDS),
     }
 
     github_token = f"ghp_{uuid4().hex[:12]}"

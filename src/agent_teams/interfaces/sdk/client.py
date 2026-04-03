@@ -110,13 +110,13 @@ class AgentTeamsClient:
         self,
         *,
         provider: str = "exa",
-        api_key: str | None = None,
-        fallback_provider: str | None = None,
+        exa_api_key: str | None = None,
+        fallback_provider: str | None = "searxng",
         searxng_instance_url: str | None = None,
     ) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {
             "provider": provider,
-            "api_key": api_key,
+            "exa_api_key": exa_api_key,
             "fallback_provider": fallback_provider,
             "searxng_instance_url": searxng_instance_url,
         }

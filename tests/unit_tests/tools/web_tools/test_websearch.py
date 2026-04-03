@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from agent_teams.env.web_config_models import (
+    DEFAULT_SEARXNG_INSTANCE_URL,
     WebConfig,
     WebFallbackProvider,
     WebProvider,
@@ -55,7 +56,7 @@ def test_build_exa_search_request_uses_advanced_tool_defaults() -> None:
 
 def test_build_provider_search_request_uses_exa_provider_adapter() -> None:
     prepared = websearch.build_provider_search_request(
-        config=WebConfig(provider=WebProvider.EXA, api_key="secret"),
+        config=WebConfig(provider=WebProvider.EXA, exa_api_key="secret"),
         request=websearch.WebSearchRequest(
             query="latest ai news",
             allowed_domains=("https://docs.python.org/3/",),
@@ -258,6 +259,58 @@ def test_select_public_searxng_instances_filters_and_sorts_candidates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_searxng_instance_candidates_prefers_default_then_public_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_fetch_public_candidates(
+        *,
+        client: httpx.AsyncClient,
+    ) -> tuple[websearch.SearxngInstanceCandidate, ...]:
+        _ = client
+        return (
+            websearch.SearxngInstanceCandidate(
+                base_url=DEFAULT_SEARXNG_INSTANCE_URL,
+                endpoint_host="search.mdosch.de",
+                source="public_pool",
+            ),
+            websearch.SearxngInstanceCandidate(
+                base_url="https://fallback.example/",
+                endpoint_host="fallback.example",
+                source="public_pool",
+            ),
+        )
+
+    monkeypatch.setattr(
+        websearch,
+        "fetch_public_searxng_instance_candidates",
+        _fake_fetch_public_candidates,
+    )
+
+    client = httpx.AsyncClient(trust_env=False)
+    try:
+        candidates = await websearch.resolve_searxng_instance_candidates(
+            client=client,
+            config=WebConfig(),
+        )
+    finally:
+        await client.aclose()
+
+    assert candidates[0] == websearch.SearxngInstanceCandidate(
+        base_url=DEFAULT_SEARXNG_INSTANCE_URL,
+        endpoint_host="search.mdosch.de",
+        source="default",
+    )
+    assert candidates[1] == websearch.SearxngInstanceCandidate(
+        base_url="https://fallback.example/",
+        endpoint_host="fallback.example",
+        source="public_pool",
+    )
+    assert [candidate.base_url for candidate in candidates].count(
+        DEFAULT_SEARXNG_INSTANCE_URL
+    ) == 1
+
+
+@pytest.mark.asyncio
 async def test_fetch_exa_search_response_classifies_http_errors() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, request=request, text="boom")
@@ -288,7 +341,7 @@ async def test_fetch_exa_search_response_classifies_http_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execute_search_falls_back_to_searxng_after_exa_failure() -> None:
+async def test_execute_search_falls_back_to_searxng_after_exa_rate_limit() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
         if "mcp.exa.ai" in str(request.url):
             return httpx.Response(429, request=request, text="limit reached")
@@ -338,13 +391,93 @@ async def test_execute_search_falls_back_to_searxng_after_exa_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_search_defaults_to_searxng_fallback_after_exa_rate_limit() -> (
+    None
+):
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        if "mcp.exa.ai" in str(request.url):
+            return httpx.Response(429, request=request, text="limit reached")
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "results": [
+                    {
+                        "title": "Python Docs",
+                        "url": "https://docs.python.org/3/",
+                        "content": "Reference",
+                    }
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        result = await websearch.execute_search(
+            client=client,
+            config=WebConfig(
+                provider=WebProvider.EXA,
+                searxng_instance_url="https://search.example.test/",
+            ),
+            request=websearch.WebSearchRequest(query="python"),
+        )
+    finally:
+        await client.aclose()
+
+    assert result.provider == WebProvider.SEARXNG
+    assert result.endpoint_host == "search.example.test"
+    assert result.internal_data == {
+        "searxng_instance_url": "https://search.example.test/",
+        "instance_source": "configured",
+        "fallback_from": "exa",
+        "primary_error_type": "rate_limited",
+    }
+
+
+@pytest.mark.asyncio
 async def test_execute_search_preserves_primary_error_when_fallback_also_fails() -> (
     None
 ):
     async def _handler(request: httpx.Request) -> httpx.Response:
         if "mcp.exa.ai" in str(request.url):
-            return httpx.Response(500, request=request, text="exa down")
+            return httpx.Response(429, request=request, text="limit reached")
         return httpx.Response(503, request=request, text="searxng down")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await websearch.execute_search(
+                client=client,
+                config=WebConfig(
+                    provider=WebProvider.EXA,
+                    fallback_provider=WebFallbackProvider.SEARXNG,
+                    searxng_instance_url="https://search.example.test/",
+                ),
+                request=websearch.WebSearchRequest(query="python"),
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "rate_limited"
+    assert exc_info.value.details == {
+        "provider": "exa",
+        "endpoint_host": "mcp.exa.ai",
+        "status_code": 429,
+        "fallback_error_type": "upstream_unavailable",
+        "fallback_endpoint_host": "search.example.test",
+        "fallback_attempt_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_search_does_not_fallback_for_non_quota_exa_errors() -> None:
+    request_hosts: list[str] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        request_hosts.append(request.url.host or "")
+        if "mcp.exa.ai" in str(request.url):
+            return httpx.Response(500, request=request, text="exa down")
+        return httpx.Response(200, request=request, json={"results": []})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
     try:
@@ -366,7 +499,50 @@ async def test_execute_search_preserves_primary_error_when_fallback_also_fails()
         "provider": "exa",
         "endpoint_host": "mcp.exa.ai",
         "status_code": 500,
-        "fallback_error_type": "upstream_unavailable",
-        "fallback_endpoint_host": "search.example.test",
-        "fallback_attempt_count": 1,
     }
+    assert request_hosts == ["mcp.exa.ai"]
+
+
+@pytest.mark.asyncio
+async def test_execute_search_does_not_fallback_when_explicitly_disabled() -> None:
+    request_hosts: list[str] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        request_hosts.append(request.url.host or "")
+        if "mcp.exa.ai" in str(request.url):
+            return httpx.Response(429, request=request, text="limit reached")
+        return httpx.Response(200, request=request, json={"results": []})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        with pytest.raises(ToolExecutionError) as exc_info:
+            await websearch.execute_search(
+                client=client,
+                config=WebConfig(
+                    provider=WebProvider.EXA,
+                    fallback_provider=WebFallbackProvider.DISABLED,
+                    searxng_instance_url="https://search.example.test/",
+                ),
+                request=websearch.WebSearchRequest(query="python"),
+            )
+    finally:
+        await client.aclose()
+
+    assert exc_info.value.error_type == "rate_limited"
+    assert exc_info.value.details == {
+        "provider": "exa",
+        "endpoint_host": "mcp.exa.ai",
+        "status_code": 429,
+    }
+    assert request_hosts == ["mcp.exa.ai"]
+
+
+def test_is_exa_fallback_error_accepts_quota_style_403_errors() -> None:
+    assert websearch.is_exa_fallback_error(
+        ToolExecutionError(
+            error_type="source_access_denied",
+            message="Exa web search returned HTTP 403: quota exceeded",
+            retryable=False,
+            details={"status_code": 403},
+        )
+    )

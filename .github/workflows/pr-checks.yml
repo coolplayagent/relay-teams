@@ -16,6 +16,7 @@ concurrency:
 
 permissions:
   contents: read
+  issues: read
   pull-requests: read
 
 jobs:
@@ -40,6 +41,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
+
+      - name: Install dev dependencies
+        run: uv sync --extra dev --no-default-groups
 
       - name: Ruff check --fix
         run: uv run --extra dev ruff check --fix

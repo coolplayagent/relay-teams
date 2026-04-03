@@ -99,9 +99,14 @@ def test_get_web_config_calls_expected_endpoint(monkeypatch) -> None:
         captured["payload"] = payload
         return {
             "provider": "exa",
-            "api_key": None,
-            "fallback_provider": None,
-            "searxng_instance_url": None,
+            "exa_api_key": None,
+            "fallback_provider": "searxng",
+            "searxng_instance_url": "https://search.mdosch.de/",
+            "searxng_instance_seeds": [
+                "https://search.mdosch.de/",
+                "https://search.seddens.net/",
+                "https://search.wdpserver.com/",
+            ],
         }
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
@@ -110,9 +115,14 @@ def test_get_web_config_calls_expected_endpoint(monkeypatch) -> None:
 
     assert response == {
         "provider": "exa",
-        "api_key": None,
-        "fallback_provider": None,
-        "searxng_instance_url": None,
+        "exa_api_key": None,
+        "fallback_provider": "searxng",
+        "searxng_instance_url": "https://search.mdosch.de/",
+        "searxng_instance_seeds": [
+            "https://search.mdosch.de/",
+            "https://search.seddens.net/",
+            "https://search.wdpserver.com/",
+        ],
     }
     assert captured == {
         "method": "GET",
@@ -205,7 +215,7 @@ def test_save_web_config_passes_web_payload(monkeypatch) -> None:
 
     response = client.save_web_config(
         provider="exa",
-        api_key="secret",
+        exa_api_key="secret",
         fallback_provider="searxng",
         searxng_instance_url="https://search.example.test/",
     )
@@ -216,7 +226,42 @@ def test_save_web_config_passes_web_payload(monkeypatch) -> None:
         "path": "/api/system/configs/web",
         "payload": {
             "provider": "exa",
-            "api_key": "secret",
+            "exa_api_key": "secret",
+            "fallback_provider": "searxng",
+            "searxng_instance_url": "https://search.example.test/",
+        },
+    }
+
+
+def test_save_web_config_defaults_to_searxng_fallback_provider(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.save_web_config(
+        provider="exa",
+        exa_api_key="secret",
+        searxng_instance_url="https://search.example.test/",
+    )
+
+    assert response == {"status": "ok"}
+    assert captured == {
+        "method": "PUT",
+        "path": "/api/system/configs/web",
+        "payload": {
+            "provider": "exa",
+            "exa_api_key": "secret",
             "fallback_provider": "searxng",
             "searxng_instance_url": "https://search.example.test/",
         },

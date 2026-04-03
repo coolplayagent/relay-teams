@@ -703,7 +703,15 @@ function createModal() {
                                             </div>
                                             <div class="form-group proxy-inline-field">
                                                 <label for="proxy-password" data-i18n="settings.proxy.password">Password</label>
-                                                <input type="password" id="proxy-password" placeholder="Optional proxy password" data-i18n-placeholder="settings.proxy.password_placeholder" autocomplete="current-password">
+                                                <div class="secure-input-row">
+                                                    <input type="password" id="proxy-password" placeholder="Optional proxy password" data-i18n-placeholder="settings.proxy.password_placeholder" autocomplete="current-password">
+                                                    <button class="secure-input-btn" id="toggle-proxy-password-btn" type="button" title="Show password" aria-label="Show password" style="display:none;">
+                                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                            <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                                            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                                        </svg>
+                                                    </button>
+                                                </div>
                                             </div>
                                             <div class="form-group proxy-inline-field">
                                                 <label for="proxy-no-proxy" data-i18n="settings.proxy.no_proxy">NO_PROXY</label>
@@ -753,29 +761,52 @@ function createModal() {
                                                 <label for="web-provider" data-i18n="settings.web.provider">提供商</label>
                                                 <select id="web-provider">
                                                     <option value="exa">Exa</option>
-                                                    <option value="searxng">SearXNG</option>
                                                 </select>
+                                            </div>
+                                            <div class="form-group proxy-inline-field">
+                                                <label for="web-api-key" id="web-api-key-label" data-i18n="settings.web.exa_api_key">Exa API Key</label>
+                                                <div class="secure-input-row">
+                                                    <input type="password" id="web-api-key" placeholder="可选，用于更高频率限制" data-i18n-placeholder="settings.web.api_key_placeholder" autocomplete="current-password">
+                                                    <button class="secure-input-btn" id="toggle-web-api-key-btn" type="button" title="Show API key" aria-label="Show API key">
+                                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                            <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                                            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                                        </svg>
+                                                    </button>
+                                                </div>
                                             </div>
                                             <div class="form-group proxy-inline-field">
                                                 <label for="web-fallback-provider" data-i18n="settings.web.fallback_provider">回退提供商</label>
                                                 <select id="web-fallback-provider">
-                                                    <option value="">Disabled</option>
                                                     <option value="searxng">SearXNG</option>
+                                                    <option value="disabled">Disabled</option>
                                                 </select>
                                             </div>
-                                            <div class="form-group proxy-inline-field">
-                                                <label for="web-api-key" data-i18n="settings.web.api_key">API Key</label>
-                                                <input type="password" id="web-api-key" placeholder="可选，用于更高频率限制" data-i18n-placeholder="settings.web.api_key_placeholder" autocomplete="current-password">
-                                            </div>
-                                            <div class="form-group proxy-inline-field">
+                                            <div class="form-group proxy-inline-field" id="web-searxng-instance-url-field" style="display:none;">
                                                 <label for="web-searxng-instance-url" data-i18n="settings.web.searxng_instance_url">SearXNG 实例 URL</label>
-                                                <input type="text" id="web-searxng-instance-url" placeholder="留空时使用内置公共实例池" data-i18n-placeholder="settings.web.searxng_instance_url_placeholder" autocomplete="off">
+                                                <input type="text" id="web-searxng-instance-url" placeholder="默认值：{default}" data-i18n-placeholder="settings.web.searxng_instance_url_placeholder" autocomplete="off">
+                                            </div>
+                                            <div class="form-group proxy-inline-field" id="web-searxng-builtins-field" style="display:none;">
+                                                <span class="web-searxng-builtins-label" data-i18n="settings.web.searxng_builtin_instances">内置实例</span>
+                                                <div class="web-searxng-builtins-list" id="web-searxng-builtins-list"></div>
                                             </div>
                                         </div>
-                                        <p class="notifications-help">
-                                            <span data-i18n="settings.web.provider_site">提供商网站：</span>
-                                            <a id="web-provider-site-link" href="https://exa.ai" target="_blank" rel="noreferrer">https://exa.ai</a>
-                                        </p>
+                                        <div class="form-group proxy-inline-field web-provider-inline-field">
+                                            <span class="web-provider-inline-label" data-i18n="settings.web.provider_site">提供商网站：</span>
+                                            <a class="web-provider-link-card" id="web-provider-site-link" href="https://exa.ai" target="_blank" rel="noreferrer" title="https://exa.ai" aria-label="https://exa.ai">
+                                                <span class="web-provider-link-copy">
+                                                    <span class="web-provider-link-badge" id="web-provider-site-badge">Exa</span>
+                                                    <span class="web-provider-link-url" id="web-provider-site-url">https://exa.ai</span>
+                                                    <span class="web-provider-link-note" data-i18n="settings.web.provider_site_help">官方文档与账户概览</span>
+                                                </span>
+                                                <span class="web-provider-link-arrow" aria-hidden="true">
+                                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
+                                                        <path d="M7 17L17 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                                        <path d="M9 7h8v8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                                    </svg>
+                                                </span>
+                                            </a>
+                                        </div>
                                     </section>
                                 </div>
                             </div>
@@ -792,7 +823,15 @@ function createModal() {
                                         <div class="proxy-form-grid">
                                             <div class="form-group proxy-inline-field">
                                                 <label for="github-token" data-i18n="settings.github.token">GitHub Token</label>
-                                                <input type="password" id="github-token" placeholder="ghp_..." data-i18n-placeholder="settings.github.token_placeholder" autocomplete="current-password">
+                                                <div class="secure-input-row">
+                                                    <input type="password" id="github-token" placeholder="ghp_..." data-i18n-placeholder="settings.github.token_placeholder" autocomplete="current-password">
+                                                    <button class="secure-input-btn" id="toggle-github-token-btn" type="button" title="Show GitHub token" aria-label="Show GitHub token" style="display:none;">
+                                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                            <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                                            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                                        </svg>
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
                                     </section>

@@ -28,7 +28,10 @@ console.log(JSON.stringify({
     allProxy: document.getElementById("proxy-all-proxy").value,
     noProxy: document.getElementById("proxy-no-proxy").value,
     proxyUsername: document.getElementById("proxy-username").value,
-    proxyPassword: document.getElementById("proxy-password").value,
+    proxyPasswordValue: document.getElementById("proxy-password").value,
+    proxyPasswordPlaceholder: document.getElementById("proxy-password").placeholder,
+    proxyPasswordType: document.getElementById("proxy-password").type,
+    toggleDisplay: document.getElementById("toggle-proxy-password-btn").style.display,
     sslVerify: document.getElementById("proxy-ssl-verify").value,
 }));
 """.strip(),
@@ -40,7 +43,10 @@ console.log(JSON.stringify({
     assert payload["allProxy"] == ""
     assert payload["noProxy"] == "localhost,127.0.0.1"
     assert payload["proxyUsername"] == "alice"
-    assert payload["proxyPassword"] == "secret"
+    assert payload["proxyPasswordValue"] == ""
+    assert payload["proxyPasswordPlaceholder"] == "************"
+    assert payload["proxyPasswordType"] == "password"
+    assert payload["toggleDisplay"] == "inline-flex"
     assert payload["sslVerify"] == "true"
 
 
@@ -94,7 +100,8 @@ await loadProxyStatusPanel();
 document.getElementById("proxy-http-proxy").value = "http://edited.example:8080";
 document.getElementById("proxy-https-proxy").value = "http://edited.example:8443";
 document.getElementById("proxy-username").value = "alice";
-document.getElementById("proxy-password").value = "secret";
+document.getElementById("proxy-password").value = "edited-secret";
+document.getElementById("proxy-password").oninput();
 document.getElementById("proxy-no-proxy").value = "localhost,127.0.0.1,.internal";
 document.getElementById("proxy-ssl-verify").value = "false";
 document.getElementById("proxy-probe-url").value = "https://example.com";
@@ -126,7 +133,7 @@ console.log(JSON.stringify({
             "all_proxy": "",
             "no_proxy": "localhost,127.0.0.1,.internal",
             "proxy_username": "alice",
-            "proxy_password": "secret",
+            "proxy_password": "edited-secret",
             "ssl_verify": False,
         },
     }
@@ -136,13 +143,119 @@ console.log(JSON.stringify({
         "all_proxy": "",
         "no_proxy": "localhost,127.0.0.1,.internal",
         "proxy_username": "alice",
-        "proxy_password": "secret",
+        "proxy_password": "edited-secret",
         "ssl_verify": False,
     }
     assert payload["saveCalls"] == 1
     assert payload["probeStatusDisplay"] == "block"
     assert "HEAD 200 in 38ms" in cast(str, payload["probeStatusText"])
     assert payload["probeButtonText"] == "Test URL"
+    assert notifications == [
+        {
+            "title": "Proxy Saved",
+            "message": "Proxy settings saved and reloaded.",
+            "tone": "success",
+        }
+    ]
+
+
+def test_proxy_probe_and_save_preserve_saved_password_when_left_unchanged(
+    tmp_path: Path,
+) -> None:
+    payload = _run_proxy_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindProxySettingsHandlers, loadProxyStatusPanel } from "./proxySettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindProxySettingsHandlers();
+await loadProxyStatusPanel();
+
+document.getElementById("toggle-proxy-password-btn").onclick();
+const revealedValue = document.getElementById("proxy-password").value;
+const revealedType = document.getElementById("proxy-password").type;
+const toggleTitle = document.getElementById("toggle-proxy-password-btn").title;
+document.getElementById("toggle-proxy-password-btn").onclick();
+document.getElementById("proxy-probe-url").value = "https://example.com";
+
+await document.getElementById("test-proxy-web-btn").onclick();
+await document.getElementById("save-proxy-btn").onclick();
+
+console.log(JSON.stringify({
+    notifications,
+    revealedValue,
+    revealedType,
+    toggleTitle,
+    savePayload: globalThis.__saveProxyPayload,
+    probePayload: globalThis.__probePayload,
+}));
+""".strip(),
+    )
+
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    probe_payload = cast(dict[str, JsonValue], payload["probePayload"])
+    save_payload = cast(dict[str, JsonValue], payload["savePayload"])
+    proxy_override = cast(dict[str, JsonValue], probe_payload["proxy_override"])
+    assert payload["revealedValue"] == "secret"
+    assert payload["revealedType"] == "text"
+    assert payload["toggleTitle"] == "Hide password"
+    assert proxy_override["proxy_password"] == "secret"
+    assert save_payload["proxy_password"] == "secret"
+    assert notifications == [
+        {
+            "title": "Proxy Saved",
+            "message": "Proxy settings saved and reloaded.",
+            "tone": "success",
+        }
+    ]
+
+
+def test_proxy_settings_panel_allows_clearing_saved_password(
+    tmp_path: Path,
+) -> None:
+    payload = _run_proxy_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindProxySettingsHandlers, loadProxyStatusPanel } from "./proxySettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindProxySettingsHandlers();
+await loadProxyStatusPanel();
+
+document.getElementById("toggle-proxy-password-btn").onclick();
+document.getElementById("proxy-password").value = "";
+document.getElementById("proxy-password").oninput();
+document.getElementById("proxy-probe-url").value = "https://example.com";
+
+await document.getElementById("test-proxy-web-btn").onclick();
+await document.getElementById("save-proxy-btn").onclick();
+
+console.log(JSON.stringify({
+    notifications,
+    savePayload: globalThis.__saveProxyPayload,
+    probePayload: globalThis.__probePayload,
+    proxyPasswordValue: document.getElementById("proxy-password").value,
+    proxyPasswordPlaceholder: document.getElementById("proxy-password").placeholder,
+    toggleDisplay: document.getElementById("toggle-proxy-password-btn").style.display,
+}));
+""".strip(),
+    )
+
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    probe_payload = cast(dict[str, JsonValue], payload["probePayload"])
+    save_payload = cast(dict[str, JsonValue], payload["savePayload"])
+    proxy_override = cast(dict[str, JsonValue], probe_payload["proxy_override"])
+    assert proxy_override["proxy_password"] is None
+    assert save_payload["proxy_password"] is None
+    assert payload["proxyPasswordValue"] == ""
+    assert payload["proxyPasswordPlaceholder"] == "Optional proxy password"
+    assert payload["toggleDisplay"] == "none"
     assert notifications == [
         {
             "title": "Proxy Saved",
@@ -242,13 +355,16 @@ def _run_proxy_settings_script(
 
     mock_api_path.write_text(
         """
+let currentConfig = __FETCH_PROXY_CONFIG__;
+
 export async function fetchProxyConfig() {
-    return __FETCH_PROXY_CONFIG__;
+    return currentConfig;
 }
 
 export async function saveProxyConfig(payload) {
     globalThis.__saveProxyCalls += 1;
     globalThis.__saveProxyPayload = payload;
+    currentConfig = payload;
     return { status: "ok" };
 }
 
@@ -292,6 +408,9 @@ const translations = {
     "settings.proxy.probe_reason": "{status_text}: {reason}",
     "settings.proxy.test_url": "Test URL",
     "settings.proxy.testing": "Testing...",
+    "settings.proxy.show_password": "Show password",
+    "settings.proxy.hide_password": "Hide password",
+    "settings.proxy.password_placeholder": "Optional proxy password",
 };
 
 export function t(key) {
@@ -353,6 +472,7 @@ function createElements() {{
         ["proxy-all-proxy", createElement("block")],
         ["proxy-username", createElement("block")],
         ["proxy-password", createElement("block")],
+        ["toggle-proxy-password-btn", createElement("none")],
         ["proxy-no-proxy", createElement("block")],
         ["proxy-ssl-verify", createElement("block")],
         ["proxy-probe-url", createElement("block")],

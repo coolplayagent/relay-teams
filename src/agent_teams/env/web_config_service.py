@@ -10,11 +10,16 @@ from agent_teams.env.web_config_models import (
     WebProvider,
 )
 from agent_teams.env.web_secret_store import WebSecretStore, get_web_secret_store
+from agent_teams.logger import get_logger
 
 _PROVIDER_ENV_KEY = "AGENT_TEAMS_WEB_PROVIDER"
 _FALLBACK_PROVIDER_ENV_KEY = "AGENT_TEAMS_WEB_FALLBACK_PROVIDER"
 _SEARXNG_INSTANCE_URL_ENV_KEY = "AGENT_TEAMS_WEB_SEARXNG_INSTANCE_URL"
-_API_KEY_ENV_KEY = "AGENT_TEAMS_WEB_API_KEY"
+_LEGACY_API_KEY_ENV_KEY = "AGENT_TEAMS_WEB_API_KEY"
+_EXA_API_KEY_ENV_KEY = "AGENT_TEAMS_WEB_EXA_API_KEY"
+_SEARXNG_API_KEY_ENV_KEY = "AGENT_TEAMS_WEB_SEARXNG_API_KEY"
+
+LOGGER = get_logger(__name__)
 
 
 class WebConfigService:
@@ -31,29 +36,56 @@ class WebConfigService:
 
     def get_web_config(self) -> WebConfig:
         env_values = load_env_file(self._config_dir / ".env")
-        provider = _parse_provider(env_values.get(_PROVIDER_ENV_KEY))
+        provider, used_legacy_searxng_provider = _parse_provider(
+            env_values.get(_PROVIDER_ENV_KEY)
+        )
         fallback_provider = _parse_fallback_provider(
             env_values.get(_FALLBACK_PROVIDER_ENV_KEY)
         )
+        should_rewrite_env_file = used_legacy_searxng_provider
+        if used_legacy_searxng_provider:
+            fallback_provider = WebFallbackProvider.SEARXNG
+            LOGGER.warning(
+                "Normalized legacy web provider 'searxng' to Exa primary with SearXNG fallback"
+            )
         searxng_instance_url = _normalize_text(
             env_values.get(_SEARXNG_INSTANCE_URL_ENV_KEY)
         )
-        api_key = self._secret_store.get_api_key(self._config_dir)
-        if api_key is None:
-            api_key = _normalize_text(env_values.get(_API_KEY_ENV_KEY))
-            if api_key is not None:
-                self._secret_store.set_api_key(self._config_dir, api_key)
-                self._write_env_file(
-                    provider=provider,
-                    fallback_provider=fallback_provider,
-                    searxng_instance_url=searxng_instance_url,
+        exa_api_key = self._secret_store.get_api_key(self._config_dir, WebProvider.EXA)
+        if exa_api_key is None:
+            exa_api_key = _normalize_text(
+                env_values.get(_EXA_API_KEY_ENV_KEY)
+                or env_values.get(_LEGACY_API_KEY_ENV_KEY)
+            )
+            if exa_api_key is not None:
+                self._secret_store.set_api_key(
+                    self._config_dir,
+                    WebProvider.EXA,
+                    exa_api_key,
                 )
-        return WebConfig(
+                should_rewrite_env_file = True
+        legacy_searxng_api_key = _normalize_text(
+            env_values.get(_SEARXNG_API_KEY_ENV_KEY)
+        )
+        if legacy_searxng_api_key is not None:
+            should_rewrite_env_file = True
+            LOGGER.warning(
+                "Ignoring deprecated SearXNG web API key because SearXNG now only runs as a fallback provider"
+            )
+        self._secret_store.delete_api_key(self._config_dir, WebProvider.SEARXNG)
+        config = WebConfig(
             provider=provider,
-            api_key=api_key,
+            exa_api_key=exa_api_key,
             fallback_provider=fallback_provider,
             searxng_instance_url=searxng_instance_url,
         )
+        if should_rewrite_env_file:
+            self._write_env_file(
+                provider=config.provider,
+                fallback_provider=config.fallback_provider,
+                searxng_instance_url=config.searxng_instance_url,
+            )
+        return config
 
     def save_web_config(self, config: WebConfig) -> None:
         self._write_env_file(
@@ -61,7 +93,12 @@ class WebConfigService:
             fallback_provider=config.fallback_provider,
             searxng_instance_url=config.searxng_instance_url,
         )
-        self._secret_store.set_api_key(self._config_dir, config.api_key)
+        self._secret_store.set_api_key(
+            self._config_dir,
+            WebProvider.EXA,
+            config.exa_api_key,
+        )
+        self._secret_store.delete_api_key(self._config_dir, WebProvider.SEARXNG)
         sync_app_env_to_process_env(self._config_dir / ".env")
 
     def resolve_runtime_config(self) -> WebConfig:
@@ -81,7 +118,9 @@ class WebConfigService:
                 fallback_provider.value if fallback_provider is not None else None
             ),
             _SEARXNG_INSTANCE_URL_ENV_KEY: searxng_instance_url,
-            _API_KEY_ENV_KEY: None,
+            _LEGACY_API_KEY_ENV_KEY: None,
+            _EXA_API_KEY_ENV_KEY: None,
+            _SEARXNG_API_KEY_ENV_KEY: None,
         }
         managed_keys = tuple(managed_values.keys())
         managed_key_set = {key for key in managed_keys}
@@ -129,12 +168,15 @@ class WebConfigService:
         env_file_path.write_text(serialized_text, encoding="utf-8")
 
 
-def _parse_provider(value: str | None) -> WebProvider:
+def _parse_provider(value: str | None) -> tuple[WebProvider, bool]:
     normalized_value = _normalize_text(value)
     if normalized_value is None:
-        return WebProvider.EXA
+        return (WebProvider.EXA, False)
+    lowered_value = normalized_value.lower()
+    if lowered_value == WebProvider.SEARXNG.value:
+        return (WebProvider.EXA, True)
     try:
-        return WebProvider(normalized_value.lower())
+        return (WebProvider(lowered_value), False)
     except ValueError as exc:
         raise ValueError(f"Unsupported web provider: {normalized_value}") from exc
 
