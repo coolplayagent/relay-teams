@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import httpx
 import pytest
 
 from agent_teams.agents.execution.recoverable_openai_chat_model import (
@@ -174,27 +175,35 @@ def test_sanitize_replayed_messages_drops_duplicate_late_tool_results() -> None:
 async def test_map_messages_keeps_system_message_when_replay_sanitizes_history() -> (
     None
 ):
-    model = RecoverableOpenAIChatModel(
-        "gpt-5.4",
-        provider=OpenAIProvider(base_url="https://example.test/v1", api_key="test"),
-    )
-    messages = [
-        ModelRequest(
-            parts=[UserPromptPart(content="你能使用哪些技能")],
-            instructions="System instructions",
-        ),
-        ModelRequest(
-            parts=[
-                ToolReturnPart(
-                    tool_name="write",
-                    tool_call_id="call-missing",
-                    content={"ok": False},
-                )
-            ]
-        ),
-    ]
+    http_client = httpx.AsyncClient(trust_env=False)
+    try:
+        model = RecoverableOpenAIChatModel(
+            "gpt-5.4",
+            provider=OpenAIProvider(
+                base_url="https://example.test/v1",
+                api_key="test",
+                http_client=http_client,
+            ),
+        )
+        messages = [
+            ModelRequest(
+                parts=[UserPromptPart(content="你能使用哪些技能")],
+                instructions="System instructions",
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="write",
+                        tool_call_id="call-missing",
+                        content={"ok": False},
+                    )
+                ]
+            ),
+        ]
 
-    mapped = await model._map_messages(messages, ModelRequestParameters())
+        mapped = await model._map_messages(messages, ModelRequestParameters())
+    finally:
+        await http_client.aclose()
 
     system_messages = [
         message

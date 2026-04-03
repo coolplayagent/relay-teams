@@ -764,10 +764,20 @@ def test_browser_settings_save_role_and_agent_configs(
     ):
         page.locator('.settings-tab[data-tab="github"]').click()
     expect(page.locator("#github-panel")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
-    expect(page.locator("#github-token")).to_have_value(
-        initial_github_token,
-        timeout=_WAIT_TIMEOUT_MS,
-    )
+    if initial_github_token:
+        expect(page.locator("#github-token")).to_have_value(
+            "", timeout=_WAIT_TIMEOUT_MS
+        )
+        expect(page.locator("#github-token")).to_have_attribute(
+            "placeholder",
+            "************",
+            timeout=_WAIT_TIMEOUT_MS,
+        )
+    else:
+        expect(page.locator("#github-token")).to_have_value(
+            "",
+            timeout=_WAIT_TIMEOUT_MS,
+        )
     page.locator("#github-token").fill(github_token)
     with page.expect_request(
         lambda request: (
@@ -780,7 +790,12 @@ def test_browser_settings_save_role_and_agent_configs(
     github_payload = json.loads(save_github_request_info.value.post_data or "{}")
     assert github_payload == {"token": github_token}
     expect(page.locator("#github-token")).to_have_value(
-        github_token,
+        "",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(page.locator("#github-token")).to_have_attribute(
+        "placeholder",
+        "************",
         timeout=_WAIT_TIMEOUT_MS,
     )
 
