@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tomllib
+from glob import glob
 from pathlib import Path
 from typing import cast
 
@@ -42,6 +43,22 @@ def _builtin_role_files(project_root: Path) -> tuple[Path, ...]:
     return tuple(sorted(builtin_root.glob("*.md")))
 
 
+def _builtin_skill_files(project_root: Path) -> tuple[Path, ...]:
+    builtin_root = project_root / "src" / "agent_teams" / "builtin" / "skills"
+    return tuple(sorted(path for path in builtin_root.rglob("*") if path.is_file()))
+
+
+def _matches_package_data_pattern(
+    *, package_root: Path, file_path: Path, pattern: str
+) -> bool:
+    resolved_file_path = file_path.resolve()
+    candidates = (
+        Path(candidate).resolve()
+        for candidate in glob(str(package_root / pattern), recursive=True)
+    )
+    return any(candidate == resolved_file_path for candidate in candidates)
+
+
 def test_tool_description_files_are_declared_in_package_data() -> None:
     project_root = _project_root()
     package_data = _load_package_data(project_root)
@@ -56,8 +73,14 @@ def test_tool_description_files_are_declared_in_package_data() -> None:
             package_root = project_root / "src" / Path(*package_name.split("."))
             if not description_file.is_relative_to(package_root):
                 continue
-            relative_path = description_file.relative_to(package_root)
-            if any(relative_path.match(pattern) for pattern in patterns):
+            if any(
+                _matches_package_data_pattern(
+                    package_root=package_root,
+                    file_path=description_file,
+                    pattern=pattern,
+                )
+                for pattern in patterns
+            ):
                 matched = True
                 break
         if not matched:
@@ -82,8 +105,14 @@ def test_tool_package_data_declarations_match_existing_description_files() -> No
         for description_file in description_files:
             if not description_file.is_relative_to(package_root):
                 continue
-            relative_path = description_file.relative_to(package_root)
-            if any(relative_path.match(pattern) for pattern in patterns):
+            if any(
+                _matches_package_data_pattern(
+                    package_root=package_root,
+                    file_path=description_file,
+                    pattern=pattern,
+                )
+                for pattern in patterns
+            ):
                 matched = True
                 break
         if not matched:
@@ -103,7 +132,11 @@ def test_builtin_role_files_are_declared_in_package_data() -> None:
         str(role_file.relative_to(project_root / "src"))
         for role_file in role_files
         if not any(
-            role_file.relative_to(builtin_package_root).match(pattern)
+            _matches_package_data_pattern(
+                package_root=builtin_package_root,
+                file_path=role_file,
+                pattern=pattern,
+            )
             for pattern in builtin_patterns
         )
     ]
@@ -122,10 +155,62 @@ def test_builtin_package_data_includes_live_role_matches() -> None:
         pattern
         for pattern in builtin_patterns
         if any(
-            role_file.relative_to(builtin_package_root).match(pattern)
+            _matches_package_data_pattern(
+                package_root=builtin_package_root,
+                file_path=role_file,
+                pattern=pattern,
+            )
             for role_file in role_files
         )
     ]
 
     assert role_files != []
+    assert matching_patterns != []
+
+
+def test_builtin_skill_files_are_declared_in_package_data() -> None:
+    project_root = _project_root()
+    package_data = _load_package_data(project_root)
+    skill_files = _builtin_skill_files(project_root)
+    builtin_package_root = project_root / "src" / "agent_teams" / "builtin"
+    builtin_patterns = package_data.get("agent_teams.builtin", ())
+
+    missing_files = [
+        str(skill_file.relative_to(project_root / "src"))
+        for skill_file in skill_files
+        if not any(
+            _matches_package_data_pattern(
+                package_root=builtin_package_root,
+                file_path=skill_file,
+                pattern=pattern,
+            )
+            for pattern in builtin_patterns
+        )
+    ]
+
+    assert missing_files == []
+
+
+def test_builtin_package_data_includes_live_skill_matches() -> None:
+    project_root = _project_root()
+    package_data = _load_package_data(project_root)
+    skill_files = _builtin_skill_files(project_root)
+    builtin_package_root = project_root / "src" / "agent_teams" / "builtin"
+    builtin_patterns = package_data.get("agent_teams.builtin", ())
+
+    matching_patterns = [
+        pattern
+        for pattern in builtin_patterns
+        if pattern.startswith("skills/")
+        and any(
+            _matches_package_data_pattern(
+                package_root=builtin_package_root,
+                file_path=skill_file,
+                pattern=pattern,
+            )
+            for skill_file in skill_files
+        )
+    ]
+
+    assert skill_files != []
     assert matching_patterns != []

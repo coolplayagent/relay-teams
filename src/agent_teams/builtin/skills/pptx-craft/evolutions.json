@@ -1,0 +1,47 @@
+{
+  "skill_id": "pptx-craft",
+  "version": "1.0.0",
+  "updated_at": "2026-03-27T12:04:52.353578+00:00",
+  "entries": [
+    {
+      "id": "ev_e116d96d",
+      "source": "execution_failure",
+      "timestamp": "2026-03-27T10:43:28.119292+00:00",
+      "context": "AI computing demand has exploded exponentially. As large models evolved from \"perception\" and \"generation\" to \"reasoning\" and \"action (task execution),\" the consumption of computing power has surged dramatically. Regarding the market's high focus on the ceiling for orders and revenue, Huang gave an exceptionally strong forecast. Huang stated bluntly in his speech: At this time last year, I said we saw $500 billion in high-confidence demand, covering Blackwell and Rubin through 2026. Now, right here, right now, I see at least $1 trillion in demand by 2027. Huang's trillion-dollar expectation once pushed; \\\\agent\\\\workspace\",\n  \"shell_type\": \"cmd\",\n  \"resolved_shell\": \"cmd\",\n  \"exit_code\": 2,\n  \"stdout\": \"\",\n  \"stderr\": \"python: can't open file 'C:\\\\\\\\Users\\\\\\\\Administrator\\\\\\\\.jiuwenclaw\\\\\\\\agent\\\\\\\\skills\\\\\\\\pptx-craft\\\\\\\\output\\\\\\\\20260327_183516_000\\\\\\\\scripts\\\\\\\\svg_to_pptx\\\\\\\\svg_to_pptx.py': [Errno 2] No such file or directory\\n\"\n}; _10.svg (Native)\\n  Converted 3 elements, skipped 0\\n  [3/10] page_2.svg (Native)\\n  Converted 3 elements, skipped 0\\n  [4/10] page_3.svg (Native)\\n  Converted 3 elements, skipped 0\\n  [5/10] page_4.svg (Native)\\n  Converted 3 elements, skipped 0\\n  [6/10] page_5.svg (Native)\\n  [7/10] page_6.svg - Error: not well-formed (invalid token): line 11, column 107\\n  Converted 3 elements, skipped 0\\n  [8/10] page_7.svg (Native)\\n  Converted 3 elements, skipped 0\\n  [9/10] page_8.svg (Native)\\n  Converted 3 elements, skipped 0\\n  [10/10] page_9.svg (Native)\\n\\n[Done] Saved: output\\\\20260327_183516_000\\\\pag;   [7/10] page_6.svg (Native)\\n  Converted 3 elements, skipped 0\\n  [8/10] page_7.svg (Native)\\n  Converted 3 elements, skipped 0\\n  [9/10] page_8.svg (Native)\\n  Converted 3 elements, skipped 0\\n  [10/10] page_9.svg (Native)\\n\\n[Done] Saved: output\\\\20260327_183516_000\\\\pages.pptx\\n  Succeeded: 10, Failed: 0\\n\",\n  \"stderr\": \"\"\n}",
+      "change": {
+        "section": "Troubleshooting",
+        "action": "append",
+        "content": "### 脚本执行路径修正\n\n- **正确执行方式**：应从 `skill_root` 目录执行转换脚本，而非 `output_dir` 目录\n- **错误命令**：`cd {output_dir} && python {skill_root}/pptx-craft/scripts/svg_to_pptx/svg_to_pptx.py .`\n- **正确命令**：`cd {skill_root}/pptx-craft && python scripts/svg_to_pptx/svg_to_pptx.py {output_dir}`\n- **原因**：脚本依赖相对路径查找资源，从 output_dir 执行会导致脚本文件找不到",
+        "target": "body"
+      },
+      "applied": false
+    },
+    {
+      "id": "ev_d135a283",
+      "source": "execution_failure",
+      "timestamp": "2026-03-27T12:04:14.581282+00:00",
+      "context": "Traceback (most recent call last):\r\n  File \"<string>\", line 97, in <module>\r\n    with open(r\"C:\\Users\\Administrator\\.jiuwenclaw\\agent\\workspace\\output\\20260327_195116_000\\pages\\page_1.svg\", \"w\", encoding=\"utf-8\") as f:\r\n         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^; pped 0\\n  [8/10] page_7.svg (Native)\\n  Converted 3 elements, skipped 0\\n  [9/10] page_8.svg (Native)\\n  Converted 3 elements, skipped 0\\n  [10/10] page_9.svg (Native)\\n\\n[Done] Saved: C:\\\\Users\\\\Administrator\\\\.jiuwenclaw\\\\agent\\\\workspace\\\\output\\\\20260327_195116_000\\\\pages.pptx\\n  Succeeded: 10, Failed: 0\\n\",\n  \"stderr\": \"\"\n}",
+      "change": {
+        "section": "Troubleshooting",
+        "action": "append",
+        "content": "### SVG 格式预检与 XML 特殊字符转义\n\n- **转换前验证**：执行 svg_to_pptx.py 前，检查所有 page_N.svg 文件是否为有效 XML 格式，定位 `not well-formed (invalid token)` 错误行\n- **特殊字符转义规则**：SVG 文本内容中的 XML 保留字符必须转义——`&`→`&amp;`、`<`→`&lt;`、`>`→`&gt;`、`\"`→`&quot;`\n- **修复策略**：发现格式错误时，使用 XML 解析器定位问题行，重新生成该页 SVG 或手动修复特殊字符后重新转换\n- **批量转换容错**：部分页面失败不影响其他页面，可单独修复失败页面后重新执行转换脚本",
+        "target": "body",
+        "merge_target": "ev_a1031057"
+      },
+      "applied": false
+    },
+    {
+      "id": "ev_bf697990",
+      "source": "execution_failure",
+      "timestamp": "2026-03-27T11:52:37.630133+00:00",
+      "context": "{'success': False, 'path': 'C:\\\\Users\\\\Administrator\\\\.jiuwenclaw\\\\agent\\\\workspace\\\\output\\\\20260327_195116_000\\\\research_notes.md', 'error': 'Path must be memory/YYYY-MM-DD.md, USER.md, or MEMORY.md. Got: C:\\\\Users\\\\Administrator\\\\.jiuwenclaw\\\\agent\\\\workspace\\\\output\\\\20260327_195116_000\\\\research_notes.md'}",
+      "change": {
+        "section": "Troubleshooting",
+        "action": "append",
+        "content": "### 文件写入工具选择\n\n- **write_memory 限制**：该工具仅支持写入 `memory/YYYY-MM-DD.md`、`USER.md` 或 `MEMORY.md`，不可用于 output 目录文件\n- **正确方式**：写入 `research_notes.md`、`ppt_plan.md` 等产物文件时，使用 `execute_python_code` 执行 Python 文件写入操作\n- **错误识别**：遇到 `Path must be memory/...` 错误时，立即切换为 Python 脚本写入，避免重复调用 write_memory",
+        "target": "body"
+      },
+      "applied": false
+    }
+  ]
+}

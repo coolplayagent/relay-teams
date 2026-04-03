@@ -39,7 +39,7 @@ def test_tool_result_envelope_serializes_nested_error() -> None:
     error = ToolError(
         type="validation_error",
         message="bad input",
-        retryable=True,
+        retryable=False,
     )
 
     envelope = ToolResultEnvelope(
@@ -52,7 +52,7 @@ def test_tool_result_envelope_serializes_nested_error() -> None:
     assert payload["error"] == {
         "type": "validation_error",
         "message": "bad input",
-        "retryable": True,
+        "retryable": False,
     }
 
 
