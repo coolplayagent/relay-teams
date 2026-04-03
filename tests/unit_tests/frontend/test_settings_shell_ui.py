@@ -300,13 +300,31 @@ console.log(JSON.stringify({
     assert 'title="Fetch Models"' in modal_html
     assert 'id="toggle-profile-api-key-btn"' in modal_html
     assert 'id="toggle-web-api-key-btn"' in modal_html
+    assert (
+        'id="toggle-web-api-key-btn" type="button" title="Show API key" aria-label="Show API key"'
+        in modal_html
+    )
     assert 'id="toggle-github-token-btn"' in modal_html
     assert 'id="toggle-proxy-password-btn"' in modal_html
+    assert 'id="web-searxng-instance-url-field"' in modal_html
+    assert 'id="web-searxng-builtins-field"' in modal_html
+    assert 'id="web-searxng-builtins-list"' in modal_html
+    assert "https://search.mdosch.de/" in modal_html
+    assert "https://search.seddens.net/" in modal_html
+    assert "https://search.wdpserver.com/" in modal_html
+    assert modal_html.count('<option value="searxng">SearXNG</option>') == 1
+    assert modal_html.count('<option value="disabled">Disabled</option>') == 1
     assert 'id="edit-profile-name-btn"' not in modal_html
     assert 'id="edit-profile-name-input"' not in modal_html
     assert ">Fetch</button>" not in modal_html
     assert modal_html.index('label for="profile-api-key"') < modal_html.index(
         'label for="profile-model"'
+    )
+    assert modal_html.index('label for="web-provider"') < modal_html.index(
+        'label for="web-api-key"'
+    )
+    assert modal_html.index('label for="web-api-key"') < modal_html.index(
+        'label for="web-fallback-provider"'
     )
     assert modal_html.index('id="profile-max-tokens"') < modal_html.index(
         'id="profile-context-window"'

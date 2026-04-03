@@ -18,6 +18,7 @@ from agent_teams.env.github_config_models import GitHubConfig
 from agent_teams.env.github_connectivity import GitHubConnectivityProbeRequest
 from agent_teams.env.github_connectivity import GitHubConnectivityProbeResult
 from agent_teams.env.web_config_models import (
+    DEFAULT_SEARXNG_INSTANCE_URL,
     WebConfig,
     WebFallbackProvider,
     WebProvider,
@@ -141,9 +142,9 @@ class _FakeSystemService:
     def get_web_config(self) -> WebConfig:
         return WebConfig(
             provider=WebProvider.EXA,
-            api_key=None,
+            exa_api_key=None,
             fallback_provider=WebFallbackProvider.SEARXNG,
-            searxng_instance_url="https://search.example.test/",
+            searxng_instance_url=DEFAULT_SEARXNG_INSTANCE_URL,
         )
 
     def list_agents(self) -> tuple[ExternalAgentSummary, ...]:
@@ -669,9 +670,9 @@ def test_get_web_config() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "provider": "exa",
-        "api_key": None,
+        "exa_api_key": None,
         "fallback_provider": "searxng",
-        "searxng_instance_url": "https://search.example.test/",
+        "searxng_instance_url": DEFAULT_SEARXNG_INSTANCE_URL,
     }
 
 
@@ -713,7 +714,7 @@ def test_save_web_config() -> None:
         "/api/system/configs/web",
         json={
             "provider": "exa",
-            "api_key": "secret",
+            "exa_api_key": "secret",
             "fallback_provider": "searxng",
             "searxng_instance_url": "https://search.example.test/",
         },
@@ -723,9 +724,49 @@ def test_save_web_config() -> None:
     assert response.json() == {"status": "ok"}
     assert service.saved_web_config == {
         "provider": "exa",
-        "api_key": "secret",
+        "exa_api_key": "secret",
         "fallback_provider": "searxng",
         "searxng_instance_url": "https://search.example.test/",
+    }
+
+
+def test_save_web_config_rejects_searxng_primary_provider() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.put(
+        "/api/system/configs/web",
+        json={
+            "provider": "searxng",
+            "exa_api_key": None,
+            "fallback_provider": "searxng",
+            "searxng_instance_url": "https://search.example.test/",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_save_web_config_accepts_disabled_fallback_provider() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/web",
+        json={
+            "provider": "exa",
+            "exa_api_key": "secret",
+            "fallback_provider": "disabled",
+            "searxng_instance_url": DEFAULT_SEARXNG_INSTANCE_URL,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.saved_web_config == {
+        "provider": "exa",
+        "exa_api_key": "secret",
+        "fallback_provider": "disabled",
+        "searxng_instance_url": DEFAULT_SEARXNG_INSTANCE_URL,
     }
 
 

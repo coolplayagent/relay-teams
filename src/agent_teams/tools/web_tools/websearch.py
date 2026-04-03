@@ -20,6 +20,7 @@ from pydantic import (
 from pydantic_ai import Agent
 
 from agent_teams.env.web_config_models import (
+    DEFAULT_SEARXNG_INSTANCE_URL,
     WebConfig,
     WebFallbackProvider,
     WebProvider,
@@ -45,7 +46,7 @@ SEARXNG_INSTANCE_CACHE_TTL_SECONDS = 24 * 60 * 60
 SEARXNG_INSTANCE_COOLDOWN_SECONDS = 30 * 60
 SEARXNG_PUBLIC_INSTANCE_LIMIT = 10
 DEFAULT_SEARXNG_INSTANCE_SEEDS = (
-    "https://search.mdosch.de/",
+    DEFAULT_SEARXNG_INSTANCE_URL,
     "https://search.seddens.net/",
     "https://search.wdpserver.com/",
 )
@@ -375,10 +376,37 @@ def should_fallback_from_exa(
     config: WebConfig,
     primary_error: ToolExecutionError,
 ) -> bool:
-    _ = primary_error
     return (
         config.provider == WebProvider.EXA
         and config.fallback_provider == WebFallbackProvider.SEARXNG
+        and is_exa_fallback_error(primary_error)
+    )
+
+
+def is_exa_fallback_error(primary_error: ToolExecutionError) -> bool:
+    status_code = primary_error.details.get("status_code")
+    if primary_error.error_type == "rate_limited":
+        return True
+    if status_code == 402:
+        return True
+    if status_code == 403:
+        return _contains_exa_quota_hint(str(primary_error))
+    return False
+
+
+def _contains_exa_quota_hint(message: str) -> bool:
+    lowered_message = message.lower()
+    return any(
+        marker in lowered_message
+        for marker in (
+            "quota",
+            "credit",
+            "billing",
+            "rate limit",
+            "too many requests",
+            "limit reached",
+            "exhausted",
+        )
     )
 
 
@@ -504,20 +532,45 @@ async def resolve_searxng_instance_candidates(
     client: httpx.AsyncClient,
     config: WebConfig,
 ) -> tuple[SearxngInstanceCandidate, ...]:
-    if config.searxng_instance_url:
+    if (
+        config.searxng_instance_url
+        and config.searxng_instance_url != DEFAULT_SEARXNG_INSTANCE_URL
+    ):
         return (
             build_searxng_instance_candidate(
                 base_url=config.searxng_instance_url,
                 source="configured",
             ),
         )
+    configured_candidates: tuple[SearxngInstanceCandidate, ...] = ()
+    if config.searxng_instance_url:
+        configured_candidates = (
+            build_searxng_instance_candidate(
+                base_url=config.searxng_instance_url,
+                source="default",
+            ),
+        )
     public_candidates = await fetch_public_searxng_instance_candidates(client=client)
-    if public_candidates:
-        return public_candidates
-    return tuple(
+    seed_candidates = tuple(
         build_searxng_instance_candidate(base_url=base_url, source="seed")
         for base_url in DEFAULT_SEARXNG_INSTANCE_SEEDS
     )
+    return deduplicate_searxng_candidates(
+        configured_candidates + public_candidates + seed_candidates
+    )
+
+
+def deduplicate_searxng_candidates(
+    candidates: Sequence[SearxngInstanceCandidate],
+) -> tuple[SearxngInstanceCandidate, ...]:
+    deduplicated: list[SearxngInstanceCandidate] = []
+    seen_base_urls: set[str] = set()
+    for candidate in candidates:
+        if candidate.base_url in seen_base_urls:
+            continue
+        deduplicated.append(candidate)
+        seen_base_urls.add(candidate.base_url)
+    return tuple(deduplicated)
 
 
 def select_available_searxng_candidates(
@@ -798,7 +851,7 @@ def build_provider_search_request(
 ) -> PreparedSearchRequest:
     if config.provider == WebProvider.EXA:
         endpoint = build_exa_search_url(
-            api_key=config.api_key,
+            api_key=config.get_api_key_for_provider(WebProvider.EXA),
             enabled_tools=(EXA_TOOL_NAME,),
         )
         return PreparedSearchRequest(

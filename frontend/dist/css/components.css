@@ -4113,6 +4113,21 @@
     font-weight: 600;
 }
 
+.web-searxng-builtins-label {
+    display: flex;
+    align-items: center;
+    min-height: 42px;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.web-searxng-builtins-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
 .web-provider-link-card {
     display: flex;
     align-items: center;

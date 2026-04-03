@@ -1,17 +1,27 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import JsonValue
-
 import json
 from pathlib import Path
 import subprocess
 from typing import cast
 
+from pydantic import JsonValue
 
-def test_web_settings_panel_loads_and_saves_optional_api_key(tmp_path: Path) -> None:
+from agent_teams.env.web_config_models import DEFAULT_SEARXNG_INSTANCE_URL
+
+
+def test_web_settings_panel_saves_exa_key_and_fallback_settings(
+    tmp_path: Path,
+) -> None:
     payload = _run_web_settings_script(
         tmp_path=tmp_path,
+        fetch_config={
+            "provider": "exa",
+            "exa_api_key": None,
+            "fallback_provider": "searxng",
+            "searxng_instance_url": None,
+        },
         runner_source="""
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from "./webSettings.mjs";
 
@@ -22,44 +32,51 @@ installGlobals(elements, notifications);
 bindWebSettingsHandlers();
 await loadWebSettingsPanel();
 
-document.getElementById("web-provider").value = "exa";
-document.getElementById("web-fallback-provider").value = "searxng";
-document.getElementById("web-api-key").value = "secret";
+const initialLabel = document.getElementById("web-api-key-label").textContent;
+const initialPlaceholder = document.getElementById("web-api-key").placeholder;
+
+document.getElementById("web-api-key").value = "draft-exa-key";
 document.getElementById("web-api-key").oninput();
-document.getElementById("web-searxng-instance-url").value = "https://search.example.test";
+document.getElementById("web-fallback-provider").value = "searxng";
+document.getElementById("web-fallback-provider").onchange();
+
+const defaultInstanceValue = document.getElementById("web-searxng-instance-url").value;
+const revealedDisplay = document.getElementById("web-searxng-instance-url-field").style.display;
+const builtinsDisplay = document.getElementById("web-searxng-builtins-field").style.display;
+const builtinsHtml = document.getElementById("web-searxng-builtins-list").innerHTML;
+
+document.getElementById("web-searxng-instance-url").value = "https://search.example.test/";
 
 await document.getElementById("save-web-btn").onclick();
 
 console.log(JSON.stringify({
     notifications,
-    provider: document.getElementById("web-provider").value,
-    fallbackProvider: document.getElementById("web-fallback-provider").value,
-    apiKey: document.getElementById("web-api-key").value,
-    apiKeyPlaceholder: document.getElementById("web-api-key").placeholder,
-    apiKeyType: document.getElementById("web-api-key").type,
-    toggleDisplay: document.getElementById("toggle-web-api-key-btn").style.display,
-    searxngInstanceUrl: document.getElementById("web-searxng-instance-url").value,
+    initialLabel,
+    initialPlaceholder,
+    defaultInstanceValue,
+    revealedDisplay,
+    builtinsDisplay,
+    builtinsHtml,
     savePayload: globalThis.__saveWebPayload,
-    providerSiteHref: document.getElementById("web-provider-site-link").href,
 }));
 """.strip(),
     )
 
     notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
-    assert payload["provider"] == "exa"
-    assert payload["fallbackProvider"] == "searxng"
-    assert payload["apiKey"] == ""
-    assert payload["apiKeyPlaceholder"] == "************"
-    assert payload["apiKeyType"] == "password"
-    assert payload["toggleDisplay"] == "inline-flex"
-    assert payload["searxngInstanceUrl"] == "https://search.example.test"
+    assert payload["initialLabel"] == "Exa API Key"
+    assert payload["initialPlaceholder"] == "Optional for higher rate limits"
+    assert payload["defaultInstanceValue"] == DEFAULT_SEARXNG_INSTANCE_URL
+    assert payload["revealedDisplay"] == "grid"
+    assert payload["builtinsDisplay"] == "grid"
+    assert "https://search.mdosch.de/" in str(payload["builtinsHtml"])
+    assert "https://search.seddens.net/" in str(payload["builtinsHtml"])
+    assert "https://search.wdpserver.com/" in str(payload["builtinsHtml"])
     assert payload["savePayload"] == {
         "provider": "exa",
-        "api_key": "secret",
+        "exa_api_key": "draft-exa-key",
         "fallback_provider": "searxng",
-        "searxng_instance_url": "https://search.example.test",
+        "searxng_instance_url": "https://search.example.test/",
     }
-    assert payload["providerSiteHref"] == "https://exa.ai"
     assert notifications == [
         {
             "title": "Web Settings Saved",
@@ -69,16 +86,16 @@ console.log(JSON.stringify({
     ]
 
 
-def test_web_settings_panel_preserves_saved_api_key_when_left_unchanged(
+def test_web_settings_panel_preserves_saved_exa_key_when_left_unchanged(
     tmp_path: Path,
 ) -> None:
     payload = _run_web_settings_script(
         tmp_path=tmp_path,
         fetch_config={
             "provider": "exa",
-            "api_key": "saved-secret",
-            "fallback_provider": None,
-            "searxng_instance_url": None,
+            "exa_api_key": "saved-exa-key",
+            "fallback_provider": "searxng",
+            "searxng_instance_url": "https://search.example.test/",
         },
         runner_source="""
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from "./webSettings.mjs";
@@ -108,21 +125,21 @@ console.log(JSON.stringify({
     assert payload["toggleDisplay"] == "inline-flex"
     assert payload["savePayload"] == {
         "provider": "exa",
-        "api_key": "saved-secret",
-        "fallback_provider": None,
-        "searxng_instance_url": None,
+        "exa_api_key": "saved-exa-key",
+        "fallback_provider": "searxng",
+        "searxng_instance_url": "https://search.example.test/",
     }
 
 
-def test_web_settings_panel_reveals_and_clears_saved_api_key(
+def test_web_settings_panel_reveals_and_clears_saved_exa_key(
     tmp_path: Path,
 ) -> None:
     payload = _run_web_settings_script(
         tmp_path=tmp_path,
         fetch_config={
             "provider": "exa",
-            "api_key": "saved-secret",
-            "fallback_provider": None,
+            "exa_api_key": "saved-exa-key",
+            "fallback_provider": "searxng",
             "searxng_instance_url": None,
         },
         runner_source="""
@@ -159,17 +176,17 @@ console.log(JSON.stringify({
     )
 
     notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
-    assert payload["revealedValue"] == "saved-secret"
+    assert payload["revealedValue"] == "saved-exa-key"
     assert payload["revealedType"] == "text"
     assert payload["toggleTitle"] == "Hide API key"
     assert payload["clearedValue"] == ""
     assert payload["clearedPlaceholder"] == "Optional for higher rate limits"
-    assert payload["toggleDisplay"] == "none"
+    assert payload["toggleDisplay"] == "inline-flex"
     assert payload["savePayload"] == {
         "provider": "exa",
-        "api_key": None,
-        "fallback_provider": None,
-        "searxng_instance_url": None,
+        "exa_api_key": None,
+        "fallback_provider": "searxng",
+        "searxng_instance_url": DEFAULT_SEARXNG_INSTANCE_URL,
     }
     assert notifications == [
         {
@@ -180,13 +197,15 @@ console.log(JSON.stringify({
     ]
 
 
-def test_web_settings_panel_renders_provider_website_card(tmp_path: Path) -> None:
+def test_web_settings_panel_renders_provider_website_card_for_exa(
+    tmp_path: Path,
+) -> None:
     payload = _run_web_settings_script(
         tmp_path=tmp_path,
         fetch_config={
             "provider": "exa",
-            "api_key": None,
-            "fallback_provider": None,
+            "exa_api_key": None,
+            "fallback_provider": "searxng",
             "searxng_instance_url": None,
         },
         runner_source="""
@@ -216,16 +235,16 @@ console.log(JSON.stringify({
     assert payload["providerSiteUrl"] == "https://exa.ai"
 
 
-def test_web_settings_panel_syncs_searxng_state_without_exposing_saved_api_key(
+def test_web_settings_panel_hides_searxng_field_until_needed(
     tmp_path: Path,
 ) -> None:
     payload = _run_web_settings_script(
         tmp_path=tmp_path,
         fetch_config={
-            "provider": "searxng",
-            "api_key": "saved-secret",
-            "fallback_provider": "searxng",
-            "searxng_instance_url": "https://search.example.test",
+            "provider": "exa",
+            "exa_api_key": None,
+            "fallback_provider": "disabled",
+            "searxng_instance_url": None,
         },
         runner_source="""
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from "./webSettings.mjs";
@@ -237,34 +256,38 @@ installGlobals(elements, notifications);
 bindWebSettingsHandlers();
 await loadWebSettingsPanel();
 
-await document.getElementById("save-web-btn").onclick();
+const hiddenDisplay = document.getElementById("web-searxng-instance-url-field").style.display;
+const hiddenDisabled = document.getElementById("web-searxng-instance-url").disabled;
+const hiddenValue = document.getElementById("web-searxng-instance-url").value;
+const hiddenBuiltinsDisplay = document.getElementById("web-searxng-builtins-field").style.display;
+const hiddenBuiltinsHtml = document.getElementById("web-searxng-builtins-list").innerHTML;
+
+document.getElementById("web-fallback-provider").value = "searxng";
+document.getElementById("web-fallback-provider").onchange();
 
 console.log(JSON.stringify({
-    apiKeyDisabled: document.getElementById("web-api-key").disabled,
-    apiKeyPlaceholder: document.getElementById("web-api-key").placeholder,
-    apiKeyType: document.getElementById("web-api-key").type,
-    toggleDisplay: document.getElementById("toggle-web-api-key-btn").style.display,
-    searxngInstanceDisabled: document.getElementById("web-searxng-instance-url").disabled,
-    providerSiteHref: document.getElementById("web-provider-site-link").href,
-    providerSiteBadge: document.getElementById("web-provider-site-badge").textContent,
-    savePayload: globalThis.__saveWebPayload,
+    hiddenDisplay,
+    hiddenDisabled,
+    hiddenValue,
+    hiddenBuiltinsDisplay,
+    hiddenBuiltinsHtml,
+    revealedDisplay: document.getElementById("web-searxng-instance-url-field").style.display,
+    revealedDisabled: document.getElementById("web-searxng-instance-url").disabled,
+    revealedValue: document.getElementById("web-searxng-instance-url").value,
+    revealedBuiltinsDisplay: document.getElementById("web-searxng-builtins-field").style.display,
 }));
 """.strip(),
     )
 
-    assert payload["apiKeyDisabled"] is True
-    assert payload["apiKeyPlaceholder"] == "************"
-    assert payload["apiKeyType"] == "password"
-    assert payload["toggleDisplay"] == "none"
-    assert payload["searxngInstanceDisabled"] is False
-    assert payload["providerSiteHref"] == "https://docs.searxng.org/"
-    assert payload["providerSiteBadge"] == "SearXNG"
-    assert payload["savePayload"] == {
-        "provider": "searxng",
-        "api_key": "saved-secret",
-        "fallback_provider": "searxng",
-        "searxng_instance_url": "https://search.example.test",
-    }
+    assert payload["hiddenDisplay"] == "none"
+    assert payload["hiddenDisabled"] is True
+    assert payload["hiddenValue"] == DEFAULT_SEARXNG_INSTANCE_URL
+    assert payload["hiddenBuiltinsDisplay"] == "none"
+    assert "https://search.mdosch.de/" in str(payload["hiddenBuiltinsHtml"])
+    assert payload["revealedDisplay"] == "grid"
+    assert payload["revealedDisabled"] is False
+    assert payload["revealedValue"] == DEFAULT_SEARXNG_INSTANCE_URL
+    assert payload["revealedBuiltinsDisplay"] == "grid"
 
 
 def _run_web_settings_script(
@@ -292,8 +315,8 @@ def _run_web_settings_script(
     runner_path = tmp_path / "runner.mjs"
     fetch_web_config = fetch_config or {
         "provider": "exa",
-        "api_key": None,
-        "fallback_provider": None,
+        "exa_api_key": None,
+        "fallback_provider": "searxng",
         "searxng_instance_url": None,
     }
     fetch_web_config_json = json.dumps(fetch_web_config)
@@ -330,6 +353,7 @@ const translations = {
     "settings.web.saved_message": "Web settings saved.",
     "settings.web.save_failed": "Save Failed",
     "settings.web.api_key_placeholder": "Optional for higher rate limits",
+    "settings.web.exa_api_key": "Exa API Key",
     "settings.model.show_api_key": "Show API key",
     "settings.model.hide_api_key": "Hide API key",
 };
@@ -397,9 +421,13 @@ function createElements() {{
     return new Map([
         ["web-provider", createElement("block")],
         ["web-fallback-provider", createElement("block")],
+        ["web-api-key-label", createElement("block")],
         ["web-api-key", createElement("block")],
         ["toggle-web-api-key-btn", createElement("none")],
+        ["web-searxng-instance-url-field", createElement("none")],
         ["web-searxng-instance-url", createElement("block")],
+        ["web-searxng-builtins-field", createElement("none")],
+        ["web-searxng-builtins-list", createElement("block")],
         ["web-provider-site-link", createElement("block")],
         ["web-provider-site-badge", createElement("block")],
         ["web-provider-site-url", createElement("block")],

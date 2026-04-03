@@ -11,20 +11,25 @@ import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const MASKED_SECRET_PLACEHOLDER = '************';
+const DEFAULT_SEARXNG_INSTANCE_URL = 'https://search.mdosch.de/';
+const BUILTIN_SEARXNG_INSTANCE_URLS = (
+    [
+        DEFAULT_SEARXNG_INSTANCE_URL,
+        'https://search.seddens.net/',
+        'https://search.wdpserver.com/',
+    ]
+);
 const WEB_PROVIDER_EXA = 'exa';
-const WEB_PROVIDER_SEARXNG = 'searxng';
+const WEB_FALLBACK_PROVIDER_SEARXNG = 'searxng';
 const WEB_PROVIDER_DETAILS = {
     [WEB_PROVIDER_EXA]: {
+        apiKeyLabelKey: 'settings.web.exa_api_key',
         label: 'Exa',
         website: 'https://exa.ai',
     },
-    [WEB_PROVIDER_SEARXNG]: {
-        label: 'SearXNG',
-        website: 'https://docs.searxng.org/',
-    },
 };
 
-let webApiKeyState = createWebApiKeyState();
+let webApiKeyStates = createWebApiKeyStates();
 
 function formatMessage(key, values = {}) {
     return Object.entries(values).reduce(
@@ -98,19 +103,29 @@ async function handleSaveWeb() {
 }
 
 function writeWebFormValues(config) {
-    setInputValue('web-provider', config.provider || WEB_PROVIDER_EXA);
-    setInputValue('web-fallback-provider', config.fallback_provider);
-    setInputValue('web-searxng-instance-url', config.searxng_instance_url);
-    webApiKeyState = createWebApiKeyState(config.api_key);
+    setInputValue('web-provider', WEB_PROVIDER_EXA);
+    setInputValue(
+        'web-fallback-provider',
+        config.fallback_provider || WEB_FALLBACK_PROVIDER_SEARXNG,
+    );
+    setInputValue(
+        'web-searxng-instance-url',
+        config.searxng_instance_url || DEFAULT_SEARXNG_INSTANCE_URL,
+    );
+    webApiKeyStates = createWebApiKeyStates(config);
     syncWebFormState();
 }
 
 function readWebFormValues() {
     return {
-        provider: readInputValue('web-provider') || WEB_PROVIDER_EXA,
-        api_key: readWebApiKeyValue(),
-        fallback_provider: readInputValue('web-fallback-provider') || null,
-        searxng_instance_url: readInputValue('web-searxng-instance-url') || null,
+        provider: WEB_PROVIDER_EXA,
+        exa_api_key: readWebApiKeyValueForProvider(WEB_PROVIDER_EXA),
+        fallback_provider: (
+            readInputValue('web-fallback-provider') || WEB_FALLBACK_PROVIDER_SEARXNG
+        ),
+        searxng_instance_url: (
+            readInputValue('web-searxng-instance-url') || DEFAULT_SEARXNG_INSTANCE_URL
+        ),
     };
 }
 
@@ -130,6 +145,12 @@ function readInputValue(id) {
     return input.value.trim();
 }
 
+function createWebApiKeyStates(config = {}) {
+    return {
+        [WEB_PROVIDER_EXA]: createWebApiKeyState(config.exa_api_key),
+    };
+}
+
 function createWebApiKeyState(persistedValue = null) {
     const normalizedValue = typeof persistedValue === 'string' ? persistedValue : '';
     return {
@@ -141,56 +162,96 @@ function createWebApiKeyState(persistedValue = null) {
     };
 }
 
-function syncWebFormState() {
-    const provider = readInputValue('web-provider') || WEB_PROVIDER_EXA;
-    const fallbackProvider = readInputValue('web-fallback-provider');
-    const apiKeyInput = document.getElementById('web-api-key');
-    const isApiKeyEditable = provider === WEB_PROVIDER_EXA;
+function getSelectedProvider() {
+    return WEB_PROVIDER_EXA;
+}
 
-    if (apiKeyInput) {
-        apiKeyInput.disabled = !isApiKeyEditable;
-    }
-    if (!isApiKeyEditable) {
-        webApiKeyState.revealed = false;
-    }
+function getWebApiKeyState(provider = getSelectedProvider()) {
+    return webApiKeyStates[provider] || createWebApiKeyState();
+}
+
+function syncWebFormState() {
+    const fallbackProvider = readInputValue('web-fallback-provider');
+    const searxngField = document.getElementById('web-searxng-instance-url-field');
+    const searxngBuiltinsField = document.getElementById('web-searxng-builtins-field');
+    const showsSearxngField = fallbackProvider === WEB_FALLBACK_PROVIDER_SEARXNG;
 
     const searxngInstanceInput = document.getElementById('web-searxng-instance-url');
-    if (searxngInstanceInput) {
-        searxngInstanceInput.disabled = !(
-            provider === WEB_PROVIDER_SEARXNG || fallbackProvider === WEB_PROVIDER_SEARXNG
-        );
+    if (searxngField) {
+        searxngField.style.display = showsSearxngField ? 'grid' : 'none';
     }
+    if (searxngBuiltinsField) {
+        searxngBuiltinsField.style.display = showsSearxngField ? 'grid' : 'none';
+    }
+    if (searxngInstanceInput) {
+        searxngInstanceInput.disabled = !showsSearxngField;
+        if (!searxngInstanceInput.value.trim()) {
+            searxngInstanceInput.value = DEFAULT_SEARXNG_INSTANCE_URL;
+        }
+    }
+    renderBuiltinSearxngInstances();
 
-    renderWebProviderSite(provider);
+    renderWebApiKeyLabel();
+    renderWebProviderSite();
     renderWebApiKeyField();
+}
+
+function renderBuiltinSearxngInstances() {
+    const builtinsList = document.getElementById('web-searxng-builtins-list');
+    if (!builtinsList) {
+        return;
+    }
+    builtinsList.innerHTML = BUILTIN_SEARXNG_INSTANCE_URLS.map(
+        (instanceUrl) => (
+            `<div class="trigger-readonly-value trigger-readonly-value-mono">${instanceUrl}</div>`
+        ),
+    ).join('');
+}
+
+function renderWebApiKeyLabel() {
+    const apiKeyLabel = document.getElementById('web-api-key-label');
+    if (!apiKeyLabel) {
+        return;
+    }
+    const providerDetails = WEB_PROVIDER_DETAILS[WEB_PROVIDER_EXA];
+    if (typeof apiKeyLabel.setAttribute === 'function') {
+        apiKeyLabel.setAttribute('data-i18n', providerDetails.apiKeyLabelKey);
+    } else {
+        apiKeyLabel.dataset = apiKeyLabel.dataset || {};
+        apiKeyLabel.dataset.i18n = providerDetails.apiKeyLabelKey;
+    }
+    apiKeyLabel.textContent = t(providerDetails.apiKeyLabelKey);
 }
 
 function handleWebApiKeyInput() {
     const apiKeyInput = document.getElementById('web-api-key');
     const nextValue = apiKeyInput ? apiKeyInput.value : '';
-    webApiKeyState.draftValue = nextValue;
-    webApiKeyState.isDirty = webApiKeyState.hasPersistedValue
-        ? nextValue !== webApiKeyState.persistedValue
+    const provider = getSelectedProvider();
+    const nextState = getWebApiKeyState(provider);
+    nextState.draftValue = nextValue;
+    nextState.isDirty = nextState.hasPersistedValue
+        ? nextValue !== nextState.persistedValue
         : nextValue.trim().length > 0;
-    if (!readWebApiKeyValue()) {
-        webApiKeyState.revealed = false;
+    if (!readWebApiKeyValueForProvider(provider)) {
+        nextState.revealed = false;
     }
+    webApiKeyStates[provider] = nextState;
     renderWebApiKeyField();
 }
 
 function toggleWebApiKeyVisibility() {
-    if (!hasWebApiKeyValue()) {
+    const provider = getSelectedProvider();
+    if (!hasWebApiKeyValue(provider)) {
         return;
     }
-    webApiKeyState.revealed = !webApiKeyState.revealed;
+    const nextState = getWebApiKeyState(provider);
+    nextState.revealed = !nextState.revealed;
+    webApiKeyStates[provider] = nextState;
     renderWebApiKeyField();
 }
 
-function renderWebProviderSite(providerValue) {
-    const providerDetails = WEB_PROVIDER_DETAILS[providerValue] || {
-        label: providerValue || 'Provider',
-        website: '',
-    };
+function renderWebProviderSite() {
+    const providerDetails = WEB_PROVIDER_DETAILS[WEB_PROVIDER_EXA];
     const siteLink = document.getElementById('web-provider-site-link');
     const siteBadge = document.getElementById('web-provider-site-badge');
     const siteUrl = document.getElementById('web-provider-site-url');
@@ -214,16 +275,22 @@ function renderWebProviderSite(providerValue) {
     }
 }
 
-function readWebApiKeyValue() {
+function readWebApiKeyValueForProvider(provider) {
+    const state = getWebApiKeyState(provider);
     const apiKeyInput = document.getElementById('web-api-key');
-    const inputValue = apiKeyInput ? apiKeyInput.value.trim() : '';
-    if (!webApiKeyState.hasPersistedValue) {
+    const inputValue = (
+        apiKeyInput && getSelectedProvider() === provider
+            ? apiKeyInput.value.trim()
+            : state.draftValue.trim()
+    );
+
+    if (!state.hasPersistedValue) {
         return inputValue || null;
     }
-    if (webApiKeyState.isDirty) {
+    if (state.isDirty) {
         return inputValue || null;
     }
-    return inputValue || webApiKeyState.persistedValue || null;
+    return inputValue || state.persistedValue || null;
 }
 
 function renderWebApiKeyField() {
@@ -232,19 +299,18 @@ function renderWebApiKeyField() {
         return;
     }
 
-    if (webApiKeyState.revealed) {
+    const state = getWebApiKeyState();
+    if (state.revealed) {
         apiKeyInput.type = 'text';
-        apiKeyInput.value = webApiKeyState.isDirty
-            ? webApiKeyState.draftValue
-            : webApiKeyState.persistedValue;
+        apiKeyInput.value = state.isDirty ? state.draftValue : state.persistedValue;
         apiKeyInput.placeholder = '';
-    } else if (webApiKeyState.hasPersistedValue && !webApiKeyState.isDirty) {
+    } else if (state.hasPersistedValue && !state.isDirty) {
         apiKeyInput.type = 'password';
         apiKeyInput.value = '';
         apiKeyInput.placeholder = MASKED_SECRET_PLACEHOLDER;
     } else {
         apiKeyInput.type = 'password';
-        apiKeyInput.value = webApiKeyState.draftValue;
+        apiKeyInput.value = state.draftValue;
         apiKeyInput.placeholder = t('settings.web.api_key_placeholder');
     }
 
@@ -253,16 +319,15 @@ function renderWebApiKeyField() {
 
 function renderWebApiKeyToggle() {
     const toggleApiKeyBtn = document.getElementById('toggle-web-api-key-btn');
-    const apiKeyInput = document.getElementById('web-api-key');
     if (!toggleApiKeyBtn) {
         return;
     }
 
-    const canReveal = apiKeyInput ? apiKeyInput.disabled !== true : true;
-    toggleApiKeyBtn.style.display = canReveal && hasWebApiKeyValue() ? 'inline-flex' : 'none';
-    toggleApiKeyBtn.disabled = !canReveal;
-    toggleApiKeyBtn.className = webApiKeyState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
-    toggleApiKeyBtn.title = webApiKeyState.revealed
+    const state = getWebApiKeyState();
+    toggleApiKeyBtn.style.display = 'inline-flex';
+    toggleApiKeyBtn.disabled = false;
+    toggleApiKeyBtn.className = state.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
+    toggleApiKeyBtn.title = state.revealed
         ? t('settings.model.hide_api_key')
         : t('settings.model.show_api_key');
     if (typeof toggleApiKeyBtn.setAttribute === 'function') {
@@ -272,11 +337,16 @@ function renderWebApiKeyToggle() {
     }
 }
 
-function hasWebApiKeyValue() {
+function hasWebApiKeyValue(provider = getSelectedProvider()) {
+    const state = getWebApiKeyState(provider);
     const apiKeyInput = document.getElementById('web-api-key');
-    const inputValue = apiKeyInput ? apiKeyInput.value.trim() : '';
-    if (webApiKeyState.hasPersistedValue && !webApiKeyState.isDirty) {
-        return Boolean(webApiKeyState.persistedValue || inputValue);
+    const inputValue = (
+        apiKeyInput && getSelectedProvider() === provider
+            ? apiKeyInput.value.trim()
+            : state.draftValue.trim()
+    );
+    if (state.hasPersistedValue && !state.isDirty) {
+        return Boolean(state.persistedValue || inputValue);
     }
-    return Boolean(webApiKeyState.draftValue.trim() || inputValue);
+    return Boolean(state.draftValue.trim() || inputValue);
 }

@@ -761,21 +761,13 @@ function createModal() {
                                                 <label for="web-provider" data-i18n="settings.web.provider">提供商</label>
                                                 <select id="web-provider">
                                                     <option value="exa">Exa</option>
-                                                    <option value="searxng">SearXNG</option>
                                                 </select>
                                             </div>
                                             <div class="form-group proxy-inline-field">
-                                                <label for="web-fallback-provider" data-i18n="settings.web.fallback_provider">回退提供商</label>
-                                                <select id="web-fallback-provider">
-                                                    <option value="">Disabled</option>
-                                                    <option value="searxng">SearXNG</option>
-                                                </select>
-                                            </div>
-                                            <div class="form-group proxy-inline-field">
-                                                <label for="web-api-key" data-i18n="settings.web.api_key">API Key</label>
+                                                <label for="web-api-key" id="web-api-key-label" data-i18n="settings.web.exa_api_key">Exa API Key</label>
                                                 <div class="secure-input-row">
                                                     <input type="password" id="web-api-key" placeholder="可选，用于更高频率限制" data-i18n-placeholder="settings.web.api_key_placeholder" autocomplete="current-password">
-                                                    <button class="secure-input-btn" id="toggle-web-api-key-btn" type="button" title="Show API key" aria-label="Show API key" style="display:none;">
+                                                    <button class="secure-input-btn" id="toggle-web-api-key-btn" type="button" title="Show API key" aria-label="Show API key">
                                                         <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                                             <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
                                                             <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
@@ -784,8 +776,23 @@ function createModal() {
                                                 </div>
                                             </div>
                                             <div class="form-group proxy-inline-field">
+                                                <label for="web-fallback-provider" data-i18n="settings.web.fallback_provider">回退提供商</label>
+                                                <select id="web-fallback-provider">
+                                                    <option value="searxng">SearXNG</option>
+                                                    <option value="disabled">Disabled</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-group proxy-inline-field" id="web-searxng-instance-url-field" style="display:none;">
                                                 <label for="web-searxng-instance-url" data-i18n="settings.web.searxng_instance_url">SearXNG 实例 URL</label>
-                                                <input type="text" id="web-searxng-instance-url" placeholder="留空时使用内置公共实例池" data-i18n-placeholder="settings.web.searxng_instance_url_placeholder" autocomplete="off">
+                                                <input type="text" id="web-searxng-instance-url" placeholder="默认值： https://search.mdosch.de/" data-i18n-placeholder="settings.web.searxng_instance_url_placeholder" autocomplete="off">
+                                            </div>
+                                            <div class="form-group proxy-inline-field" id="web-searxng-builtins-field" style="display:none;">
+                                                <span class="web-searxng-builtins-label" data-i18n="settings.web.searxng_builtin_instances">内置实例</span>
+                                                <div class="web-searxng-builtins-list" id="web-searxng-builtins-list">
+                                                    <div class="trigger-readonly-value trigger-readonly-value-mono">https://search.mdosch.de/</div>
+                                                    <div class="trigger-readonly-value trigger-readonly-value-mono">https://search.seddens.net/</div>
+                                                    <div class="trigger-readonly-value trigger-readonly-value-mono">https://search.wdpserver.com/</div>
+                                                </div>
                                             </div>
                                         </div>
                                         <div class="form-group proxy-inline-field web-provider-inline-field">
