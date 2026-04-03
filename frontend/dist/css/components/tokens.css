@@ -500,24 +500,54 @@
     opacity: 0.6;
 }
 
-.session-token-usage {
+.composer-usage-pill {
     display: inline-flex;
     align-items: center;
-    justify-content: flex-end;
-    gap: 0.55rem;
+    justify-content: center;
     min-height: 1.7rem;
-    margin-left: auto;
-    padding: 0.18rem 0.55rem;
+    padding: 0 0.65rem;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-surface);
-    color: var(--text-secondary);
-    font-size: 0.74rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-surface) 90%, transparent);
+    font-size: 0.72rem;
+    font-weight: 600;
     white-space: nowrap;
 }
 
-.session-token-usage-label {
+.composer-usage-strip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    min-height: 1.7rem;
+    margin-left: auto;
+}
+
+.session-token-usage {
+    justify-content: flex-end;
+    gap: 0.65rem;
     color: var(--text-secondary);
+    font-size: 0.72rem;
+}
+
+.session-token-usage-pair {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.28rem;
+}
+
+.session-token-usage-arrow {
+    font-size: 0.76rem;
+    line-height: 1;
+}
+
+.session-token-usage-arrow-up {
+    color: #34d399;
+}
+
+.session-token-usage-arrow-down {
+    color: #60a5fa;
 }
 
 .session-token-usage-value {
@@ -672,8 +702,14 @@
         align-items: flex-start;
     }
 
-    .session-token-usage {
+    .composer-usage-strip {
         width: 100%;
+        justify-content: flex-start;
+        margin-left: 0;
+    }
+
+    .session-token-usage {
+        width: auto;
         justify-content: flex-start;
         margin-left: 0;
     }

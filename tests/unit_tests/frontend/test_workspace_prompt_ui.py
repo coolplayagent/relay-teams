@@ -81,6 +81,9 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     backend_status_script = (
         repo_root / "frontend" / "dist" / "js" / "utils" / "backendStatus.js"
     ).read_text(encoding="utf-8")
+    i18n_script = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "i18n.js"
+    ).read_text(encoding="utf-8")
     markdown_script = (
         repo_root / "frontend" / "dist" / "js" / "utils" / "markdown.js"
     ).read_text(encoding="utf-8")
@@ -112,7 +115,10 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert 'id="orchestration-preset-select"' in index_html
     assert 'id="prompt-input-hint"' in index_html
     assert 'id="session-token-usage"' in index_html
-    assert "Latest provider context usage" in index_html
+    assert 'class="composer-usage-strip"' in index_html
+    assert "Prompt / context window" in index_html
+    assert "Tokens --" not in index_html
+    assert "↑ -- ↓ --" in index_html
     assert "-- / --" in index_html
     assert "Checking backend..." in index_html
     assert "Enter to send · Shift+Enter for new line" in index_html
@@ -156,6 +162,11 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "fetchSessionContextPreview" not in context_indicator_script
     assert "main-context-indicator" in context_indicator_script
     assert "panel-context-indicator" in context_indicator_script
+    assert "isMainComposerRecoveryActionVisible" not in context_indicator_script
+    assert "Prompt / context window" in i18n_script
+    assert "Prompt tokens: {input_tokens}" in i18n_script
+    assert "本轮输入 / 上下文窗口" in i18n_script
+    assert "本轮输入：{input_tokens}" in i18n_script
     assert 'data-tab="orchestration"' in settings_index_script
     assert 'id="orchestration-panel"' in settings_index_script
     assert "loadOrchestrationSettingsPanel" in settings_index_script
@@ -172,13 +183,21 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "fetchSessionTokenUsage" in session_token_usage_script
     assert "token_usage.detail" in session_token_usage_script
     assert "session-token-usage" in session_token_usage_script
+    assert "session-token-usage-pair" in session_token_usage_script
+    assert "session-token-usage-arrow-up" in session_token_usage_script
+    assert "session-token-usage-arrow-down" in session_token_usage_script
     assert "markBackendOnline" in request_script
     assert "markBackendOffline" in request_script
     assert ".status-indicator > span:last-child" in components_css
     assert "flex: 1 1 auto;" in components_css
     assert "white-space: nowrap;" in components_css
     assert ".input-footer-hint {" in components_css
+    assert ".composer-usage-strip {" in components_css
+    assert ".composer-usage-pill {" in components_css
     assert ".session-token-usage {" in components_css
+    assert ".session-token-usage-pair {" in components_css
+    assert ".composer-context-indicator {" in components_css
+    assert "position: static;" in components_css
     assert ".status-indicator.online span {" not in components_css
     assert ".status-indicator.offline > span:first-child" in components_css
     assert ".status-indicator.checking > span:first-child" in components_css

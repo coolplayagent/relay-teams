@@ -333,6 +333,122 @@
 
 /* Approval inline */
 
+.recovery-approval-host {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.recovery-approval-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid color-mix(in srgb, var(--warning) 18%, var(--border-color));
+    border-radius: var(--radius-md);
+    background:
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--warning) 7%, var(--bg-surface)) 0%,
+            color-mix(in srgb, var(--bg-surface) 92%, transparent) 100%
+        );
+    box-shadow: var(--shadow-sm);
+}
+
+.recovery-approval-copy {
+    min-width: 0;
+}
+
+.recovery-approval-eyebrow {
+    margin-bottom: 0.18rem;
+    color: var(--warning);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.recovery-approval-title {
+    color: var(--text-primary);
+    font-size: 0.92rem;
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+.recovery-approval-meta {
+    margin-top: 0.16rem;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+.recovery-approval-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    align-self: center;
+}
+
+.recovery-approval-action {
+    height: 2rem;
+    padding: 0 0.75rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+        transform 0.15s ease,
+        border-color 0.2s ease,
+        background-color 0.2s ease,
+        color 0.2s ease,
+        opacity 0.2s ease;
+}
+
+.recovery-approval-action:hover {
+    transform: translateY(-1px);
+}
+
+.recovery-approval-action:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.recovery-approval-action-approve {
+    border-color: color-mix(in srgb, var(--primary) 26%, var(--border-color));
+    background: color-mix(in srgb, var(--primary) 11%, transparent);
+    color: var(--primary);
+}
+
+.recovery-approval-action-approve:hover {
+    border-color: color-mix(in srgb, var(--primary) 50%, var(--border-color));
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
+.recovery-approval-action-deny {
+    border-color: rgba(239, 68, 68, 0.22);
+    background: rgba(239, 68, 68, 0.08);
+    color: #ef6b6b;
+}
+
+.recovery-approval-action-deny:hover {
+    border-color: rgba(239, 68, 68, 0.48);
+    background: rgba(239, 68, 68, 0.14);
+}
+
+.recovery-approval-status {
+    margin-left: auto;
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    line-height: 1.3;
+}
+
+.recovery-approval-status.is-error {
+    color: var(--danger);
+}
+
 .tool-approval-inline {
     padding: 0.4rem 0.85rem;
     background: rgba(255, 255, 255, 0.015);
@@ -358,6 +474,63 @@
     font-size: 0.72rem;
     color: var(--text-secondary);
     background: rgba(255, 255, 255, 0.015);
+}
+
+/* --- Tool Group - collapsible divider for grouped tool blocks --- */
+
+.tool-group {
+    margin: 0.35rem 0;
+}
+
+.tool-group-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    cursor: pointer;
+    list-style: none;
+    color: var(--text-secondary);
+    font-size: 0.8125rem;
+    font-family: var(--font-ui);
+    user-select: none;
+    padding: 0.2rem 0;
+    transition: color 0.15s;
+}
+
+.tool-group-summary::-webkit-details-marker {
+    display: none;
+}
+
+.tool-group-summary:hover {
+    color: var(--text-primary);
+}
+
+.tool-group-line {
+    flex: 1 1 auto;
+    height: 1px;
+    background: color-mix(in srgb, var(--border-color) 82%, transparent);
+}
+
+.tool-group-label {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.tool-group-toggle {
+    flex: 0 0 auto;
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    line-height: 1;
+    transform: rotate(0deg);
+    transition: transform 0.16s ease;
+}
+
+.tool-group[open] > .tool-group-summary .tool-group-toggle {
+    transform: rotate(90deg);
+}
+
+.tool-group-body {
+    overflow: hidden;
 }
 
 /* --- Animations --- */
@@ -388,20 +561,9 @@
 }
 
 .context-indicator {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     min-width: 4.9rem;
-    height: 1.7rem;
-    padding: 0 0.55rem;
-    border-radius: 999px;
-    border: 1px solid var(--border-color);
-    background: color-mix(in srgb, var(--bg-surface) 90%, transparent);
     color: var(--text-secondary);
-    font-size: 0.72rem;
-    font-weight: 600;
     letter-spacing: 0.01em;
-    white-space: nowrap;
 }
 
 .context-indicator[data-state="ready"] {
@@ -423,9 +585,68 @@
 }
 
 #main-context-indicator {
+    position: static;
+    right: auto;
+    bottom: auto;
+}
+
+.composer-context-indicator {
+    font-family: var(--font-mono);
+}
+
+#resume-run-btn {
     position: absolute;
-    right: 3.3rem;
-    bottom: 0.92rem;
+    right: 3.25rem;
+    bottom: 0.6rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    height: 36px;
+    padding: 0 0.8rem;
+    border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border-color));
+    background:
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--primary) 12%, transparent),
+            color-mix(in srgb, var(--primary) 4%, transparent)
+        );
+    color: var(--primary);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    box-shadow: 0 10px 24px -18px color-mix(in srgb, var(--primary) 82%, transparent);
+    border-radius: 999px;
+    cursor: pointer;
+    transition:
+        transform 0.15s ease,
+        border-color 0.2s ease,
+        background-color 0.2s ease,
+        color 0.2s ease,
+        opacity 0.2s ease;
+}
+
+#resume-run-btn svg {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+}
+
+#resume-run-btn:hover {
+    border-color: color-mix(in srgb, var(--primary) 52%, var(--border-color));
+    background:
+        linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--primary) 18%, transparent),
+            color-mix(in srgb, var(--primary) 8%, transparent)
+        );
+    color: color-mix(in srgb, var(--primary) 88%, white 12%);
+    transform: translateY(-1px);
+}
+
+#resume-run-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
 }
 
 #send-btn {

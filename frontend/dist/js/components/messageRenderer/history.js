@@ -3,6 +3,7 @@
  * Historical message rendering and approval state hydration.
  */
 import { isRunPrimaryRoleId } from '../../core/state.js';
+import { formatMessage } from '../../utils/i18n.js';
 import {
     applyToolReturn,
     appendMessageText,
@@ -76,6 +77,8 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
             roleId: String(msgItem.role_id || '').trim(),
             streamKey,
         });
+        const msgCreatedAt = String(msgItem.created_at || '').trim();
+        if (msgCreatedAt) wrapper.dataset.createdAt = msgCreatedAt;
         renderParts(contentEl, parts, pendingToolBlocks, {
             collapseUserPrompt: role === 'user' && options.collapsibleUserPrompts === true,
         });
@@ -91,7 +94,30 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
         };
     });
 
-    if (streamOverlayEntry && Array.isArray(streamOverlayEntry.parts) && streamOverlayEntry.parts.length > 0) {
+    // Store the last message timestamp from raw data (including tool-return
+    // messages not rendered as .message elements) so the collapse group can
+    // compute duration from round start to the final message.
+    if (historyMessages.length > 0) {
+        for (let i = historyMessages.length - 1; i >= 0; i -= 1) {
+            const ts = String(historyMessages[i]?.created_at || '').trim();
+            if (ts) {
+                container.dataset.roundLastMessageAt = ts;
+                break;
+            }
+        }
+    }
+
+    if (shouldCollapseIntermediateMessages(streamOverlayEntry, options)) {
+        collapseIntermediateMessages(container);
+    }
+
+    if (
+        streamOverlayEntry
+        && (
+            (Array.isArray(streamOverlayEntry.parts) && streamOverlayEntry.parts.length > 0)
+            || streamOverlayEntry.textStreaming === true
+        )
+    ) {
         renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBlocks, lastRenderedMessage, runId);
     }
 
@@ -165,12 +191,20 @@ function renderStreamOverlayEntry(
         runId,
     );
     let combinedText = '';
+    let renderedLiveTextTail = false;
     const overlayParts = Array.isArray(streamOverlayEntry.parts) ? streamOverlayEntry.parts : [];
-    const trailingTextPart = [...overlayParts].reverse().find(part => part && typeof part === 'object');
+    const hasLiveTextTail = streamOverlayEntry.textStreaming === true;
+    const trailingTextPart = [...overlayParts]
+        .reverse()
+        .find(part => part && typeof part === 'object' && part.kind === 'text');
     const flushText = (streaming = false) => {
         const safeText = String(combinedText || '');
-        if (!safeText.trim()) return;
-        appendMessageText(contentEl, safeText.trim(), { streaming });
+        if (!safeText && !streaming) return;
+        if (!safeText.trim() && !streaming) return;
+        appendMessageText(contentEl, streaming ? safeText : safeText.trim(), { streaming });
+        if (streaming) {
+            renderedLiveTextTail = true;
+        }
         combinedText = '';
     };
 
@@ -205,7 +239,10 @@ function renderStreamOverlayEntry(
         applyOverlayToolState(toolBlock, part);
     });
 
-    flushText(trailingTextPart?.kind === 'text');
+    flushText(hasLiveTextTail && !!trailingTextPart);
+    if (hasLiveTextTail && !renderedLiveTextTail) {
+        appendMessageText(contentEl, '', { streaming: true });
+    }
 }
 
 function resolveOverlayContentTarget(container, label, streamOverlayEntry, lastRenderedMessage, runId = '') {
@@ -321,6 +358,142 @@ function resolveHistoryStreamKey(runId, instanceId, roleId) {
         return 'primary';
     }
     return safeInstanceId || `role:${safeRoleId}`;
+}
+
+function collapseIntermediateMessages(container) {
+    if (!container) return;
+    const messages = Array.from(container.querySelectorAll(':scope > .message'));
+    if (messages.length === 0) return;
+
+    const last = messages[messages.length - 1];
+
+    // Everything before the last message is intermediate (coordinator_messages
+    // do not contain the user prompt; that lives in the round header intent).
+    const beforeLast = messages.slice(0, -1);
+
+    // Also lift thinking and tool blocks out of the final message so only
+    // the plain text reply remains visible.
+    const lastContent = last.querySelector('.msg-content');
+    const liftedFromLast = [];
+    if (lastContent) {
+        Array.from(lastContent.children).forEach(child => {
+            if (child.classList.contains('thinking-block') || child.classList.contains('tool-block')) {
+                liftedFromLast.push(child);
+            }
+        });
+    }
+
+    if (beforeLast.length === 0 && liftedFromLast.length === 0) return;
+
+    // Compute elapsed duration from round start (user sent message) to last
+    // coordinator message. Round start comes from the section's dataset
+    // (set by renderRoundSection); last message time from raw data stored
+    // by renderHistoricalMessageList (covers non-rendered tool-return messages).
+    const firstTime = Date.parse(container.dataset.roundCreatedAt || messages[0].dataset.createdAt || '');
+    const lastTime = Date.parse(container.dataset.roundLastMessageAt || last.dataset.createdAt || '');
+    const durationText = Number.isFinite(firstTime) && Number.isFinite(lastTime) && lastTime > firstTime
+        ? formatElapsed(lastTime - firstTime)
+        : '';
+    const durationSuffix = durationText ? ` (${durationText})` : '';
+    const label = formatMessage('tool.group.processed', { duration: durationSuffix }).trim();
+
+    const group = document.createElement('details');
+    group.className = 'tool-group';
+    group.innerHTML = `
+        <summary class="tool-group-summary">
+            <span class="tool-group-line" aria-hidden="true"></span>
+            <span class="tool-group-label">${label}</span>
+            <span class="tool-group-toggle" aria-hidden="true">></span>
+            <span class="tool-group-line" aria-hidden="true"></span>
+        </summary>
+    `;
+    const body = document.createElement('div');
+    body.className = 'tool-group-body';
+    group.appendChild(body);
+
+    // Collect all sibling nodes from the first message up to (but not
+    // including) the last message, preserving markers and dividers.
+    container.insertBefore(group, beforeLast[0] || last);
+    let node = group.nextElementSibling;
+    while (node && node !== last) {
+        const next = node.nextElementSibling;
+        body.appendChild(node);
+        node = next;
+    }
+    liftedFromLast.forEach(el => body.appendChild(el));
+
+    // If the last message has no remaining visible content after lifting,
+    // hide it so only the collapsed group is shown.
+    if (lastContent && lastContent.childNodes.length === 0) {
+        last.hidden = true;
+    }
+
+    // Animate open / close via Web Animations API.
+    group.addEventListener('click', (e) => {
+        if (!e.target.closest('.tool-group-summary')) return;
+        e.preventDefault();
+        if (group.open) {
+            body.animate(
+                [
+                    { opacity: 1, maxHeight: body.scrollHeight + 'px' },
+                    { opacity: 0, maxHeight: '0px' },
+                ],
+                { duration: 180, easing: 'ease' },
+            ).onfinish = () => { group.open = false; };
+        } else {
+            group.open = true;
+            body.animate(
+                [
+                    { opacity: 0, maxHeight: '0px' },
+                    { opacity: 1, maxHeight: body.scrollHeight + 'px' },
+                ],
+                { duration: 200, easing: 'ease' },
+            );
+        }
+    });
+}
+
+function shouldCollapseIntermediateMessages(streamOverlayEntry, options = {}) {
+    const runStatus = String(options.runStatus || '').trim().toLowerCase();
+    const isLatestRound = options.isLatestRound === true;
+    if (isLatestRound && runStatus !== 'completed') {
+        return false;
+    }
+    if (!streamOverlayEntry || typeof streamOverlayEntry !== 'object') {
+        return true;
+    }
+    if (streamOverlayEntry.textStreaming === true) {
+        return false;
+    }
+    const parts = Array.isArray(streamOverlayEntry.parts) ? streamOverlayEntry.parts : [];
+    return !parts.some(part => {
+        if (!part || typeof part !== 'object') return false;
+        if (part.kind === 'thinking') {
+            return part.finished !== true;
+        }
+        if (part.kind !== 'tool') {
+            return false;
+        }
+        const status = String(part.status || '').trim().toLowerCase();
+        const approvalStatus = String(part.approvalStatus || '').trim().toLowerCase();
+        return (
+            status === 'pending'
+            || status === 'running'
+            || approvalStatus === 'requested'
+            || approvalStatus === 'approve'
+            || (part.result === undefined && part.validation === undefined)
+        );
+    });
+}
+function formatElapsed(ms) {
+    const totalSeconds = Math.round(ms / 1000);
+    if (totalSeconds < 60) return `${totalSeconds}s`;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes < 60) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const remainMinutes = minutes % 60;
+    return remainMinutes > 0 ? `${hours}h ${remainMinutes}m` : `${hours}h`;
 }
 
 function wrapperMatchesOverlay(wrapper, options = {}) {

@@ -23,6 +23,11 @@ import {
     updateSession,
 } from '../core/api.js';
 import { state } from '../core/state.js';
+import { detachActiveStreamForSessionSwitch } from '../core/stream.js';
+import { clearSessionRecovery, stopSessionContinuity } from '../app/recovery.js';
+import { clearAllStreamState } from './messageRenderer.js';
+import { clearAllPanels } from './agentPanel.js';
+import { clearContextIndicators } from './contextIndicators.js';
 import { formatMessage, t } from '../utils/i18n.js';
 import { hideProjectView, openAutomationProjectView, openWorkspaceProjectView } from './projectView.js';
 
@@ -39,9 +44,32 @@ let projectSortMode = 'recent';
 let openProjectMenuId = null;
 let projectMenuDismissBound = false;
 let languageRefreshBound = false;
+let pendingSessionAnimation = null;
+
+const SESSION_ANIMATION_ENTER_MS = 220;
+const SESSION_ANIMATION_REMOVE_MS = 180;
+const SESSION_ANIMATION_ACTIVATE_MS = 240;
 
 export function setSelectSessionHandler(handler) {
     selectSessionHandler = handler;
+}
+
+function clearActiveSessionView() {
+    const sessionId = state.currentSessionId;
+    if (state.activeEventSource) {
+        detachActiveStreamForSessionSwitch({ focusPrompt: false });
+    }
+    if (sessionId) {
+        stopSessionContinuity(sessionId);
+    }
+    state.currentSessionId = null;
+    clearSessionRecovery();
+    clearAllPanels();
+    clearContextIndicators();
+    clearAllStreamState();
+    if (els.chatMessages) {
+        els.chatMessages.innerHTML = '';
+    }
 }
 
 function escapeHtml(value) {
@@ -530,6 +558,63 @@ async function selectSessionById(sessionId) {
     await selectSessionHandler(sessionId);
 }
 
+function setPendingSessionAnimation(sessionId, animation) {
+    const safeSessionId = String(sessionId || '').trim();
+    const safeAnimation = String(animation || '').trim();
+    if (!safeSessionId || !safeAnimation) {
+        pendingSessionAnimation = null;
+        return;
+    }
+    pendingSessionAnimation = {
+        sessionId: safeSessionId,
+        animation: safeAnimation,
+    };
+}
+
+function consumePendingSessionAnimation() {
+    const pending = pendingSessionAnimation;
+    pendingSessionAnimation = null;
+    return pending;
+}
+
+function findSessionItem(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId || !els.projectsList) return null;
+    const items = Array.from(els.projectsList.querySelectorAll('.session-item'));
+    return items.find(item => String(item?.getAttribute?.('data-session-id') || '').trim() === safeSessionId) || null;
+}
+
+function animateSessionItem(item, animation) {
+    if (!item) return;
+    const safeAnimation = String(animation || '').trim();
+    if (!safeAnimation) return;
+    const animationClass = `session-item-${safeAnimation}`;
+    if (item.classList?.add) {
+        item.classList.remove('session-item-entering', 'session-item-removing', 'session-item-activating');
+        item.classList.add(animationClass);
+        const duration = safeAnimation === 'removing'
+            ? SESSION_ANIMATION_REMOVE_MS
+            : safeAnimation === 'entering'
+                ? SESSION_ANIMATION_ENTER_MS
+                : SESSION_ANIMATION_ACTIVATE_MS;
+        globalThis.setTimeout(() => {
+            item.classList?.remove?.(animationClass);
+        }, duration);
+        return;
+    }
+    if (typeof item.className === 'string' && !item.className.includes(animationClass)) {
+        item.className = `${item.className} ${animationClass}`.trim();
+    }
+}
+
+function playPendingSessionAnimation() {
+    const pending = consumePendingSessionAnimation();
+    if (!pending) return;
+    const item = findSessionItem(pending.sessionId);
+    if (!item) return;
+    animateSessionItem(item, pending.animation);
+}
+
 function renderAutomationHint(project) {
     const status = String(project?.status || '').trim() || 'unknown';
     const nextRunAt = String(project?.next_run_at || '').trim();
@@ -594,7 +679,9 @@ function bindProjectCard(card, group) {
             const targetWorkspaceId = String(button.getAttribute('data-workspace-id') || '').trim();
             if (!sessionId) return;
             state.currentWorkspaceId = targetWorkspaceId || AUTOMATION_INTERNAL_WORKSPACE_ID;
-            void selectSessionById(sessionId);
+            void selectSessionById(sessionId).then(() => {
+                animateSessionItem(button, 'activating');
+            });
         };
         button.addEventListener('click', selectTarget);
         button.addEventListener('keydown', event => {
@@ -645,7 +732,13 @@ function bindProjectCard(card, group) {
                 cancelLabel: t('settings.action.cancel'),
             });
             if (!shouldDelete) return;
+            const sessionItem = button.closest?.('.session-item') || null;
+            animateSessionItem(sessionItem, 'removing');
+            await new Promise(resolve => globalThis.setTimeout(resolve, SESSION_ANIMATION_REMOVE_MS));
             await deleteSession(sessionId);
+            if (state.currentSessionId === sessionId) {
+                clearActiveSessionView();
+            }
             await loadProjects();
         });
     });
@@ -771,6 +864,7 @@ export async function loadProjects() {
             openProjectMenuId = null;
         }
         groups.forEach(group => els.projectsList.appendChild(renderProjectCard(group)));
+        playPendingSessionAnimation();
     } catch (error) {
         sysLog(formatMessage('sidebar.error.loading_projects', { error: error.message }), 'log-error');
     }
@@ -894,6 +988,9 @@ export async function handleRemoveWorkspaceClick(workspace) {
     try {
         const sessions = await fetchSessions();
         const workspaceSessions = Array.isArray(sessions) ? sessions.filter(session => String(session?.workspace_id || '') === workspaceId) : [];
+        const shouldClearView = workspaceSessions.some(
+            session => session.session_id === state.currentSessionId,
+        );
         for (const session of workspaceSessions) {
             await deleteSession(session.session_id);
         }
@@ -902,6 +999,7 @@ export async function handleRemoveWorkspaceClick(workspace) {
         expandedProjectSessionIds.delete(groupKey('workspace', workspaceId));
         initializedProjectIds.delete(groupKey('workspace', workspaceId));
         openProjectMenuId = null;
+        if (shouldClearView) clearActiveSessionView();
         if (state.currentProjectViewWorkspaceId === workspaceId) hideProjectView();
         if (state.currentWorkspaceId === workspaceId) state.currentWorkspaceId = null;
         await loadProjects();
@@ -971,13 +1069,14 @@ export async function handleNewSessionClick(workspaceId, manualClick = true) {
         return;
     }
     try {
-        expandedProjectSessionIds.add(groupKey('workspace', targetWorkspaceId));
         const data = await startNewSession(targetWorkspaceId);
         state.currentWorkspaceId = targetWorkspaceId;
         sysLog(formatMessage('sidebar.log.created_session', { session_id: data.session_id }));
         if (manualClick) els.chatMessages.innerHTML = '';
+        setPendingSessionAnimation(data.session_id, 'entering');
         await loadProjects();
         await selectSessionById(data.session_id);
+        animateSessionItem(findSessionItem(data.session_id), 'activating');
     } catch (error) {
         sysLog(formatMessage('sidebar.error.creating_session', { error: error.message }), 'log-error');
     }

@@ -2,7 +2,10 @@
  * components/messageRenderer/stream.js
  * Streaming message mutation helpers plus a durable in-browser overlay cache.
  */
-import { isPrimaryRoleId } from '../../core/state.js';
+import {
+    getRunPrimaryRoleId,
+    isPrimaryRoleId,
+} from '../../core/state.js';
 import {
     applyToolReturn,
     appendStructuredContentPart,
@@ -34,7 +37,7 @@ export function getOrCreateStreamBlock(
     label,
     runId = '',
 ) {
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     let st = streamState.get(streamKey);
     if (!st || st.container !== container) {
         st = createStreamState({
@@ -57,7 +60,7 @@ export function getOrCreateStreamBlock(
 }
 
 export function appendStreamChunk(instanceId, text, runId = '', roleId = '', label = '') {
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const st = streamState.get(streamKey);
     if (!st) return;
 
@@ -72,6 +75,13 @@ export function appendStreamChunk(instanceId, text, runId = '', roleId = '', lab
     st.activeRaw += text;
     updateMessageText(st.activeTextEl, st.activeRaw, { streaming: true });
     updateOverlayText(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, label || st.label, text);
+    setOverlayTextStreaming(
+        st.runId || runId,
+        st.instanceId || instanceId,
+        roleId || st.roleId,
+        label || st.label,
+        true,
+    );
     scrollBottom(st.container);
 }
 
@@ -84,7 +94,7 @@ export function appendStreamOutputParts(
     const roleId = String(options.roleId || '');
     const label = String(options.label || '');
     const container = options.container || null;
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     let st = streamState.get(streamKey);
     if (!st && container) {
         st = createStreamState({
@@ -220,7 +230,7 @@ export function appendToolCallBlock(
     const runId = String(options.runId || '');
     const roleId = String(options.roleId || '');
     const label = String(options.label || '');
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     let st = streamState.get(streamKey);
     if (!st) {
         const actorLabel = label || (toolName ? 'Tool' : 'Agent');
@@ -266,7 +276,7 @@ export function updateToolResult(
     const runId = String(options.runId || '');
     const roleId = String(options.roleId || '');
     const container = options.container || null;
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const st = streamState.get(streamKey);
     const toolBlock = resolveToolBlockTarget(st, container, toolName, toolCallId);
     if (!toolBlock) {
@@ -282,7 +292,7 @@ export function markToolInputValidationFailed(instanceId, payload, options = {})
     const runId = String(options.runId || '');
     const roleId = String(options.roleId || '');
     const container = options.container || null;
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const st = streamState.get(streamKey);
     const toolBlock = resolveToolBlockTarget(
         st,
@@ -306,7 +316,7 @@ export function startThinkingBlock(instanceId, partIndex, options = {}) {
     const roleId = String(options.roleId || '');
     const label = String(options.label || '');
     const container = options.container || null;
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     let st = streamState.get(streamKey);
     if (!st && container) {
         const actorLabel = label || 'Agent';
@@ -338,7 +348,7 @@ export function appendThinkingChunk(instanceId, partIndex, text, options = {}) {
     const roleId = String(options.roleId || '');
     const label = String(options.label || '');
     const container = options.container || null;
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const st = streamState.get(streamKey);
     if (!st) {
         updateOverlayThinkingText(runId, instanceId, roleId, label, partIndex, text, { append: true });
@@ -355,7 +365,7 @@ export function appendThinkingChunk(instanceId, partIndex, text, options = {}) {
 export function finalizeThinking(instanceId, partIndex, options = {}) {
     const runId = String(options.runId || '');
     const roleId = String(options.roleId || '');
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const st = streamState.get(streamKey);
     const entry = resolveThinkingEntry(st, partIndex, { allowCreate: false });
     if (!entry) {
@@ -375,7 +385,7 @@ export function attachToolApprovalControls(instanceId, toolName, payload, handle
     const runId = String(options.runId || '');
     const roleId = String(options.roleId || '');
     const container = options.container || null;
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const st = streamState.get(streamKey);
     const toolBlock = resolveToolBlockTarget(
         st,
@@ -407,7 +417,7 @@ export function markToolApprovalResolved(instanceId, payload, options = {}) {
     const runId = String(options.runId || '');
     const roleId = String(options.roleId || '');
     const container = options.container || null;
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const st = streamState.get(streamKey);
     updateOverlayToolApproval(
         (st && st.runId) || runId,
@@ -454,7 +464,7 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
     const instanceId = String(options.instanceId || '').trim();
     const roleId = String(options.roleId || '').trim();
     const label = String(options.label || '').trim();
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const cleanupDelayMs = Number(options.cleanupDelayMs || 0);
 
     if (evType === 'text_delta') {
@@ -464,6 +474,7 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
     }
     if (evType === 'thinking_started') {
         clearOverlayEntryCleanupTimer(runId, streamKey);
+        setOverlayTextStreaming(runId, streamKey, roleId, label, false);
         startOverlayThinking(runId, streamKey, roleId, label, payload?.part_index ?? 0);
         return;
     }
@@ -486,6 +497,7 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
     }
     if (evType === 'tool_call') {
         clearOverlayEntryCleanupTimer(runId, streamKey);
+        setOverlayTextStreaming(runId, streamKey, roleId, label, false);
         updateOverlayToolCall(runId, streamKey, roleId, label, {
             tool_call_id: payload?.tool_call_id || '',
             tool_name: payload?.tool_name || '',
@@ -534,10 +546,12 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
         return;
     }
     if (evType === 'model_step_finished') {
+        setOverlayTextStreaming(runId, streamKey, roleId, label, false);
         scheduleOverlayEntryCleanup(runId, streamKey, roleId, cleanupDelayMs);
         return;
     }
     if (evType === 'run_completed' || evType === 'run_failed' || evType === 'run_stopped') {
+        setOverlayTextStreaming(runId, streamKey, roleId, label, false);
         scheduleRunOverlayCleanup(runId, cleanupDelayMs);
     }
 }
@@ -563,13 +577,23 @@ function ensureApprovalState(toolBlock) {
     return approvalEl;
 }
 
-function resolveStreamKey(instanceId, roleId) {
+function resolveStreamKey(instanceId, roleId, runId = '') {
     const safeInstanceId = String(instanceId || '').trim();
-    if (isPrimaryRoleId(roleId) || !roleId || safeInstanceId === PRIMARY_KEY || safeInstanceId === 'coordinator') {
+    const safeRoleId = String(roleId || '').trim();
+    const safeRunId = String(runId || '').trim();
+    const runPrimaryRoleId = safeRunId ? String(getRunPrimaryRoleId(safeRunId) || '').trim() : '';
+    const isPrimaryForRun = !!(safeRoleId && runPrimaryRoleId && safeRoleId === runPrimaryRoleId);
+    if (
+        isPrimaryForRun
+        || (!safeRunId && isPrimaryRoleId(safeRoleId))
+        || !safeRoleId
+        || safeInstanceId === PRIMARY_KEY
+        || safeInstanceId === 'coordinator'
+    ) {
         return PRIMARY_KEY;
     }
     if (safeInstanceId) return safeInstanceId;
-    return `role:${String(roleId || '').trim()}`;
+    return `role:${safeRoleId}`;
 }
 
 function createStreamState({
@@ -579,7 +603,7 @@ function createStreamState({
     label,
     runId,
 }) {
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const reused = findReusableStreamState({
         container,
         instanceId,
@@ -635,6 +659,9 @@ function findReusableStreamState({
     if (!contentEl) return null;
     const activeTextEl = findLastReusableTextElement(contentEl);
     const activeRaw = resolveReusableRawText(overlayEntry);
+    if (activeTextEl) {
+        syncStreamingCursor(activeTextEl, overlayEntry?.textStreaming === true);
+    }
     const thinkingBinding = bindReusableThinkingState(contentEl, overlayEntry);
     const pendingToolBlocks = bindReusableToolBlocks(contentEl, overlayEntry);
     return {
@@ -652,7 +679,7 @@ function findReusableStreamState({
         label,
         runId: String(runId || ''),
         instanceId: String(instanceId || ''),
-        streamKey: resolveStreamKey(instanceId, roleId),
+        streamKey: resolveStreamKey(instanceId, roleId, runId),
     };
 }
 
@@ -665,11 +692,11 @@ function resolveOverlayEntry(runId, instanceId, roleId, label) {
     if (!runOverlay) {
         return null;
     }
-    const key = resolveStreamKey(instanceId, roleId);
+    const key = resolveStreamKey(instanceId, roleId, safeRunId);
     return runOverlay.entries.get(key)
-        || runOverlay.entries.get(resolveStreamKey(instanceId, ''))
-        || runOverlay.entries.get(resolveStreamKey('', roleId))
-        || runOverlay.entries.get(resolveStreamKey('', ''));
+        || runOverlay.entries.get(resolveStreamKey(instanceId, '', safeRunId))
+        || runOverlay.entries.get(resolveStreamKey('', roleId, safeRunId))
+        || runOverlay.entries.get(resolveStreamKey('', '', safeRunId));
 }
 
 function findReusableMessageWrapper({
@@ -680,7 +707,7 @@ function findReusableMessageWrapper({
     runId,
 }) {
     if (!container) return null;
-    const streamKey = resolveStreamKey(instanceId, roleId);
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const safeLabel = String(label || '').trim().toUpperCase();
     const safeRunId = String(runId || '').trim();
     const wrappers = Array.from(container.querySelectorAll('.message'));
@@ -842,6 +869,7 @@ function endActiveText(st) {
     if (st.activeTextEl) {
         syncStreamingCursor(st.activeTextEl, false);
     }
+    setOverlayTextStreaming(st.runId, st.instanceId, st.roleId, st.label, false);
     st.activeTextEl = null;
     st.activeRaw = '';
 }
@@ -866,7 +894,7 @@ function clearOverlayEntry(runId, instanceId, roleId) {
     if (!safeRunId) return;
     const runOverlay = overlayState.get(safeRunId);
     if (!runOverlay) return;
-    const key = resolveStreamKey(instanceId, roleId);
+    const key = resolveStreamKey(instanceId, roleId, safeRunId);
     runOverlay.entries.delete(key);
     if (runOverlay.entries.size === 0) {
         clearRunOverlayCleanupTimer(safeRunId);
@@ -882,7 +910,7 @@ function ensureOverlayEntry(runId, instanceId, roleId, label) {
         runOverlay = { entries: new Map() };
         overlayState.set(safeRunId, runOverlay);
     }
-    const key = resolveStreamKey(instanceId, roleId);
+    const key = resolveStreamKey(instanceId, roleId, safeRunId);
     let entry = runOverlay.entries.get(key);
     if (!entry) {
         entry = {
@@ -892,6 +920,7 @@ function ensureOverlayEntry(runId, instanceId, roleId, label) {
             parts: [],
             thinkingActiveByPart: new Map(),
             thinkingSequence: 0,
+            textStreaming: false,
         };
         runOverlay.entries.set(key, entry);
     } else {
@@ -900,6 +929,7 @@ function ensureOverlayEntry(runId, instanceId, roleId, label) {
         if (label) entry.label = String(label);
         if (!entry.thinkingActiveByPart) entry.thinkingActiveByPart = new Map();
         if (typeof entry.thinkingSequence !== 'number') entry.thinkingSequence = 0;
+        if (typeof entry.textStreaming !== 'boolean') entry.textStreaming = false;
     }
     return entry;
 }
@@ -909,7 +939,7 @@ function scheduleOverlayEntryCleanup(runId, instanceId, roleId, delayMs = 0) {
     if (!safeRunId) {
         return;
     }
-    const key = resolveStreamKey(instanceId, roleId);
+    const key = resolveStreamKey(instanceId, roleId, safeRunId);
     if (delayMs <= 0) {
         clearOverlayEntryCleanupTimer(safeRunId, key);
         clearOverlayEntry(safeRunId, key, roleId);
@@ -993,6 +1023,7 @@ function updateOverlayText(runId, instanceId, roleId, label, text) {
     const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
     if (!entry) return;
     const nextText = String(text || '');
+    entry.textStreaming = true;
     if (!nextText) return;
     const lastPart = entry.parts[entry.parts.length - 1];
     if (lastPart && lastPart.kind === 'text') {
@@ -1000,6 +1031,12 @@ function updateOverlayText(runId, instanceId, roleId, label, text) {
         return;
     }
     entry.parts.push({ kind: 'text', content: nextText });
+}
+
+function setOverlayTextStreaming(runId, instanceId, roleId, label, isStreaming) {
+    const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
+    if (!entry) return;
+    entry.textStreaming = isStreaming === true;
 }
 
 function startOverlayThinking(runId, instanceId, roleId, label, partIndex) {
@@ -1204,5 +1241,6 @@ function cloneOverlayEntry(entry) {
         roleId: entry.roleId,
         label: entry.label,
         parts: entry.parts.map(part => ({ ...part })),
+        textStreaming: entry.textStreaming === true,
     };
 }

@@ -47,6 +47,12 @@ def test_streaming_messages_render_a_terminal_cursor_until_finalize() -> None:
     assert "const STREAMING_CURSOR_CLASS = 'streaming-cursor';" in helper_block_script
     assert "export function syncStreamingCursor(textEl, active)" in helper_block_script
     assert "function resolveStreamingCursorHost(root)" in helper_block_script
+    assert "const terminalSelector = [" in helper_block_script
+    assert "'pre code'," in helper_block_script
+    assert "'blockquote > :last-child'," in helper_block_script
+    assert "'li:last-child'," in helper_block_script
+    assert "function findLastRenderableElement(root)" in helper_block_script
+    assert "function hasRenderableTerminalContent(node)" in helper_block_script
     assert "updateMessageText," in helper_facade_script
     assert "syncStreamingCursor," in helper_facade_script
     assert (
@@ -65,11 +71,12 @@ def test_streaming_messages_render_a_terminal_cursor_until_finalize() -> None:
     assert "appendThinkingText(contentEl, String(part.content || '')," in history_script
     assert "const flushText = (streaming = false) => {" in history_script
     assert (
-        "appendMessageText(contentEl, safeText.trim(), { streaming });"
+        "appendMessageText(contentEl, streaming ? safeText : safeText.trim(), { streaming });"
         in history_script
     )
     assert "flushText(false);" in history_script
-    assert "flushText(trailingTextPart?.kind === 'text');" in history_script
+    assert "flushText(hasLiveTextTail && !!trailingTextPart);" in history_script
+    assert "appendMessageText(contentEl, '', { streaming: true });" in history_script
 
 
 def test_streaming_cursor_styles_are_declared_in_shared_frontend_css() -> None:

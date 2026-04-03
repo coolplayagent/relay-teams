@@ -267,7 +267,7 @@ globalThis.__openAgentPanelCalls = [];
         cwd=str(repo_root),
         text=True,
         encoding="utf-8",
-        timeout=30,
+        timeout=3,
     )
 
     if completed.returncode != 0:

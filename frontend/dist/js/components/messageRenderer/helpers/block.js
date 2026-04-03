@@ -363,6 +363,29 @@ function ensureThinkingBlock(contentEl, options = {}) {
 function resolveStreamingCursorHost(root) {
     if (!root || !root.childNodes?.length) return root;
 
+    const terminalSelector = [
+        'pre code',
+        'blockquote > :last-child',
+        'li:last-child',
+        'p:last-child',
+        'h1:last-child, h2:last-child, h3:last-child, h4:last-child, h5:last-child, h6:last-child',
+        'td:last-child, th:last-child',
+        '.msg-inline-code:last-child',
+    ].join(', ');
+    const terminalCandidates = Array.from(root.querySelectorAll(terminalSelector));
+    for (let index = terminalCandidates.length - 1; index >= 0; index -= 1) {
+        const candidate = terminalCandidates[index];
+        if (!candidate || candidate.classList?.contains(STREAMING_CURSOR_CLASS)) continue;
+        if (hasRenderableTerminalContent(candidate)) {
+            return candidate;
+        }
+    }
+
+    return findLastRenderableElement(root) || root;
+}
+
+function findLastRenderableElement(root) {
+    if (!root || !root.childNodes?.length) return null;
     for (let index = root.childNodes.length - 1; index >= 0; index -= 1) {
         const child = root.childNodes[index];
         if (!child) continue;
@@ -374,8 +397,21 @@ function resolveStreamingCursorHost(root) {
         }
         if (child.nodeType !== Node.ELEMENT_NODE) continue;
         if (child.classList?.contains(STREAMING_CURSOR_CLASS)) continue;
-        return resolveStreamingCursorHost(child);
+        if (hasRenderableTerminalContent(child)) {
+            const nested = findLastRenderableElement(child);
+            return nested || child;
+        }
     }
+    return null;
+}
 
-    return root;
+function hasRenderableTerminalContent(node) {
+    if (!node) return false;
+    const ownText = Array.from(node.childNodes || [])
+        .filter(child => child?.nodeType === Node.TEXT_NODE)
+        .map(child => String(child.textContent || ''))
+        .join('')
+        .trim();
+    if (ownText) return true;
+    return !!String(node.textContent || '').trim();
 }
