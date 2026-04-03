@@ -162,7 +162,9 @@ def test_ai_run_retries_after_provider_rate_limit_once(
     assert after_calls >= before_calls + 2
 
 
-def test_ai_run_retries_after_stream_drop_once(api_client: httpx.Client) -> None:
+def test_ai_run_auto_recovers_after_partial_stream_drop(
+    api_client: httpx.Client,
+) -> None:
     session_id = create_session(
         api_client,
         session_id=new_session_id("session-stream-drop"),
@@ -170,7 +172,7 @@ def test_ai_run_retries_after_stream_drop_once(api_client: httpx.Client) -> None
     run_id = create_run(
         api_client,
         session_id=session_id,
-        intent="[stream-drop-once] 请在一次流中断后重试，并输出一句确认。",
+        intent="[stream-drop-once] retry after a dropped partial stream and finish the reply.",
         execution_mode="ai",
     )
 
@@ -178,17 +180,28 @@ def test_ai_run_retries_after_stream_drop_once(api_client: httpx.Client) -> None
     event_types = [str(event.get("event_type") or "") for event in events]
 
     assert event_types[-1] == "run_completed"
-    assert "llm_retry_scheduled" in event_types
+    assert "run_resumed" in event_types
     assert "run_paused" not in event_types
-    retry_payloads = [
+    assert "llm_retry_exhausted" not in event_types
+
+    resumed_payloads = [
         json.loads(str(event["payload_json"]))
         for event in events
-        if str(event.get("event_type") or "") == "llm_retry_scheduled"
+        if str(event.get("event_type") or "") == "run_resumed"
     ]
     assert any(
-        payload.get("error_code") in {"network_stream_interrupted", "network_error"}
-        for payload in retry_payloads
+        payload.get("reason") == "auto_recovery_network_stream_interrupted"
+        for payload in resumed_payloads
     )
+
+    text_payloads = [
+        json.loads(str(event["payload_json"]))
+        for event in events
+        if str(event.get("event_type") or "") == "text_delta"
+    ]
+    combined_text = "".join(str(payload.get("text") or "") for payload in text_payloads)
+    assert "[fake-llm] p" in combined_text
+    assert "Recovered after dropped stream." in combined_text
 
 
 def test_ai_run_completes_over_slow_stream(api_client: httpx.Client) -> None:

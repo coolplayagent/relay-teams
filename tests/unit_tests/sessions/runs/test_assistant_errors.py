@@ -22,26 +22,35 @@ def test_build_auto_recovery_prompt_reuses_invalid_tool_args_guidance() -> None:
     )
 
 
-def test_build_auto_recovery_prompt_reuses_network_stream_guidance() -> None:
+def test_build_auto_recovery_prompt_uses_network_stream_guidance_only() -> None:
     assert (
         build_auto_recovery_prompt("network_stream_interrupted")
         == NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE
     )
-    assert (
-        build_assistant_error_message(
-            error_code="network_stream_interrupted",
-            error_message=None,
-        )
-        == NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE
+    message = build_assistant_error_message(
+        error_code="network_stream_interrupted",
+        error_message=None,
     )
-    assert (
-        build_assistant_error_message(
-            error_code="network_timeout",
-            error_message=None,
-        )
-        == NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE
-    )
+    assert message != NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE
+    assert "interrupted before it finished" in message
+    assert "Please retry your last message." in message
     assert build_auto_recovery_prompt("network_timeout") is None
+
+
+def test_build_assistant_error_message_uses_user_facing_network_messages() -> None:
+    timeout_message = build_assistant_error_message(
+        error_code="network_timeout",
+        error_message=None,
+    )
+    network_message = build_assistant_error_message(
+        error_code="network_error",
+        error_message="connection reset by peer",
+    )
+
+    assert "timed out before it finished" in timeout_message
+    assert "Please retry your last message." in timeout_message
+    assert "network connection problem" in network_message
+    assert "connection reset by peer" in network_message
 
 
 def test_build_assistant_error_message_uses_auth_invalid_code() -> None:

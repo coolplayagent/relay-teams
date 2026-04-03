@@ -6,6 +6,7 @@ import json
 from agent_teams.agents.execution.llm_session import AgentLlmSession
 from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from agent_teams.mcp.mcp_registry import McpRegistry
+from agent_teams.providers.llm_retry import LlmRetryErrorInfo
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 
 
@@ -79,3 +80,59 @@ def test_normalize_tool_call_args_for_replay_updates_live_messages() -> None:
         "background": True,
         "yield_time_ms": None,
     }
+
+
+def test_should_retry_after_text_side_effect_rejects_transport_errors() -> None:
+    session = object.__new__(AgentLlmSession)
+
+    should_retry = AgentLlmSession._should_retry_after_text_side_effect(
+        session,
+        retry_error=LlmRetryErrorInfo(
+            message="incomplete chunked read",
+            error_code="network_stream_interrupted",
+            retryable=True,
+            transport_error=True,
+        ),
+    )
+
+    assert should_retry is False
+
+
+def test_should_pause_for_recoverable_error_requires_transport_side_effects() -> None:
+    session = object.__new__(AgentLlmSession)
+    retry_error = LlmRetryErrorInfo(
+        message="incomplete chunked read",
+        error_code="network_stream_interrupted",
+        retryable=True,
+        transport_error=True,
+    )
+
+    should_pause = AgentLlmSession._should_pause_for_recoverable_error(
+        session,
+        retry_error=retry_error,
+        attempt_text_emitted=True,
+        attempt_tool_event_emitted=False,
+        attempt_messages_committed=False,
+    )
+
+    assert should_pause is True
+
+
+def test_should_pause_for_recoverable_error_skips_safe_request_retry_case() -> None:
+    session = object.__new__(AgentLlmSession)
+    retry_error = LlmRetryErrorInfo(
+        message="incomplete chunked read",
+        error_code="network_stream_interrupted",
+        retryable=True,
+        transport_error=True,
+    )
+
+    should_pause = AgentLlmSession._should_pause_for_recoverable_error(
+        session,
+        retry_error=retry_error,
+        attempt_text_emitted=False,
+        attempt_tool_event_emitted=False,
+        attempt_messages_committed=False,
+    )
+
+    assert should_pause is False

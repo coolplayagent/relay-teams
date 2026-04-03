@@ -848,6 +848,20 @@ class AgentLlmSession:
                     retry_number=next_retry_number,
                     total_attempts=total_attempts,
                 )
+            if self._should_pause_for_recoverable_error(
+                retry_error=retry_error,
+                attempt_text_emitted=attempt_text_emitted or printed_any,
+                attempt_tool_event_emitted=attempt_tool_event_emitted,
+                attempt_messages_committed=attempt_messages_committed,
+            ):
+                assert retry_error is not None
+                raise self._build_recoverable_pause_error(
+                    request=request,
+                    error=retry_error,
+                    retry_number=retry_number,
+                    total_attempts=total_attempts,
+                    error_message=self._build_model_api_error_message(exc),
+                )
             if retry_error is not None and retry_error.retryable:
                 if (
                     self._retry_config.enabled
@@ -920,6 +934,24 @@ class AgentLlmSession:
                     request,
                     retry_number=next_retry_number,
                     total_attempts=total_attempts,
+                )
+            if self._should_pause_for_recoverable_error(
+                retry_error=retry_error,
+                attempt_text_emitted=attempt_text_emitted or printed_any,
+                attempt_tool_event_emitted=attempt_tool_event_emitted,
+                attempt_messages_committed=attempt_messages_committed,
+            ):
+                assert retry_error is not None
+                raise self._build_recoverable_pause_error(
+                    request=request,
+                    error=retry_error,
+                    retry_number=retry_number,
+                    total_attempts=total_attempts,
+                    error_message=(
+                        retry_error.message
+                        if retry_error.message
+                        else (str(exc) or exc.__class__.__name__)
+                    ),
                 )
             if retry_error is not None:
                 log_event(
@@ -1104,10 +1136,26 @@ class AgentLlmSession:
     ) -> bool:
         if retry_error is None or not retry_error.retryable:
             return False
-        if retry_error.transport_error:
-            return True
         status_code = retry_error.status_code
         return status_code is not None and status_code >= 500
+
+    def _should_pause_for_recoverable_error(
+        self,
+        *,
+        retry_error: LlmRetryErrorInfo | None,
+        attempt_text_emitted: bool,
+        attempt_tool_event_emitted: bool,
+        attempt_messages_committed: bool,
+    ) -> bool:
+        if retry_error is None or not retry_error.retryable:
+            return False
+        if not retry_error.transport_error:
+            return False
+        return (
+            attempt_text_emitted
+            or attempt_tool_event_emitted
+            or attempt_messages_committed
+        )
 
     def _build_recoverable_pause_error(
         self,

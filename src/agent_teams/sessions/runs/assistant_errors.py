@@ -59,17 +59,34 @@ def build_auto_recovery_prompt(error_code: str | None) -> str | None:
 def _build_recovery_guidance_message(error_code: str) -> str | None:
     if error_code == "model_tool_args_invalid_json":
         return INVALID_TOOL_ARGS_RECOVERY_MESSAGE
-    if error_code in {
-        "network_stream_interrupted",
-        "network_timeout",
-        "network_error",
-    }:
-        return NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE
     if error_code == "auth_invalid":
         return (
             "The previous request could not continue because the API key is invalid. "
             "The conversation state already persisted is still valid."
         )
+    return None
+
+
+def _build_network_error_message(error_code: str, detail: str) -> str | None:
+    if error_code == "network_stream_interrupted":
+        return (
+            "The model response was interrupted before it finished because the network "
+            "connection to the provider was closed unexpectedly. "
+            "Please retry your last message."
+        )
+    if error_code == "network_timeout":
+        return (
+            "The model response timed out before it finished. "
+            "Please retry your last message."
+        )
+    if error_code == "network_error":
+        base_message = (
+            "The request to the model provider failed because of a network connection problem. "
+            "Please retry your last message."
+        )
+        if not detail:
+            return base_message
+        return f"{base_message} Details: {detail}"
     return None
 
 
@@ -84,6 +101,9 @@ def build_assistant_error_message(
     recovery_guidance = _build_recovery_guidance_message(code)
     if recovery_guidance is not None:
         return recovery_guidance
+    network_message = _build_network_error_message(code, detail)
+    if network_message is not None:
+        return network_message
     lowered = detail.lower()
     if "prompt is too long" in lowered:
         return (
