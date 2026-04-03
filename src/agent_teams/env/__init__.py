@@ -52,7 +52,11 @@ from agent_teams.env.github_env import (
     resolve_github_token_from_env,
 )
 from agent_teams.env.proxy_config_service import ProxyConfigService
-from agent_teams.env.web_config_models import WebConfig, WebProvider
+from agent_teams.env.web_config_models import (
+    WebConfig,
+    WebFallbackProvider,
+    WebProvider,
+)
 from agent_teams.env.web_config_service import WebConfigService
 from agent_teams.env.web_connectivity import (
     WebConnectivityProbeDiagnostics,
@@ -109,5 +113,6 @@ __all__ = [
     "WebConnectivityProbeService",
     "WebConfig",
     "WebConfigService",
+    "WebFallbackProvider",
     "WebProvider",
 ]

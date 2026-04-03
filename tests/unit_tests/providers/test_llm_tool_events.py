@@ -263,25 +263,28 @@ def test_commit_ready_messages_defers_tool_call_event_until_safe_commit() -> Non
         cast(object, fake_repo),
     )
 
-    history, pending, tool_events_published = provider._session._commit_ready_messages(
-        request=_request(),
-        history=[],
-        pending_messages=[
-            ModelResponse(
-                parts=[
-                    ToolCallPart(
-                        tool_name="create_tasks",
-                        args={"objective": "x"},
-                        tool_call_id="call-unsafe",
-                    )
-                ]
-            )
-        ],
+    history, pending, tool_events_published, committed_tool_validation_failures = (
+        provider._session._commit_ready_messages(
+            request=_request(),
+            history=[],
+            pending_messages=[
+                ModelResponse(
+                    parts=[
+                        ToolCallPart(
+                            tool_name="create_tasks",
+                            args={"objective": "x"},
+                            tool_call_id="call-unsafe",
+                        )
+                    ]
+                )
+            ],
+        )
     )
 
     assert history == []
     assert len(pending) == 1
     assert tool_events_published is False
+    assert committed_tool_validation_failures is False
     assert hub.events == []
 
 
@@ -294,34 +297,37 @@ def test_commit_ready_messages_publishes_only_tool_outcomes_after_safe_commit() 
         cast(object, fake_repo),
     )
 
-    history, pending, tool_events_published = provider._session._commit_ready_messages(
-        request=_request(),
-        history=[],
-        pending_messages=[
-            ModelResponse(
-                parts=[
-                    ToolCallPart(
-                        tool_name="create_tasks",
-                        args={"objective": "x"},
-                        tool_call_id="call-safe",
-                    )
-                ]
-            ),
-            ModelRequest(
-                parts=[
-                    ToolReturnPart(
-                        tool_name="create_tasks",
-                        content={"ok": True},
-                        tool_call_id="call-safe",
-                    )
-                ]
-            ),
-        ],
+    history, pending, tool_events_published, committed_tool_validation_failures = (
+        provider._session._commit_ready_messages(
+            request=_request(),
+            history=[],
+            pending_messages=[
+                ModelResponse(
+                    parts=[
+                        ToolCallPart(
+                            tool_name="create_tasks",
+                            args={"objective": "x"},
+                            tool_call_id="call-safe",
+                        )
+                    ]
+                ),
+                ModelRequest(
+                    parts=[
+                        ToolReturnPart(
+                            tool_name="create_tasks",
+                            content={"ok": True},
+                            tool_call_id="call-safe",
+                        )
+                    ]
+                ),
+            ],
+        )
     )
 
     assert len(history) == 2
     assert pending == []
     assert tool_events_published is True
+    assert committed_tool_validation_failures is False
     assert [event.event_type for event in hub.events] == [RunEventType.TOOL_RESULT]
 
 

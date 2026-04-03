@@ -44,6 +44,15 @@ def _suppress_host_github_prompt_line(
     )
 
 
+@pytest.fixture(autouse=True)
+def _freeze_runtime_date_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_runtime_date_context",
+        lambda: ("2026-04-02", "HKT (UTC+08:00)"),
+    )
+
+
 def _role(role_id: str) -> RoleDefinition:
     tools = ()
     if role_id.casefold() == "coordinator":
@@ -316,6 +325,11 @@ def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
     assert "## Runtime Environment Information" in prompt
     assert "- Operating System:" in prompt
     assert f"- Working Directory: {working_directory.resolve()}" in prompt
+    assert "- Current Date: 2026-04-02" in prompt
+    assert "- Runtime Timezone: HKT (UTC+08:00)" in prompt
+    assert (
+        "Do not trust your internal knowledge for the current date or time." in prompt
+    )
 
 
 def test_runtime_environment_prompt_mentions_github_when_token_and_system_gh_exist(
@@ -335,6 +349,11 @@ def test_runtime_environment_prompt_mentions_github_when_token_and_system_gh_exi
     assert (
         f"- GitHub CLI: token configured; using system gh at {system_gh_path}" in prompt
     )
+    assert "- Current Date: 2026-04-02" in prompt
+    assert "- Runtime Timezone: HKT (UTC+08:00)" in prompt
+    assert (
+        "use the runtime date in this section as the default source of truth" in prompt
+    )
 
 
 def test_runtime_environment_prompt_mentions_on_demand_gh_when_only_token_exists(
@@ -351,6 +370,8 @@ def test_runtime_environment_prompt_mentions_on_demand_gh_when_only_token_exists
     )
 
     assert "- GitHub CLI: token configured; gh will be resolved on demand" in prompt
+    assert "- Current Date: 2026-04-02" in prompt
+    assert "- Runtime Timezone: HKT (UTC+08:00)" in prompt
 
 
 def test_runtime_environment_prompt_uses_runtime_shell_summary(
@@ -377,6 +398,11 @@ def test_runtime_environment_prompt_uses_runtime_shell_summary(
 
     assert "Shell Type: PowerShell" in prompt
     assert "powershell.exe" in prompt
+    assert "- Current Date: 2026-04-02" in prompt
+    assert "- Runtime Timezone: HKT (UTC+08:00)" in prompt
+    assert (
+        "Do not trust your internal knowledge for the current date or time." in prompt
+    )
 
 
 def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_context() -> (
@@ -409,6 +435,8 @@ def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_co
     assert "## Available Roles" in result.capability_summary
     assert "## Runtime Environment Information" in result.workspace_context
     assert "## Orchestration Prompt" in result.workspace_context
+    assert "- Current Date: 2026-04-02" in result.workspace_context
+    assert "- Runtime Timezone: HKT (UTC+08:00)" in result.workspace_context
     assert result.prompt.index("## Orchestration Rules") < result.prompt.index(
         "## Available Roles"
     )

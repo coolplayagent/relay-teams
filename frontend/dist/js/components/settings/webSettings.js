@@ -10,6 +10,13 @@ import { showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
+const WEB_PROVIDER_EXA = 'exa';
+const WEB_PROVIDER_SEARXNG = 'searxng';
+const WEB_PROVIDER_SITES = {
+    [WEB_PROVIDER_EXA]: 'https://exa.ai',
+    [WEB_PROVIDER_SEARXNG]: 'https://docs.searxng.org/',
+};
+
 function formatMessage(key, values = {}) {
     return Object.entries(values).reduce(
         (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
@@ -21,6 +28,14 @@ export function bindWebSettingsHandlers() {
     const saveBtn = document.getElementById('save-web-btn');
     if (saveBtn) {
         saveBtn.onclick = handleSaveWeb;
+    }
+    const providerInput = document.getElementById('web-provider');
+    if (providerInput) {
+        providerInput.onchange = syncWebFormState;
+    }
+    const fallbackProviderInput = document.getElementById('web-fallback-provider');
+    if (fallbackProviderInput) {
+        fallbackProviderInput.onchange = syncWebFormState;
     }
 }
 
@@ -63,12 +78,17 @@ async function handleSaveWeb() {
 function writeWebFormValues(config) {
     setInputValue('web-provider', config.provider);
     setInputValue('web-api-key', config.api_key);
+    setInputValue('web-fallback-provider', config.fallback_provider);
+    setInputValue('web-searxng-instance-url', config.searxng_instance_url);
+    syncWebFormState();
 }
 
 function readWebFormValues() {
     return {
-        provider: readInputValue('web-provider') || 'exa',
+        provider: readInputValue('web-provider') || WEB_PROVIDER_EXA,
         api_key: readInputValue('web-api-key') || null,
+        fallback_provider: readInputValue('web-fallback-provider') || null,
+        searxng_instance_url: readInputValue('web-searxng-instance-url') || null,
     };
 }
 
@@ -86,4 +106,25 @@ function readInputValue(id) {
         return '';
     }
     return input.value.trim();
+}
+
+function syncWebFormState() {
+    const provider = readInputValue('web-provider') || WEB_PROVIDER_EXA;
+    const fallbackProvider = readInputValue('web-fallback-provider');
+    const apiKeyInput = document.getElementById('web-api-key');
+    if (apiKeyInput) {
+        apiKeyInput.disabled = provider !== WEB_PROVIDER_EXA;
+    }
+    const searxngInstanceInput = document.getElementById('web-searxng-instance-url');
+    if (searxngInstanceInput) {
+        searxngInstanceInput.disabled = !(
+            provider === WEB_PROVIDER_SEARXNG || fallbackProvider === WEB_PROVIDER_SEARXNG
+        );
+    }
+    const providerSiteLink = document.getElementById('web-provider-site-link');
+    if (providerSiteLink) {
+        const site = WEB_PROVIDER_SITES[provider] || WEB_PROVIDER_SITES[WEB_PROVIDER_EXA];
+        providerSiteLink.href = site;
+        providerSiteLink.textContent = site;
+    }
 }

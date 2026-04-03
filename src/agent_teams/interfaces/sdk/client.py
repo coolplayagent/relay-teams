@@ -111,10 +111,14 @@ class AgentTeamsClient:
         *,
         provider: str = "exa",
         api_key: str | None = None,
+        fallback_provider: str | None = None,
+        searxng_instance_url: str | None = None,
     ) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {
             "provider": provider,
             "api_key": api_key,
+            "fallback_provider": fallback_provider,
+            "searxng_instance_url": searxng_instance_url,
         }
         return self._request_json("PUT", "/api/system/configs/web", payload)
 

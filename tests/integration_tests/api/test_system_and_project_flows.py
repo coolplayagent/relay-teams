@@ -35,11 +35,21 @@ def test_system_config_roundtrips_and_prompt_preview(
     web_api_key = f"web-{uuid4().hex[:8]}"
     web_response = api_client.put(
         "/api/system/configs/web",
-        json={"provider": "exa", "api_key": web_api_key},
+        json={
+            "provider": "exa",
+            "api_key": web_api_key,
+            "fallback_provider": "searxng",
+            "searxng_instance_url": "https://search.example.test/",
+        },
     )
     web_response.raise_for_status()
     web_payload = api_client.get("/api/system/configs/web").json()
-    assert web_payload == {"provider": "exa", "api_key": web_api_key}
+    assert web_payload == {
+        "provider": "exa",
+        "api_key": web_api_key,
+        "fallback_provider": "searxng",
+        "searxng_instance_url": "https://search.example.test/",
+    }
 
     github_token = f"ghp_{uuid4().hex[:12]}"
     github_response = api_client.put(

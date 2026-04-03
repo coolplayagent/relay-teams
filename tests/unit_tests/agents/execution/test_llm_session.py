@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 from agent_teams.agents.execution.llm_session import AgentLlmSession
 from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.providers.llm_retry import LlmRetryErrorInfo
-from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    RetryPromptPart,
+    ToolCallPart,
+)
 
 
 def test_maybe_enrich_tool_result_payload_wraps_builtin_computer_results() -> None:
@@ -62,7 +68,7 @@ def test_normalize_tool_call_args_for_replay_updates_live_messages() -> None:
             ToolCallPart(
                 tool_name="shell",
                 args=(
-                    '{"command":"python -c \\"print(\\\'hello\\\')\\""'
+                    '{"command":"python -c "print(\'hello\')""'
                     ',"background":true,"yield_time_ms":null}'
                 ),
                 tool_call_id="call-live",
@@ -136,3 +142,30 @@ def test_should_pause_for_recoverable_error_skips_safe_request_retry_case() -> N
     )
 
     assert should_pause is False
+
+
+def test_normalize_committable_messages_keeps_request_fields() -> None:
+    session = object.__new__(AgentLlmSession)
+    request = ModelRequest(
+        parts=[
+            RetryPromptPart(
+                content="validation failed",
+                tool_name="shell",
+                tool_call_id="call-1",
+            )
+        ],
+        timestamp=datetime(2026, 4, 2, 22, 44, 3, tzinfo=UTC),
+        instructions="System instructions",
+        run_id="run-123",
+        metadata={"source": "test"},
+    )
+
+    normalized = AgentLlmSession._normalize_committable_messages(session, [request])
+
+    assert len(normalized) == 1
+    normalized_request = normalized[0]
+    assert isinstance(normalized_request, ModelRequest)
+    assert normalized_request.instructions == "System instructions"
+    assert normalized_request.timestamp == datetime(2026, 4, 2, 22, 44, 3, tzinfo=UTC)
+    assert normalized_request.run_id == "run-123"
+    assert normalized_request.metadata == {"source": "test"}

@@ -176,16 +176,20 @@ Runtime loading still supports manual `.env` proxy URLs that already contain emb
 
 Returns the saved web tool configuration.
 Fields:
-- `provider`: currently only `exa`
+- `provider`: `exa` or `searxng`
 - `api_key`: optional value rehydrated from the unified secret store
+- `fallback_provider`: optional `searxng`
+- `searxng_instance_url`: optional explicit SearXNG base URL; when omitted the runtime may use the built-in public instance pool
 
-The web settings UI intentionally stays minimal. All other `websearch` and `webfetch` behavior is fixed in code, including the Exa MCP endpoint and temp file location under `~/.agent-teams/.../tmp`. `websearch` uses Exa's advanced MCP search tool internally, returns structured search hits, and accepts optional allow/block domain filters at tool-call time; persisted tool state stores only sanitized Exa host/tool metadata and must not retain API-key-bearing URLs. `webfetch` keeps a fixed `5 MiB` limit for textual responses, while binary responses are streamed to the workspace temp directory with a fixed `512 MiB` cap. When the upstream origin proves `Range` support through a valid byte-range probe and returns a strong validator such as `ETag` or `Last-Modified`, binary downloads use segmented fetching and workspace-scoped resume state to continue later calls from the last completed offset.
+`websearch` returns structured search hits and accepts optional allow/block domain filters at tool-call time. Exa remains the primary hosted search backend. When `fallback_provider=searxng`, any Exa tool failure triggers an automatic retry against SearXNG. The runtime prefers `searxng_instance_url` when configured; otherwise it uses a built-in public SearXNG instance pool sourced from `searx.space` and seed URLs, with short-lived per-instance cooldowns for failing endpoints. Persisted tool state stores only sanitized host/tool metadata and must not retain API-key-bearing URLs. `webfetch` keeps a fixed `5 MiB` limit for textual responses, while binary responses are streamed to the workspace temp directory with a fixed `512 MiB` cap. When the upstream origin proves `Range` support through a valid byte-range probe and returns a strong validator such as `ETag` or `Last-Modified`, binary downloads use segmented fetching and workspace-scoped resume state to continue later calls from the last completed offset.
 
 ### `PUT /system/configs/web`
 
 Saves the web tool configuration.
-`provider` is currently fixed to `exa`.
+`provider` accepts `exa` or `searxng`.
 `api_key` is optional because Exa hosted MCP can be used without a key; providing one only raises the rate-limit ceiling.
+`fallback_provider` may be set to `searxng` to enable automatic retry after Exa failures.
+`searxng_instance_url` is optional; if omitted while SearXNG is used directly or as fallback, the runtime chooses from the built-in public instance pool.
 The backend persists the API key only through the unified secret store and does not write it back to `.env`.
 
 ### `GET /system/configs/github`
