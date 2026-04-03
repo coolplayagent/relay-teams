@@ -434,6 +434,7 @@ function renderRoundSection(round, index) {
     });
     const coordinatorOverlay = getCoordinatorStreamOverlay(round.run_id);
     const primaryRoleLabel = getRunPrimaryRoleLabel(round.run_id);
+    const isLatestRound = index === roundsState.currentRounds.length - 1;
 
     if (round.coordinator_messages?.length > 0) {
         renderHistoricalMessageList(section, round.coordinator_messages, {
@@ -441,6 +442,9 @@ function renderRoundSection(round, index) {
             pendingToolApprovals: pendingCoordinatorApprovals,
             primaryRoleLabel,
             runId: round.run_id,
+            runStatus: round.run_status,
+            runPhase: round.run_phase,
+            isLatestRound,
             streamOverlayEntry: coordinatorOverlay,
         });
     } else if (pendingCoordinatorApprovals.length > 0 || coordinatorOverlay) {
@@ -449,6 +453,9 @@ function renderRoundSection(round, index) {
             pendingToolApprovals: pendingCoordinatorApprovals,
             primaryRoleLabel,
             runId: round.run_id,
+            runStatus: round.run_status,
+            runPhase: round.run_phase,
+            isLatestRound,
             streamOverlayEntry: coordinatorOverlay,
         });
     } else if (!round.has_user_messages) {

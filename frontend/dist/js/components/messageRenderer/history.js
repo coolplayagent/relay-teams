@@ -107,9 +107,17 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
         }
     }
 
-    collapseIntermediateMessages(container);
+    if (shouldCollapseIntermediateMessages(streamOverlayEntry, options)) {
+        collapseIntermediateMessages(container);
+    }
 
-    if (streamOverlayEntry && Array.isArray(streamOverlayEntry.parts) && streamOverlayEntry.parts.length > 0) {
+    if (
+        streamOverlayEntry
+        && (
+            (Array.isArray(streamOverlayEntry.parts) && streamOverlayEntry.parts.length > 0)
+            || streamOverlayEntry.textStreaming === true
+        )
+    ) {
         renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBlocks, lastRenderedMessage, runId);
     }
 
@@ -183,12 +191,20 @@ function renderStreamOverlayEntry(
         runId,
     );
     let combinedText = '';
+    let renderedLiveTextTail = false;
     const overlayParts = Array.isArray(streamOverlayEntry.parts) ? streamOverlayEntry.parts : [];
-    const trailingTextPart = [...overlayParts].reverse().find(part => part && typeof part === 'object');
+    const hasLiveTextTail = streamOverlayEntry.textStreaming === true;
+    const trailingTextPart = [...overlayParts]
+        .reverse()
+        .find(part => part && typeof part === 'object' && part.kind === 'text');
     const flushText = (streaming = false) => {
         const safeText = String(combinedText || '');
-        if (!safeText.trim()) return;
-        appendMessageText(contentEl, safeText.trim(), { streaming });
+        if (!safeText && !streaming) return;
+        if (!safeText.trim() && !streaming) return;
+        appendMessageText(contentEl, streaming ? safeText : safeText.trim(), { streaming });
+        if (streaming) {
+            renderedLiveTextTail = true;
+        }
         combinedText = '';
     };
 
@@ -223,7 +239,10 @@ function renderStreamOverlayEntry(
         applyOverlayToolState(toolBlock, part);
     });
 
-    flushText(trailingTextPart?.kind === 'text');
+    flushText(hasLiveTextTail && !!trailingTextPart);
+    if (hasLiveTextTail && !renderedLiveTextTail) {
+        appendMessageText(contentEl, '', { streaming: true });
+    }
 }
 
 function resolveOverlayContentTarget(container, label, streamOverlayEntry, lastRenderedMessage, runId = '') {
@@ -434,6 +453,38 @@ function collapseIntermediateMessages(container) {
     });
 }
 
+function shouldCollapseIntermediateMessages(streamOverlayEntry, options = {}) {
+    const runStatus = String(options.runStatus || '').trim().toLowerCase();
+    const isLatestRound = options.isLatestRound === true;
+    if (isLatestRound && runStatus !== 'completed') {
+        return false;
+    }
+    if (!streamOverlayEntry || typeof streamOverlayEntry !== 'object') {
+        return true;
+    }
+    if (streamOverlayEntry.textStreaming === true) {
+        return false;
+    }
+    const parts = Array.isArray(streamOverlayEntry.parts) ? streamOverlayEntry.parts : [];
+    return !parts.some(part => {
+        if (!part || typeof part !== 'object') return false;
+        if (part.kind === 'thinking') {
+            return part.finished !== true;
+        }
+        if (part.kind !== 'tool') {
+            return false;
+        }
+        const status = String(part.status || '').trim().toLowerCase();
+        const approvalStatus = String(part.approvalStatus || '').trim().toLowerCase();
+        return (
+            status === 'pending'
+            || status === 'running'
+            || approvalStatus === 'requested'
+            || approvalStatus === 'approve'
+            || (part.result === undefined && part.validation === undefined)
+        );
+    });
+}
 function formatElapsed(ms) {
     const totalSeconds = Math.round(ms / 1000);
     if (totalSeconds < 60) return `${totalSeconds}s`;

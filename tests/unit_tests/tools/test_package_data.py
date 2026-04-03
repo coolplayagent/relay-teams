@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tomllib
+from functools import cache
 from glob import glob
 from pathlib import Path
 from typing import cast
@@ -45,18 +46,34 @@ def _builtin_role_files(project_root: Path) -> tuple[Path, ...]:
 
 def _builtin_skill_files(project_root: Path) -> tuple[Path, ...]:
     builtin_root = project_root / "src" / "agent_teams" / "builtin" / "skills"
-    return tuple(sorted(path for path in builtin_root.rglob("*") if path.is_file()))
+    return tuple(
+        sorted(
+            path
+            for path in builtin_root.rglob("*")
+            if path.is_file()
+            and "node_modules" not in path.parts
+            and not any(part.startswith(".") for part in path.parts)
+        )
+    )
+
+
+@cache
+def _resolved_package_data_candidates(
+    package_root_str: str, pattern: str
+) -> frozenset[Path]:
+    package_root = Path(package_root_str)
+    return frozenset(
+        Path(candidate).resolve()
+        for candidate in glob(str(package_root / pattern), recursive=True)
+    )
 
 
 def _matches_package_data_pattern(
     *, package_root: Path, file_path: Path, pattern: str
 ) -> bool:
     resolved_file_path = file_path.resolve()
-    candidates = (
-        Path(candidate).resolve()
-        for candidate in glob(str(package_root / pattern), recursive=True)
-    )
-    return any(candidate == resolved_file_path for candidate in candidates)
+    candidates = _resolved_package_data_candidates(str(package_root), pattern)
+    return resolved_file_path in candidates
 
 
 def test_tool_description_files_are_declared_in_package_data() -> None:

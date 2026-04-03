@@ -247,6 +247,19 @@
     border-left: 3px solid var(--primary);
 }
 
+.session-item-entering {
+    animation: sessionItemEnter 0.22s ease;
+}
+
+.session-item-removing {
+    pointer-events: none;
+    animation: sessionItemRemove 0.18s ease forwards;
+}
+
+.session-item-activating {
+    animation: sessionItemActivate 0.24s ease;
+}
+
 .session-id {
     font-size: 0.875rem;
     font-weight: 500;
@@ -513,6 +526,44 @@
 
     35% {
         box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 10%, transparent);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 0%, transparent);
+    }
+}
+
+@keyframes sessionItemEnter {
+    0% {
+        opacity: 0.72;
+        transform: translateY(4px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes sessionItemRemove {
+    0% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    100% {
+        opacity: 0;
+        transform: translateY(-3px);
+    }
+}
+
+@keyframes sessionItemActivate {
+    0% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 0%, transparent);
+    }
+
+    50% {
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 10%, transparent);
     }
 
     100% {
