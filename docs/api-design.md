@@ -706,7 +706,7 @@ Notes:
   - video: `kind`, `count`, `resolution`, `duration_ms`, `seed`
 - `yolo` is optional.
 - `yolo: false` preserves the existing tool approval flow.
-- `yolo: true` skips tool approval for all tools in that run, including resumed recoverable runs.
+- `yolo: true` skips human tool approval for that run, including resumed recoverable runs, but tool-local validation still applies.
 - `thinking` is optional.
 - `thinking.enabled` enables model thinking streams for providers that emit thinking parts.
 - `thinking.effort` optionally sets provider reasoning effort (`minimal`, `low`, `medium`, `high`); when set, it is forwarded to OpenAI-compatible providers as `openai_reasoning_effort`.
@@ -819,6 +819,17 @@ Request:
 ```json
 {"action": "approve", "feedback": ""}
 ```
+
+Allowed `action` values:
+- `approve`: legacy one-time approval, equivalent to `approve_once`
+- `approve_once`: execute this pending tool call once
+- `approve_exact`: for shell, also save an exact reusable approval for the normalized command
+- `approve_prefix`: for shell, also save reusable prefix approvals such as `git status`
+- `deny`: deny the pending tool call
+
+Notes:
+- Shell exact/prefix approvals are project-scoped and shell-runtime-scoped. Git Bash approvals do not automatically apply to PowerShell, and vice versa.
+- Shell `workdir` values must stay inside the workspace writable roots even when the command itself targets external executables or scripts.
 
 ### `POST /runs/{run_id}/stop`
 

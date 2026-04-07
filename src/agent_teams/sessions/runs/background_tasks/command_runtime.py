@@ -21,7 +21,9 @@ from pydantic import BaseModel, ConfigDict
 from agent_teams.env import build_github_cli_env, build_subprocess_env, get_env_var
 from agent_teams.env.github_config_service import GitHubConfigService
 from agent_teams.env.runtime_env import get_app_config_dir
-from agent_teams.sessions.runs.background_tasks.github_cli import get_gh_path
+from agent_teams.sessions.runs.background_tasks.github_cli import (
+    resolve_existing_gh_path,
+)
 
 WINDOWS_GIT_BASH_CANDIDATES = (
     Path(r"C:\Program Files\Git\bin\bash.exe"),
@@ -81,6 +83,7 @@ _WINDOWS_POWERSHELL_CMDLET_PREFIXES = frozenset(
         "Write",
     }
 )
+_WINDOWS_POWERSHELL_ALIASES = frozenset({"curl", "irm", "iwr", "wget"})
 _EXPLICIT_WINDOWS_SHELL_NAMES = frozenset(
     {
         "bash",
@@ -345,12 +348,42 @@ def _command_prefers_powershell(command: str | None) -> bool:
         return True
     if _POWERSHELL_MEMBER_PATTERN.search(normalized) is not None:
         return True
+    if command_name in _WINDOWS_POWERSHELL_ALIASES:
+        return True
+    if _starts_powershell_script_invocation(normalized):
+        return True
     for match in _POWERSHELL_CMDLET_PATTERN.finditer(normalized):
         cmdlet = match.group("cmdlet")
         prefix = cmdlet.split("-", 1)[0]
         if prefix in _WINDOWS_POWERSHELL_CMDLET_PREFIXES:
             return True
     return False
+
+
+def _starts_powershell_script_invocation(command: str) -> bool:
+    normalized = command.strip()
+    if not normalized:
+        return False
+    if normalized.startswith("&"):
+        remainder = normalized[1:].lstrip()
+        token = _extract_windows_shell_token(remainder)
+        return token.lower().endswith(".ps1")
+    token = _extract_windows_shell_token(normalized)
+    return token.lower().endswith(".ps1")
+
+
+def _extract_windows_shell_token(command: str) -> str:
+    stripped = command.lstrip()
+    if not stripped:
+        return ""
+    quote = stripped[0]
+    if quote in {"'", '"'}:
+        end_index = stripped.find(quote, 1)
+        if end_index == -1:
+            return stripped[1:]
+        return stripped[1:end_index]
+    token, *_ = stripped.split(maxsplit=1)
+    return token
 
 
 def _resolve_windows_bash_path() -> str:
@@ -603,7 +636,7 @@ def _load_github_cli_env() -> dict[str, str]:
 
 async def _resolve_gh_path() -> Path | None:
     try:
-        return await get_gh_path()
+        return resolve_existing_gh_path()
     except Exception:
         return None
 

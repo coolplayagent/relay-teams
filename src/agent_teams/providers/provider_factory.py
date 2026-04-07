@@ -48,6 +48,9 @@ from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.providers.token_usage_repo import TokenUsageRepository
 from agent_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
+from agent_teams.tools.workspace_tools.shell_approval_repo import (
+    ShellApprovalRepository,
+)
 from agent_teams.workspace import WorkspaceManager
 
 if TYPE_CHECKING:
@@ -83,6 +86,7 @@ def create_provider_factory(
     tool_approval_policy: ToolApprovalPolicy,
     notification_service: NotificationService | None,
     get_task_execution_service: Callable[[], TaskExecutionService],
+    shell_approval_repo: ShellApprovalRepository | None = None,
     computer_runtime: ComputerRuntime | None = None,
     token_usage_repo: TokenUsageRepository | None = None,
     metric_recorder: MetricRecorder | None = None,
@@ -169,6 +173,7 @@ def create_provider_factory(
                 run_control_manager=run_control_manager,
                 tool_approval_manager=tool_approval_manager,
                 tool_approval_policy=tool_approval_policy,
+                shell_approval_repo=shell_approval_repo,
                 notification_service=notification_service,
                 token_usage_repo=token_usage_repo,
                 metric_recorder=metric_recorder,

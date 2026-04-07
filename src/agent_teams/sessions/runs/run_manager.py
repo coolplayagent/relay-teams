@@ -66,6 +66,7 @@ from agent_teams.sessions.runs.run_models import (
 )
 from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
 from agent_teams.tools.runtime.approval_ticket_repo import (
+    ApprovalTicketRecord,
     ApprovalTicketRepository,
     ApprovalTicketStatus,
 )
@@ -84,6 +85,11 @@ from agent_teams.sessions.runs.run_state_repo import RunStateRepository
 from agent_teams.sessions.session_repository import SessionRepository
 from agent_teams.agents.tasks.task_repository import TaskRepository
 from agent_teams.tools.runtime import ToolApprovalAction, ToolApprovalManager
+from agent_teams.tools.workspace_tools.shell_approval_repo import (
+    ShellApprovalRepository,
+    ShellApprovalScope,
+)
+from agent_teams.tools.workspace_tools.shell_policy import ShellRuntimeFamily
 from agent_teams.trace import bind_trace_context
 from agent_teams.agents.tasks.models import TaskRecord
 from agent_teams.agents.tasks.enums import TaskStatus
@@ -96,6 +102,48 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 _T = TypeVar("_T")
+
+
+def _approval_action_is_approved(action: str) -> bool:
+    return action in {"approve", "approve_once", "approve_exact", "approve_prefix"}
+
+
+def _approval_action_requires_shell_grant(action: str) -> bool:
+    return action in {"approve_exact", "approve_prefix"}
+
+
+def _normalize_shell_prefix_candidates(raw_value: object) -> tuple[str, ...]:
+    if not isinstance(raw_value, list):
+        return ()
+    normalized: list[str] = []
+    for item in raw_value:
+        if not isinstance(item, str):
+            continue
+        candidate = item.strip()
+        if candidate:
+            normalized.append(candidate)
+    return tuple(normalized)
+
+
+def _extract_shell_grant_metadata(
+    ticket: ApprovalTicketRecord,
+) -> tuple[str, ShellRuntimeFamily, str, tuple[str, ...]] | None:
+    if ticket.tool_name != "shell":
+        return None
+    metadata = ticket.metadata
+    workspace_key = str(metadata.get("workspace_key") or "").strip()
+    runtime_family = str(metadata.get("runtime_family") or "").strip()
+    normalized_command = str(metadata.get("normalized_command") or "").strip()
+    prefix_candidates = _normalize_shell_prefix_candidates(
+        metadata.get("prefix_candidates")
+    )
+    if not workspace_key or not runtime_family:
+        return None
+    try:
+        resolved_runtime_family = ShellRuntimeFamily(runtime_family)
+    except ValueError:
+        return None
+    return workspace_key, resolved_runtime_family, normalized_command, prefix_candidates
 
 
 class AutoRecoveryReason(StrEnum):
@@ -171,6 +219,7 @@ class RunManager:
         orchestration_settings_service: OrchestrationSettingsService | None = None,
         media_asset_service: MediaAssetService | None = None,
         runtime_role_resolver: RuntimeRoleResolver | None = None,
+        shell_approval_repo: ShellApprovalRepository | None = None,
     ) -> None:
         self._meta_agent: MetaAgent = meta_agent
         self._provider_factory = provider_factory or (
@@ -199,6 +248,7 @@ class RunManager:
         self._orchestration_settings_service = orchestration_settings_service
         self._media_asset_service = media_asset_service
         self._runtime_role_resolver = runtime_role_resolver
+        self._shell_approval_repo = shell_approval_repo
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
@@ -1705,7 +1755,13 @@ class RunManager:
         action: str,
         feedback: str = "",
     ) -> None:
-        if action not in {"approve", "deny"}:
+        if action not in {
+            "approve",
+            "approve_once",
+            "approve_exact",
+            "approve_prefix",
+            "deny",
+        }:
             raise ValueError(f"Unsupported action: {action}")
         runtime = self._runtime_for_run(run_id)
         if (
@@ -1725,12 +1781,21 @@ class RunManager:
             run_id=run_id,
             tool_call_id=tool_call_id,
         )
+        ticket = (
+            self._approval_ticket_repo.get(tool_call_id)
+            if self._approval_ticket_repo is not None
+            else None
+        )
+        if ticket is not None and ticket.run_id != run_id:
+            raise KeyError(f"Tool approval {tool_call_id} not found for run {run_id}")
+        if _approval_action_requires_shell_grant(action):
+            self._persist_shell_approval_grants(ticket=ticket, action=action)
         if self._approval_ticket_repo is not None:
             self._approval_ticket_repo.resolve(
                 tool_call_id=tool_call_id,
                 status=(
                     ApprovalTicketStatus.APPROVED
-                    if action == "approve"
+                    if _approval_action_is_approved(action)
                     else ApprovalTicketStatus.DENIED
                 ),
                 feedback=feedback,
@@ -1769,6 +1834,36 @@ class RunManager:
                 ),
             )
         )
+
+    def _persist_shell_approval_grants(
+        self,
+        *,
+        ticket: ApprovalTicketRecord | None,
+        action: str,
+    ) -> None:
+        if ticket is None or self._shell_approval_repo is None:
+            return
+        if ticket.status != ApprovalTicketStatus.REQUESTED:
+            return
+        resolved = _extract_shell_grant_metadata(ticket)
+        if resolved is None:
+            return
+        workspace_key, runtime_family, normalized_command, prefix_candidates = resolved
+        if action == "approve_exact" and normalized_command:
+            self._shell_approval_repo.grant(
+                workspace_key=workspace_key,
+                runtime_family=runtime_family,
+                scope=ShellApprovalScope.EXACT,
+                value=normalized_command,
+            )
+        if action == "approve_prefix":
+            for candidate in prefix_candidates:
+                self._shell_approval_repo.grant(
+                    workspace_key=workspace_key,
+                    runtime_family=runtime_family,
+                    scope=ShellApprovalScope.PREFIX,
+                    value=candidate,
+                )
 
     def list_open_tool_approvals(self, run_id: str) -> list[dict[str, str]]:
         if self._approval_ticket_repo is None:

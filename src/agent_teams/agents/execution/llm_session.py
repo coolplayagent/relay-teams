@@ -112,6 +112,9 @@ from agent_teams.tools.runtime import (
     ToolApprovalPolicy,
     ToolDeps,
 )
+from agent_teams.tools.workspace_tools.shell_approval_repo import (
+    ShellApprovalRepository,
+)
 from agent_teams.mcp.mcp_models import McpToolSchema
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.notifications import NotificationService
@@ -236,6 +239,7 @@ class AgentLlmSession:
         retry_config: LlmRetryConfig | None = None,
         im_tool_service: "ImToolService | None" = None,
         computer_runtime: "ComputerRuntime | None" = None,
+        shell_approval_repo: ShellApprovalRepository | None = None,
     ) -> None:
         self._config = config
         self._task_repo = task_repo
@@ -272,6 +276,7 @@ class AgentLlmSession:
         self._retry_config = retry_config or LlmRetryConfig()
         self._im_tool_service = im_tool_service
         self._computer_runtime = computer_runtime
+        self._shell_approval_repo = shell_approval_repo
         self._mcp_tool_context_token_cache: dict[str, int] = {}
 
     async def run(self, request: LLMRequest) -> str:
@@ -409,6 +414,7 @@ class AgentLlmSession:
             run_control_manager=self._run_control_manager,
             tool_approval_manager=self._tool_approval_manager,
             tool_approval_policy=self._resolve_tool_approval_policy(request.run_id),
+            shell_approval_repo=self._shell_approval_repo,
             metric_recorder=self._metric_recorder,
             notification_service=self._notification_service,
             im_tool_service=self._im_tool_service,

@@ -74,6 +74,7 @@ class ToolApprovalRequest(BaseModel):
     source: str = ""
     execution_surface: ExecutionSurface | None = None
     cache_key: str = ""
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class ToolApprovalDecision(BaseModel):

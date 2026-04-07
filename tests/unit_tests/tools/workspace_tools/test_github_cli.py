@@ -128,6 +128,73 @@ class TestGitHubCliPath:
         assert path == system_gh
         assert mock_download.await_count == 0
 
+    @pytest.mark.asyncio
+    async def test_resolve_existing_gh_path_does_not_attempt_download(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        cache_dir = tmp_path / "bin"
+        cache_dir.mkdir()
+
+        with patch("shutil.which", return_value=None):
+            with patch(
+                "agent_teams.tools.workspace_tools.github_cli.BIN_DIR",
+                cache_dir,
+            ):
+                from agent_teams.tools.workspace_tools import github_cli
+
+                github_cli.clear_gh_path_cache()
+                with patch(
+                    "agent_teams.tools.workspace_tools.github_cli._download_gh",
+                    new=AsyncMock(side_effect=RuntimeError("no network")),
+                ) as mock_download:
+                    path = github_cli.resolve_existing_gh_path()
+
+        assert path is None
+        assert mock_download.await_count == 0
+
+    def test_resolve_existing_gh_path_does_not_create_bin_dir(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        cache_dir = tmp_path / "missing-bin"
+
+        with patch("shutil.which", return_value=None):
+            with patch(
+                "agent_teams.tools.workspace_tools.github_cli.BIN_DIR",
+                cache_dir,
+            ):
+                from agent_teams.tools.workspace_tools import github_cli
+
+                github_cli.clear_gh_path_cache()
+                path = github_cli.resolve_existing_gh_path()
+
+        assert path is None
+        assert not cache_dir.exists()
+
+    def test_resolve_existing_gh_path_swallow_lookup_errors(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        cache_dir = tmp_path / "bin"
+
+        with patch("shutil.which", return_value=None):
+            with patch(
+                "agent_teams.tools.workspace_tools.github_cli.BIN_DIR",
+                cache_dir,
+            ):
+                from agent_teams.tools.workspace_tools import github_cli
+
+                github_cli.clear_gh_path_cache()
+                with patch.object(
+                    github_cli.Path,
+                    "is_file",
+                    side_effect=OSError("read-only"),
+                ):
+                    path = github_cli.resolve_existing_gh_path()
+
+        assert path is None
+
 
 class TestGitHubCliDownload:
     @pytest.mark.asyncio

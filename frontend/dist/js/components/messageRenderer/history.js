@@ -329,7 +329,7 @@ function applyOverlayToolState(toolBlock, part) {
         return;
     }
 
-    if (part.approvalStatus === 'approve' && part.result === undefined) {
+    if (isApprovedApprovalStatus(part.approvalStatus) && part.result === undefined) {
         setToolStatus(toolBlock, 'running');
         outputEl.classList.remove('error-text');
         outputEl.classList.add('warning-text');
@@ -480,10 +480,19 @@ function shouldCollapseIntermediateMessages(streamOverlayEntry, options = {}) {
             status === 'pending'
             || status === 'running'
             || approvalStatus === 'requested'
-            || approvalStatus === 'approve'
+            || isApprovedApprovalStatus(approvalStatus)
             || (part.result === undefined && part.validation === undefined)
         );
     });
+}
+function isApprovedApprovalStatus(value) {
+    const approvalStatus = String(value || '').trim().toLowerCase();
+    return (
+        approvalStatus === 'approve'
+        || approvalStatus === 'approve_once'
+        || approvalStatus === 'approve_exact'
+        || approvalStatus === 'approve_prefix'
+    );
 }
 function formatElapsed(ms) {
     const totalSeconds = Math.round(ms / 1000);

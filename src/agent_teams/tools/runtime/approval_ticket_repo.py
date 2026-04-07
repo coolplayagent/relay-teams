@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 import logging
 from datetime import datetime, timezone
@@ -42,6 +43,7 @@ class ApprovalTicketRecord(BaseModel):
     role_id: RequiredIdentifierStr
     tool_name: RequiredIdentifierStr
     args_preview: str = ""
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
     status: ApprovalTicketStatus = ApprovalTicketStatus.REQUESTED
     feedback: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
@@ -95,6 +97,7 @@ class ApprovalTicketRepository:
                     role_id        TEXT NOT NULL,
                     tool_name      TEXT NOT NULL,
                     args_preview   TEXT NOT NULL DEFAULT '',
+                    metadata_json  TEXT NOT NULL DEFAULT '{}',
                     status         TEXT NOT NULL,
                     feedback       TEXT NOT NULL DEFAULT '',
                     created_at     TEXT NOT NULL,
@@ -103,6 +106,17 @@ class ApprovalTicketRepository:
                 )
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in self._conn.execute(
+                    "PRAGMA table_info(approval_tickets)"
+                ).fetchall()
+            }
+            if "metadata_json" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE approval_tickets "
+                    "ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
+                )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_approval_tickets_run_status ON approval_tickets(run_id, status, created_at ASC)"
             )
@@ -133,10 +147,16 @@ class ApprovalTicketRepository:
         role_id: str,
         tool_name: str,
         args_preview: str,
+        metadata: dict[str, JsonValue] | None = None,
         cache_key: str = "",
         signature_args_preview: str | None = None,
     ) -> ApprovalTicketRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
+        metadata_json = json.dumps(
+            {} if metadata is None else metadata,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         signature_key = approval_signature_key(
             run_id=run_id,
             task_id=task_id,
@@ -164,8 +184,8 @@ class ApprovalTicketRepository:
             self._conn.execute(
                 """
                 INSERT INTO approval_tickets(tool_call_id, signature_key, run_id, session_id, task_id, instance_id,
-                                             role_id, tool_name, args_preview, status, feedback, created_at, updated_at, resolved_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                             role_id, tool_name, args_preview, metadata_json, status, feedback, created_at, updated_at, resolved_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tool_call_id)
                 DO UPDATE SET
                     signature_key=excluded.signature_key,
@@ -176,6 +196,7 @@ class ApprovalTicketRepository:
                     role_id=excluded.role_id,
                     tool_name=excluded.tool_name,
                     args_preview=excluded.args_preview,
+                    metadata_json=excluded.metadata_json,
                     status=excluded.status,
                     updated_at=excluded.updated_at
                 """,
@@ -189,6 +210,7 @@ class ApprovalTicketRepository:
                     role_id,
                     tool_name,
                     args_preview,
+                    metadata_json,
                     ApprovalTicketStatus.REQUESTED.value,
                     "",
                     created_at,
@@ -383,6 +405,7 @@ class ApprovalTicketRepository:
                 field_name="tool_name",
             ),
             args_preview=str(row["args_preview"]),
+            metadata=_load_ticket_metadata(row["metadata_json"]),
             status=status,
             feedback=str(row["feedback"]),
             created_at=created_at,
@@ -484,6 +507,22 @@ def _optional_ticket_timestamp(
     raise ValueError(f"Invalid persisted {field_name}")
 
 
+def _load_ticket_metadata(raw_value: object) -> dict[str, JsonValue]:
+    normalized = normalize_persisted_text(raw_value)
+    if normalized is None:
+        return {}
+    try:
+        decoded = json.loads(normalized)
+    except ValueError as exc:
+        raise ValueError("Invalid persisted metadata_json") from exc
+    if not isinstance(decoded, dict):
+        raise ValueError("Approval ticket metadata_json must decode to an object")
+    metadata: dict[str, JsonValue] = {}
+    for key, value in decoded.items():
+        metadata[str(key)] = value
+    return metadata
+
+
 def _persisted_value_preview(value: object) -> str:
     if value is None:
         return "<null>"
@@ -524,6 +563,7 @@ def _log_invalid_ticket_row(*, row: sqlite3.Row, error: Exception) -> None:
         "created_at": _persisted_value_preview(row["created_at"]),
         "updated_at": _persisted_value_preview(row["updated_at"]),
         "resolved_at": _persisted_value_preview(row["resolved_at"]),
+        "metadata_json": _persisted_value_preview(row["metadata_json"]),
         "error_type": type(error).__name__,
         "error": str(error),
     }

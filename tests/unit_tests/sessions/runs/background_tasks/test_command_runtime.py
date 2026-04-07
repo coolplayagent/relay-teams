@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import signal
+import os
 
 import pytest
 
@@ -9,6 +10,7 @@ from agent_teams.sessions.runs.background_tasks.command_runtime import (
     CommandRuntimeKind,
     ResolvedCommandRuntime,
     kill_process_tree_by_pid,
+    build_command_env,
     resolve_command_runtime,
 )
 
@@ -105,6 +107,113 @@ def test_resolve_command_runtime_prefers_powershell_for_env_and_member_access(
         )
         == powershell_runtime
     )
+
+
+@pytest.mark.asyncio
+async def test_build_command_env_does_not_download_gh_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bash_runtime = ResolvedCommandRuntime(
+        kind=CommandRuntimeKind.BASH,
+        executable="/bin/bash",
+        display_name="Bash",
+    )
+
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_existing_gh_path",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "_load_github_cli_env",
+        lambda: {
+            "GH_TOKEN": "ghp_secret",
+            "GITHUB_TOKEN": "ghp_secret",
+            "GH_PROMPT_DISABLED": "1",
+        },
+    )
+    monkeypatch.setattr(
+        runtime_module.os,
+        "environ",
+        {"PATH": "/usr/bin"},
+    )
+
+    env = await build_command_env(
+        {"EXTRA_VAR": "1"},
+        runtime=bash_runtime,
+        command="node script.js",
+    )
+
+    assert env["GH_TOKEN"] == "ghp_secret"
+    assert env["GITHUB_TOKEN"] == "ghp_secret"
+    assert env["GH_PROMPT_DISABLED"] == "1"
+    assert env["EXTRA_VAR"] == "1"
+    assert env["PATH"] == "/usr/bin"
+
+
+@pytest.mark.asyncio
+async def test_build_command_env_prepends_existing_gh_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    bash_runtime = ResolvedCommandRuntime(
+        kind=CommandRuntimeKind.BASH,
+        executable="/bin/bash",
+        display_name="Bash",
+    )
+    gh = tmp_path / "bin" / "gh"
+    gh.parent.mkdir()
+    gh.write_text("fake", encoding="utf-8")
+
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_existing_gh_path",
+        lambda: gh,
+    )
+    monkeypatch.setattr(runtime_module, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(
+        runtime_module.os,
+        "environ",
+        {"PATH": "/usr/bin"},
+    )
+
+    env = await build_command_env(
+        runtime=bash_runtime,
+        command="gh auth status",
+    )
+
+    assert env["PATH"].split(os.pathsep)[0] == str(gh.parent)
+
+
+@pytest.mark.asyncio
+async def test_build_command_env_ignores_gh_lookup_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bash_runtime = ResolvedCommandRuntime(
+        kind=CommandRuntimeKind.BASH,
+        executable="/bin/bash",
+        display_name="Bash",
+    )
+
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_existing_gh_path",
+        lambda: (_ for _ in ()).throw(OSError("read-only")),
+    )
+    monkeypatch.setattr(runtime_module, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(
+        runtime_module.os,
+        "environ",
+        {"PATH": "/usr/bin"},
+    )
+
+    env = await build_command_env(
+        runtime=bash_runtime,
+        command="node script.js",
+    )
+
+    assert env["PATH"] == "/usr/bin"
 
 
 def test_kill_process_tree_by_pid_waits_for_posix_exit_before_success(

@@ -82,6 +82,9 @@ if TYPE_CHECKING:
     from agent_teams.tools.runtime.approval_ticket_repo import (
         ApprovalTicketRepository,
     )
+    from agent_teams.tools.workspace_tools.shell_approval_repo import (
+        ShellApprovalRepository,
+    )
 
 LOGGER = get_logger(__name__)
 _EXTERNAL_ACP_PROMPT_INACTIVITY_TIMEOUT_SECONDS = 60.0
@@ -151,6 +154,7 @@ class ExternalAcpSessionManager:
         tool_approval_manager: ToolApprovalManager,
         tool_approval_policy: ToolApprovalPolicy,
         get_notification_service: Callable[[], NotificationService | None],
+        shell_approval_repo: ShellApprovalRepository | None = None,
         resolve_model_config: (
             Callable[[RoleDefinition, LLMRequest], ModelEndpointConfig | None] | None
         ) = None,
@@ -185,6 +189,7 @@ class ExternalAcpSessionManager:
         self._run_control_manager = run_control_manager
         self._tool_approval_manager = tool_approval_manager
         self._tool_approval_policy = tool_approval_policy
+        self._shell_approval_repo = shell_approval_repo
         self._get_notification_service = get_notification_service
         self._resolve_model_config = resolve_model_config
         self._metric_recorder = metric_recorder
@@ -941,6 +946,7 @@ class ExternalAcpSessionManager:
             run_control_manager=self._run_control_manager,
             tool_approval_manager=self._tool_approval_manager,
             tool_approval_policy=self._tool_approval_policy,
+            shell_approval_repo=self._shell_approval_repo,
             get_notification_service=self._get_notification_service,
             metric_recorder=self._metric_recorder,
             im_tool_service=self._im_tool_service,

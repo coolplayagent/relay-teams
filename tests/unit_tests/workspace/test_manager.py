@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agent_teams.workspace import (
     FileScopeBackend,
     WorkspaceFileScope,
@@ -109,10 +111,8 @@ def test_workspace_manager_includes_builtin_and_app_skill_roots_in_read_scope(
         app_skills_dir.resolve(),
     )
     assert handle.locations.writable_roots == (project_root.resolve(), tmp_root)
-    assert (
+    with pytest.raises(ValueError, match="outside workspace write scope"):
         handle.resolve_workdir(app_skills_dir.resolve().as_posix())
-        == app_skills_dir.resolve()
-    )
 
 
 def test_workspace_manager_resolves_execution_root_under_worktree_working_directory(
