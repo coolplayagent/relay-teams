@@ -109,7 +109,8 @@ def test_live_streaming_tool_overlay_skips_processed_group_summary() -> None:
     assert "status === 'pending'" in history_script
     assert "status === 'running'" in history_script
     assert "approvalStatus === 'requested'" in history_script
-    assert "approvalStatus === 'approve'" in history_script
+    assert "function isApprovedApprovalStatus(value)" in history_script
+    assert "approvalStatus === 'approve_exact'" in history_script
 
 
 def test_tool_blocks_extract_effective_inputs_instead_of_footer_status() -> None:

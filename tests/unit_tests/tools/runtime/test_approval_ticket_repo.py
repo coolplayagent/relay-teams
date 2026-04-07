@@ -172,6 +172,30 @@ def test_find_reusable_matches_approved_ticket_by_cache_key(tmp_path: Path) -> N
     assert record.tool_call_id == "call-approved"
 
 
+def test_approval_ticket_repo_persists_metadata_json(tmp_path: Path) -> None:
+    repository = ApprovalTicketRepository(tmp_path / "approval_ticket_metadata.db")
+
+    created = repository.upsert_requested(
+        tool_call_id="call-shell",
+        run_id="run-1",
+        session_id="session-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="shell",
+        args_preview='{"command": "git status"}',
+        metadata={
+            "runtime_family": "git-bash",
+            "normalized_command": "git status",
+            "prefix_candidates": ["git status"],
+        },
+    )
+
+    assert created.metadata["runtime_family"] == "git-bash"
+    assert created.metadata["normalized_command"] == "git status"
+    assert created.metadata["prefix_candidates"] == ["git status"]
+
+
 def test_find_reusable_does_not_cross_exec_context_boundaries(tmp_path: Path) -> None:
     repository = ApprovalTicketRepository(tmp_path / "approval_ticket_exec_context.db")
     approved_cache_key = build_shell_cache_key(

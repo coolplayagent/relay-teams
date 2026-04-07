@@ -14,7 +14,8 @@ from agent_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.tools.runtime import ToolDeps, ToolResultProjection
+from agent_teams.tools.runtime import ToolDeps, ToolExecutionError, ToolResultProjection
+from agent_teams.tools.runtime.models import ToolApprovalRequest
 from agent_teams.tools.workspace_tools import (
     register_background_tasks,
     register_list_background_tasks,
@@ -95,6 +96,8 @@ async def test_shell_passes_none_tool_call_id_without_validation_error(
             session_id="session-1",
             instance_id="inst-1",
             role_id="writer",
+            shell_approval_repo=None,
+            tool_approval_policy=SimpleNamespace(yolo=False),
         ),
     )
 
@@ -150,7 +153,7 @@ def test_build_shell_cache_key_includes_cwd_background_and_tty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_shell_defers_workdir_resolution_until_execute_tool_runs_action(
+async def test_shell_builds_approval_request_after_resolving_workdir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -161,11 +164,16 @@ async def test_shell_defers_workdir_resolution_until_execute_tool_runs_action(
         fake_agent.tools["shell"],
     )
 
-    class _ExplodingWorkspace(_FakeWorkspace):
-        def resolve_workdir(self, relative_path: str | None = None) -> Path:
-            raise AssertionError(f"unexpected workdir resolution: {relative_path}")
+    class _RecordingWorkspace(_FakeWorkspace):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root)
+            self.calls: list[str | None] = []
 
-    workspace = _ExplodingWorkspace(tmp_path)
+        def resolve_workdir(self, relative_path: str | None = None) -> Path:
+            self.calls.append(relative_path)
+            return super().resolve_workdir(relative_path)
+
+    workspace = _RecordingWorkspace(tmp_path)
     ctx = SimpleNamespace(
         tool_call_id="call-1",
         deps=SimpleNamespace(
@@ -174,12 +182,15 @@ async def test_shell_defers_workdir_resolution_until_execute_tool_runs_action(
             session_id="session-1",
             instance_id="inst-1",
             role_id="writer",
+            shell_approval_repo=None,
+            tool_approval_policy=SimpleNamespace(yolo=False),
         ),
     )
 
     async def _fake_execute_tool(_ctx: object, **kwargs: object) -> dict[str, object]:
         del _ctx
-        assert kwargs["approval_request"] is not None
+        approval_request = cast(ToolApprovalRequest, kwargs["approval_request"])
+        assert approval_request.cache_key
         return {"delegated": True}
 
     monkeypatch.setattr(shell_module, "execute_tool", _fake_execute_tool)
@@ -187,6 +198,7 @@ async def test_shell_defers_workdir_resolution_until_execute_tool_runs_action(
     result = await tool(ctx, command="pwd", workdir="../outside")
 
     assert result == {"delegated": True}
+    assert workspace.calls == ["../outside"]
 
 
 def test_register_background_tasks_is_idempotent_per_agent(
@@ -235,3 +247,175 @@ def test_register_list_background_tasks_only_registers_requested_tool(
     register_list_background_tasks(cast(Agent[ToolDeps, str], fake_agent))
 
     assert captured == ["list_background_tasks"]
+
+
+@pytest.mark.asyncio
+async def test_shell_returns_blocked_tool_result_for_local_policy_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_background_tasks(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["shell"],
+    )
+    service = _CapturingBackgroundTaskService()
+    workspace = _FakeWorkspace(tmp_path)
+    ctx = SimpleNamespace(
+        tool_call_id="call-1",
+        deps=SimpleNamespace(
+            background_task_service=service,
+            workspace=workspace,
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            shell_approval_repo=None,
+            tool_approval_policy=SimpleNamespace(yolo=True),
+        ),
+    )
+
+    async def _fake_execute_tool(
+        _ctx: object,
+        *,
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        assert approval_request is not None
+        assert approval_request.source == "shell_local_policy"
+        try:
+            await action()
+        except ToolExecutionError as exc:
+            return {"ok": False, "error": {"type": exc.error_type, "message": str(exc)}}
+        raise AssertionError("expected local shell policy to block action")
+
+    monkeypatch.setattr(shell_module, "execute_tool", _fake_execute_tool)
+
+    result = await tool(ctx, command="curl https://example.com")
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "type": "tool_blocked",
+            "message": "command is blocked by local shell policy: curl",
+        },
+    }
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_shell_yolo_blocks_parent_directory_change_in_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_background_tasks(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["shell"],
+    )
+    service = _CapturingBackgroundTaskService()
+    workspace = _FakeWorkspace(tmp_path)
+    ctx = SimpleNamespace(
+        tool_call_id="call-1",
+        deps=SimpleNamespace(
+            background_task_service=service,
+            workspace=workspace,
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            shell_approval_repo=None,
+            tool_approval_policy=SimpleNamespace(yolo=True),
+        ),
+    )
+
+    async def _fake_execute_tool(
+        _ctx: object,
+        *,
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        assert approval_request is not None
+        assert approval_request.source == "shell_local_policy"
+        try:
+            await action()
+        except ToolExecutionError as exc:
+            return {"ok": False, "error": {"type": exc.error_type, "message": str(exc)}}
+        raise AssertionError("expected yolo directory change to block action")
+
+    monkeypatch.setattr(shell_module, "execute_tool", _fake_execute_tool)
+
+    result = await tool(ctx, command="cd .. && pwd")
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "type": "tool_blocked",
+            "message": (
+                "directory change is blocked by local shell policy: "
+                f"{tmp_path.parent.resolve()} is outside {tmp_path.resolve()}"
+            ),
+        },
+    }
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_shell_returns_blocked_tool_result_for_workdir_escape(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_background_tasks(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["shell"],
+    )
+
+    class _BlockedWorkspace(_FakeWorkspace):
+        def resolve_workdir(self, relative_path: str | None = None) -> Path:
+            raise ValueError(f"Path is outside workspace write scope: {relative_path}")
+
+    ctx = SimpleNamespace(
+        tool_call_id="call-1",
+        deps=SimpleNamespace(
+            workspace=_BlockedWorkspace(tmp_path),
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            shell_approval_repo=None,
+            tool_approval_policy=SimpleNamespace(yolo=True),
+        ),
+    )
+
+    async def _fake_execute_tool(
+        _ctx: object,
+        *,
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        assert approval_request is not None
+        assert approval_request.source == "shell_local_policy"
+        try:
+            await action()
+        except ToolExecutionError as exc:
+            return {"ok": False, "error": {"type": exc.error_type, "message": str(exc)}}
+        raise AssertionError("expected workdir validation to block action")
+
+    monkeypatch.setattr(shell_module, "execute_tool", _fake_execute_tool)
+
+    result = await tool(ctx, command="pwd", workdir="../outside")
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "type": "tool_blocked",
+            "message": "Path is outside workspace write scope: ../outside",
+        },
+    }

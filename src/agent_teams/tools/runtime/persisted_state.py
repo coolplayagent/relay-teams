@@ -297,7 +297,7 @@ def recover_tool_call_state_from_event_log(
             )
         elif event_type == RunEventType.TOOL_APPROVAL_RESOLVED.value:
             action = str(payload.get("action") or "").strip().lower()
-            if action == "approve":
+            if action in {"approve", "approve_once", "approve_exact", "approve_prefix"}:
                 state = state.model_copy(
                     update={
                         "approval_status": ToolApprovalStatus.APPROVE,

@@ -69,33 +69,15 @@ def _get_platform_key() -> str:
 async def get_gh_path() -> Path:
     global _gh_path_cache
 
-    if _gh_path_cache and _gh_path_cache.is_file():
-        return _gh_path_cache
-
-    system_path = resolve_system_gh_path()
-    if system_path is not None:
-        LOGGER.info("Using system GitHub CLI at %s", system_path)
-        _gh_path_cache = system_path
-        return system_path
-
-    local_path = get_bundled_gh_path()
-    if local_path is not None:
-        _gh_path_cache = local_path
-        return local_path
+    existing_path = resolve_existing_gh_path()
+    if existing_path is not None:
+        return existing_path
 
     async with _gh_path_lock:
-        if _gh_path_cache and _gh_path_cache.is_file():
-            return _gh_path_cache
-        system_path = resolve_system_gh_path()
-        if system_path is not None:
-            LOGGER.info("Using system GitHub CLI at %s", system_path)
-            _gh_path_cache = system_path
-            return system_path
-        local_path = get_bundled_gh_path()
-        if local_path is not None:
-            _gh_path_cache = local_path
-            return local_path
-        download_target = _bundled_gh_target_path()
+        existing_path = resolve_existing_gh_path()
+        if existing_path is not None:
+            return existing_path
+        download_target = _bundled_gh_target_path(ensure_parent=True)
         try:
             await _download_gh(download_target)
             _gh_path_cache = download_target
@@ -109,6 +91,28 @@ async def get_gh_path() -> Path:
 def clear_gh_path_cache() -> None:
     global _gh_path_cache
     _gh_path_cache = None
+
+
+def resolve_existing_gh_path() -> Path | None:
+    global _gh_path_cache
+
+    try:
+        if _gh_path_cache and _gh_path_cache.is_file():
+            return _gh_path_cache
+
+        system_path = resolve_system_gh_path()
+        if system_path is not None:
+            LOGGER.info("Using system GitHub CLI at %s", system_path)
+            _gh_path_cache = system_path
+            return system_path
+
+        local_path = get_bundled_gh_path()
+        if local_path is not None:
+            _gh_path_cache = local_path
+            return local_path
+    except Exception:
+        return None
+    return None
 
 
 def resolve_system_gh_path() -> Path | None:
@@ -128,8 +132,9 @@ def get_bundled_gh_path() -> Path | None:
     return None
 
 
-def _bundled_gh_target_path() -> Path:
-    BIN_DIR.mkdir(parents=True, exist_ok=True)
+def _bundled_gh_target_path(*, ensure_parent: bool = False) -> Path:
+    if ensure_parent:
+        BIN_DIR.mkdir(parents=True, exist_ok=True)
     extension = ".exe" if os.name == "nt" else ""
     return BIN_DIR / f"gh{extension}"
 

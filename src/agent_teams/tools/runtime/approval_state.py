@@ -7,7 +7,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-ToolApprovalAction = Literal["approve", "deny"]
+ToolApprovalAction = Literal[
+    "approve",
+    "approve_once",
+    "approve_exact",
+    "approve_prefix",
+    "deny",
+]
 
 
 class _ToolApprovalEntry(BaseModel):

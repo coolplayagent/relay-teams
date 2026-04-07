@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
+from agent_teams.computer import ComputerActionRisk
 from pydantic import JsonValue
 from pydantic_ai import Agent
 
@@ -11,6 +13,7 @@ from agent_teams.tools.runtime import (
     ToolApprovalRequest,
     ToolContext,
     ToolDeps,
+    ToolExecutionError,
     execute_tool,
 )
 from agent_teams.tools.workspace_tools.background_task_tool_support import (
@@ -20,7 +23,11 @@ from agent_teams.tools.workspace_tools.background_task_tool_support import (
 from agent_teams.tools.workspace_tools.command_canonicalization import (
     canonicalize_shell_command,
 )
-from agent_teams.tools.workspace_tools.shell_policy import validate_shell_command
+from agent_teams.tools.workspace_tools.shell_approval_repo import ShellApprovalScope
+from agent_teams.tools.workspace_tools.shell_policy import (
+    ShellPolicyDecision,
+    validate_shell_command,
+)
 
 CURRENT_ROLE_ENV_KEY = "AGENT_TEAMS_CURRENT_ROLE_ID"
 DESCRIPTION = load_tool_description(__file__)
@@ -37,9 +44,24 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         workdir: str | None = None,
         tty: bool = False,
     ) -> dict[str, JsonValue]:
-        approval_request = ToolApprovalRequest(
-            cache_key=build_shell_cache_key(
-                command,
+        blocked_error: ToolExecutionError | None = None
+        shell_policy: ShellPolicyDecision | None = None
+        cwd: Path | None = None
+        try:
+            shell_policy, cwd = prepare_shell_execution(
+                ctx,
+                command=command,
+                workdir=workdir,
+            )
+        except ToolExecutionError as exc:
+            blocked_error = exc
+        approval_request = (
+            build_shell_blocked_approval_request()
+            if blocked_error is not None
+            else build_shell_approval_request(
+                ctx,
+                shell_policy=_require_shell_policy(shell_policy),
+                command=command,
                 workdir=workdir,
                 tty=tty,
                 background=background,
@@ -47,9 +69,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         )
 
         async def _action():
-            validate_shell_command(command)
+            if blocked_error is not None:
+                raise blocked_error
+            if cwd is None:
+                raise RuntimeError("shell execution cwd was not prepared")
             service = require_background_task_service(ctx)
-            cwd = resolve_cwd(ctx, workdir)
             record, completed = await service.execute_command(
                 run_id=ctx.deps.run_id,
                 session_id=ctx.deps.session_id,
@@ -110,6 +134,78 @@ def build_shell_cache_key(
     )
 
 
+def build_shell_approval_request(
+    ctx: ToolContext,
+    *,
+    shell_policy: ShellPolicyDecision,
+    command: str,
+    workdir: str | None,
+    tty: bool,
+    background: bool,
+) -> ToolApprovalRequest:
+    cache_key = build_shell_cache_key(
+        command,
+        workdir=workdir,
+        tty=tty,
+        background=background,
+    )
+    metadata = build_shell_approval_metadata(ctx, shell_policy=shell_policy)
+    repo = ctx.deps.shell_approval_repo
+    if repo is not None and not ctx.deps.tool_approval_policy.yolo:
+        workspace_key = str(metadata["workspace_key"])
+        runtime_family = shell_policy.runtime_family
+        normalized_command = shell_policy.normalized_command
+        prefix_candidates = shell_policy.prefix_candidates
+        if repo.has_exact_grant(
+            workspace_key=workspace_key,
+            runtime_family=runtime_family,
+            normalized_command=normalized_command,
+        ) or repo.has_prefix_grants(
+            workspace_key=workspace_key,
+            runtime_family=runtime_family,
+            prefix_candidates=prefix_candidates,
+        ):
+            return ToolApprovalRequest(
+                cache_key=cache_key,
+                risk_level=ComputerActionRisk.SAFE,
+                source="shell_saved_permission",
+                target_summary=", ".join(prefix_candidates)[:200],
+                metadata=metadata,
+            )
+    return ToolApprovalRequest(
+        cache_key=cache_key,
+        source="shell",
+        target_summary=", ".join(shell_policy.prefix_candidates)[:200],
+        metadata=metadata,
+    )
+
+
+def build_shell_blocked_approval_request() -> ToolApprovalRequest:
+    return ToolApprovalRequest(
+        risk_level=ComputerActionRisk.SAFE,
+        source="shell_local_policy",
+    )
+
+
+def build_shell_approval_metadata(
+    ctx: ToolContext,
+    *,
+    shell_policy: ShellPolicyDecision,
+) -> dict[str, JsonValue]:
+    return {
+        "workspace_key": str(ctx.deps.workspace.execution_root.resolve()),
+        "runtime_family": shell_policy.runtime_family.value,
+        "normalized_command": shell_policy.normalized_command,
+        "prefix_candidates": cast(
+            list[JsonValue], list(shell_policy.prefix_candidates)
+        ),
+        "approval_scope_values": [
+            ShellApprovalScope.EXACT.value,
+            ShellApprovalScope.PREFIX.value,
+        ],
+    }
+
+
 def resolve_cwd(
     ctx: ToolContext,
     workdir: str | None,
@@ -123,3 +219,33 @@ def resolve_cwd(
     if ensure_tmp_root and cwd == ctx.deps.workspace.tmp_root and not cwd.exists():
         cwd.mkdir(parents=True, exist_ok=True)
     return cwd
+
+
+def prepare_shell_execution(
+    ctx: ToolContext,
+    *,
+    command: str,
+    workdir: str | None,
+) -> tuple[ShellPolicyDecision, Path]:
+    try:
+        cwd = resolve_cwd(ctx, workdir)
+        shell_policy = validate_shell_command(
+            command,
+            yolo=ctx.deps.tool_approval_policy.yolo,
+            effective_cwd=cwd,
+        )
+    except ValueError as exc:
+        raise ToolExecutionError(
+            error_type="tool_blocked",
+            message=str(exc),
+            retryable=False,
+        ) from exc
+    return shell_policy, cwd
+
+
+def _require_shell_policy(
+    shell_policy: ShellPolicyDecision | None,
+) -> ShellPolicyDecision:
+    if shell_policy is None:
+        raise RuntimeError("shell execution preparation produced incomplete state")
+    return shell_policy

@@ -49,6 +49,9 @@ from agent_teams.tools.runtime import (
     ToolDeps,
 )
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from agent_teams.tools.workspace_tools.shell_approval_repo import (
+    ShellApprovalRepository,
+)
 from agent_teams.workspace import WorkspaceManager, build_conversation_id
 
 if TYPE_CHECKING:
@@ -134,6 +137,7 @@ class ExternalAcpHostToolBridge:
         metric_recorder: MetricRecorder | None = None,
         im_tool_service: ImToolService | None = None,
         computer_runtime: ComputerRuntime | None = None,
+        shell_approval_repo: ShellApprovalRepository | None = None,
     ) -> None:
         self._task_repo = task_repo
         self._shared_store = shared_store
@@ -162,6 +166,7 @@ class ExternalAcpHostToolBridge:
         self._metric_recorder = metric_recorder
         self._im_tool_service = im_tool_service
         self._computer_runtime = computer_runtime
+        self._shell_approval_repo = shell_approval_repo
 
         self._catalog_by_name: dict[str, HostedToolDefinition] = {}
         self._catalog_signature = ""
@@ -483,6 +488,7 @@ class ExternalAcpHostToolBridge:
             run_control_manager=self._run_control_manager,
             tool_approval_manager=self._tool_approval_manager,
             tool_approval_policy=self._tool_approval_policy.with_yolo(yolo),
+            shell_approval_repo=self._shell_approval_repo,
             metric_recorder=self._metric_recorder,
             notification_service=self._get_notification_service(),
             im_tool_service=self._im_tool_service,

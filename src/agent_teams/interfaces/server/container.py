@@ -161,6 +161,9 @@ from agent_teams.tools.runtime import (
     ToolApprovalManager,
     ToolApprovalPolicy,
 )
+from agent_teams.tools.workspace_tools.shell_approval_repo import (
+    ShellApprovalRepository,
+)
 from agent_teams.gateway.wechat import (
     WeChatAccountRepository,
     WeChatClient,
@@ -285,6 +288,9 @@ class ServerContainer:
             session_history_marker_repo=self.session_history_marker_repo,
         )
         self.approval_ticket_repo: ApprovalTicketRepository = ApprovalTicketRepository(
+            runtime.paths.db_path
+        )
+        self.shell_approval_repo: ShellApprovalRepository = ShellApprovalRepository(
             runtime.paths.db_path
         )
         self.run_runtime_repo: RunRuntimeRepository = RunRuntimeRepository(
@@ -474,6 +480,7 @@ class ServerContainer:
             run_control_manager=self.run_control_manager,
             tool_approval_manager=self.tool_approval_manager,
             tool_approval_policy=self.tool_approval_policy,
+            shell_approval_repo=self.shell_approval_repo,
             get_notification_service=lambda: self.notification_service,
             resolve_model_config=self._resolve_external_agent_model_config,
             metric_recorder=self.metric_recorder,
@@ -542,6 +549,7 @@ class ServerContainer:
             orchestration_settings_service=self.orchestration_settings_service,
             media_asset_service=self.media_asset_service,
             runtime_role_resolver=self.runtime_role_resolver,
+            shell_approval_repo=self.shell_approval_repo,
         )
         self.session_service: SessionService = SessionService(
             session_repo=self.session_repo,
@@ -769,6 +777,7 @@ class ServerContainer:
             run_control_manager=self.run_control_manager,
             tool_approval_manager=self.tool_approval_manager,
             tool_approval_policy=self.tool_approval_policy,
+            shell_approval_repo=self.shell_approval_repo,
             notification_service=self.notification_service,
             get_task_execution_service=get_task_execution_service,
             token_usage_repo=self.token_usage_repo,

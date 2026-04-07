@@ -61,7 +61,13 @@ class InjectMessageRequest(BaseModel):
 class ResolveToolApprovalRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    action: Literal["approve", "deny"]
+    action: Literal[
+        "approve",
+        "approve_once",
+        "approve_exact",
+        "approve_prefix",
+        "deny",
+    ]
     feedback: str = ""
 
 

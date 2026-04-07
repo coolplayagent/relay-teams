@@ -37,14 +37,27 @@ def build_approvals_app(
     def tool_approvals_resolve(
         run_id: str = typer.Option(..., "--run-id"),
         tool_call_id: str = typer.Option(..., "--tool-call-id"),
-        action: str = typer.Option(..., "--action", help="approve or deny"),
+        action: str = typer.Option(
+            ...,
+            "--action",
+            help="approve, approve_once, approve_exact, approve_prefix, or deny",
+        ),
         feedback: str = typer.Option("", "--feedback"),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
     ) -> None:
         auto_start_if_needed(base_url, autostart)
-        if action not in {"approve", "deny"}:
-            raise typer.BadParameter("action must be approve or deny")
+        if action not in {
+            "approve",
+            "approve_once",
+            "approve_exact",
+            "approve_prefix",
+            "deny",
+        }:
+            raise typer.BadParameter(
+                "action must be approve, approve_once, approve_exact, "
+                "approve_prefix, or deny"
+            )
         result = request_json(
             base_url,
             "POST",

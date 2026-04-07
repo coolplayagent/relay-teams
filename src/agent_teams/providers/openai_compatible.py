@@ -69,6 +69,9 @@ if TYPE_CHECKING:
         ToolApprovalManager,
         ToolApprovalPolicy,
     )
+    from agent_teams.tools.workspace_tools.shell_approval_repo import (
+        ShellApprovalRepository,
+    )
     from agent_teams.workspace import WorkspaceManager
     from agent_teams.gateway.im import ImToolService
 
@@ -108,6 +111,7 @@ class OpenAICompatibleProvider(LLMProvider):
         tool_approval_manager: ToolApprovalManager,
         tool_approval_policy: ToolApprovalPolicy,
         notification_service: NotificationService | None = None,
+        shell_approval_repo: ShellApprovalRepository | None = None,
         token_usage_repo: TokenUsageRepository | None = None,
         metric_recorder: MetricRecorder | None = None,
         retry_config: LlmRetryConfig | None = None,
@@ -151,6 +155,7 @@ class OpenAICompatibleProvider(LLMProvider):
             run_control_manager=run_control_manager,
             tool_approval_manager=tool_approval_manager,
             tool_approval_policy=tool_approval_policy,
+            shell_approval_repo=shell_approval_repo,
             notification_service=notification_service,
             token_usage_repo=token_usage_repo,
             metric_recorder=metric_recorder,

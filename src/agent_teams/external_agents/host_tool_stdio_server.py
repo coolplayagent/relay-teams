@@ -68,6 +68,7 @@ async def _run_stdio_server() -> None:
         run_control_manager=container.run_control_manager,
         tool_approval_manager=container.tool_approval_manager,
         tool_approval_policy=container.tool_approval_policy,
+        shell_approval_repo=container.shell_approval_repo,
         get_notification_service=lambda: container.notification_service,
         metric_recorder=container.metric_recorder,
         im_tool_service=container.im_tool_service,

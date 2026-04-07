@@ -585,6 +585,33 @@ async def test_spawn_shell_strips_bash_startup_env(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_build_shell_env_ignores_gh_lookup_errors(monkeypatch) -> None:
+    from agent_teams.tools.workspace_tools import shell_executor
+
+    shell = shell_executor.ResolvedShell(
+        kind=shell_executor.ShellKind.BASH,
+        executable="bash",
+        display_name="Bash",
+    )
+
+    monkeypatch.setattr(shell_executor, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(
+        shell_executor,
+        "resolve_existing_gh_path",
+        lambda: (_ for _ in ()).throw(OSError("read-only")),
+    )
+    monkeypatch.setattr(
+        shell_executor.os,
+        "environ",
+        {"PATH": "/usr/bin"},
+    )
+
+    env = await shell_executor.build_shell_env(shell=shell)
+
+    assert env["PATH"] == "/usr/bin"
+
+
+@pytest.mark.asyncio
 async def test_create_shell_subprocess_uses_powershell_wrapper_and_keeps_env(
     monkeypatch,
 ) -> None:

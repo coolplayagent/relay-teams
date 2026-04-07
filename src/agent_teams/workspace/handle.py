@@ -129,6 +129,14 @@ class WorkspaceHandle(BaseModel):
         return Path("tmp", relative_path).as_posix()
 
     def resolve_workdir(self, relative_path: str | None = None) -> Path:
-        if relative_path is None:
-            return self.execution_root
-        return self._resolve_candidate_path(relative_path)
+        raw_path = "." if relative_path is None else relative_path
+        candidate = (
+            self.execution_root
+            if relative_path is None
+            else self._resolve_candidate_path(relative_path)
+        )
+        return self._validate_allowed_path(
+            candidate,
+            write=True,
+            raw_path=raw_path,
+        )

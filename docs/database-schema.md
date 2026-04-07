@@ -638,6 +638,7 @@ Primary query keys used by repositories:
 - `agent_teams.agents.tasks`: `tasks`.
 - `agent_teams.agents.execution`: `messages`.
 - `agent_teams.tools.runtime`: `approval_tickets`.
+- `agent_teams.tools.workspace_tools`: `shell_approval_grants`.
 - `agent_teams.providers`: `token_usage`.
 - `agent_teams.gateway.feishu`: `feishu_gateway_accounts`, `feishu_message_pool`.
 - `agent_teams.automation`: `automation_execution_events`.
@@ -684,6 +685,20 @@ Notes:
 - `target_role_id` stores an optional one-run direct-chat override, such as a leading `@Role` mention from the web composer.
 - `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later.
 - `conversation_context_json` stores optional source-channel context, including Feishu group-chat markers used by runtime prompt assembly and the automation direct-send override used by IM-bound scheduled runs.
+
+---
+
+### 2.9.0 `approval_tickets` and `shell_approval_grants`
+
+`approval_tickets` persists pending and reusable tool-approval records. Shell tickets also store `metadata_json`, which carries normalized command data used when the operator resolves a pending shell approval as `approve_exact` or `approve_prefix`.
+
+`shell_approval_grants` stores project-scoped reusable shell approvals keyed by:
+- `workspace_key`
+- `runtime_family`
+- `scope` (`exact` or `prefix`)
+- `value`
+
+These grants are local-only runtime permissions. They are separate from per-run approval tickets and are used only by the shell tool in non-`yolo` runs.
 
 ---
 

@@ -34,6 +34,9 @@ from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from agent_teams.tools.runtime.approval_state import ToolApprovalManager
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.tools.runtime.policy import ToolApprovalPolicy
+from agent_teams.tools.workspace_tools.shell_approval_repo import (
+    ShellApprovalRepository,
+)
 from agent_teams.workspace import WorkspaceHandle
 
 
@@ -143,6 +146,7 @@ class ToolDeps(BaseModel):
     run_control_manager: SkipValidation[RunControlManager]
     tool_approval_manager: SkipValidation[ToolApprovalManager]
     tool_approval_policy: SkipValidation[ToolApprovalPolicy]
+    shell_approval_repo: SkipValidation[ShellApprovalRepository | None] = None
     metric_recorder: SkipValidation[MetricRecorder | None] = None
     notification_service: SkipValidation[NotificationService | None] = None
     im_tool_service: SkipValidation[ImToolServiceLike | None] = None

@@ -441,6 +441,7 @@ async def _handle_tool_approval(
         role_id=ctx.deps.role_id,
         tool_name=tool_name,
         args_preview=args_preview,
+        metadata=approval_request.metadata if approval_request is not None else None,
         cache_key=cache_key,
         signature_args_preview=approval_preview,
     )
@@ -604,7 +605,7 @@ async def _wait_for_ticket_resolution(
     )
     resolved_status = (
         ApprovalTicketStatus.APPROVED
-        if action == "approve"
+        if _approval_action_is_approved(action)
         else ApprovalTicketStatus.DENIED
     )
     ctx.deps.approval_ticket_repo.resolve(
@@ -617,7 +618,7 @@ async def _wait_for_ticket_resolution(
         meta["approval_feedback"] = feedback
     log_event(
         LOGGER,
-        logging.INFO if action == "approve" else logging.WARNING,
+        logging.INFO if _approval_action_is_approved(action) else logging.WARNING,
         event="tool.approval.resolved",
         message="Tool approval resolved",
         payload={
@@ -656,6 +657,10 @@ async def _wait_for_ticket_resolution(
         )
 
     return ticket_id, None
+
+
+def _approval_action_is_approved(action: str) -> bool:
+    return action in {"approve", "approve_once", "approve_exact", "approve_prefix"}
 
 
 def _publish_tool_approval_notification(
@@ -814,7 +819,12 @@ def _approval_status_from_meta(
     runtime_meta: dict[str, JsonValue],
 ) -> ToolApprovalStatus | None:
     approval_text = str(runtime_meta.get("approval_status") or "").strip().lower()
-    if approval_text == ToolApprovalStatus.APPROVE.value:
+    if approval_text in {
+        ToolApprovalStatus.APPROVE.value,
+        "approve_once",
+        "approve_exact",
+        "approve_prefix",
+    }:
         return ToolApprovalStatus.APPROVE
     if approval_text == ToolApprovalStatus.DENY.value:
         return ToolApprovalStatus.DENY
