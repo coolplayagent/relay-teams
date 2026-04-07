@@ -23,7 +23,7 @@ Highlights:
 
 ## Web Interface
 
-![Agent Teams Web Interface](docs/agent_teams.png)
+![Agent Teams Web Interface](docs/relay_teams.png)
 
 Start the server with `uv run relay-teams server start` and open http://127.0.0.1:8000 in your browser.
 Use `uv run relay-teams server restart` to restart the managed server, and `uv run relay-teams server stop --force` to force stop it.
@@ -73,7 +73,7 @@ relay-teams --help
 relay-teams-evals --help
 ```
 
-If the `relay-teams` command is still missing in a fresh local checkout, the project package was not installed into the active virtual environment. Run `uv pip install -e .` or use `uv run python -m agent_teams --help` as a fallback.
+If the `relay-teams` command is still missing in a fresh local checkout, the project package was not installed into the active virtual environment. Run `uv pip install -e .` or use `uv run python -m relay_teams --help` as a fallback.
 
 Examples:
 

@@ -9,7 +9,7 @@ from typing import cast
 
 import pytest
 
-from agent_teams.interfaces.server import app as server_app
+from relay_teams.interfaces.server import app as server_app
 
 
 def test_register_signal_handlers_logs_and_chains_previous_handler(

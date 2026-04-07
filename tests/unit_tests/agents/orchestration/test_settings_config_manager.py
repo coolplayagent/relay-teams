@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.agents.orchestration.settings_config_manager import (
+from relay_teams.agents.orchestration.settings_config_manager import (
     OrchestrationSettingsConfigManager,
 )
 

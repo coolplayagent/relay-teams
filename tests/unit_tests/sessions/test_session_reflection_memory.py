@@ -2,21 +2,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-from agent_teams.sessions.session_service import SessionService
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
-from agent_teams.providers.token_usage_repo import TokenUsageRepository
-from agent_teams.roles.memory_repository import RoleMemoryRepository
-from agent_teams.roles.memory_service import RoleMemoryService
-from agent_teams.sessions.session_repository import SessionRepository
-from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.workspace import WorkspaceService
-from agent_teams.workspace.workspace_repository import WorkspaceRepository
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.session_service import SessionService
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.roles.memory_repository import RoleMemoryRepository
+from relay_teams.roles.memory_service import RoleMemoryService
+from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.workspace import WorkspaceService
+from relay_teams.workspace.workspace_repository import WorkspaceRepository
 
 
 def _build_service(

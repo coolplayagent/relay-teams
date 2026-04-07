@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from agent_teams.agents.execution.llm_session import AgentLlmSession
-from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
-from agent_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.agents.execution.llm_session import AgentLlmSession
+from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
+from relay_teams.mcp.mcp_registry import McpRegistry
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,

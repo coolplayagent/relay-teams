@@ -5,7 +5,7 @@ import logging
 
 import pytest
 
-from agent_teams.trace import (
+from relay_teams.trace import (
     bind_trace_context,
     generate_request_id,
     generate_span_id,

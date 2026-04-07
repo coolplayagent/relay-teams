@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.release.pull_request_issue_link import (
+from relay_teams.release.pull_request_issue_link import (
     IssueLinkRequirementError,
     PullRequestIssueLinkContext,
     build_graphql_url,

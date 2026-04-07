@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from agent_teams.sessions.session_repository import SessionRepository
+from relay_teams.sessions.session_repository import SessionRepository
 
 
 def test_list_all_tolerates_blank_session_metadata_json(tmp_path: Path) -> None:

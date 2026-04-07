@@ -6,8 +6,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from agent_teams.gateway.feishu.client import FeishuClient
-from agent_teams.gateway.feishu.models import FeishuEnvironment
+from relay_teams.gateway.feishu.client import FeishuClient
+from relay_teams.gateway.feishu.models import FeishuEnvironment
 
 
 class _FakeSyncHttpClient:
@@ -121,7 +121,7 @@ def test_get_chat_name_uses_net_client_and_cache(monkeypatch) -> None:
         return fake_client
 
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        "relay_teams.gateway.feishu.client.create_sync_http_client",
         _fake_create_sync_http_client,
     )
     client = FeishuClient(merged_env={"SSL_VERIFY": "false"})
@@ -167,7 +167,7 @@ def test_get_user_name_uses_net_client_and_cache(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        "relay_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()
@@ -212,7 +212,7 @@ def test_send_text_message_uses_net_client_request_chain(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        "relay_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()
@@ -264,7 +264,7 @@ def test_delete_message_uses_delete_endpoint(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        "relay_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()
@@ -305,7 +305,7 @@ def test_reply_text_message_uses_reply_endpoint(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        "relay_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()
@@ -355,7 +355,7 @@ def test_create_message_reaction_uses_reaction_endpoint(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        "relay_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()
@@ -420,7 +420,7 @@ def test_resolve_user_name_falls_back_to_chat_member_lookup(monkeypatch) -> None
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        "relay_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()
@@ -471,7 +471,7 @@ def test_get_chat_name_raises_runtime_error_for_failed_response(monkeypatch) -> 
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        "relay_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()
@@ -525,7 +525,7 @@ def test_send_file_uploads_image_and_sends_image_message(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        "relay_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()
@@ -593,7 +593,7 @@ def test_send_file_uploads_regular_file_and_sends_file_message(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.client.create_sync_http_client",
+        "relay_teams.gateway.feishu.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     client = FeishuClient()

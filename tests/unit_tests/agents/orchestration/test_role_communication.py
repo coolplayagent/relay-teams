@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.agents.instances.models import AgentRuntimeRecord
-from agent_teams.agents.orchestration import (
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.models import AgentRuntimeRecord
+from relay_teams.agents.orchestration import (
     FeedbackLoopSpec,
     RoleAgentBinding,
     RoleCommunicationExchange,
@@ -25,7 +25,7 @@ from agent_teams.agents.orchestration import (
     validate_exchange_binding,
     validate_role_communication,
 )
-from agent_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_models import RoleDefinition
 
 
 def test_role_state_space_rejects_unknown_transition_state() -> None:

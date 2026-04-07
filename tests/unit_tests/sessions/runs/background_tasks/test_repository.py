@@ -4,11 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import datetime, timezone
 
-from agent_teams.sessions.runs.background_tasks.models import (
+from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.sessions.runs.background_tasks.repository import (
+from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
 

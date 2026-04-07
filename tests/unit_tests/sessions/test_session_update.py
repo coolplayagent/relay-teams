@@ -4,25 +4,25 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
-from agent_teams.providers.token_usage_repo import TokenUsageRepository
-from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-from agent_teams.sessions.session_service import SessionService
-from agent_teams.sessions.session_repository import SessionRepository
-from agent_teams.sessions.session_models import SessionMode
-from agent_teams.gateway.feishu import (
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.session_service import SessionService
+from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.sessions.session_models import SessionMode
+from relay_teams.gateway.feishu import (
     SESSION_METADATA_TITLE_SOURCE_KEY,
     SESSION_TITLE_SOURCE_AUTO,
     SESSION_TITLE_SOURCE_MANUAL,
 )
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry, SystemRolesUnavailableError
-from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.workspace import WorkspaceService
-from agent_teams.workspace.workspace_repository import WorkspaceRepository
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry, SystemRolesUnavailableError
+from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.workspace import WorkspaceService
+from relay_teams.workspace.workspace_repository import WorkspaceRepository
 
 
 def _build_service(

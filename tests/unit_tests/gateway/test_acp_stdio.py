@@ -11,39 +11,39 @@ from typing import cast
 import pytest
 from pydantic import JsonValue
 
-import agent_teams.gateway.acp_stdio as acp_stdio_module
-from agent_teams.gateway.acp_stdio import (
+import relay_teams.gateway.acp_stdio as acp_stdio_module
+from relay_teams.gateway.acp_stdio import (
     AcpGatewayServer,
     _AcpRequestContext,
     AcpStdioRuntime,
 )
-from agent_teams.gateway.session_ingress_service import GatewaySessionIngressService
-from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
-from agent_teams.gateway.gateway_session_model_profile_store import (
+from relay_teams.gateway.session_ingress_service import GatewaySessionIngressService
+from relay_teams.gateway.gateway_session_repository import GatewaySessionRepository
+from relay_teams.gateway.gateway_session_model_profile_store import (
     GatewaySessionModelProfileStore,
 )
-from agent_teams.gateway.gateway_session_service import GatewaySessionService
-from agent_teams.media import MediaAssetService, content_parts_from_text
-from agent_teams.metrics import (
+from relay_teams.gateway.gateway_session_service import GatewaySessionService
+from relay_teams.media import MediaAssetService, content_parts_from_text
+from relay_teams.metrics import (
     DEFAULT_DEFINITIONS,
     MetricEvent,
     MetricRecorder,
     MetricRegistry,
 )
-from agent_teams.providers.token_usage_repo import RunTokenUsage
-from agent_teams.sessions import SessionService
-from agent_teams.sessions.session_models import SessionRecord
-from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.run_manager import RunManager
-from agent_teams.sessions.runs.run_models import IntentInput, RunEvent
-from agent_teams.sessions.runs.run_runtime_repo import (
+from relay_teams.providers.token_usage_repo import RunTokenUsage
+from relay_teams.sessions import SessionService
+from relay_teams.sessions.session_models import SessionRecord
+from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_models import IntentInput, RunEvent
+from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.workspace import WorkspaceService
-from agent_teams.workspace.workspace_models import WorkspaceRecord
+from relay_teams.workspace import WorkspaceService
+from relay_teams.workspace.workspace_models import WorkspaceRecord
 
 
 class FakeSessionService:
@@ -690,7 +690,7 @@ async def test_session_prompt_rejects_busy_active_run(
     failure_events = [
         event
         for event in sink.events
-        if event.definition_name == "agent_teams.gateway.operation_failures"
+        if event.definition_name == "relay_teams.gateway.operation_failures"
     ]
     assert len(failure_events) == 1
     assert failure_events[0].tags.gateway_operation == "session_prompt"
@@ -725,7 +725,7 @@ async def test_failed_notification_does_not_emit_jsonrpc_error_response(
     failure_events = [
         event
         for event in sink.events
-        if event.definition_name == "agent_teams.gateway.operation_failures"
+        if event.definition_name == "relay_teams.gateway.operation_failures"
     ]
     assert len(failure_events) == 1
     assert failure_events[0].tags.gateway_operation == "session_cancel"
@@ -2027,7 +2027,7 @@ async def test_initialize_records_gateway_request_metrics(
     operation_events = [
         event
         for event in sink.events
-        if event.definition_name == "agent_teams.gateway.operations"
+        if event.definition_name == "relay_teams.gateway.operations"
     ]
     assert len(operation_events) == 1
     assert operation_events[0].tags.gateway_operation == "initialize"
@@ -2097,7 +2097,7 @@ async def test_session_prompt_records_gateway_prompt_phase_metrics(
     operation_events = [
         event
         for event in sink.events
-        if event.definition_name == "agent_teams.gateway.operations"
+        if event.definition_name == "relay_teams.gateway.operations"
         and event.tags.gateway_operation == "session_prompt"
     ]
     assert {

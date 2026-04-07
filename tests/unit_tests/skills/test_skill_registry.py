@@ -9,15 +9,15 @@ from typing import cast
 from pydantic import JsonValue
 import pytest
 
-from agent_teams.builtin import get_builtin_skills_dir
-from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.skills.discovery import SkillsDirectory
-from agent_teams.skills.skill_models import SkillScope
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.skills.skill_registry import SkillRegistry
+from relay_teams.builtin import get_builtin_skills_dir
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.skills.discovery import SkillsDirectory
+from relay_teams.skills.skill_models import SkillScope
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.skills.skill_registry import SkillRegistry
 
-from agent_teams.tools.runtime import ToolContext
+from relay_teams.tools.runtime import ToolContext
 
 
 def test_get_toolset_tools_builds_skill_tools_without_annotation_errors() -> None:
@@ -153,7 +153,7 @@ def test_registry_from_config_dirs_merges_builtin_and_app_skills(
     app_config_dir = tmp_path / ".agent-teams"
     builtin_skills_dir = tmp_path / "builtin" / "skills"
     monkeypatch.setattr(
-        "agent_teams.skills.discovery.get_builtin_skills_dir_path",
+        "relay_teams.skills.discovery.get_builtin_skills_dir_path",
         lambda: builtin_skills_dir.resolve(),
     )
 
@@ -209,7 +209,7 @@ def test_registry_from_config_dirs_creates_app_skills_directory(
 ) -> None:
     app_config_dir = tmp_path / ".agent-teams"
     monkeypatch.setattr(
-        "agent_teams.skills.discovery.get_builtin_skills_dir_path",
+        "relay_teams.skills.discovery.get_builtin_skills_dir_path",
         lambda: (tmp_path / "builtin" / "skills").resolve(),
     )
 

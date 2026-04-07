@@ -13,7 +13,7 @@ import pytest
 
 class TestExtractPathsFromCommand:
     def test_extract_cd_path(self):
-        from agent_teams.tools.workspace_tools.shell_executor import (
+        from relay_teams.tools.workspace_tools.shell_executor import (
             extract_paths_from_command,
         )
 
@@ -21,7 +21,7 @@ class TestExtractPathsFromCommand:
         assert "/tmp/test" in paths
 
     def test_extract_rm_path(self):
-        from agent_teams.tools.workspace_tools.shell_executor import (
+        from relay_teams.tools.workspace_tools.shell_executor import (
             extract_paths_from_command,
         )
 
@@ -29,7 +29,7 @@ class TestExtractPathsFromCommand:
         assert "/tmp/test" in paths
 
     def test_extract_mkdir_path(self):
-        from agent_teams.tools.workspace_tools.shell_executor import (
+        from relay_teams.tools.workspace_tools.shell_executor import (
             extract_paths_from_command,
         )
 
@@ -37,7 +37,7 @@ class TestExtractPathsFromCommand:
         assert "/tmp/newdir/subdir" in paths
 
     def test_extract_multiple_commands(self):
-        from agent_teams.tools.workspace_tools.shell_executor import (
+        from relay_teams.tools.workspace_tools.shell_executor import (
             extract_paths_from_command,
         )
 
@@ -51,7 +51,7 @@ class TestExtractPathsFromCommand:
         assert "/project/dist" in paths
 
     def test_ignore_flags(self):
-        from agent_teams.tools.workspace_tools.shell_executor import (
+        from relay_teams.tools.workspace_tools.shell_executor import (
             extract_paths_from_command,
         )
 
@@ -60,7 +60,7 @@ class TestExtractPathsFromCommand:
         assert "/tmp/test" in paths
 
     def test_quoted_paths(self):
-        from agent_teams.tools.workspace_tools.shell_executor import (
+        from relay_teams.tools.workspace_tools.shell_executor import (
             extract_paths_from_command,
         )
 
@@ -71,38 +71,38 @@ class TestExtractPathsFromCommand:
 
 class TestNormalizeTimeout:
     def test_none_timeout(self):
-        from agent_teams.tools.workspace_tools.shell_executor import normalize_timeout
+        from relay_teams.tools.workspace_tools.shell_executor import normalize_timeout
 
         result = normalize_timeout(None)
         assert result == 120_000
 
     def test_custom_timeout(self):
-        from agent_teams.tools.workspace_tools.shell_executor import normalize_timeout
+        from relay_teams.tools.workspace_tools.shell_executor import normalize_timeout
 
         result = normalize_timeout(60000)
         assert result == 60000
 
     def test_timeout_too_large(self):
-        from agent_teams.tools.workspace_tools.shell_executor import normalize_timeout
+        from relay_teams.tools.workspace_tools.shell_executor import normalize_timeout
 
         result = normalize_timeout(1_300_000)
         assert result == 1_200_000
 
     def test_timeout_too_small(self):
-        from agent_teams.tools.workspace_tools.shell_executor import normalize_timeout
+        from relay_teams.tools.workspace_tools.shell_executor import normalize_timeout
 
         with pytest.raises(ValueError):
             normalize_timeout(0)
 
     def test_negative_timeout(self):
-        from agent_teams.tools.workspace_tools.shell_executor import normalize_timeout
+        from relay_teams.tools.workspace_tools.shell_executor import normalize_timeout
 
         with pytest.raises(ValueError):
             normalize_timeout(-1)
 
 
 def test_resolve_bash_path_prefers_env_override(monkeypatch, tmp_path: Path) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     git_bash = tmp_path / "custom" / "bash.exe"
     git_bash.parent.mkdir(parents=True)
@@ -115,7 +115,7 @@ def test_resolve_bash_path_prefers_env_override(monkeypatch, tmp_path: Path) -> 
 def test_resolve_bash_path_prefers_git_bash_over_wsl_on_windows(
     monkeypatch, tmp_path: Path
 ) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     git_bash = tmp_path / "Git" / "bin" / "bash.exe"
     git_bash.parent.mkdir(parents=True)
@@ -140,7 +140,7 @@ def test_resolve_bash_path_prefers_git_bash_over_wsl_on_windows(
 def test_iter_windows_git_bash_candidates_includes_git_install_root(
     monkeypatch, tmp_path: Path
 ) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     git_exe = tmp_path / "Git" / "cmd" / "git.exe"
     git_exe.parent.mkdir(parents=True)
@@ -161,7 +161,7 @@ def test_iter_windows_git_bash_candidates_includes_git_install_root(
 
 
 def test_resolve_bash_path_rejects_wsl_bash_without_git_bash(monkeypatch) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     monkeypatch.delenv("GIT_BASH_PATH", raising=False)
     monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
@@ -177,7 +177,7 @@ def test_resolve_bash_path_rejects_wsl_bash_without_git_bash(monkeypatch) -> Non
 
 
 def test_resolve_bash_path_uses_system_bash_on_non_windows(monkeypatch) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     monkeypatch.delenv("GIT_BASH_PATH", raising=False)
     monkeypatch.setattr(shell_executor, "_is_windows", lambda: False)
@@ -193,7 +193,7 @@ def test_resolve_bash_path_uses_system_bash_on_non_windows(monkeypatch) -> None:
 def test_resolve_exec_shell_falls_back_to_powershell_on_windows(
     monkeypatch,
 ) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
     monkeypatch.setattr(
@@ -220,7 +220,7 @@ def test_resolve_exec_shell_falls_back_to_powershell_on_windows(
 def test_describe_runtime_shell_reports_powershell_when_git_bash_is_missing(
     monkeypatch,
 ) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
     monkeypatch.setattr(
@@ -280,7 +280,7 @@ class _FakeProcess:
 async def test_kill_process_tree_windows_falls_back_to_proc_kill_when_taskkill_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     proc = _FakeProcess()
     monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
@@ -327,7 +327,7 @@ def _make_fake_factory(
 
 @pytest.mark.asyncio
 async def test_spawn_shell_does_not_timeout_after_streams_finish(monkeypatch) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     proc = _FakeProcess()
     monkeypatch.setattr(shell_executor, "resolve_bash_path", lambda: "bash")
@@ -353,7 +353,7 @@ async def test_spawn_shell_does_not_timeout_after_streams_finish(monkeypatch) ->
 
 @pytest.mark.asyncio
 async def test_spawn_shell_yields_nonzero_exit_code(monkeypatch) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     proc = _FakeProcess()
     monkeypatch.setattr(shell_executor, "resolve_bash_path", lambda: "bash")
@@ -379,7 +379,7 @@ async def test_spawn_shell_yields_nonzero_exit_code(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_spawn_shell_creates_process_group(monkeypatch) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     captured_kwargs: dict[str, object] = {}
     proc = _FakeProcess()
@@ -422,7 +422,7 @@ async def test_spawn_shell_creates_process_group(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_spawn_shell_passes_role_env_to_subprocess(monkeypatch) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     captured_kwargs: dict[str, object] = {}
     proc = _FakeProcess()
@@ -467,7 +467,7 @@ async def test_spawn_shell_injects_github_token_and_bundled_path(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     captured_kwargs: dict[str, object] = {}
     proc = _FakeProcess()
@@ -524,7 +524,7 @@ async def test_spawn_shell_injects_github_token_and_bundled_path(
 
 @pytest.mark.asyncio
 async def test_spawn_shell_strips_bash_startup_env(monkeypatch) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     captured_kwargs: dict[str, object] = {}
     proc = _FakeProcess()
@@ -586,7 +586,7 @@ async def test_spawn_shell_strips_bash_startup_env(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_build_shell_env_ignores_gh_lookup_errors(monkeypatch) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     shell = shell_executor.ResolvedShell(
         kind=shell_executor.ShellKind.BASH,
@@ -615,7 +615,7 @@ async def test_build_shell_env_ignores_gh_lookup_errors(monkeypatch) -> None:
 async def test_create_shell_subprocess_uses_powershell_wrapper_and_keeps_env(
     monkeypatch,
 ) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     captured_args: list[object] = []
     captured_kwargs: dict[str, object] = {}
@@ -674,7 +674,7 @@ async def test_create_shell_subprocess_uses_powershell_wrapper_and_keeps_env(
 
 
 def test_run_git_bash_strips_bash_startup_env(monkeypatch, tmp_path: Path) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     captured_kwargs: dict[str, object] = {}
 
@@ -725,14 +725,14 @@ def test_run_git_bash_strips_bash_startup_env(monkeypatch, tmp_path: Path) -> No
 
 class TestValidateShellCommand:
     def test_accepts_normal_length_command(self):
-        from agent_teams.tools.workspace_tools.shell_policy import (
+        from relay_teams.tools.workspace_tools.shell_policy import (
             validate_shell_command,
         )
 
         validate_shell_command("echo hello")
 
     def test_accepts_long_inline_script(self):
-        from agent_teams.tools.workspace_tools.shell_policy import (
+        from relay_teams.tools.workspace_tools.shell_policy import (
             validate_shell_command,
         )
 
@@ -740,7 +740,7 @@ class TestValidateShellCommand:
         validate_shell_command(long_cmd)
 
     def test_rejects_command_above_max_length(self):
-        from agent_teams.tools.workspace_tools.shell_policy import (
+        from relay_teams.tools.workspace_tools.shell_policy import (
             MAX_COMMAND_LENGTH,
             validate_shell_command,
         )
@@ -750,7 +750,7 @@ class TestValidateShellCommand:
             validate_shell_command(cmd)
 
     def test_error_message_includes_length(self):
-        from agent_teams.tools.workspace_tools.shell_policy import (
+        from relay_teams.tools.workspace_tools.shell_policy import (
             MAX_COMMAND_LENGTH,
             validate_shell_command,
         )
@@ -761,7 +761,7 @@ class TestValidateShellCommand:
 
 
 def test_run_git_bash_uses_current_proxy_env(monkeypatch) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     captured: dict[str, object] = {}
     monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:8080")
@@ -790,7 +790,7 @@ def test_run_git_bash_uses_current_proxy_env(monkeypatch) -> None:
 
 
 def test_run_git_bash_uses_process_group(monkeypatch) -> None:
-    from agent_teams.tools.workspace_tools import shell_executor
+    from relay_teams.tools.workspace_tools import shell_executor
 
     captured_kwargs: dict[str, object] = {}
     monkeypatch.setattr(shell_executor, "resolve_bash_path", lambda: "bash")

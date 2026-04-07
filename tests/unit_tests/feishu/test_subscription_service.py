@@ -15,19 +15,19 @@ from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.frames import Close
 from websockets.http11 import Response
 
-from agent_teams.env.proxy_env import ProxyEnvConfig
-from agent_teams.gateway.feishu.lark_ws_compat import (
+from relay_teams.env.proxy_env import ProxyEnvConfig
+from relay_teams.gateway.feishu.lark_ws_compat import (
     import_lark_module,
     import_lark_ws_client_module,
 )
-from agent_teams.gateway.feishu.models import (
+from relay_teams.gateway.feishu.models import (
     FeishuEnvironment,
     FeishuTriggerRuntimeConfig,
     FeishuTriggerSourceConfig,
     FeishuTriggerTargetConfig,
     TriggerProcessingResult,
 )
-from agent_teams.gateway.feishu.subscription_service import (
+from relay_teams.gateway.feishu.subscription_service import (
     FeishuSubscriptionService,
     WsClientLike,
     _FeishuWsController,
@@ -273,7 +273,7 @@ def test_feishu_ws_hub_reuses_single_thread_for_multiple_bots(
         return controller
 
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.subscription_service.import_lark_ws_client_module",
+        "relay_teams.gateway.feishu.subscription_service.import_lark_ws_client_module",
         lambda: SimpleNamespace(),
     )
     hub = _FeishuWsHub(controller_factory=_controller_factory)
@@ -448,7 +448,7 @@ def test_feishu_ws_controller_get_conn_url_uses_net_http_client(monkeypatch) -> 
 
 def test_build_websocket_ssl_context_respects_proxy_ssl_setting(monkeypatch) -> None:
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.subscription_service.load_proxy_env_config",
+        "relay_teams.gateway.feishu.subscription_service.load_proxy_env_config",
         lambda: ProxyEnvConfig(ssl_verify=False),
     )
 
@@ -461,7 +461,7 @@ def test_build_websocket_ssl_context_respects_proxy_ssl_setting(monkeypatch) -> 
 
 def test_resolve_websocket_proxy_url_uses_https_proxy_for_wss(monkeypatch) -> None:
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.subscription_service.load_proxy_env_config",
+        "relay_teams.gateway.feishu.subscription_service.load_proxy_env_config",
         lambda: ProxyEnvConfig(
             https_proxy="http://proxy.internal:8443",
             http_proxy="http://proxy.internal:8080",
@@ -478,7 +478,7 @@ def test_resolve_websocket_proxy_url_uses_https_proxy_for_wss(monkeypatch) -> No
 
 def test_resolve_websocket_proxy_url_respects_no_proxy(monkeypatch) -> None:
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.subscription_service.load_proxy_env_config",
+        "relay_teams.gateway.feishu.subscription_service.load_proxy_env_config",
         lambda: ProxyEnvConfig(
             https_proxy="http://proxy.internal:8443",
             no_proxy="open.feishu.cn",
@@ -537,7 +537,7 @@ def test_import_lark_ws_client_module_suppresses_known_deprecations(
             return ModuleType(module_name)
 
         monkeypatch.setattr(
-            "agent_teams.gateway.feishu.lark_ws_compat.importlib.import_module",
+            "relay_teams.gateway.feishu.lark_ws_compat.importlib.import_module",
             _fake_import,
         )
         with warnings.catch_warnings(record=True) as caught:
@@ -571,7 +571,7 @@ def test_import_lark_module_suppresses_dispatcher_handler_deprecations(
         return ModuleType(module_name)
 
     monkeypatch.setattr(
-        "agent_teams.gateway.feishu.lark_ws_compat.importlib.import_module",
+        "relay_teams.gateway.feishu.lark_ws_compat.importlib.import_module",
         _fake_import,
     )
     try:

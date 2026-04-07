@@ -46,7 +46,7 @@ The default server bootstrap may create a `default` workspace rooted at the curr
 
 Memory is no longer part of the workspace module.
 
-It lives under `src/agent_teams/roles/` and uses one database table:
+It lives under `src/relay_teams/roles/` and uses one database table:
 
 - `role_memories`
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_teams.tools.runtime import ToolApprovalManager
+from relay_teams.tools.runtime import ToolApprovalManager
 
 
 def test_tool_approval_manager_open_list_resolve() -> None:

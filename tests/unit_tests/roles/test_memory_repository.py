@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.roles.memory_repository import RoleMemoryRepository
+from relay_teams.roles.memory_repository import RoleMemoryRepository
 
 
 def test_role_memory_repository_scopes_records_by_workspace(tmp_path: Path) -> None:

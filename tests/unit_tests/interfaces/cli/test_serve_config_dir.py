@@ -5,8 +5,8 @@ from pathlib import Path
 from types import ModuleType
 import sys
 
-from agent_teams.interfaces.server import cli as server_cli
-from agent_teams.interfaces.server.runtime_identity import ServerRuntimeIdentity
+from relay_teams.interfaces.server import cli as server_cli
+from relay_teams.interfaces.server.runtime_identity import ServerRuntimeIdentity
 
 
 def test_start_runs_uvicorn_and_tracks_managed_process(
@@ -38,7 +38,7 @@ def test_start_runs_uvicorn_and_tracks_managed_process(
 
     setattr(fake_uvicorn, "run", fake_run)
 
-    fake_server_module = ModuleType("agent_teams.interfaces.server.app")
+    fake_server_module = ModuleType("relay_teams.interfaces.server.app")
     sentinel_app = object()
     setattr(fake_server_module, "app", sentinel_app)
 
@@ -52,16 +52,16 @@ def test_start_runs_uvicorn_and_tracks_managed_process(
         "_get_current_runtime_identity",
         lambda: ServerRuntimeIdentity(
             python_executable="D:/workspace/agent_teams/.venv/Scripts/python.exe",
-            package_root="D:/workspace/agent_teams/src/agent_teams",
+            package_root="D:/workspace/agent_teams/src/relay_teams",
             config_dir="C:/Users/test/.agent-teams",
-            builtin_roles_dir="D:/workspace/agent_teams/src/agent_teams/builtin/roles",
-            builtin_skills_dir="D:/workspace/agent_teams/src/agent_teams/builtin/skills",
+            builtin_roles_dir="D:/workspace/agent_teams/src/relay_teams/builtin/roles",
+            builtin_skills_dir="D:/workspace/agent_teams/src/relay_teams/builtin/skills",
         ),
     )
     monkeypatch.setattr(server_cli.os, "getpid", lambda: 4321)
     monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
     monkeypatch.setitem(
-        sys.modules, "agent_teams.interfaces.server.app", fake_server_module
+        sys.modules, "relay_teams.interfaces.server.app", fake_server_module
     )
 
     server_cli.start(host="127.0.0.1", port=8911)
@@ -81,7 +81,7 @@ def test_start_runs_uvicorn_and_tracks_managed_process(
         "host": "127.0.0.1",
         "port": 8911,
         "python_executable": "D:/workspace/agent_teams/.venv/Scripts/python.exe",
-        "package_root": "D:/workspace/agent_teams/src/agent_teams",
-        "builtin_skills_dir": "D:/workspace/agent_teams/src/agent_teams/builtin/skills",
+        "package_root": "D:/workspace/agent_teams/src/relay_teams",
+        "builtin_skills_dir": "D:/workspace/agent_teams/src/relay_teams/builtin/skills",
     }
     assert not process_file.exists()

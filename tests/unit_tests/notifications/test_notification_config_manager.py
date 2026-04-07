@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.notifications import (
+from relay_teams.notifications import (
     NotificationConfigManager,
     default_notification_config,
 )
-from agent_teams.notifications.models import NotificationConfig
+from relay_teams.notifications.models import NotificationConfig
 
 
 def test_get_notification_config_returns_default_when_missing(tmp_path: Path) -> None:

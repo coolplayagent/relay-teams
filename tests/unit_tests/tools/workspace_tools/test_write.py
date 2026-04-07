@@ -8,13 +8,13 @@ from typing import cast
 import pytest
 from pydantic_ai import Agent
 
-from agent_teams.tools.runtime import ToolDeps, ToolResultProjection
-from agent_teams.tools.workspace_tools import register_write, register_write_tmp
+from relay_teams.tools.runtime import ToolDeps, ToolResultProjection
+from relay_teams.tools.workspace_tools import register_write, register_write_tmp
 
 
 class TestAtomicWrite:
     def test_atomic_write_creates_file(self, tmp_path):
-        from agent_teams.tools.workspace_tools.write import atomic_write
+        from relay_teams.tools.workspace_tools.write import atomic_write
 
         test_file = tmp_path / "new.txt"
 
@@ -24,7 +24,7 @@ class TestAtomicWrite:
         assert test_file.read_text() == "hello world"
 
     def test_atomic_write_overwrites(self, tmp_path):
-        from agent_teams.tools.workspace_tools.write import atomic_write
+        from relay_teams.tools.workspace_tools.write import atomic_write
 
         test_file = tmp_path / "test.txt"
         test_file.write_text("old content")
@@ -34,7 +34,7 @@ class TestAtomicWrite:
         assert test_file.read_text() == "new content"
 
     def test_atomic_write_creates_parent_dirs(self, tmp_path):
-        from agent_teams.tools.workspace_tools.write import atomic_write
+        from relay_teams.tools.workspace_tools.write import atomic_write
 
         test_file = tmp_path / "subdir" / "nested" / "file.txt"
 
@@ -44,7 +44,7 @@ class TestAtomicWrite:
         assert test_file.read_text() == "content"
 
     def test_atomic_write_empty_content(self, tmp_path):
-        from agent_teams.tools.workspace_tools.write import atomic_write
+        from relay_teams.tools.workspace_tools.write import atomic_write
 
         test_file = tmp_path / "empty.txt"
 
@@ -54,7 +54,7 @@ class TestAtomicWrite:
         assert test_file.read_text() == ""
 
     def test_atomic_write_special_chars(self, tmp_path):
-        from agent_teams.tools.workspace_tools.write import atomic_write
+        from relay_teams.tools.workspace_tools.write import atomic_write
 
         test_file = tmp_path / "special.txt"
         content = "line1\nline2\nline3 with 'quotes' and \"double quotes\""
@@ -66,7 +66,7 @@ class TestAtomicWrite:
 
 class TestGenerateDiff:
     def test_generate_diff_no_change(self):
-        from agent_teams.tools.workspace_tools.write import generate_diff
+        from relay_teams.tools.workspace_tools.write import generate_diff
 
         old = "line1\nline2\nline3\n"
         new = "line1\nline2\nline3\n"
@@ -76,7 +76,7 @@ class TestGenerateDiff:
         assert diff == ""
 
     def test_generate_diff_modify(self):
-        from agent_teams.tools.workspace_tools.write import generate_diff
+        from relay_teams.tools.workspace_tools.write import generate_diff
 
         old = "line1\nline2\nline3\n"
         new = "line1\nmodified\nline3\n"
@@ -88,7 +88,7 @@ class TestGenerateDiff:
         assert "modified" in diff
 
     def test_generate_diff_add(self):
-        from agent_teams.tools.workspace_tools.write import generate_diff
+        from relay_teams.tools.workspace_tools.write import generate_diff
 
         old = "line1\nline2\n"
         new = "line1\nline2\nline3\n"
@@ -99,7 +99,7 @@ class TestGenerateDiff:
         assert "line3" in diff
 
     def test_generate_diff_delete(self):
-        from agent_teams.tools.workspace_tools.write import generate_diff
+        from relay_teams.tools.workspace_tools.write import generate_diff
 
         old = "line1\nline2\nline3\n"
         new = "line1\nline3\n"
@@ -111,7 +111,7 @@ class TestGenerateDiff:
 
 class TestFormatDiffShort:
     def test_format_diff_no_changes(self):
-        from agent_teams.tools.workspace_tools.write import format_diff_short
+        from relay_teams.tools.workspace_tools.write import format_diff_short
 
         old = "line1\nline2\n"
         new = "line1\nline2\n"
@@ -121,7 +121,7 @@ class TestFormatDiffShort:
         assert result == "No changes"
 
     def test_format_diff_modify(self):
-        from agent_teams.tools.workspace_tools.write import format_diff_short
+        from relay_teams.tools.workspace_tools.write import format_diff_short
 
         old = "line1\nline2\nline3\n"
         new = "line1\nmodified\nline3\n"
@@ -132,7 +132,7 @@ class TestFormatDiffShort:
         assert "changed" in result
 
     def test_format_diff_add(self):
-        from agent_teams.tools.workspace_tools.write import format_diff_short
+        from relay_teams.tools.workspace_tools.write import format_diff_short
 
         old = "line1\nline2\n"
         new = "line1\nline2\nline3\n"
@@ -143,7 +143,7 @@ class TestFormatDiffShort:
         assert "added" in result
 
     def test_format_diff_delete(self):
-        from agent_teams.tools.workspace_tools.write import format_diff_short
+        from relay_teams.tools.workspace_tools.write import format_diff_short
 
         old = "line1\nline2\nline3\n"
         new = "line1\nline3\n"
@@ -155,7 +155,7 @@ class TestFormatDiffShort:
 
 
 def test_project_write_result_keeps_only_output_visible() -> None:
-    from agent_teams.tools.workspace_tools.write import _project_write_result
+    from relay_teams.tools.workspace_tools.write import _project_write_result
 
     projected = _project_write_result(
         output="Wrote file successfully.\n\nDiff:\nNo changes",
@@ -221,7 +221,7 @@ async def test_write_tool_supports_managed_tmp_prefix(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.tools.workspace_tools import write as write_module
+    from relay_teams.tools.workspace_tools import write as write_module
 
     fake_agent = _FakeAgent()
     register_write(cast(Agent[ToolDeps, str], fake_agent))
@@ -261,7 +261,7 @@ async def test_write_tmp_tool_is_confined_to_workspace_tmp_directory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.tools.workspace_tools import write_tmp as write_tmp_module
+    from relay_teams.tools.workspace_tools import write_tmp as write_tmp_module
 
     fake_agent = _FakeAgent()
     register_write_tmp(cast(Agent[ToolDeps, str], fake_agent))
@@ -301,7 +301,7 @@ async def test_write_tmp_tool_uses_shared_tmp_path_resolver(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.tools.workspace_tools import write_tmp as write_tmp_module
+    from relay_teams.tools.workspace_tools import write_tmp as write_tmp_module
 
     fake_agent = _FakeAgent()
     register_write_tmp(cast(Agent[ToolDeps, str], fake_agent))
@@ -355,7 +355,7 @@ async def test_write_tmp_tool_rejects_paths_outside_workspace_tmp_directory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.tools.workspace_tools import write_tmp as write_tmp_module
+    from relay_teams.tools.workspace_tools import write_tmp as write_tmp_module
 
     fake_agent = _FakeAgent()
     register_write_tmp(cast(Agent[ToolDeps, str], fake_agent))

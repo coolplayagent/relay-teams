@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.agents.execution.prompt_instructions import PromptInstructionResolver
-from agent_teams.agents.execution import system_prompts
-from agent_teams.agents.execution.system_prompts import (
+from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
+from relay_teams.agents.execution import system_prompts
+from relay_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
     RuntimePromptBuildInput,
     SystemPromptSectionsInput,
@@ -16,21 +16,21 @@ from agent_teams.agents.execution.system_prompts import (
     build_runtime_system_prompt_result,
     compose_system_prompt,
 )
-from agent_teams.agents.execution.user_prompts import (
+from relay_teams.agents.execution.user_prompts import (
     UserPromptBuildInput,
     UserPromptSkillCandidate,
     build_user_prompt,
 )
-from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
-from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
-from agent_teams.mcp.mcp_registry import McpRegistry
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
-from agent_teams.roles.temporary_role_models import TemporaryRoleSpec
-from agent_teams.roles.temporary_role_repository import TemporaryRoleRepository
-from agent_teams.sessions.runs.run_models import RunTopologySnapshot
-from agent_teams.sessions.session_models import SessionMode
+from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
+from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
+from relay_teams.roles.temporary_role_models import TemporaryRoleSpec
+from relay_teams.roles.temporary_role_repository import TemporaryRoleRepository
+from relay_teams.sessions.runs.run_models import RunTopologySnapshot
+from relay_teams.sessions.session_models import SessionMode
 
 
 @pytest.fixture(autouse=True)
@@ -377,7 +377,7 @@ def test_runtime_environment_prompt_mentions_on_demand_gh_when_only_token_exists
 def test_runtime_environment_prompt_uses_runtime_shell_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agent_teams.tools.workspace_tools.shell_executor import ShellRuntimeSummary
+    from relay_teams.tools.workspace_tools.shell_executor import ShellRuntimeSummary
 
     monkeypatch.setattr(
         system_prompts,
@@ -385,7 +385,7 @@ def test_runtime_environment_prompt_uses_runtime_shell_summary(
         lambda: (False, None),
     )
     monkeypatch.setattr(
-        "agent_teams.tools.workspace_tools.shell_executor.describe_runtime_shell",
+        "relay_teams.tools.workspace_tools.shell_executor.describe_runtime_shell",
         lambda: ShellRuntimeSummary(
             shell_info="PowerShell",
             shell_path=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
@@ -571,7 +571,7 @@ def test_runtime_system_prompt_loads_all_project_agents_files_before_fallback(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from agent_teams.agents.execution import prompt_instructions
+    from relay_teams.agents.execution import prompt_instructions
 
     project_root = tmp_path / "project"
     nested_dir = project_root / "src" / "feature"
@@ -623,7 +623,7 @@ def test_runtime_system_prompt_falls_back_to_global_claude_before_gemini(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from agent_teams.agents.execution import prompt_instructions
+    from relay_teams.agents.execution import prompt_instructions
 
     config_dir = tmp_path / "config"
     home_dir = tmp_path / "home"

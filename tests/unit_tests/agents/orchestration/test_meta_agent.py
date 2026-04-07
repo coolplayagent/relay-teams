@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import pytest
 
-from agent_teams.agents.orchestration.meta_agent import MetaAgent
-from agent_teams.agents.orchestration.coordinator import CoordinatorRunResult
-from agent_teams.media import content_parts_from_text
-from agent_teams.sessions.runs.assistant_errors import RunCompletionReason
-from agent_teams.sessions.runs.run_models import IntentInput
+from relay_teams.agents.orchestration.meta_agent import MetaAgent
+from relay_teams.agents.orchestration.coordinator import CoordinatorRunResult
+from relay_teams.media import content_parts_from_text
+from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
+from relay_teams.sessions.runs.run_models import IntentInput
 
 
 class _CoordinatorStub:

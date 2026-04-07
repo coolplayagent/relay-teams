@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 from threading import Barrier
 
-from agent_teams.sessions.runs.run_runtime_repo import (
+from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,

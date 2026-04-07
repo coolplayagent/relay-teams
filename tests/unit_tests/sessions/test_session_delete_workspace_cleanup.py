@@ -5,30 +5,30 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.sessions.runs.background_tasks.models import (
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.sessions.runs.background_tasks.repository import (
+from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
-from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.sessions.session_service import SessionService
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-from agent_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
-from agent_teams.sessions.session_repository import SessionRepository
-from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
-from agent_teams.providers.token_usage_repo import TokenUsageRepository
-from agent_teams.workspace.workspace_repository import WorkspaceRepository
-from agent_teams.workspace.workspace_service import WorkspaceService
-from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
-from agent_teams.workspace import (
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.session_service import SessionService
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
+from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.workspace.workspace_repository import WorkspaceRepository
+from relay_teams.workspace.workspace_service import WorkspaceService
+from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
     build_instance_conversation_id,

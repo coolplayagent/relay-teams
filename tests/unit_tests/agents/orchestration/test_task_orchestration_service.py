@@ -8,21 +8,21 @@ from typing import cast
 
 import pytest
 
-from agent_teams.agents.orchestration.task_orchestration_service import (
+from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskDraft,
     TaskOrchestrationService,
     TaskUpdate,
 )
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
 
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.sessions.session_repository import SessionRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
-from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
-from agent_teams.agents.tasks.enums import TaskStatus
-from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 
 class _FakeTaskExecutionService:

@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.env.environment_variable_models import (
+from relay_teams.env.environment_variable_models import (
     EnvironmentVariableRecord,
     EnvironmentVariableSaveRequest,
     EnvironmentVariableScope,
     EnvironmentVariableValueKind,
 )
-from agent_teams.env.environment_variable_service import EnvironmentVariableService
+from relay_teams.env.environment_variable_service import EnvironmentVariableService
 
 
 class _FakeEnvironmentVariableBackend:

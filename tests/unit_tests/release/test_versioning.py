@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.release import (
+from relay_teams.release import (
     build_timestamp_version,
     render_version_file,
     write_version_file,

@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.roles.runtime_role_resolver import RuntimeRoleResolver
-from agent_teams.roles.temporary_role_models import TemporaryRoleSpec
-from agent_teams.roles.temporary_role_repository import TemporaryRoleRepository
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
+from relay_teams.roles.temporary_role_models import TemporaryRoleSpec
+from relay_teams.roles.temporary_role_repository import TemporaryRoleRepository
 
 
 def _base_registry() -> RoleRegistry:

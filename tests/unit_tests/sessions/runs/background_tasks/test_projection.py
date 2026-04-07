@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.sessions.runs.background_tasks.models import (
+from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.sessions.runs.background_tasks.projection import (
+from relay_teams.sessions.runs.background_tasks.projection import (
     build_background_task_completion_message,
     build_background_task_payload,
     build_background_task_result_payload,

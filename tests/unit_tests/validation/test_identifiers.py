@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ValidationError
 import pytest
 
-from agent_teams.validation import (
+from relay_teams.validation import (
     OptionalIdentifierStr,
     RequiredIdentifierStr,
     normalize_persisted_text,

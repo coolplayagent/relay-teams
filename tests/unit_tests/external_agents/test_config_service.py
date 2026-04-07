@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_teams.external_agents import (
+from relay_teams.external_agents import (
     ExternalAgentConfig,
     ExternalAgentConfigService,
     ExternalAgentSecretBinding,

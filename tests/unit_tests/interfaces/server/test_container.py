@@ -6,14 +6,14 @@ import os
 import pytest
 from pathlib import Path
 
-from agent_teams.builtin import get_builtin_roles_dir
-from agent_teams.env.environment_variable_models import (
+from relay_teams.builtin import get_builtin_roles_dir
+from relay_teams.env.environment_variable_models import (
     EnvironmentVariableSaveRequest,
     EnvironmentVariableScope,
 )
-from agent_teams.interfaces.server.container import ServerContainer
-from agent_teams.roles import RoleLoader
-from agent_teams.sessions.runs.background_tasks.models import (
+from relay_teams.interfaces.server.container import ServerContainer
+from relay_teams.roles import RoleLoader
+from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
@@ -134,7 +134,7 @@ def test_container_tolerates_missing_builtin_roles_on_startup(
     missing_builtin_roles_dir = tmp_path / "missing_builtin_roles"
     missing_builtin_roles_dir.mkdir()
     monkeypatch.setattr(
-        "agent_teams.interfaces.server.container.get_builtin_roles_dir",
+        "relay_teams.interfaces.server.container.get_builtin_roles_dir",
         lambda: missing_builtin_roles_dir,
     )
 
@@ -316,7 +316,7 @@ def test_container_interrupts_persisted_background_processes_before_marking_stop
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.interfaces.server import container as container_module
+    from relay_teams.interfaces.server import container as container_module
 
     _clear_proxy_env(monkeypatch)
     config_dir = tmp_path / ".agent-teams"
@@ -375,7 +375,7 @@ def test_container_preserves_background_task_rows_when_startup_kill_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agent_teams.interfaces.server import container as container_module
+    from relay_teams.interfaces.server import container as container_module
 
     _clear_proxy_env(monkeypatch)
     config_dir = tmp_path / ".agent-teams"

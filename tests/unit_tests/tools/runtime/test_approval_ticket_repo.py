@@ -4,12 +4,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 
-from agent_teams.tools.runtime.approval_ticket_repo import (
+from relay_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRepository,
     ApprovalTicketStatus,
     approval_signature_key,
 )
-from agent_teams.tools.workspace_tools.shell import build_shell_cache_key
+from relay_teams.tools.workspace_tools.shell import build_shell_cache_key
 
 
 def test_approval_ticket_repo_skips_invalid_persisted_rows(tmp_path: Path) -> None:

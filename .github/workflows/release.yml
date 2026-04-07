@@ -57,7 +57,7 @@ jobs:
             '__all__ = ["__version__"]' \
             '' \
             "__version__ = \"${RELEASE_VERSION}\"" \
-            '' > src/agent_teams/_version.py
+            '' > src/relay_teams/_version.py
 
       - name: Build distribution
         run: uv build

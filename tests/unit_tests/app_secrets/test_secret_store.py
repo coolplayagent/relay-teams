@@ -4,8 +4,8 @@ from __future__ import annotations
 from json import loads
 from pathlib import Path
 
-from agent_teams.secrets import AppSecretStore, SecretIndexDocument, SecretIndexEntry
-from agent_teams.secrets.secret_models import SecretCoordinate
+from relay_teams.secrets import AppSecretStore, SecretIndexDocument, SecretIndexEntry
+from relay_teams.secrets.secret_models import SecretCoordinate
 
 
 class _FileOnlySecretStore(AppSecretStore):

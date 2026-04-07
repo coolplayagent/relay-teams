@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.computer import ExecutionSurface
-from agent_teams.roles.temporary_role_models import (
+from relay_teams.computer import ExecutionSurface
+from relay_teams.roles.temporary_role_models import (
     TemporaryRoleRecord,
     TemporaryRoleSource,
     TemporaryRoleSpec,
 )
-from agent_teams.roles.temporary_role_repository import TemporaryRoleRepository
+from relay_teams.roles.temporary_role_repository import TemporaryRoleRepository
 
 
 def test_temporary_role_repository_roundtrip_and_cleanup(tmp_path: Path) -> None:

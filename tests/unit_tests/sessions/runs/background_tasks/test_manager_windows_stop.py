@@ -6,22 +6,22 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.sessions.runs.background_tasks.command_runtime import (
+from relay_teams.sessions.runs.background_tasks.command_runtime import (
     CommandRuntimeKind,
     ResolvedCommandRuntime,
     resolve_bash_path,
 )
-from agent_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
-from agent_teams.sessions.runs.background_tasks.models import (
+from relay_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
+from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.sessions.runs.background_tasks.repository import (
+from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
-from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.workspace import WorkspaceHandle
-from agent_teams.workspace.workspace_models import (
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.workspace import WorkspaceHandle
+from relay_teams.workspace.workspace_models import (
     WorkspaceLocations,
     WorkspaceRef,
     default_workspace_profile,
@@ -214,10 +214,10 @@ async def test_background_task_manager_windows_supports_multiple_shell_runtimes(
     command: str,
     expected_output: str,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import (
+    from relay_teams.sessions.runs.background_tasks import (
         command_runtime as runtime_module,
     )
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(tmp_path / "background-terminal-win-runtimes.db")
     hub = RunEventHub()

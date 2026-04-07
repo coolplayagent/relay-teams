@@ -19,7 +19,7 @@
 - Windows 上要启用 unified exec，至少需要 ConPTY 可用；若系统过老不支持 ConPTY，则会退回非 unified exec 路径。
 - Windows restricted-token sandbox 主路径当前是 capture-only 执行模型，不是 session 模型，所以交互式 background terminal、`write_stdin`、`resize` 之类能力会被显式禁用。
 - 本 worktree 没有自己实现 `/ps` 或 background shell；它做的是把外部 ACP agent 作为 role backend 接进来。对于 Codex，本分支当前采用 `stdio` 方式，配置形态是 `command="codex"`、`args=("--serve",)`，可见于测试 `tests/unit_tests/external_agents/test_acp_client.py:42` 与 `tests/unit_tests/external_agents/test_config_service.py:71`。
-- 公开可检索的上游仓库里，我没有检索到 `--serve` 字面量定义；所以“`codex --serve` 是当前公开仓库明文可见的官方入口”这一点，现有证据不足。能确认的是：本分支明确按这个调用约定来对接 Codex，并且其 stdio transport 设计与 ACP JSON-RPC 消息流是自洽的，见 `src/agent_teams/external_agents/acp_client.py:146`。
+- 公开可检索的上游仓库里，我没有检索到 `--serve` 字面量定义；所以“`codex --serve` 是当前公开仓库明文可见的官方入口”这一点，现有证据不足。能确认的是：本分支明确按这个调用约定来对接 Codex，并且其 stdio transport 设计与 ACP JSON-RPC 消息流是自洽的，见 `src/relay_teams/external_agents/acp_client.py:146`。
 
 ## 2. `@openai/codex` npm 包到底是什么
 
@@ -374,30 +374,30 @@ Windows 侧不是模仿 Unix PTY，而是直接走 ConPTY：
 
 ### 8.1 配置模型
 
-外部 agent 的 `stdio` transport 定义在 `src/agent_teams/external_agents/models.py:26`：
+外部 agent 的 `stdio` transport 定义在 `src/relay_teams/external_agents/models.py:26`：
 
 - `command`
 - `args`
 - `env`
 
-整体配置是 `ExternalAgentConfig`，见 `src/agent_teams/external_agents/models.py:63`。
+整体配置是 `ExternalAgentConfig`，见 `src/relay_teams/external_agents/models.py:63`。
 
 ### 8.2 运行方式
 
-本分支的 stdio client 在 `src/agent_teams/external_agents/acp_client.py:146`。
+本分支的 stdio client 在 `src/relay_teams/external_agents/acp_client.py:146`。
 
 它会：
 
-- `asyncio.create_subprocess_exec(command, *args, ...)`，见 `src/agent_teams/external_agents/acp_client.py:171`
+- `asyncio.create_subprocess_exec(command, *args, ...)`，见 `src/relay_teams/external_agents/acp_client.py:171`
 - 通过 stdin/stdout 跑 JSON-RPC
-- 逐行读取 stdout 消息，见 `src/agent_teams/external_agents/acp_client.py:249`
-- 把 stderr 作为调试日志吸收，见 `src/agent_teams/external_agents/acp_client.py:266`
+- 逐行读取 stdout 消息，见 `src/relay_teams/external_agents/acp_client.py:249`
+- 把 stderr 作为调试日志吸收，见 `src/relay_teams/external_agents/acp_client.py:266`
 
 而且它明确支持把外部 agent 启动在当前 session workspace 内，见：
 
 - `tests/unit_tests/external_agents/test_acp_client.py:14`
-- `src/agent_teams/external_agents/acp_client.py:152`
-- `src/agent_teams/external_agents/acp_client.py:177`
+- `src/relay_teams/external_agents/acp_client.py:152`
+- `src/relay_teams/external_agents/acp_client.py:177`
 
 ### 8.3 为什么这里写的是 `codex --serve`
 
@@ -424,25 +424,25 @@ Windows 侧不是模仿 Unix PTY，而是直接走 ConPTY：
 
 外部 agent API 暴露在：
 
-- `GET /api/system/configs/agents`，`src/agent_teams/interfaces/server/routers/system.py:334`
-- `GET /api/system/configs/agents/{agent_id}`，`src/agent_teams/interfaces/server/routers/system.py:341`
-- `PUT /api/system/configs/agents/{agent_id}`，`src/agent_teams/interfaces/server/routers/system.py:352`
-- `DELETE /api/system/configs/agents/{agent_id}`，`src/agent_teams/interfaces/server/routers/system.py:364`
-- `POST /api/system/configs/agents/{agent_id}:test`，`src/agent_teams/interfaces/server/routers/system.py:376`
+- `GET /api/system/configs/agents`，`src/relay_teams/interfaces/server/routers/system.py:334`
+- `GET /api/system/configs/agents/{agent_id}`，`src/relay_teams/interfaces/server/routers/system.py:341`
+- `PUT /api/system/configs/agents/{agent_id}`，`src/relay_teams/interfaces/server/routers/system.py:352`
+- `DELETE /api/system/configs/agents/{agent_id}`，`src/relay_teams/interfaces/server/routers/system.py:364`
+- `POST /api/system/configs/agents/{agent_id}:test`，`src/relay_teams/interfaces/server/routers/system.py:376`
 
 CLI 则在：
 
-- `src/agent_teams/external_agents/agent_cli.py:21`
+- `src/relay_teams/external_agents/agent_cli.py:21`
 
-而真正的 role backend 切换在 `ExternalAcpProvider`，见 `src/agent_teams/external_agents/provider.py:100`。
+而真正的 role backend 切换在 `ExternalAcpProvider`，见 `src/relay_teams/external_agents/provider.py:100`。
 
 `ExternalAcpSessionManager` 会：
 
-- 解析当前 role 绑定的外部 agent，见 `src/agent_teams/external_agents/provider.py:206`
-- 构造外部 session，见 `src/agent_teams/external_agents/provider.py:646`
-- 在 `session/new` / `session/load` 中传 `cwd` 和 `mcpServers`，见 `src/agent_teams/external_agents/provider.py:668`
-- 处理来自外部 agent 的 `mcp/connect`、`mcp/message`、`mcp/disconnect`，见 `src/agent_teams/external_agents/provider.py:699`
-- 把 `session/update` 中的 chunk/tool_call/tool_result 重新映射回 Agent Teams 的 run events，见 `src/agent_teams/external_agents/provider.py:756`
+- 解析当前 role 绑定的外部 agent，见 `src/relay_teams/external_agents/provider.py:206`
+- 构造外部 session，见 `src/relay_teams/external_agents/provider.py:646`
+- 在 `session/new` / `session/load` 中传 `cwd` 和 `mcpServers`，见 `src/relay_teams/external_agents/provider.py:668`
+- 处理来自外部 agent 的 `mcp/connect`、`mcp/message`、`mcp/disconnect`，见 `src/relay_teams/external_agents/provider.py:699`
+- 把 `session/update` 中的 chunk/tool_call/tool_result 重新映射回 Agent Teams 的 run events，见 `src/relay_teams/external_agents/provider.py:756`
 
 ### 8.5 这和 `/ps` 的关系
 

@@ -4,9 +4,9 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agent_teams.interfaces.server.deps import get_mcp_service
-from agent_teams.interfaces.server.routers import mcp
-from agent_teams.mcp.mcp_models import (
+from relay_teams.interfaces.server.deps import get_mcp_service
+from relay_teams.interfaces.server.routers import mcp
+from relay_teams.mcp.mcp_models import (
     McpConfigScope,
     McpServerSummary,
     McpServerToolsSummary,

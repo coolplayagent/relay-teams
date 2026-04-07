@@ -1,4 +1,4 @@
-﻿# Metrics Platform Design
+# Metrics Platform Design
 
 ## Summary
 
@@ -28,24 +28,24 @@
 ## Naming And Tags
 
 Built-in metrics:
-- `agent_teams.session.steps`
-- `agent_teams.llm.input_tokens`
-- `agent_teams.llm.cached_input_tokens`
-- `agent_teams.llm.output_tokens`
-- `agent_teams.tool.calls`
-- `agent_teams.tool.duration_ms`
-- `agent_teams.tool.failures`
-- `agent_teams.skill.calls`
-- `agent_teams.mcp.calls`
-- `agent_teams.retrieval.searches`
-- `agent_teams.retrieval.search_duration_ms`
-- `agent_teams.retrieval.search_failures`
-- `agent_teams.retrieval.rebuilds`
-- `agent_teams.retrieval.rebuild_duration_ms`
-- `agent_teams.retrieval.document_count`
-- `agent_teams.gateway.operations`
-- `agent_teams.gateway.operation_duration_ms`
-- `agent_teams.gateway.operation_failures`
+- `relay_teams.session.steps`
+- `relay_teams.llm.input_tokens`
+- `relay_teams.llm.cached_input_tokens`
+- `relay_teams.llm.output_tokens`
+- `relay_teams.tool.calls`
+- `relay_teams.tool.duration_ms`
+- `relay_teams.tool.failures`
+- `relay_teams.skill.calls`
+- `relay_teams.mcp.calls`
+- `relay_teams.retrieval.searches`
+- `relay_teams.retrieval.search_duration_ms`
+- `relay_teams.retrieval.search_failures`
+- `relay_teams.retrieval.rebuilds`
+- `relay_teams.retrieval.rebuild_duration_ms`
+- `relay_teams.retrieval.document_count`
+- `relay_teams.gateway.operations`
+- `relay_teams.gateway.operation_duration_ms`
+- `relay_teams.gateway.operation_failures`
 
 Standard tags:
 - `workspace_id`

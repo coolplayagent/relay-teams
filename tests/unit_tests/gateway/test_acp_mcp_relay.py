@@ -7,26 +7,26 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import JsonValue
 
-import agent_teams.gateway.acp_mcp_relay as acp_mcp_relay_module
-from agent_teams.gateway.acp_mcp_relay import (
+import relay_teams.gateway.acp_mcp_relay as acp_mcp_relay_module
+from relay_teams.gateway.acp_mcp_relay import (
     AcpMcpServer,
     AcpMcpConnectionTransport,
     AcpMcpRelay,
     GatewayAwareMcpRegistry,
 )
-from agent_teams.gateway.gateway_models import (
+from relay_teams.gateway.gateway_models import (
     GatewayChannelType,
     GatewayMcpServerSpec,
     GatewaySessionRecord,
 )
-from agent_teams.metrics import (
+from relay_teams.metrics import (
     DEFAULT_DEFINITIONS,
     MetricEvent,
     MetricRecorder,
     MetricRegistry,
 )
-from agent_teams.mcp.mcp_models import McpServerSpec
-from agent_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.mcp_models import McpServerSpec
+from relay_teams.mcp.mcp_registry import McpRegistry
 
 
 class _MetricEventSink:
@@ -229,7 +229,7 @@ async def test_acp_mcp_connection_transport_records_bridge_metrics(
     operation_events = [
         event
         for event in sink.events
-        if event.definition_name == "agent_teams.gateway.operations"
+        if event.definition_name == "relay_teams.gateway.operations"
     ]
     assert len(operation_events) == 2
     assert operation_events[0].tags.gateway_operation == "mcp_bridge_request"

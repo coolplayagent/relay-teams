@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from typing import cast
 
-from agent_teams.gateway.feishu.lark_ws_compat import import_lark_module
-from agent_teams.gateway.feishu.models import (
+from relay_teams.gateway.feishu.lark_ws_compat import import_lark_module
+from relay_teams.gateway.feishu.models import (
     FeishuChatQueueClearResult,
     FeishuChatQueueItemPreview,
     FeishuChatQueueSummary,
@@ -19,14 +19,14 @@ from agent_teams.gateway.feishu.models import (
     FeishuTriggerTargetConfig,
     TriggerProcessingResult,
 )
-from agent_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
-from agent_teams.gateway.gateway_session_service import GatewaySessionService
-from agent_teams.gateway.im import ImSessionCommandService, ImToolService
-from agent_teams.providers.token_usage_repo import SessionTokenUsage
-from agent_teams.sessions import ExternalSessionBindingRepository, SessionService
-from agent_teams.sessions.runs.run_manager import RunManager
-from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
-from agent_teams.sessions.session_models import SessionMode, SessionRecord
+from relay_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
+from relay_teams.gateway.gateway_session_service import GatewaySessionService
+from relay_teams.gateway.im import ImSessionCommandService, ImToolService
+from relay_teams.providers.token_usage_repo import SessionTokenUsage
+from relay_teams.sessions import ExternalSessionBindingRepository, SessionService
+from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
+from relay_teams.sessions.session_models import SessionMode, SessionRecord
 
 if TYPE_CHECKING:
     from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1

@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.sessions.runs.background_tasks.command_runtime import (
+from relay_teams.sessions.runs.background_tasks.command_runtime import (
     CommandRuntimeKind,
     ResolvedCommandRuntime,
 )
-from agent_teams.tools.workspace_tools import shell_policy as shell_policy_module
-from agent_teams.tools.workspace_tools.shell_policy import (
+from relay_teams.tools.workspace_tools import shell_policy as shell_policy_module
+from relay_teams.tools.workspace_tools.shell_policy import (
     MAX_TIMEOUT_SECONDS,
     ShellRuntimeFamily,
     normalize_timeout,

@@ -3,9 +3,9 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agent_teams.interfaces.server.deps import get_metrics_service
-from agent_teams.interfaces.server.routers import observability
-from agent_teams.metrics import (
+from relay_teams.interfaces.server.deps import get_metrics_service
+from relay_teams.interfaces.server.routers import observability
+from relay_teams.metrics import (
     MetricScope,
     ObservabilityBreakdown,
     ObservabilityBreakdownRow,

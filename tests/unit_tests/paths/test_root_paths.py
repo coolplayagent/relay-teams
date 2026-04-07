@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 
-from agent_teams.paths import root_paths
+from relay_teams.paths import root_paths
 
 
 def test_get_project_root_or_none_returns_git_root(

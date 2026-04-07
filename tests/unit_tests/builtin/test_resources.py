@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_teams.builtin.resources import ensure_app_config_bootstrap
+from relay_teams.builtin.resources import ensure_app_config_bootstrap
 
 
 def test_ensure_app_config_bootstrap_seeds_empty_model_config(

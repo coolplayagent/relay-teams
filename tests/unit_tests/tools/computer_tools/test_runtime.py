@@ -6,16 +6,16 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from agent_teams.computer import (
+from relay_teams.computer import (
     ComputerActionResult,
     ComputerActionTarget,
     ComputerObservation,
     describe_builtin_tool,
 )
-from agent_teams.media import MediaAssetRecord, MediaModality, MediaRefContentPart
-from agent_teams.media.models import MediaAssetStorageKind
-from agent_teams.tools.runtime import ToolContext
-from agent_teams.tools.computer_tools.runtime import _approval_request, _project_result
+from relay_teams.media import MediaAssetRecord, MediaModality, MediaRefContentPart
+from relay_teams.media.models import MediaAssetStorageKind
+from relay_teams.tools.runtime import ToolContext
+from relay_teams.tools.computer_tools.runtime import _approval_request, _project_result
 
 
 class _FakeMediaAssetService:

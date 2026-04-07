@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_teams.gateway.feishu.inbound_runtime import FeishuInboundRuntime
-from agent_teams.gateway.feishu.models import (
+from relay_teams.gateway.feishu.inbound_runtime import FeishuInboundRuntime
+from relay_teams.gateway.feishu.models import (
     FEISHU_METADATA_MESSAGE_ID_KEY,
     FeishuEnvironment,
     FeishuNormalizedMessage,
@@ -17,10 +17,10 @@ from agent_teams.gateway.feishu.models import (
     SESSION_METADATA_TITLE_SOURCE_KEY,
     SESSION_TITLE_SOURCE_MANUAL,
 )
-from agent_teams.providers.token_usage_repo import SessionTokenUsage
-from agent_teams.sessions import ExternalSessionBindingRepository
-from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
-from agent_teams.sessions.session_models import SessionMode, SessionRecord
+from relay_teams.providers.token_usage_repo import SessionTokenUsage
+from relay_teams.sessions import ExternalSessionBindingRepository
+from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
+from relay_teams.sessions.session_models import SessionMode, SessionRecord
 
 
 class _FakeSessionService:

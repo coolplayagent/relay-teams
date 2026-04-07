@@ -4,14 +4,14 @@ from __future__ import annotations
 import pytest
 from pydantic_ai.mcp import MCPServerStdio
 
-from agent_teams.mcp.mcp_models import (
+from relay_teams.mcp.mcp_models import (
     McpConfigScope,
     McpServerSpec,
     McpToolInfo,
 )
-from agent_teams.mcp.mcp_registry import McpRegistry, build_mcp_server
-from agent_teams.mcp.mcp_service import McpService
-from agent_teams.trace import get_trace_context
+from relay_teams.mcp.mcp_registry import McpRegistry, build_mcp_server
+from relay_teams.mcp.mcp_service import McpService
+from relay_teams.trace import get_trace_context
 
 
 def test_list_servers_reports_effective_transport() -> None:

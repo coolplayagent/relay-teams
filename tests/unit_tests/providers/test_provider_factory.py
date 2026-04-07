@@ -6,46 +6,46 @@ from typing import cast
 
 import pytest
 
-import agent_teams.providers.provider_factory as runtime_factory_module
-from agent_teams.agents.orchestration.task_orchestration_service import (
+import relay_teams.providers.provider_factory as runtime_factory_module
+from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
-from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
-from agent_teams.media import MediaAssetService
-from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
-from agent_teams.mcp.mcp_registry import McpRegistry
-from agent_teams.notifications import NotificationService
-from agent_teams.providers.provider_contracts import (
+from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from relay_teams.media import MediaAssetService
+from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
+from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.notifications import NotificationService
+from relay_teams.providers.provider_contracts import (
     EchoProvider,
     LLMRequest,
     MisconfiguredProvider,
 )
-from agent_teams.providers.model_config import ModelEndpointConfig, ProviderType
-from agent_teams.providers.provider_factory import create_provider_factory
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.sessions.runs.background_tasks import BackgroundTaskService
-from agent_teams.sessions.runs.run_control_manager import RunControlManager
-from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.runtime_config import RuntimeConfig, RuntimePaths
-from agent_teams.skills.skill_registry import SkillRegistry
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.sessions.session_history_marker_repository import (
+from relay_teams.providers.model_config import ModelEndpointConfig, ProviderType
+from relay_teams.providers.provider_factory import create_provider_factory
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
+from relay_teams.sessions.runs.run_control_manager import RunControlManager
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
+from relay_teams.sessions.runs.runtime_config import RuntimeConfig, RuntimePaths
+from relay_teams.skills.skill_registry import SkillRegistry
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
-from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
-from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
-from agent_teams.skills.discovery import SkillsDirectory
-from agent_teams.providers.token_usage_repo import TokenUsageRepository
-from agent_teams.tools.registry import ToolRegistry
-from agent_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
-from agent_teams.workspace import WorkspaceManager
+from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.skills.discovery import SkillsDirectory
+from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.tools.registry import ToolRegistry
+from relay_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
+from relay_teams.workspace import WorkspaceManager
 
 
 class _CapturingProviderRegistry:
@@ -82,7 +82,7 @@ def _build_runtime(
         paths=RuntimePaths(
             config_dir=Path(".agent_teams"),
             env_file=Path(".agent_teams/.env"),
-            db_path=Path(".agent_teams/agent_teams.db"),
+            db_path=Path(".agent_teams/relay_teams.db"),
             roles_dir=Path(".agent_teams/roles"),
         ),
         llm_profiles=profiles,

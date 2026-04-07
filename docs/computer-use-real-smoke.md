@@ -35,7 +35,7 @@ When Agent Teams launches apps through the Linux backend, it now prefers X11-com
 Agent Teams now auto-detects the host OS backend. On Linux, the real desktop runtime is selected automatically unless you explicitly force scripted validation.
 
 ```bash
-uv run --extra dev python -m uvicorn agent_teams.interfaces.server.app:app --host 127.0.0.1 --port 8000
+uv run --extra dev python -m uvicorn relay_teams.interfaces.server.app:app --host 127.0.0.1 --port 8000
 ```
 
 If you need the scripted desktop runtime instead of the real OS backend, set:

@@ -8,52 +8,52 @@ from pathlib import Path
 import pytest
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-from agent_teams.media import (
+from relay_teams.media import (
     MediaAssetRepository,
     MediaAssetService,
     content_parts_from_text,
 )
-from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.agents.instances.models import create_subagent_instance
-from agent_teams.agents.orchestration.task_execution_service import TaskExecutionService
-from agent_teams.agents.execution.system_prompts import RuntimePromptBuilder
-from agent_teams.mcp.mcp_registry import McpRegistry
-from agent_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
-from agent_teams.roles.memory_repository import RoleMemoryRepository
-from agent_teams.roles.memory_service import RoleMemoryService
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.sessions.runs.run_control_manager import RunControlManager
-from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.sessions.runs.assistant_errors import RunCompletionReason
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
-from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
-from agent_teams.sessions.runs.recoverable_pause import (
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.models import create_subagent_instance
+from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
+from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
+from relay_teams.roles.memory_repository import RoleMemoryRepository
+from relay_teams.roles.memory_service import RoleMemoryService
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.sessions.runs.run_control_manager import RunControlManager
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
+from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from relay_teams.sessions.runs.recoverable_pause import (
     RecoverableRunPauseError,
     RecoverableRunPausePayload,
 )
-from agent_teams.sessions.runs.run_runtime_repo import (
+from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
-from agent_teams.skills.skill_registry import SkillRegistry
-from agent_teams.skills.skill_routing_service import SkillRuntimeService
-from agent_teams.tools.registry import build_default_registry
-from agent_teams.workspace import (
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.skills.skill_registry import SkillRegistry
+from relay_teams.skills.skill_routing_service import SkillRuntimeService
+from relay_teams.tools.registry import build_default_registry
+from relay_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
 )
-from agent_teams.agents.tasks.enums import TaskStatus
-from agent_teams.agents.tasks.events import EventType
-from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.events import EventType
+from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 
 class _CapturingProvider:

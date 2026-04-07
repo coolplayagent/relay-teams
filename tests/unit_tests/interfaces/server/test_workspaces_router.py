@@ -8,9 +8,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
-from agent_teams.interfaces.server.deps import get_workspace_service
-from agent_teams.interfaces.server.routers import workspaces
-from agent_teams.workspace import (
+from relay_teams.interfaces.server.deps import get_workspace_service
+from relay_teams.interfaces.server.routers import workspaces
+from relay_teams.workspace import (
     FileScopeBackend,
     GitWorktreeClient,
     WorkspaceRecord,

@@ -5,9 +5,9 @@ from pathlib import Path
 import sqlite3
 
 import pytest
-from agent_teams.sessions.runs.run_models import RunThinkingConfig
-from agent_teams.sessions.session_models import SessionMode
-from agent_teams.gateway.wechat import WeChatAccountRecord, WeChatAccountRepository
+from relay_teams.sessions.runs.run_models import RunThinkingConfig
+from relay_teams.sessions.session_models import SessionMode
+from relay_teams.gateway.wechat import WeChatAccountRecord, WeChatAccountRepository
 
 
 def test_wechat_account_repository_round_trips_account_settings(

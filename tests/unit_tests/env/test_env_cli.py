@@ -7,8 +7,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from agent_teams.interfaces.cli import app as cli_app
-from agent_teams.env import env_cli
+from relay_teams.interfaces.cli import app as cli_app
+from relay_teams.env import env_cli
 
 runner = CliRunner()
 

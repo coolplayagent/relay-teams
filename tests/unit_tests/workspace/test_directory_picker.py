@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from agent_teams.workspace import directory_picker
+from relay_teams.workspace import directory_picker
 
 
 class _FakeTkRoot:

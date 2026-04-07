@@ -170,12 +170,12 @@ Future backends may include an external runtime adapter similar to an `acpx`-sty
 
 Recommended new package layout:
 
-- `src/agent_teams/gateway/models/`
-- `src/agent_teams/gateway/session/`
-- `src/agent_teams/gateway/dispatch/`
-- `src/agent_teams/gateway/bridges/acp_stdio/`
-- `src/agent_teams/gateway/backends/internal_runtime/`
-- `src/agent_teams/gateway/cli.py`
+- `src/relay_teams/gateway/models/`
+- `src/relay_teams/gateway/session/`
+- `src/relay_teams/gateway/dispatch/`
+- `src/relay_teams/gateway/bridges/acp_stdio/`
+- `src/relay_teams/gateway/backends/internal_runtime/`
+- `src/relay_teams/gateway/cli.py`
 
 Suggested responsibilities:
 

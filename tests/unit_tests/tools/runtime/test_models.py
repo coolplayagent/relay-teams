@@ -5,34 +5,34 @@ import pytest
 from pydantic import ValidationError
 from typing import cast
 
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.agents.orchestration.task_execution_service import (
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agents.orchestration.task_execution_service import (
     TaskExecutionService,
 )
-from agent_teams.agents.orchestration.task_orchestration_service import (
+from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.mcp.mcp_registry import McpRegistry
-from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.run_control_manager import RunControlManager
-from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
-from agent_teams.tools.runtime.approval_state import ToolApprovalManager
-from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.tools.runtime.policy import ToolApprovalPolicy
-from agent_teams.tools.runtime import (
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
+from relay_teams.sessions.runs.run_control_manager import RunControlManager
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
+from relay_teams.tools.runtime import (
     ToolError,
     ToolDeps,
     ToolInternalRecord,
     ToolResultEnvelope,
     ToolResultProjection,
 )
-from agent_teams.workspace import WorkspaceHandle
+from relay_teams.workspace import WorkspaceHandle
 
 
 def test_tool_result_envelope_serializes_nested_error() -> None:

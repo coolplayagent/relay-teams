@@ -15,8 +15,8 @@ import zipfile
 
 import pytest
 
-from agent_teams.builtin import get_builtin_skills_dir
-from agent_teams.skills import installer_support
+from relay_teams.builtin import get_builtin_skills_dir
+from relay_teams.skills import installer_support
 
 
 def test_resolve_source_from_marketplace_page(monkeypatch: pytest.MonkeyPatch) -> None:

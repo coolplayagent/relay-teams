@@ -1,4 +1,4 @@
-from agent_teams.sessions.session_rounds_projection import paginate_rounds
+from relay_teams.sessions.session_rounds_projection import paginate_rounds
 from typing import cast
 
 
