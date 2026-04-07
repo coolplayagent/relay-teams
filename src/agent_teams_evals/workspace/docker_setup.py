@@ -203,8 +203,8 @@ class DockerConfig(BaseModel):
     # Build once with: docker build -f docker/Dockerfile.agent-runtime -t agent-teams-runtime:latest .
     agent_runtime_image: str = "agent-teams-runtime:latest"
     # Path to the wrapper inside agent_runtime_image that creates a local
-    # container venv and starts agent-teams from there.
-    agent_runtime_bin: str = "/opt/agent-runtime/bin/agent-teams"
+    # container venv and starts relay-teams from there.
+    agent_runtime_bin: str = "/opt/agent-runtime/bin/relay-teams"
     # Port the agent-teams server listens on inside the container.
     container_server_port: int = 8000
     # Path inside each eval container where the repo is checked out.

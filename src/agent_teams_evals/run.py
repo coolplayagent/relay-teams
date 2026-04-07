@@ -487,7 +487,7 @@ def init_config(
 
     output.write_text(sample_yaml(), encoding="utf-8")
     typer.echo(f"Sample config written to: {output}")
-    typer.echo(f"Edit it, then run:  agent-teams-evals run --config {output}")
+    typer.echo(f"Edit it, then run:  relay-teams-evals run --config {output}")
 
 
 @app.command()

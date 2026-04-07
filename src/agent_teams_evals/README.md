@@ -13,16 +13,16 @@ uv sync
 ## Quick start
 
 ```bash
-# 1. Start the agent-teams backend
-agent-teams server start
+# 1. Start the relay-teams backend
+relay-teams server start
 
 # 2. Generate a config file
-agent-teams-evals init-config --output eval.yaml
+relay-teams-evals init-config --output eval.yaml
 
 # 3. Edit eval.yaml (set dataset_path, scorer, workspace_mode, etc.)
 
 # 4. Run
-agent-teams-evals run --config eval.yaml
+relay-teams-evals run --config eval.yaml
 ```
 
 Runs resume by default when `output_dir` already contains `checkpoint.meta.json`
@@ -32,10 +32,10 @@ to archive the previous `output_dir` and start fresh.
 CLI overrides are available for quick one-offs without editing the file:
 
 ```bash
-agent-teams-evals run --config eval.yaml --limit 5 --concurrency 2
-agent-teams-evals run --config eval.yaml --restart
-agent-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707 --rerun
-agent-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707,astropy__astropy-14309 --rerun --concurrency 2
+relay-teams-evals run --config eval.yaml --limit 5 --concurrency 2
+relay-teams-evals run --config eval.yaml --restart
+relay-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707 --rerun
+relay-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707,astropy__astropy-14309 --rerun --concurrency 2
 ```
 
 ## Workspace modes
@@ -52,7 +52,7 @@ git_clone_timeout_seconds: 120
 
 ### docker mode
 
-Runs each eval item inside a dedicated SWE-bench Docker container. The agent-teams server starts inside the container alongside the repo. This is the recommended mode for SWE-bench.
+Runs each eval item inside a dedicated SWE-bench Docker container. The relay-teams server starts inside the container alongside the repo. This is the recommended mode for SWE-bench.
 
 ```yaml
 workspace_mode: docker
@@ -65,8 +65,8 @@ docker:
   #   docker build -f docker/Dockerfile.agent-runtime -t agent-teams-runtime:latest .
   agent_runtime_image: "agent-teams-runtime:latest"
 
-  # Wrapper that creates a container-local venv with uv, then starts agent-teams.
-  agent_runtime_bin: "/opt/agent-runtime/bin/agent-teams"
+  # Wrapper that creates a container-local venv with uv, then starts relay-teams.
+  agent_runtime_bin: "/opt/agent-runtime/bin/relay-teams"
 
   # Port the agent-teams server listens on inside each container.
   container_server_port: 8000
@@ -235,7 +235,7 @@ recorded as an auxiliary diagnostic score for the scored patch.
 
 1. A stopped runtime data container is created once from `agent_runtime_image`
 2. For each item, a SWE-bench image is launched with `docker run -d`, mounting the runtime via `--volumes-from`
-3. The agent-teams server starts inside the container; the runner waits for it to become ready
+3. The relay-teams server starts inside the container; the runner waits for it to become ready
 4. A temporary workspace is registered pointing to `container_repo_path` inside the container
 5. After the run, the workspace is deleted and the container is removed (unless `keep_workspaces: true`)
 6. The runtime data container is removed after all items finish
@@ -264,8 +264,8 @@ to the checkpoint log, overwrites that item's artifact directory, and refreshes
 `report.json` / `report.html` so they show the latest result for the rerun item:
 
 ```bash
-agent-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707 --rerun
-agent-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707,astropy__astropy-14309 --rerun --concurrency 2
+relay-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707 --rerun
+relay-teams-evals run --config eval.yaml --item-ids astropy__astropy-8707,astropy__astropy-14309 --rerun --concurrency 2
 ```
 
 Token usage is recorded in detail for each result and the final report:
@@ -297,7 +297,7 @@ Aux     : patch_jaccard=0.167
 ## Re-rendering a report
 
 ```bash
-agent-teams-evals report \
+relay-teams-evals report \
     --results-file .agent_teams/evals/results/report.json \
     --format html
 ```

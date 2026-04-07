@@ -11,11 +11,11 @@ from agent_teams_evals.workspace.docker_setup import DockerConfig
 
 _SAMPLE_YAML = """\
 # Agent Teams Eval Config
-# Generate this file: agent-teams-evals init-config
-# Run with:           agent-teams-evals run --config eval.yaml
+# Generate this file: relay-teams-evals init-config
+# Run with:           relay-teams-evals run --config eval.yaml
 # Resume is automatic when output_dir already has checkpoint files.
 # Force a fresh run with:
-#   agent-teams-evals run --config eval.yaml --restart
+#   relay-teams-evals run --config eval.yaml --restart
 
 # --- Dataset ---
 dataset: jsonl                          # jsonl | swebench
@@ -52,7 +52,7 @@ docker:
   # wheelhouse via /opt/agent-runtime/ through --volumes-from.
   # Build once: docker build -f docker/Dockerfile.agent-runtime -t agent-teams-runtime:latest .
   agent_runtime_image: "agent-teams-runtime:latest"
-  agent_runtime_bin: "/opt/agent-runtime/bin/agent-teams"
+  agent_runtime_bin: "/opt/agent-runtime/bin/relay-teams"
   container_startup_timeout_seconds: 60
   forward_env_vars:
     - ANTHROPIC_API_KEY

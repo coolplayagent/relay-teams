@@ -18,7 +18,7 @@ jobs:
       id-token: write
     environment:
       name: pypi
-      url: https://pypi.org/project/cool-play-agent-teams/
+      url: https://pypi.org/project/relay-teams/
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -67,3 +67,4 @@ jobs:
 
       - name: Report published version
         run: echo "Published version ${{ steps.version.outputs.version }}"
+

@@ -27,9 +27,9 @@ skills_app = typer.Typer(
         "If both scopes define the same skill name, both entries are kept and can "
         "be distinguished by canonical ref.\n\n"
         "Common usage:\n"
-        "- agent-teams skills list\n"
-        "- agent-teams skills list --source app --format json\n"
-        "- agent-teams skills show time"
+        "- relay-teams skills list\n"
+        "- relay-teams skills list --source app --format json\n"
+        "- relay-teams skills show time"
     ),
 )
 
@@ -59,9 +59,9 @@ class SkillListEntry(TypedDict):
         "List all discovered skills across builtin and app scopes.\n\n"
         "If the same skill exists in both places, both entries are shown.\n\n"
         "Examples:\n"
-        "- agent-teams skills list\n"
-        "- agent-teams skills list --source builtin\n"
-        "- agent-teams skills list --format json"
+        "- relay-teams skills list\n"
+        "- relay-teams skills list --source builtin\n"
+        "- relay-teams skills list --format json"
     ),
 )
 def skills_list(
@@ -97,9 +97,9 @@ def skills_list(
         "The argument can be a canonical ref such as app:time or builtin:time, "
         "or a unique plain skill name.\n\n"
         "Examples:\n"
-        "- agent-teams skills show time\n"
-        "- agent-teams skills show builtin:time\n"
-        "- agent-teams skills show time --format json"
+        "- relay-teams skills show time\n"
+        "- relay-teams skills show builtin:time\n"
+        "- relay-teams skills show time --format json"
     ),
 )
 def skills_show(
