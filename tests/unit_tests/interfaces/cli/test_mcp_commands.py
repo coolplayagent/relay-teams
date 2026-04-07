@@ -92,3 +92,11 @@ def test_mcp_tools_surfaces_connection_error(monkeypatch) -> None:
 
     assert result.exit_code != 0
     assert "Failed to connect MCP server 'broken-server'" in result.output
+
+
+def test_mcp_help_uses_relay_teams_examples() -> None:
+    result = runner.invoke(cli_app.app, ["mcp", "--help"])
+
+    assert result.exit_code == 0
+    assert "relay-teams mcp list" in result.output
+    assert "relay-teams mcp tools filesystem" in result.output

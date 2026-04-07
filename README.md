@@ -1,4 +1,4 @@
-# cool-play-agent-teams
+# relay-teams
 
 Role-driven multi-agent orchestration framework built with strong typing and tool-only collaboration flow.
 Runtime model execution uses `pydantic_ai` with OpenAI-compatible endpoints.
@@ -25,8 +25,8 @@ Highlights:
 
 ![Agent Teams Web Interface](docs/agent_teams.png)
 
-Start the server with `uv run agent-teams server start` and open http://127.0.0.1:8000 in your browser.
-Use `uv run agent-teams server restart` to restart the managed server, and `uv run agent-teams server stop --force` to force stop it.
+Start the server with `uv run relay-teams server start` and open http://127.0.0.1:8000 in your browser.
+Use `uv run relay-teams server restart` to restart the managed server, and `uv run relay-teams server stop --force` to force stop it.
 The web UI now includes a language toggle beside the settings button so you can switch between English and Simplified Chinese in-page.
 
 Frontend assets are now decoupled under `frontend/dist` and served by the backend.
@@ -52,7 +52,7 @@ sh setup.sh
 Install from PyPI:
 
 ```bash
-pip install cool-play-agent-teams
+pip install relay-teams
 ```
 
 Direct install:
@@ -67,13 +67,13 @@ For local development, prefer `uv run --extra dev ...` over raw `python`, `pytes
 ### 2) help
 
 ```bash
-agent-teams --help
+relay-teams --help
 
 # for evals
-agent-teams-evals --help
+relay-teams-evals --help
 ```
 
-If the `agent-teams` command is still missing in a fresh local checkout, the project package was not installed into the active virtual environment. Run `uv pip install -e .` or use `uv run python -m agent_teams --help` as a fallback.
+If the `relay-teams` command is still missing in a fresh local checkout, the project package was not installed into the active virtual environment. Run `uv pip install -e .` or use `uv run python -m agent_teams --help` as a fallback.
 
 Examples:
 
@@ -82,4 +82,5 @@ uv run --extra dev pytest -q
 uv run --extra dev ruff check --fix
 uv run --extra dev basedpyright
 ```
+
 

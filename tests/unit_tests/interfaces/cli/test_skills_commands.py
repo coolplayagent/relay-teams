@@ -129,7 +129,7 @@ def test_skills_help_explains_merge_order() -> None:
     )
     assert "~/.agent-teams/skills" in normalized_output
     assert "both entries are kept" in normalized_output
-    assert "agent-teams skills show time" in normalized_output
+    assert "relay-teams skills show time" in normalized_output
 
 
 def test_skills_list_help_includes_examples_and_source_behavior() -> None:
@@ -142,7 +142,7 @@ def test_skills_list_help_includes_examples_and_source_behavior() -> None:
     )
     assert "both entries are shown" in normalized_output
     assert "--source" in normalized_output
-    assert "agent-teams skills list --source builtin" in normalized_output
+    assert "relay-teams skills list --source builtin" in normalized_output
 
 
 def test_skills_show_help_describes_effective_skill_resolution() -> None:
@@ -153,7 +153,7 @@ def test_skills_show_help_describes_effective_skill_resolution() -> None:
     assert "Show a single skill definition." in normalized_output
     assert "canonical ref such as app:time or builtin:time" in normalized_output
     assert "Skill canonical ref or unique plain name to inspect." in normalized_output
-    assert "agent-teams skills show time --format json" in normalized_output
+    assert "relay-teams skills show time --format json" in normalized_output
 
 
 def _build_registry(tmp_path: Path) -> SkillRegistry:

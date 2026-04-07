@@ -124,7 +124,7 @@ def _print_missing_role_hint(role_ids: list[str]) -> None:
         typer.echo("Available roles:")
         for role_id in role_ids:
             typer.echo(f"- {role_id}")
-    typer.echo("Usage: agent-teams roles prompt --role-id <role_id>")
+    typer.echo("Usage: relay-teams roles prompt --role-id <role_id>")
 
 
 def _parse_shared_state_json(raw: str) -> dict[str, object]:

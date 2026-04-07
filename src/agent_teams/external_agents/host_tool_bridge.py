@@ -13,8 +13,8 @@ from uuid import uuid4
 
 import mcp.types as mcp_types
 from fastmcp.server.server import FastMCP
-from fastmcp.tools.tool import Tool as FastMcpTool
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools.base import Tool as FastMcpTool
+from fastmcp.tools.base import ToolResult
 from mcp.shared.exceptions import McpError
 from mcp.shared.memory import create_client_server_memory_streams
 from mcp.shared.message import SessionMessage

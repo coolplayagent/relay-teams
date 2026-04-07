@@ -22,9 +22,9 @@ mcp_app = typer.Typer(
         "Config file:\n"
         "1. ~/.agent-teams/mcp.json (app scope)\n\n"
         "Common usage:\n"
-        "- agent-teams mcp list\n"
-        "- agent-teams mcp list --format json\n"
-        "- agent-teams mcp tools filesystem"
+        "- relay-teams mcp list\n"
+        "- relay-teams mcp list --format json\n"
+        "- relay-teams mcp tools filesystem"
     ),
 )
 
@@ -78,7 +78,7 @@ def mcp_list(
         "Connect to one MCP server and list the tools it exposes.\n\n"
         "This command validates the effective MCP server configuration by establishing a real connection.\n\n"
         "Example:\n"
-        "- agent-teams mcp tools filesystem --format json"
+        "- relay-teams mcp tools filesystem --format json"
     ),
 )
 def mcp_tools(
