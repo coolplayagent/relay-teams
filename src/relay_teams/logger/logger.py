@@ -8,6 +8,7 @@ import configparser
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import traceback
@@ -18,6 +19,7 @@ from queue import SimpleQueue
 from threading import Lock
 from types import TracebackType
 from typing import Literal, cast, override
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from relay_teams.builtin import (
     get_builtin_logger_ini_path,
@@ -38,11 +40,40 @@ DEFAULT_DEBUG_LOG_LEVEL = "DEBUG"
 DEFAULT_LOG_CONSOLE = "1"
 DEFAULT_BACKUP_COUNT = 14
 _LOGGER_INI_NAME = "logger.ini"
+DEFAULT_LOG_REDACTION_PLACEHOLDER = "***"
+_REDACTION_KEYS_ADD_ENV = "AGENT_TEAMS_LOG_REDACTION_KEYS_ADD"
+_REDACTION_KEYS_REPLACE_ENV = "AGENT_TEAMS_LOG_REDACTION_KEYS_REPLACE"
+_REDACTION_PATTERNS_ADD_ENV = "AGENT_TEAMS_LOG_REDACTION_PATTERNS_ADD"
+_REDACTION_PATTERNS_REPLACE_ENV = "AGENT_TEAMS_LOG_REDACTION_PATTERNS_REPLACE"
+_REDACTION_PLACEHOLDER_ENV = "AGENT_TEAMS_LOG_REDACTION_PLACEHOLDER"
+
+_DEFAULT_REDACTION_KEYS = frozenset(
+    {
+        "password",
+        "passwd",
+        "secret",
+        "api_key",
+        "apikey",
+        "token",
+        "access_token",
+        "refresh_token",
+        "authorization",
+        "client_secret",
+        "proxy_password",
+    }
+)
+_HEADER_TOKEN_PATTERN = re.compile(
+    r"(?P<scheme>Bearer|Basic)\s+[^\s\"';,]+",
+    re.IGNORECASE,
+)
+_URL_PATTERN = re.compile(r"\b(?:https?|wss?)://[^\s\"'<>]+", re.IGNORECASE)
+_OPENAI_TOKEN_PATTERN = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b")
 
 _RUNTIME_ENV_VALUES: dict[str, str] | None = None
 _LOGGING_LOCK = Lock()
 _LOGGING_RUNTIME: "_LoggingRuntime | None" = None
 _DEFAULT_RECORD_FACTORY = logging.getLogRecordFactory()
+_REDACTION_WARNING_CACHE: set[str] = set()
 
 type LogSource = Literal["backend", "frontend"]
 type LogExcInfo = (
@@ -51,6 +82,29 @@ type LogExcInfo = (
     | tuple[type[BaseException], BaseException, TracebackType | None]
     | tuple[None, None, None]
     | None
+)
+
+
+class _RedactionSettings:
+    def __init__(
+        self,
+        *,
+        sensitive_keys: frozenset[str],
+        custom_patterns: tuple[re.Pattern[str], ...],
+        use_default_patterns: bool,
+        placeholder: str,
+    ) -> None:
+        self.sensitive_keys = sensitive_keys
+        self.custom_patterns = custom_patterns
+        self.use_default_patterns = use_default_patterns
+        self.placeholder = placeholder
+
+
+_REDACTION_SETTINGS = _RedactionSettings(
+    sensitive_keys=_DEFAULT_REDACTION_KEYS,
+    custom_patterns=(),
+    use_default_patterns=True,
+    placeholder=DEFAULT_LOG_REDACTION_PLACEHOLDER,
 )
 
 
@@ -144,7 +198,7 @@ class HumanReadableFormatter(logging.Formatter):
         source = _resolve_log_source(record)
         logger_name = _display_logger_name(record.name, source)
         event = str(getattr(record, "event", "-") or "-")
-        message = record.getMessage()
+        message = _sanitize_log_message(record.getMessage())
 
         parts = [
             timestamp,
@@ -197,6 +251,7 @@ def configure_logging(
     with _LOGGING_LOCK:
         shutdown_logging()
         _refresh_runtime_env_values()
+        redaction_warnings = _refresh_redaction_settings()
 
         resolved_config_dir = (
             get_app_config_dir()
@@ -314,6 +369,7 @@ def configure_logging(
             frontend_queue_handler=frontend_queue_handler,
             managed_handlers=tuple(managed_handlers),
         )
+        _log_redaction_warnings(redaction_warnings)
 
 
 def shutdown_logging() -> None:
@@ -411,7 +467,7 @@ def log_event(
         message,
         extra={
             "event": event,
-            "payload": sanitize_payload(payload or {}),
+            "payload": _snapshot_json_value(payload or {}),
             "duration_ms": duration_ms,
         },
         exc_info=exc_info,
@@ -419,20 +475,52 @@ def log_event(
 
 
 def sanitize_payload(payload: JsonValue) -> JsonValue:
+    return _sanitize_json_value(payload)
+
+
+def _snapshot_json_value(payload: JsonValue) -> JsonValue:
     if isinstance(payload, dict):
         dict_payload = cast(dict[object, JsonValue], payload)
         return {
-            str(key): sanitize_payload(value) for key, value in dict_payload.items()
+            str(item_key): _snapshot_json_value(item_value)
+            for item_key, item_value in dict_payload.items()
         }
     if isinstance(payload, list):
         list_payload = cast(list[JsonValue], payload)
-        return [sanitize_payload(value) for value in list_payload]
+        return [_snapshot_json_value(value) for value in list_payload]
     if isinstance(payload, tuple):
         tuple_payload = cast(tuple[JsonValue, ...], payload)
-        return [sanitize_payload(value) for value in tuple_payload]
-    if isinstance(payload, str):
-        return _truncate(_mask_sensitive(payload))
+        return [_snapshot_json_value(value) for value in tuple_payload]
     return payload
+
+
+def _sanitize_json_value(
+    payload: object,
+    *,
+    key: str | None = None,
+) -> JsonValue:
+    settings = _get_redaction_settings()
+    if key is not None and _is_sensitive_key(key, settings):
+        return settings.placeholder
+    if isinstance(payload, dict):
+        dict_payload = cast(dict[object, object], payload)
+        return {
+            str(item_key): _sanitize_json_value(item_value, key=str(item_key))
+            for item_key, item_value in dict_payload.items()
+        }
+    if isinstance(payload, list):
+        list_payload = cast(list[object], payload)
+        return [_sanitize_json_value(value) for value in list_payload]
+    if isinstance(payload, tuple):
+        tuple_payload = cast(tuple[object, ...], payload)
+        return [_sanitize_json_value(value) for value in tuple_payload]
+    if payload is None or isinstance(payload, bool | int | float):
+        return cast(JsonValue, payload)
+    return _truncate(_redact_string(str(payload), settings=settings))
+
+
+def _sanitize_log_message(message: str) -> str:
+    return _truncate(_redact_string(message, settings=_get_redaction_settings()))
 
 
 def _refresh_runtime_env_values() -> None:
@@ -448,6 +536,128 @@ def _get_runtime_env_value(key: str, default: str) -> str:
     if values is None:
         return default
     return values.get(key, default)
+
+
+def _get_redaction_settings() -> _RedactionSettings:
+    return _REDACTION_SETTINGS
+
+
+def _refresh_redaction_settings() -> tuple[str, ...]:
+    global _REDACTION_SETTINGS
+
+    warnings: list[str] = []
+    placeholder = _resolve_redaction_placeholder()
+    sensitive_keys = _resolve_redaction_keys(warnings)
+    custom_patterns, use_default_patterns = _resolve_redaction_patterns(warnings)
+    _REDACTION_SETTINGS = _RedactionSettings(
+        sensitive_keys=sensitive_keys,
+        custom_patterns=custom_patterns,
+        use_default_patterns=use_default_patterns,
+        placeholder=placeholder,
+    )
+    return tuple(warnings)
+
+
+def _resolve_redaction_placeholder() -> str:
+    raw = _get_runtime_env_value(
+        _REDACTION_PLACEHOLDER_ENV,
+        DEFAULT_LOG_REDACTION_PLACEHOLDER,
+    ).strip()
+    return raw or DEFAULT_LOG_REDACTION_PLACEHOLDER
+
+
+def _resolve_redaction_keys(warnings: list[str]) -> frozenset[str]:
+    replace_raw = _get_runtime_env_value(_REDACTION_KEYS_REPLACE_ENV, "").strip()
+    if replace_raw:
+        replaced = _parse_env_string_list(
+            replace_raw, env_key=_REDACTION_KEYS_REPLACE_ENV
+        )
+        if replaced is None:
+            warnings.append(
+                f"Invalid {_REDACTION_KEYS_REPLACE_ENV}; using default redaction keys."
+            )
+            return _DEFAULT_REDACTION_KEYS
+        return frozenset(
+            _normalize_redaction_key(value) for value in replaced if value.strip()
+        )
+
+    add_raw = _get_runtime_env_value(_REDACTION_KEYS_ADD_ENV, "").strip()
+    if not add_raw:
+        return _DEFAULT_REDACTION_KEYS
+
+    added = _parse_env_string_list(add_raw, env_key=_REDACTION_KEYS_ADD_ENV)
+    if added is None:
+        warnings.append(
+            f"Invalid {_REDACTION_KEYS_ADD_ENV}; using default redaction keys only."
+        )
+        return _DEFAULT_REDACTION_KEYS
+
+    return _DEFAULT_REDACTION_KEYS | frozenset(
+        _normalize_redaction_key(value) for value in added if value.strip()
+    )
+
+
+def _resolve_redaction_patterns(
+    warnings: list[str],
+) -> tuple[tuple[re.Pattern[str], ...], bool]:
+    replace_raw = _get_runtime_env_value(_REDACTION_PATTERNS_REPLACE_ENV, "").strip()
+    if replace_raw:
+        replaced = _parse_env_regex_list(
+            replace_raw,
+            env_key=_REDACTION_PATTERNS_REPLACE_ENV,
+        )
+        if replaced is None:
+            warnings.append(
+                f"Invalid {_REDACTION_PATTERNS_REPLACE_ENV}; using default redaction patterns."
+            )
+            return (), True
+        return replaced, False
+
+    add_raw = _get_runtime_env_value(_REDACTION_PATTERNS_ADD_ENV, "").strip()
+    if not add_raw:
+        return (), True
+
+    added = _parse_env_regex_list(add_raw, env_key=_REDACTION_PATTERNS_ADD_ENV)
+    if added is None:
+        warnings.append(
+            f"Invalid {_REDACTION_PATTERNS_ADD_ENV}; using default redaction patterns only."
+        )
+        return (), True
+    return added, True
+
+
+def _parse_env_string_list(raw: str, *, env_key: str) -> list[str] | None:
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, list):
+        return None
+
+    values: list[str] = []
+    for item in parsed:
+        if not isinstance(item, str):
+            return None
+        normalized = item.strip()
+        if normalized:
+            values.append(normalized)
+    return values
+
+
+def _parse_env_regex_list(
+    raw: str, *, env_key: str
+) -> tuple[re.Pattern[str], ...] | None:
+    values = _parse_env_string_list(raw, env_key=env_key)
+    if values is None:
+        return None
+
+    patterns: list[re.Pattern[str]] = []
+    try:
+        for value in values:
+            patterns.append(re.compile(value))
+    except re.error:
+        return None
+    return tuple(patterns)
 
 
 class _LoggerSettings:
@@ -624,10 +834,11 @@ def _display_logger_name(name: str, source: LogSource) -> str:
 
 
 def _render_payload(payload: object) -> str:
+    sanitized = _sanitize_json_value(payload)
     try:
-        text = json.dumps(payload, ensure_ascii=False, default=str)
+        text = json.dumps(sanitized, ensure_ascii=False, default=str)
     except TypeError:
-        text = str(payload)
+        text = str(sanitized)
     return _truncate(text, limit=500)
 
 
@@ -651,11 +862,72 @@ def _configure_uvicorn_loggers() -> None:
         logger.setLevel(logging.DEBUG)
 
 
-def _mask_sensitive(value: str) -> str:
-    lowered = value.lower()
-    if "sk-" in lowered or "bearer " in lowered:
-        return "***"
-    return value
+def _redact_string(value: str, *, settings: _RedactionSettings) -> str:
+    redacted = value
+    if settings.use_default_patterns:
+        redacted = _HEADER_TOKEN_PATTERN.sub(
+            lambda match: f"{match.group('scheme')} {settings.placeholder}",
+            redacted,
+        )
+        redacted = _URL_PATTERN.sub(
+            lambda match: _redact_url(match.group(0), settings),
+            redacted,
+        )
+        redacted = _OPENAI_TOKEN_PATTERN.sub(
+            lambda _match: settings.placeholder, redacted
+        )
+    for pattern in settings.custom_patterns:
+        redacted = pattern.sub(lambda _match: settings.placeholder, redacted)
+    return redacted
+
+
+def _redact_url(url: str, settings: _RedactionSettings) -> str:
+    try:
+        split_result = urlsplit(url)
+    except ValueError:
+        return settings.placeholder
+    netloc = split_result.netloc
+    if "@" in netloc:
+        host_port = netloc.rsplit("@", 1)[1]
+        netloc = f"{settings.placeholder}@{host_port}"
+
+    query_pairs = parse_qsl(split_result.query, keep_blank_values=True)
+    redacted_pairs = [
+        (
+            key,
+            settings.placeholder if _is_sensitive_key(key, settings) else value,
+        )
+        for key, value in query_pairs
+    ]
+    query = urlencode(redacted_pairs, doseq=True)
+    return urlunsplit(
+        (
+            split_result.scheme,
+            netloc,
+            split_result.path,
+            query,
+            split_result.fragment,
+        )
+    )
+
+
+def _is_sensitive_key(key: str, settings: _RedactionSettings) -> bool:
+    return _normalize_redaction_key(key) in settings.sensitive_keys
+
+
+def _normalize_redaction_key(key: str) -> str:
+    return key.strip().lower().replace("-", "_")
+
+
+def _log_redaction_warnings(warnings: tuple[str, ...]) -> None:
+    if not warnings:
+        return
+    logger = logging.getLogger(f"{BACKEND_LOGGER_NAMESPACE}.logger")
+    for warning in warnings:
+        if warning in _REDACTION_WARNING_CACHE:
+            continue
+        _REDACTION_WARNING_CACHE.add(warning)
+        logger.warning(warning)
 
 
 def _truncate(value: str, limit: int = 2000) -> str:
