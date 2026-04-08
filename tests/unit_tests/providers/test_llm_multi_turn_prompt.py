@@ -2586,6 +2586,140 @@ async def test_generate_emits_model_step_started_before_retry_attempt_prompt_pre
 
 
 @pytest.mark.asyncio
+async def test_generate_rebuilds_prompt_context_after_tool_validation_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, _message_repo = _build_provider(
+        tmp_path / "validation_restart_prompt_context.db",
+        fake_hub,
+    )
+
+    validation_node = _FakeModelRequestNode(
+        SimpleNamespace(
+            input_tokens=0,
+            cache_read_tokens=0,
+            output_tokens=0,
+            total_tokens=0,
+            requests=1,
+            tool_calls=0,
+            details={},
+        )
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[validation_node],
+                messages_by_step=[
+                    [
+                        ModelResponse(
+                            parts=[
+                                ToolCallPart(
+                                    tool_name="shell",
+                                    args='{"command":"echo hi"}',
+                                    tool_call_id="call-1",
+                                )
+                            ]
+                        ),
+                        ModelRequest(
+                            parts=[
+                                RetryPromptPart(
+                                    content="Tool arguments were not valid JSON.",
+                                    tool_name="shell",
+                                    tool_call_id="call-1",
+                                )
+                            ]
+                        ),
+                    ]
+                ],
+                result=_ScriptedResult(response="unused", messages=[]),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="after restart")]),
+                    messages=[ModelResponse(parts=[TextPart(content="after restart")])],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _FakeModelRequestNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    prepare_reserve_flags: list[bool] = []
+    rebuilt_history = [
+        ModelRequest(parts=[UserPromptPart(content="rebuilt compacted history")])
+    ]
+
+    async def _prepare_prompt_context_for_restart(
+        *,
+        request: LLMRequest,
+        conversation_id: str,
+        system_prompt: str,
+        reserve_user_prompt_tokens: bool,
+        allowed_tools: tuple[str, ...],
+        allowed_mcp_servers: tuple[str, ...],
+        allowed_skills: tuple[str, ...],
+    ) -> _PreparedPromptContext:
+        _ = (
+            request,
+            conversation_id,
+            system_prompt,
+            allowed_tools,
+            allowed_mcp_servers,
+            allowed_skills,
+        )
+        prepare_reserve_flags.append(reserve_user_prompt_tokens)
+        history: tuple[ModelRequest | ModelResponse, ...]
+        if len(prepare_reserve_flags) == 1:
+            history = ()
+        else:
+            history = tuple(rebuilt_history)
+        return _PreparedPromptContext(
+            history=history,
+            system_prompt="system",
+            budget=build_conversation_compaction_budget(
+                context_window=32_000,
+                estimated_system_prompt_tokens=0,
+                estimated_user_prompt_tokens=0,
+                estimated_tool_context_tokens=0,
+                estimated_output_reserve_tokens=0,
+            ),
+        )
+
+    monkeypatch.setattr(
+        provider._session,
+        "_prepare_prompt_context",
+        _prepare_prompt_context_for_restart,
+    )
+
+    request = LLMRequest(
+        run_id="run-validation-restart",
+        trace_id="run-validation-restart",
+        task_id="task-validation-restart",
+        session_id="session-validation-restart",
+        workspace_id="default",
+        instance_id="inst-validation-restart",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "after restart"
+    assert prepare_reserve_flags == [True, False]
+    assert len(scripted_agent.histories) == 2
+    assert scripted_agent.histories[1] == rebuilt_history
+
+
+@pytest.mark.asyncio
 async def test_generate_uses_parsed_provider_error_code_for_non_retryable_model_api_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -477,6 +477,35 @@ def test_coerce_history_to_provider_safe_sequence_keeps_bridge_when_prefix_drop_
     assert "Resume the preserved execution state after repair." in bridge_part.content
 
 
+def test_coerce_history_to_provider_safe_sequence_prefers_explicit_user_prompt_over_bridge() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Resume the preserved execution state after repair."),
+    )
+    history = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="missing-call",
+                    content="orphaned",
+                )
+            ]
+        )
+    ]
+
+    repaired = AgentLlmSession._coerce_history_to_provider_safe_sequence(
+        session,
+        request=_build_request(user_prompt="restart from the latest user request"),
+        history=history,
+    )
+
+    assert repaired == []
+
+
 @pytest.mark.asyncio
 async def test_safe_max_output_tokens_accounts_for_full_prompt_budget() -> None:
     session = object.__new__(AgentLlmSession)
