@@ -136,7 +136,7 @@ safe history
 
 ### Phase 1：本次已实现
 
-- 统一 prompt-view 准备流程
+- 统一 prompt-view 准备流程，并复用到初次尝试、injection restart、validation restart
 - 新增 deterministic `microcompact`
 - 用完整 prompt 预算驱动 full compaction
 - 扩展 compaction metadata 与时间线标签
@@ -156,19 +156,24 @@ safe history
 本次提交后，主线程 session 的 prompt 准备流程变为：
 
 ```text
+publish MODEL_STEP_STARTED
 load conversation history
 -> truncate to safe boundary
+-> snapshot original history for later summary source
 -> inject existing compaction summary into provisional system prompt
 -> build full prompt budget
 -> microcompact old tool results in prompt view
 -> if still above threshold then full compaction
+   - plan on live prompt-view history
+   - rewrite rolling summary from original history
 -> coerce the visible suffix to a provider-replayable history
 -> rebuild final system prompt with latest summary
--> build model settings
+-> build model settings / agent iteration context
 -> call model
 ```
 
 对应入口位于 `src/relay_teams/agents/execution/llm_session.py` 中的 `_prepare_prompt_context(...)`。
+真正的每轮迭代重建则统一走 `_build_agent_iteration_context(...)`。
 
 ## 6. 关键设计
 
@@ -191,6 +196,17 @@ load conversation history
 - 保留工具名、原始 token 估算、前后预览片段
 
 这样做的目的不是“生成摘要”，而是先把低价值的大输出从热路径里移走，尽量减少 full compaction 的触发频率。
+
+这里还有一个实现细节需要明确：
+
+- `microcompact` 只改变 live prompt view
+- full compaction 的 rolling summary 不直接消费这个 preview 版本
+- session 会在 `microcompact` 之前保留一份原始 `source_history`
+- 当真正触发 rolling-summary compaction 时，预算规划和 kept suffix 仍基于 live history，
+  但 summary rewrite 改为读取原始 `source_history`
+
+这样可以避免 preview-only 的前后片段在 full compaction 之前就污染摘要来源，
+导致工具输出中间的关键信息被永久丢失。
 
 ### 6.2 完整 prompt 预算
 
@@ -218,7 +234,36 @@ load conversation history
 - 把 full compaction 的触发判断改成基于完整 prompt 预算
 - 给 marker 补足后续迁移到 checkpoint 语义所需的基础元数据
 
-### 6.4 `tool-safe boundary` 不等于 `provider-replayable boundary`
+同时，full compaction 现在采用一个明确的双视图策略：
+
+- `history`：发送给 provider 的 live prompt view，也是 compaction planner 看到的视图
+- `source_history`：`microcompact` 之前保存的原始消息视图，只用于 rolling summary rewrite
+
+这样可以同时满足两件事：
+
+- token 预算、保留尾部和最终 provider 输入保持一致
+- rolling summary 仍然基于完整工具输出，而不是 preview 版替身
+
+### 6.4 统一迭代上下文重建
+
+这次实现里，首次尝试、injection restart 和 committed tool validation restart
+都统一走 `_build_agent_iteration_context(...)`。
+
+这意味着每次真正进入下一轮 `agent.iter(...)` 之前，都会重新：
+
+- 从 repository 读取安全边界历史
+- 重建 provisional / final system prompt
+- 重新执行 `microcompact`、full compaction、replay repair
+- 按压缩后的最新预算重建 model settings
+
+这样做的目的，是避免只有首次尝试用了压缩后的 prompt view，
+而后续 restart 又因为重新加载 repository 原始历史而退回大体积未压缩 history。
+
+同时，`MODEL_STEP_STARTED` 会在 prompt preparation 之前发布。
+这保证了如果新 attempt 在 prompt prep 阶段失败，rounds projection 里的 retry card
+也能被及时清理，不会残留一个已经不存在的 active retry 状态。
+
+### 6.5 `tool-safe boundary` 不等于 `provider-replayable boundary`
 
 这次真实故障暴露了一个关键问题：旧实现里的 “safe boundary” 只保证了 `tool_call -> tool_return` 链闭合，
 但没有保证 compact 之后剩下的可见 suffix 仍然能作为合法 chat history 重放给 provider。
@@ -243,7 +288,13 @@ load conversation history
 
 resume bridge 默认会带上当前 run intent，用来恢复 “当前任务为什么在做这些工具动作” 这个用户锚点。
 
-### 6.5 marker 元数据与时间线
+为了不让这个 replayability 检查在热路径上退化成 O(n²)，
+planner 现在会先反向预计算每个 suffix start 是否 replayable，
+再在正向扫描 split 边界时复用这张表。
+`coerce_replayable_compaction_count(...)` 也沿用同一套预计算逻辑，
+避免对 `history[index:]` 反复做全量重扫。
+
+### 6.6 marker 元数据与时间线
 
 本次 compaction marker 额外记录：
 
@@ -282,6 +333,11 @@ Microcompact 139.9k -> 9.0k
 - `microcompact` 只改 prompt view，不改持久 transcript，减少不必要的结构性变化。
 - compaction 预算开始显式考虑完整 prompt 组成，而不是只估 history。
 - marker 元数据开始保留压缩前后 token 变化，为后续补 `cache_read/create/delete` 做准备。
+- 当前 system prompt 实际上仍是“稳定前缀 + 动态尾巴”：
+  - 基础 role/system 指令块大体稳定
+  - rolling summary 作为动态 section 追加在 system prompt 末尾
+  - 这让缓存收益主要集中在 system prompt 前半段
+  - 只要 summary 改变，位于它后面的 history 前缀缓存通常就会一起失效
 
 后续建议继续完善：
 
@@ -295,18 +351,23 @@ Microcompact 139.9k -> 9.0k
 
 - `src/relay_teams/agents/execution/llm_session.py`
   - 新增统一 `_prepare_prompt_context(...)`
-  - compaction 与 token 预算统一由该入口编排
+  - `_build_agent_iteration_context(...)` 统一复用到首次尝试与 restart
+  - compaction、token 预算、provider-safe replay 修复统一由该入口编排
+  - full compaction 时同时传递 live `history` 与原始 `source_history`
 - `src/relay_teams/agents/execution/conversation_microcompact.py`
   - 新增发送前轻量压缩
 - `src/relay_teams/agents/execution/conversation_compaction.py`
   - 新增 `ConversationCompactionBudget`
   - full compaction 改为接收完整 prompt 预算
+  - rolling summary rewrite 改为读取原始 `source_history`
+  - replayable suffix 规划改为反向预计算，避免 O(n²) 扫描
   - marker metadata 扩展
 - `src/relay_teams/sessions/session_service.py`
   - marker label 支持区分 rolling summary compaction
 - `src/relay_teams/sessions/session_rounds_projection.py`
   - rounds 投影同步显示 rolling-summary label
   - rounds 投影新增 `microcompact` 运行时字段
+  - 后续 step 若显式报告未应用 `microcompact`，会清理旧 badge 状态
 - `frontend/dist/js/components/rounds/timeline.js`
   - round badge 区分 `microcompact` 与 full compaction marker
 
@@ -320,14 +381,18 @@ Microcompact 139.9k -> 9.0k
   - 相同输入得到完全一致的输出
 - `tests/unit_tests/agents/execution/test_conversation_compaction.py`
   - marker metadata 正确写入
+  - rolling summary 会读取 `microcompact` 之前的原始工具输出
+  - replayable suffix 规划不会退化成 O(n²) 后缀重扫
 - `tests/unit_tests/agents/execution/test_llm_session.py`
-  - `_prepare_prompt_context(...)` 的热路径接线
+  - `_prepare_prompt_context(...)` 会同时把 live `history` 和原始 `source_history` 传给 full compaction
   - `_safe_max_output_tokens(...)` 开始考虑完整 prompt 预算
+  - validation / injection restart 会重建同一套 prompt-view 上下文
 - `tests/unit_tests/sessions/test_session_agent_messages.py`
   - timeline label 更新
 - `tests/unit_tests/sessions/test_rounds_projection_message_role_fallback.py`
   - rounds projection label 更新
   - rounds projection `microcompact` 字段映射
+  - 较新的 step 若未应用 `microcompact`，旧 badge 会被清理
 - `tests/unit_tests/frontend/test_round_history_clear_ui.py`
   - 前端 round badge 显示 `microcompact` 独立文案
 
