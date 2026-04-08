@@ -162,6 +162,7 @@ load conversation history
 -> build full prompt budget
 -> microcompact old tool results in prompt view
 -> if still above threshold then full compaction
+-> coerce the visible suffix to a provider-replayable history
 -> rebuild final system prompt with latest summary
 -> build model settings
 -> call model
@@ -217,7 +218,32 @@ load conversation history
 - 把 full compaction 的触发判断改成基于完整 prompt 预算
 - 给 marker 补足后续迁移到 checkpoint 语义所需的基础元数据
 
-### 6.4 marker 元数据与时间线
+### 6.4 `tool-safe boundary` 不等于 `provider-replayable boundary`
+
+这次真实故障暴露了一个关键问题：旧实现里的 “safe boundary” 只保证了 `tool_call -> tool_return` 链闭合，
+但没有保证 compact 之后剩下的可见 suffix 仍然能作为合法 chat history 重放给 provider。
+
+典型坏形态是：
+
+- 历史前半段被 compact 掉
+- 后半段只剩 `assistant/tool/...`
+- 触发这些工具调用的原始 user 锚点已经不在 live history 里
+
+这类 suffix 在部分 provider 上会直接触发 `messages 参数非法`，
+而且即使 provider 容忍，也会削弱长时任务继续执行时的语义稳定性。
+
+本次修复分两层处理：
+
+- full compaction 选边界时，不再只要求 tool 链闭合，还要求保留段本身是 replayable 的：
+  - 第一个可见 message 必须是 user anchor
+  - 可见段内不能存在 orphan tool result
+- 在真正调用 provider 前，增加最后一道 prompt-view 修复：
+  - 如果可见 history 没有 user anchor，但内部 tool replay 仍合法，则插入 synthetic resume bridge
+  - 如果可见 history 前缀已经损坏，则先裁掉不可重放前缀，再决定是否补 bridge
+
+resume bridge 默认会带上当前 run intent，用来恢复 “当前任务为什么在做这些工具动作” 这个用户锚点。
+
+### 6.5 marker 元数据与时间线
 
 本次 compaction marker 额外记录：
 

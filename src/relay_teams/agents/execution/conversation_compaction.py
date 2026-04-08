@@ -205,6 +205,8 @@ class DefaultConversationCompactionStrategy(ConversationCompactionStrategy):
             _update_pending_tool_call_ids(pending_tool_call_ids, message)
             if pending_tool_call_ids:
                 continue
+            if not is_replayable_history(history[index:]):
+                continue
             latest_safe_split = index
             if remaining_tokens <= target_tokens:
                 target_safe_split = index
@@ -269,6 +271,37 @@ class ConversationCompactionService:
         )
         if not plan.should_compact:
             return list(history)
+        compacted_message_count = coerce_replayable_compaction_count(
+            history=history,
+            proposed_count=plan.compacted_message_count,
+        )
+        if compacted_message_count != plan.compacted_message_count:
+            if compacted_message_count <= 0:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="conversation.history.compaction.skipped_invalid_suffix",
+                    message=(
+                        "Skipped conversation compaction because the proposed suffix "
+                        "was not replayable"
+                    ),
+                    payload={
+                        "role_id": role_id,
+                        "conversation_id": conversation_id,
+                        "proposed_compacted_message_count": plan.compacted_message_count,
+                    },
+                )
+                return list(history)
+            estimator = ConversationTokenEstimator()
+            plan = plan.model_copy(
+                update={
+                    "compacted_message_count": compacted_message_count,
+                    "kept_message_count": len(history) - compacted_message_count,
+                    "estimated_tokens_after": estimator.estimate_history_tokens(
+                        history[compacted_message_count:]
+                    ),
+                }
+            )
 
         source_history = list(history[: plan.compacted_message_count])
         if not source_history:
@@ -546,6 +579,69 @@ def _update_pending_tool_call_ids(
             continue
         if isinstance(part, (ToolReturnPart, RetryPromptPart)):
             pending_tool_call_ids.discard(tool_call_id)
+
+
+def message_has_replay_anchor(message: ModelRequest | ModelResponse) -> bool:
+    if not isinstance(message, ModelRequest):
+        return False
+    for part in message.parts:
+        if isinstance(part, UserPromptPart):
+            return True
+        if isinstance(part, RetryPromptPart) and not str(part.tool_name or "").strip():
+            return True
+    return False
+
+
+def history_has_valid_tool_replay(
+    history: Sequence[ModelRequest | ModelResponse],
+) -> bool:
+    pending_tool_call_ids: set[str] = set()
+    for message in history:
+        if isinstance(message, ModelResponse):
+            for part in message.parts:
+                if not isinstance(part, ToolCallPart):
+                    continue
+                tool_call_id = str(part.tool_call_id or "").strip()
+                if not tool_call_id:
+                    return False
+                pending_tool_call_ids.add(tool_call_id)
+            continue
+        for part in message.parts:
+            if (
+                isinstance(part, RetryPromptPart)
+                and not str(part.tool_name or "").strip()
+            ):
+                continue
+            if not isinstance(part, (ToolReturnPart, RetryPromptPart)):
+                continue
+            tool_call_id = str(part.tool_call_id or "").strip()
+            if not tool_call_id or tool_call_id not in pending_tool_call_ids:
+                return False
+            pending_tool_call_ids.discard(tool_call_id)
+    return not pending_tool_call_ids
+
+
+def is_replayable_history(
+    history: Sequence[ModelRequest | ModelResponse],
+) -> bool:
+    if not history:
+        return True
+    if not message_has_replay_anchor(history[0]):
+        return False
+    return history_has_valid_tool_replay(history)
+
+
+def coerce_replayable_compaction_count(
+    *,
+    history: Sequence[ModelRequest | ModelResponse],
+    proposed_count: int,
+) -> int:
+    if proposed_count <= 0 or proposed_count >= len(history):
+        return 0
+    for compacted_count in range(proposed_count, 0, -1):
+        if is_replayable_history(history[compacted_count:]):
+            return compacted_count
+    return 0
 
 
 def _resolve_protected_tail_messages(

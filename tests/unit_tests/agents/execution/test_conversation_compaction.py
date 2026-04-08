@@ -28,6 +28,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     TextPart,
+    ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
@@ -131,7 +132,45 @@ def test_compaction_budget_keeps_positive_history_budget_under_high_pressure() -
 
     assert budget.history_trigger_tokens == 1
     assert budget.history_target_tokens == 1
-    assert plan.should_compact is True
+    assert plan.should_compact is False
+
+
+def test_default_conversation_compaction_strategy_requires_replayable_suffix() -> None:
+    strategy = DefaultConversationCompactionStrategy()
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="inspect the file")]),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read_file",
+                    args='{"path":"README.md"}',
+                    tool_call_id="call-1",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="file contents",
+                )
+            ]
+        ),
+    ]
+
+    plan = strategy.plan(
+        history=history,
+        budget=ConversationCompactionBudget(
+            context_window=100,
+            history_trigger_tokens=1,
+            history_target_tokens=1,
+        ),
+    )
+
+    assert plan.should_compact is False
+    assert plan.compacted_message_count == 0
+    assert plan.kept_message_count == len(history)
 
 
 @pytest.mark.asyncio
@@ -258,7 +297,17 @@ async def test_conversation_compaction_service_preserves_microcompacted_suffix(
         task_id="task-1",
         trace_id="run-1",
         messages=[
+            ModelRequest(parts=[UserPromptPart(content="turn-0")]),
             ModelRequest(parts=[UserPromptPart(content="turn-1")]),
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="read_file",
+                        args='{"path":"README.md"}',
+                        tool_call_id="call-1",
+                    )
+                ]
+            ),
             ModelRequest(
                 parts=[
                     ToolReturnPart(
@@ -268,8 +317,124 @@ async def test_conversation_compaction_service_preserves_microcompacted_suffix(
                     )
                 ]
             ),
-            ModelResponse(parts=[TextPart(content="done")]),
         ],
+    )
+
+    service = ConversationCompactionService(
+        config=ModelEndpointConfig(
+            model="gpt-test",
+            base_url="https://example.test/v1",
+            api_key="secret",
+            context_window=100,
+        ),
+        retry_config=LlmRetryConfig(),
+        message_repo=message_repo,
+        session_history_marker_repo=marker_repo,
+        strategy=_FixedStrategy(
+            ConversationCompactionPlan(
+                should_compact=True,
+                estimated_tokens_before=120,
+                estimated_tokens_after=40,
+                threshold_tokens=80,
+                target_tokens=40,
+                compacted_message_count=1,
+                kept_message_count=3,
+                protected_tail_messages=3,
+                source_char_budget=12000,
+            )
+        ),
+    )
+    monkeypatch.setattr(compaction_module, "Agent", _FakeAgent)
+    monkeypatch.setattr(compaction_module, "ModelRequestNode", _FakeModelRequestNode)
+    monkeypatch.setattr(service, "_build_model", lambda: object())
+
+    next_history = await service.maybe_compact(
+        session_id="session-1",
+        role_id="writer",
+        conversation_id=conversation_id,
+        history=[
+            ModelRequest(parts=[UserPromptPart(content="turn-0")]),
+            ModelRequest(parts=[UserPromptPart(content="turn-1")]),
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="read_file",
+                        args='{"path":"README.md"}',
+                        tool_call_id="call-1",
+                    )
+                ]
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="read_file",
+                        tool_call_id="call-1",
+                        content="[Compacted tool result]\ntool: read_file",
+                    )
+                ]
+            ),
+        ],
+        budget=ConversationCompactionBudget(
+            context_window=100,
+            history_trigger_tokens=80,
+            history_target_tokens=40,
+        ),
+    )
+
+    assert len(next_history) == 3
+    kept_user_message = next_history[0]
+    assert isinstance(kept_user_message, ModelRequest)
+    kept_user_part = kept_user_message.parts[0]
+    assert isinstance(kept_user_part, UserPromptPart)
+    compacted_message = next_history[-1]
+    assert isinstance(compacted_message, ModelRequest)
+    compacted_part = compacted_message.parts[0]
+    assert isinstance(compacted_part, ToolReturnPart)
+    assert compacted_part.content == "[Compacted tool result]\ntool: read_file"
+
+
+@pytest.mark.asyncio
+async def test_conversation_compaction_service_skips_invalid_nonreplayable_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "conversation_compaction_invalid_suffix.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    message_repo = MessageRepository(
+        db_path,
+        session_history_marker_repo=marker_repo,
+    )
+    conversation_id = build_conversation_id("session-1", "writer")
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="inspect the file")]),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read_file",
+                    args='{"path":"README.md"}',
+                    tool_call_id="call-1",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="file contents",
+                )
+            ]
+        ),
+    ]
+    message_repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="writer",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=history,
     )
 
     service = ConversationCompactionService(
@@ -304,19 +469,7 @@ async def test_conversation_compaction_service_preserves_microcompacted_suffix(
         session_id="session-1",
         role_id="writer",
         conversation_id=conversation_id,
-        history=[
-            ModelRequest(parts=[UserPromptPart(content="turn-1")]),
-            ModelRequest(
-                parts=[
-                    ToolReturnPart(
-                        tool_name="read_file",
-                        tool_call_id="call-1",
-                        content="[Compacted tool result]\ntool: read_file",
-                    )
-                ]
-            ),
-            ModelResponse(parts=[TextPart(content="done")]),
-        ],
+        history=history,
         budget=ConversationCompactionBudget(
             context_window=100,
             history_trigger_tokens=80,
@@ -324,12 +477,12 @@ async def test_conversation_compaction_service_preserves_microcompacted_suffix(
         ),
     )
 
-    assert len(next_history) == 2
-    compacted_message = next_history[0]
-    assert isinstance(compacted_message, ModelRequest)
-    compacted_part = compacted_message.parts[0]
-    assert isinstance(compacted_part, ToolReturnPart)
-    assert compacted_part.content == "[Compacted tool result]\ntool: read_file"
+    assert next_history == history
+    latest_marker = marker_repo.get_latest(
+        "session-1",
+        marker_type=SessionHistoryMarkerType.COMPACTION,
+    )
+    assert latest_marker is None
 
 
 def test_compaction_prompt_section_ignores_summaries_before_latest_clear(

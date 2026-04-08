@@ -81,6 +81,8 @@ from relay_teams.agents.execution.conversation_compaction import (
     ConversationCompactionBudget,
     ConversationCompactionService,
     ConversationTokenEstimator,
+    history_has_valid_tool_replay,
+    is_replayable_history,
 )
 from relay_teams.agents.execution.conversation_microcompact import (
     ConversationMicrocompactService,
@@ -2031,6 +2033,10 @@ class AgentLlmSession:
             estimated_tokens_before_microcompact=estimated_before_microcompact,
             estimated_tokens_after_microcompact=estimated_after_microcompact,
         )
+        history = self._coerce_history_to_provider_safe_sequence(
+            request=request,
+            history=history,
+        )
         final_system_prompt = self._inject_compaction_summary(
             session_id=request.session_id,
             conversation_id=conversation_id,
@@ -2054,6 +2060,136 @@ class AgentLlmSession:
             microcompact_compacted_message_count=compacted_message_count,
             microcompact_compacted_part_count=compacted_part_count,
         )
+
+    def _coerce_history_to_provider_safe_sequence(
+        self,
+        *,
+        request: LLMRequest,
+        history: Sequence[ModelRequest | ModelResponse],
+    ) -> list[ModelRequest | ModelResponse]:
+        candidate_history = list(history)
+        if is_replayable_history(candidate_history):
+            return candidate_history
+        replayable_start = self._first_tool_replayable_history_index(candidate_history)
+        if replayable_start > 0:
+            candidate_history = candidate_history[replayable_start:]
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.history.replayable_prefix.dropped",
+                message=(
+                    "Dropped a non-replayable history prefix before sending the "
+                    "provider request"
+                ),
+                payload={
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                    "dropped_message_count": replayable_start,
+                },
+            )
+        if is_replayable_history(candidate_history):
+            return candidate_history
+        if history_has_valid_tool_replay(candidate_history):
+            bridge_message = self._build_history_replay_bridge_message(request=request)
+            if bridge_message is not None:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="llm.history.replay_bridge.inserted",
+                    message=(
+                        "Inserted a synthetic user bridge before replaying "
+                        "assistant/tool-only history"
+                    ),
+                    payload={
+                        "role_id": request.role_id,
+                        "instance_id": request.instance_id,
+                        "message_count": len(candidate_history),
+                    },
+                )
+                return [bridge_message, *candidate_history]
+        if str(request.user_prompt or "").strip():
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.history.invalid_suffix.dropped",
+                message=(
+                    "Dropped non-replayable history and relied on the current user "
+                    "prompt to restart the provider request"
+                ),
+                payload={
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                    "message_count": len(candidate_history),
+                },
+            )
+            return []
+        bridge_message = self._build_history_replay_bridge_message(request=request)
+        if bridge_message is not None:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.history.replay_bridge.synthetic_only",
+                message=(
+                    "Fell back to a synthetic user bridge because no replayable "
+                    "history suffix remained"
+                ),
+                payload={
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                },
+            )
+            return [bridge_message]
+        return []
+
+    def _first_tool_replayable_history_index(
+        self,
+        history: Sequence[ModelRequest | ModelResponse],
+    ) -> int:
+        if not history:
+            return 0
+        for index in range(len(history)):
+            if history_has_valid_tool_replay(history[index:]):
+                return index
+        return len(history)
+
+    def _build_history_replay_bridge_message(
+        self,
+        *,
+        request: LLMRequest,
+    ) -> ModelRequest | None:
+        prompt = self._build_history_replay_bridge_prompt(request=request)
+        if not prompt:
+            return None
+        return ModelRequest(parts=[UserPromptPart(content=prompt)])
+
+    def _build_history_replay_bridge_prompt(
+        self,
+        *,
+        request: LLMRequest,
+    ) -> str:
+        intent_text = ""
+        run_intent_repo = getattr(self, "_run_intent_repo", None)
+        try:
+            if run_intent_repo is not None:
+                intent_text = run_intent_repo.get(
+                    request.run_id,
+                    fallback_session_id=request.session_id,
+                ).intent.strip()
+        except KeyError:
+            intent_text = ""
+        lines = [
+            "Continue the existing task using the compacted summary and preserved execution history.",
+            "Resume from the latest in-progress state without discarding prior decisions or artifacts.",
+        ]
+        if intent_text:
+            lines.extend(
+                [
+                    "",
+                    "Original task intent:",
+                    intent_text,
+                ]
+            )
+        return "\n".join(lines).strip()
 
     async def _estimate_compaction_budget(
         self,

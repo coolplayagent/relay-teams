@@ -20,6 +20,7 @@ from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.model_config import ModelEndpointConfig
 from relay_teams.providers.provider_contracts import LLMRequest
+from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -203,6 +204,15 @@ class _FakeCompactionService:
         return self._prompt_section
 
 
+class _FakeRunIntentRepo:
+    def __init__(self, intent: str) -> None:
+        self._intent = intent
+
+    def get(self, run_id: str, *, fallback_session_id: str | None = None) -> object:
+        _ = (run_id, fallback_session_id)
+        return type("_Intent", (), {"intent": self._intent})()
+
+
 async def _zero_mcp_context_tokens(
     *,
     allowed_mcp_servers: tuple[str, ...],
@@ -232,6 +242,7 @@ async def test_prepare_prompt_context_applies_microcompact_before_full_compactio
 ):
     session = object.__new__(AgentLlmSession)
     base_history = [
+        ModelRequest(parts=[UserPromptPart(content="summarize the file")]),
         ModelResponse(
             parts=[
                 ToolCallPart(
@@ -253,6 +264,7 @@ async def test_prepare_prompt_context_applies_microcompact_before_full_compactio
     ]
     microcompacted_history = [
         base_history[0],
+        base_history[1],
         ModelRequest(
             parts=[
                 ToolReturnPart(
@@ -290,6 +302,10 @@ async def test_prepare_prompt_context_applies_microcompact_before_full_compactio
         ConversationCompactionService,
         compaction_service,
     )
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Summarize the file and preserve tool outputs."),
+    )
     session._estimated_mcp_context_tokens = _zero_mcp_context_tokens
     session._estimated_tool_context_tokens = lambda **_kwargs: 120
 
@@ -311,6 +327,120 @@ async def test_prepare_prompt_context_applies_microcompact_before_full_compactio
     compaction_call = compaction_service.calls[0]
     assert compaction_call["estimated_tokens_before_microcompact"] == 260
     assert compaction_call["estimated_tokens_after_microcompact"] == 80
+
+
+@pytest.mark.asyncio
+async def test_prepare_prompt_context_inserts_replay_bridge_for_resume_history() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    base_history = [
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read_file",
+                    args='{"path":"README.md"}',
+                    tool_call_id="call-1",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="README contents",
+                )
+            ]
+        ),
+    ]
+    session._config = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        context_window=600,
+    )
+    session._message_repo = cast(MessageRepository, _FakeMessageRepo(base_history))
+    session._conversation_microcompact_service = None
+    session._conversation_compaction_service = None
+    session._estimated_mcp_context_tokens = _zero_mcp_context_tokens
+    session._estimated_tool_context_tokens = lambda **_kwargs: 120
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Build the release handoff and keep prior artifacts."),
+    )
+
+    prepared = await AgentLlmSession._prepare_prompt_context(
+        session,
+        request=_build_request(user_prompt=None),
+        conversation_id="conv-1",
+        system_prompt="System prompt",
+        reserve_user_prompt_tokens=False,
+        allowed_tools=("shell",),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+
+    prepared_history = list(prepared.history)
+    assert len(prepared_history) == 3
+    bridge_message = prepared_history[0]
+    assert isinstance(bridge_message, ModelRequest)
+    bridge_part = bridge_message.parts[0]
+    assert isinstance(bridge_part, UserPromptPart)
+    assert "Original task intent:" in bridge_part.content
+    assert "Build the release handoff" in bridge_part.content
+    assert prepared_history[1:] == base_history
+
+
+def test_coerce_history_to_provider_safe_sequence_drops_orphan_tool_prefix() -> None:
+    session = object.__new__(AgentLlmSession)
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Investigate the preserved tool execution state."),
+    )
+    history = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="missing-call",
+                    content="orphaned",
+                )
+            ]
+        ),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read_file",
+                    args='{"path":"README.md"}',
+                    tool_call_id="call-1",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="README contents",
+                )
+            ]
+        ),
+    ]
+
+    repaired = AgentLlmSession._coerce_history_to_provider_safe_sequence(
+        session,
+        request=_build_request(user_prompt=None),
+        history=history,
+    )
+
+    assert len(repaired) == 3
+    bridge_message = repaired[0]
+    assert isinstance(bridge_message, ModelRequest)
+    bridge_part = bridge_message.parts[0]
+    assert isinstance(bridge_part, UserPromptPart)
+    assert "Investigate the preserved tool execution state." in bridge_part.content
+    assert repaired[1:] == history[1:]
 
 
 @pytest.mark.asyncio
