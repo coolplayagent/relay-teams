@@ -2020,6 +2020,7 @@ class AgentLlmSession:
         allowed_skills: tuple[str, ...],
     ) -> _PreparedPromptContext:
         history = self._load_safe_history_for_conversation(conversation_id)
+        source_history = list(history)
         provisional_system_prompt = self._inject_compaction_summary(
             session_id=request.session_id,
             conversation_id=conversation_id,
@@ -2053,6 +2054,7 @@ class AgentLlmSession:
         history = await self._maybe_compact_history(
             request=request,
             history=history,
+            source_history=source_history,
             conversation_id=conversation_id,
             budget=budget,
             estimated_tokens_before_microcompact=estimated_before_microcompact,
@@ -2522,6 +2524,7 @@ class AgentLlmSession:
         *,
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
+        source_history: Sequence[ModelRequest | ModelResponse] | None = None,
         conversation_id: str,
         budget: ConversationCompactionBudget,
         estimated_tokens_before_microcompact: int | None = None,
@@ -2534,6 +2537,7 @@ class AgentLlmSession:
             role_id=request.role_id,
             conversation_id=conversation_id,
             history=history,
+            source_history=source_history,
             budget=budget,
             estimated_tokens_before_microcompact=estimated_tokens_before_microcompact,
             estimated_tokens_after_microcompact=estimated_tokens_after_microcompact,

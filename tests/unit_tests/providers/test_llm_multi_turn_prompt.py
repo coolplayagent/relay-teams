@@ -137,6 +137,7 @@ class _FakeConversationCompactionService:
         role_id: str,
         conversation_id: str,
         history: list[ModelRequest | ModelResponse],
+        source_history: list[ModelRequest | ModelResponse] | None = None,
         budget: object | None = None,
         estimated_tokens_before_microcompact: int | None = None,
         estimated_tokens_after_microcompact: int | None = None,
@@ -146,6 +147,7 @@ class _FakeConversationCompactionService:
             role_id,
             conversation_id,
             budget,
+            source_history,
             estimated_tokens_before_microcompact,
             estimated_tokens_after_microcompact,
         )

@@ -196,6 +196,7 @@ class DefaultConversationCompactionStrategy(ConversationCompactionStrategy):
         message_tokens = [
             self._estimator.estimate_message_tokens(message) for message in history
         ]
+        replayable_suffix_starts = _compute_replayable_suffix_starts(history)
         max_compactable = max(0, message_count - protected_tail_messages)
         if max_compactable <= 0:
             return ConversationCompactionPlan(
@@ -210,7 +211,9 @@ class DefaultConversationCompactionStrategy(ConversationCompactionStrategy):
         pending_tool_call_ids: set[str] = set()
         remaining_tokens = estimated_tokens
         latest_safe_split = 0
+        latest_safe_remaining_tokens = estimated_tokens
         target_safe_split = 0
+        target_safe_remaining_tokens = estimated_tokens
 
         for index, message in enumerate(history, start=1):
             if index > max_compactable:
@@ -219,11 +222,13 @@ class DefaultConversationCompactionStrategy(ConversationCompactionStrategy):
             _update_pending_tool_call_ids(pending_tool_call_ids, message)
             if pending_tool_call_ids:
                 continue
-            if not is_replayable_history(history[index:]):
+            if not replayable_suffix_starts[index]:
                 continue
             latest_safe_split = index
+            latest_safe_remaining_tokens = remaining_tokens
             if remaining_tokens <= target_tokens:
                 target_safe_split = index
+                target_safe_remaining_tokens = remaining_tokens
                 break
 
         split_index = target_safe_split or latest_safe_split
@@ -242,7 +247,12 @@ class DefaultConversationCompactionStrategy(ConversationCompactionStrategy):
         return ConversationCompactionPlan(
             should_compact=True,
             estimated_tokens_before=estimated_tokens,
-            estimated_tokens_after=max(0, remaining_tokens),
+            estimated_tokens_after=max(
+                0,
+                target_safe_remaining_tokens
+                if target_safe_split > 0
+                else latest_safe_remaining_tokens,
+            ),
             threshold_tokens=threshold_tokens,
             target_tokens=target_tokens,
             compacted_message_count=split_index,
@@ -281,10 +291,15 @@ class ConversationCompactionService:
         role_id: str,
         conversation_id: str,
         history: Sequence[ModelRequest | ModelResponse],
+        source_history: Sequence[ModelRequest | ModelResponse] | None = None,
         budget: ConversationCompactionBudget,
         estimated_tokens_before_microcompact: int | None = None,
         estimated_tokens_after_microcompact: int | None = None,
     ) -> list[ModelRequest | ModelResponse]:
+        summary_history = _resolve_summary_source_history(
+            history=history,
+            source_history=source_history,
+        )
         plan = self._strategy.plan(
             history=history,
             budget=budget,
@@ -323,8 +338,8 @@ class ConversationCompactionService:
                 }
             )
 
-        source_history = list(history[: plan.compacted_message_count])
-        if not source_history:
+        compacted_source_history = list(summary_history[: plan.compacted_message_count])
+        if not compacted_source_history:
             return list(history)
         existing_summary = self.get_latest_summary(
             session_id=session_id,
@@ -333,7 +348,7 @@ class ConversationCompactionService:
         summary = await self._rewrite_summary(
             role_id=role_id,
             existing_summary=existing_summary,
-            source_history=source_history,
+            source_history=compacted_source_history,
             source_char_budget=plan.source_char_budget,
         )
         if not summary:
@@ -660,10 +675,83 @@ def coerce_replayable_compaction_count(
 ) -> int:
     if proposed_count <= 0 or proposed_count >= len(history):
         return 0
+    replayable_suffix_starts = _compute_replayable_suffix_starts(history)
     for compacted_count in range(proposed_count, 0, -1):
-        if is_replayable_history(history[compacted_count:]):
+        if replayable_suffix_starts[compacted_count]:
             return compacted_count
     return 0
+
+
+def _compute_replayable_suffix_starts(
+    history: Sequence[ModelRequest | ModelResponse],
+) -> tuple[bool, ...]:
+    if not history:
+        return ()
+    replayable_suffix_starts = [False] * len(history)
+    required_tool_call_ids: set[str] = set()
+    seen_tool_call_ids: set[str] = set()
+    invalid_suffix = False
+    for index in range(len(history) - 1, -1, -1):
+        invalid_suffix = _update_reverse_replay_state(
+            required_tool_call_ids=required_tool_call_ids,
+            seen_tool_call_ids=seen_tool_call_ids,
+            message=history[index],
+            invalid_suffix=invalid_suffix,
+        )
+        replayable_suffix_starts[index] = (
+            not invalid_suffix
+            and not required_tool_call_ids
+            and message_has_replay_anchor(history[index])
+        )
+    return tuple(replayable_suffix_starts)
+
+
+def _update_reverse_replay_state(
+    *,
+    required_tool_call_ids: set[str],
+    seen_tool_call_ids: set[str],
+    message: ModelMessage,
+    invalid_suffix: bool,
+) -> bool:
+    if invalid_suffix:
+        return True
+    if isinstance(message, ModelResponse):
+        for part in message.parts:
+            if not isinstance(part, ToolCallPart):
+                continue
+            tool_call_id = str(part.tool_call_id or "").strip()
+            if not tool_call_id:
+                return True
+            if tool_call_id in required_tool_call_ids:
+                required_tool_call_ids.discard(tool_call_id)
+                seen_tool_call_ids.add(tool_call_id)
+                continue
+            if tool_call_id not in seen_tool_call_ids:
+                return True
+            seen_tool_call_ids.add(tool_call_id)
+        return False
+    if not isinstance(message, ModelRequest):
+        return False
+    for part in message.parts:
+        if isinstance(part, RetryPromptPart) and not str(part.tool_name or "").strip():
+            continue
+        if not isinstance(part, (ToolReturnPart, RetryPromptPart)):
+            continue
+        tool_call_id = str(part.tool_call_id or "").strip()
+        if not tool_call_id or tool_call_id in required_tool_call_ids:
+            return True
+        required_tool_call_ids.add(tool_call_id)
+    return False
+
+
+def _resolve_summary_source_history(
+    *,
+    history: Sequence[ModelRequest | ModelResponse],
+    source_history: Sequence[ModelRequest | ModelResponse] | None,
+) -> Sequence[ModelRequest | ModelResponse]:
+    if source_history is None or len(source_history) != len(history):
+        return history
+    return source_history
 
 
 def _resolve_protected_tail_messages(

@@ -173,6 +173,36 @@ def test_default_conversation_compaction_strategy_requires_replayable_suffix() -
     assert plan.kept_message_count == len(history)
 
 
+def test_default_conversation_compaction_strategy_precomputes_replayable_suffixes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = DefaultConversationCompactionStrategy()
+    history = [
+        ModelRequest(parts=[UserPromptPart(content=f"turn-{index}-" + ("x" * 120))])
+        for index in range(20)
+    ]
+
+    monkeypatch.setattr(
+        compaction_module,
+        "is_replayable_history",
+        lambda _history: (_ for _ in ()).throw(
+            AssertionError("plan() should not rescan suffix replayability")
+        ),
+    )
+
+    plan = strategy.plan(
+        history=history,
+        budget=ConversationCompactionBudget(
+            context_window=400,
+            history_trigger_tokens=320,
+            history_target_tokens=200,
+        ),
+    )
+
+    assert plan.should_compact is True
+    assert plan.compacted_message_count > 0
+
+
 @pytest.mark.asyncio
 async def test_conversation_compaction_service_hides_messages_and_creates_marker(
     monkeypatch: pytest.MonkeyPatch,
@@ -391,6 +421,124 @@ async def test_conversation_compaction_service_preserves_microcompacted_suffix(
     compacted_part = compacted_message.parts[0]
     assert isinstance(compacted_part, ToolReturnPart)
     assert compacted_part.content == "[Compacted tool result]\ntool: read_file"
+
+
+@pytest.mark.asyncio
+async def test_conversation_compaction_service_summarizes_original_history_before_microcompact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "conversation_compaction_source_history.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    message_repo = MessageRepository(
+        db_path,
+        session_history_marker_repo=marker_repo,
+    )
+    conversation_id = build_conversation_id("session-1", "writer")
+    original_history = [
+        ModelRequest(parts=[UserPromptPart(content="inspect the file")]),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read_file",
+                    args='{"path":"README.md"}',
+                    tool_call_id="call-1",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="original payload " * 800,
+                )
+            ]
+        ),
+        ModelRequest(parts=[UserPromptPart(content="continue from the analysis")]),
+    ]
+    message_repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="writer",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=original_history,
+    )
+    live_history = [
+        original_history[0],
+        original_history[1],
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="[Compacted tool result]\ntool: read_file",
+                )
+            ]
+        ),
+        original_history[3],
+    ]
+    service = ConversationCompactionService(
+        config=ModelEndpointConfig(
+            model="gpt-test",
+            base_url="https://example.test/v1",
+            api_key="secret",
+            context_window=100,
+        ),
+        retry_config=LlmRetryConfig(),
+        message_repo=message_repo,
+        session_history_marker_repo=marker_repo,
+        strategy=_FixedStrategy(
+            ConversationCompactionPlan(
+                should_compact=True,
+                estimated_tokens_before=160,
+                estimated_tokens_after=40,
+                threshold_tokens=80,
+                target_tokens=40,
+                compacted_message_count=3,
+                kept_message_count=1,
+                protected_tail_messages=1,
+                source_char_budget=12000,
+            )
+        ),
+    )
+    captured_source_history: list[ModelRequest | ModelResponse] = []
+
+    async def _fake_rewrite_summary(
+        *,
+        role_id: str,
+        existing_summary: str,
+        source_history: Sequence[ModelRequest | ModelResponse],
+        source_char_budget: int,
+    ) -> str:
+        _ = (role_id, existing_summary, source_char_budget)
+        captured_source_history.extend(source_history)
+        return "## Active summary\n- preserve the original source"
+
+    monkeypatch.setattr(service, "_rewrite_summary", _fake_rewrite_summary)
+    next_history = await service.maybe_compact(
+        session_id="session-1",
+        role_id="writer",
+        conversation_id=conversation_id,
+        history=live_history,
+        source_history=original_history,
+        budget=ConversationCompactionBudget(
+            context_window=100,
+            history_trigger_tokens=80,
+            history_target_tokens=40,
+        ),
+    )
+
+    assert next_history == [original_history[3]]
+    assert len(captured_source_history) == 3
+    captured_message = captured_source_history[-1]
+    assert isinstance(captured_message, ModelRequest)
+    captured_part = captured_message.parts[0]
+    assert isinstance(captured_part, ToolReturnPart)
+    assert str(captured_part.content).startswith("original payload")
 
 
 @pytest.mark.asyncio

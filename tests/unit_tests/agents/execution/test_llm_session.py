@@ -325,6 +325,8 @@ async def test_prepare_prompt_context_applies_microcompact_before_full_compactio
     assert microcompact_service.calls
     assert compaction_service.calls
     compaction_call = compaction_service.calls[0]
+    assert compaction_call["history"] == microcompacted_history
+    assert compaction_call["source_history"] == base_history
     assert compaction_call["estimated_tokens_before_microcompact"] == 260
     assert compaction_call["estimated_tokens_after_microcompact"] == 80
 
