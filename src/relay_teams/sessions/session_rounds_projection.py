@@ -555,10 +555,10 @@ def _project_compaction_marker(marker: dict[str, object]) -> dict[str, object]:
 def _project_microcompact_payload(
     payload: dict[str, object],
 ) -> dict[str, object] | None:
-    compacted_message_count = _payload_non_negative_int(
+    compacted_message_count = _read_non_negative_int_from_payload(
         payload, "microcompact_compacted_message_count"
     )
-    compacted_part_count = _payload_non_negative_int(
+    compacted_part_count = _read_non_negative_int_from_payload(
         payload, "microcompact_compacted_part_count"
     )
     applied = payload.get("microcompact_applied") is True or (
@@ -568,10 +568,10 @@ def _project_microcompact_payload(
         return None
     return {
         "applied": True,
-        "estimated_tokens_before": _payload_non_negative_int(
+        "estimated_tokens_before": _read_non_negative_int_from_payload(
             payload, "estimated_tokens_before_microcompact"
         ),
-        "estimated_tokens_after": _payload_non_negative_int(
+        "estimated_tokens_after": _read_non_negative_int_from_payload(
             payload, "estimated_tokens_after_microcompact"
         ),
         "compacted_message_count": compacted_message_count,
@@ -592,7 +592,7 @@ def _payload_reports_microcompact_state(payload: dict[str, object]) -> bool:
     )
 
 
-def _payload_non_negative_int(payload: dict[str, object], key: str) -> int:
+def _read_non_negative_int_from_payload(payload: dict[str, object], key: str) -> int:
     value = payload.get(key)
     if isinstance(value, bool):
         return 1 if value else 0

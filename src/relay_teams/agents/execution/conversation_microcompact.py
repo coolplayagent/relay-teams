@@ -26,6 +26,9 @@ from relay_teams.agents.execution.tool_call_history import (
 _MIN_TOOL_RESULT_TOKENS = 192
 _PREVIEW_CHARS = 160
 _COMPACT_NOTE = "older tool output removed to preserve context window"
+_ESTIMATED_TOKEN_BYTES = 4
+_ESTIMATED_TOKEN_OVERHEAD = 8
+_PREVIEW_SECTION_COUNT = 2
 
 
 class ConversationMicrocompactResult(BaseModel):
@@ -207,7 +210,7 @@ def _build_compacted_tool_result_content(
     original_tokens: int,
 ) -> str:
     normalized_payload = " ".join(original_payload.split())
-    if len(normalized_payload) <= (_PREVIEW_CHARS * 2):
+    if len(normalized_payload) <= (_PREVIEW_CHARS * _PREVIEW_SECTION_COUNT):
         preview_start = normalized_payload
         preview_end = normalized_payload
     else:
@@ -234,4 +237,7 @@ def _stringify_tool_result_content(content: object) -> str:
 
 def _estimate_text_tokens(content: str) -> int:
     encoded = content.encode("utf-8")
-    return max(1, (len(encoded) // 4) + 8)
+    return max(
+        1,
+        (len(encoded) // _ESTIMATED_TOKEN_BYTES) + _ESTIMATED_TOKEN_OVERHEAD,
+    )

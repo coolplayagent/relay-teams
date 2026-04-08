@@ -45,6 +45,17 @@ _PROTECTED_TAIL_MESSAGES = 12
 DEFAULT_PROTECTED_TAIL_MESSAGES = _PROTECTED_TAIL_MESSAGES
 _SEVERE_HISTORY_PRESSURE_RATIO = 2.0
 _MIN_HISTORY_TOKEN_BUDGET = 1
+_ESTIMATED_TOKEN_BYTES = 4
+_ESTIMATED_TOKEN_OVERHEAD = 8
+_SOURCE_CHAR_BUDGET_PER_TARGET_TOKEN = 4
+_MIN_SOURCE_CHAR_BUDGET = 12_000
+_MAX_SOURCE_CHAR_BUDGET = 48_000
+_SUMMARY_REWRITE_MAX_RETRIES = 3
+_SUMMARY_RESPONSE_MAX_TOKENS = 400
+_SUMMARY_TEMPERATURE = 0.2
+_PROTECTED_TAIL_RATIO_NUMERATOR = 2
+_PROTECTED_TAIL_RATIO_DENOMINATOR = 3
+_SEVERE_PRESSURE_TAIL_DIVISOR = 4
 
 
 class ConversationTokenEstimator:
@@ -57,7 +68,10 @@ class ConversationTokenEstimator:
     def estimate_message_tokens(self, message: ModelRequest | ModelResponse) -> int:
         payload = ModelMessagesTypeAdapter.dump_json([message])
         serialized_size = len(payload)
-        return max(1, (serialized_size // 4) + 8)
+        return max(
+            1,
+            (serialized_size // _ESTIMATED_TOKEN_BYTES) + _ESTIMATED_TOKEN_OVERHEAD,
+        )
 
 
 class ConversationCompactionPlan(BaseModel):
@@ -234,7 +248,13 @@ class DefaultConversationCompactionStrategy(ConversationCompactionStrategy):
             compacted_message_count=split_index,
             kept_message_count=kept_message_count,
             protected_tail_messages=protected_tail_messages,
-            source_char_budget=min(max(target_tokens * 4, 12000), 48000),
+            source_char_budget=min(
+                max(
+                    target_tokens * _SOURCE_CHAR_BUDGET_PER_TARGET_TOKEN,
+                    _MIN_SOURCE_CHAR_BUDGET,
+                ),
+                _MAX_SOURCE_CHAR_BUDGET,
+            ),
         )
 
 
@@ -429,7 +449,7 @@ class ConversationCompactionService:
                 "Output only the final markdown."
             ),
             model_settings=self._model_settings(),
-            retries=3,
+            retries=_SUMMARY_REWRITE_MAX_RETRIES,
         )
         prompt = (
             f"Role: {role_id}\n\n"
@@ -503,10 +523,12 @@ class ConversationCompactionService:
     def _model_settings(self) -> OpenAIChatModelSettings:
         configured_max_tokens = self._config.sampling.max_tokens
         max_tokens = (
-            400 if configured_max_tokens is None else min(configured_max_tokens, 400)
+            _SUMMARY_RESPONSE_MAX_TOKENS
+            if configured_max_tokens is None
+            else min(configured_max_tokens, _SUMMARY_RESPONSE_MAX_TOKENS)
         )
         return {
-            "temperature": min(self._config.sampling.temperature, 0.2),
+            "temperature": min(self._config.sampling.temperature, _SUMMARY_TEMPERATURE),
             "top_p": self._config.sampling.top_p,
             "max_tokens": max_tokens,
             "openai_continuous_usage_stats": True,
@@ -657,13 +679,17 @@ def _resolve_protected_tail_messages(
         return 1
     protected_tail_messages = min(
         default_protected_tail_messages,
-        max(1, (message_count * 2) // 3),
+        max(
+            1,
+            (message_count * _PROTECTED_TAIL_RATIO_NUMERATOR)
+            // _PROTECTED_TAIL_RATIO_DENOMINATOR,
+        ),
     )
     if threshold_tokens > 0 and estimated_tokens >= int(
         threshold_tokens * _SEVERE_HISTORY_PRESSURE_RATIO
     ):
         protected_tail_messages = min(
             protected_tail_messages,
-            max(1, message_count // 4),
+            max(1, message_count // _SEVERE_PRESSURE_TAIL_DIVISOR),
         )
     return min(protected_tail_messages, message_count - 1)

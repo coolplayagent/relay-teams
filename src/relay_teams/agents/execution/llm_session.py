@@ -144,6 +144,14 @@ if TYPE_CHECKING:
 
 LOGGER = get_logger(__name__)
 LLM_REQUEST_LIMIT = 500
+_ESTIMATED_TOKEN_BYTES = 4
+_ESTIMATED_TOKEN_OVERHEAD = 8
+_COMPACTION_OUTPUT_RESERVE_TOKENS = 32
+_MIN_AVAILABLE_OUTPUT_TOKENS = 1
+_BUILTIN_TOOL_CONTEXT_CHARS = 200
+_EXTERNAL_TOOL_CONTEXT_CHARS = 600
+_SKILL_CONTEXT_CHARS = 800
+_MCP_SERVER_CONTEXT_FALLBACK_CHARS = 1_200
 
 
 class _PreparedPromptContext(BaseModel):
@@ -2210,7 +2218,9 @@ class AgentLlmSession:
             )
         estimator = ConversationTokenEstimator()
         estimated_system_prompt_tokens = max(
-            1, (len(system_prompt.encode("utf-8")) // 4) + 8
+            1,
+            (len(system_prompt.encode("utf-8")) // _ESTIMATED_TOKEN_BYTES)
+            + _ESTIMATED_TOKEN_OVERHEAD,
         )
         user_prompt = str(request.user_prompt or "").strip()
         estimated_user_prompt_tokens = (
@@ -2231,7 +2241,7 @@ class AgentLlmSession:
             estimated_system_prompt_tokens=estimated_system_prompt_tokens,
             estimated_user_prompt_tokens=estimated_user_prompt_tokens,
             estimated_tool_context_tokens=estimated_tool_context_tokens,
-            estimated_output_reserve_tokens=32,
+            estimated_output_reserve_tokens=_COMPACTION_OUTPUT_RESERVE_TOKENS,
         )
 
     async def _build_model_settings(
@@ -2298,8 +2308,11 @@ class AgentLlmSession:
         reserved_tokens = estimated_history_tokens + budget.estimated_non_history_tokens
         available_output_tokens = context_window - reserved_tokens
         if available_output_tokens <= 0:
-            return 1
-        return max(1, min(configured_max_tokens, available_output_tokens))
+            return _MIN_AVAILABLE_OUTPUT_TOKENS
+        return max(
+            _MIN_AVAILABLE_OUTPUT_TOKENS,
+            min(configured_max_tokens, available_output_tokens),
+        )
 
     def _estimated_tool_context_tokens(
         self,
@@ -2315,12 +2328,17 @@ class AgentLlmSession:
         for tool_name in allowed_tools:
             descriptor = describe_builtin_tool(tool_name)
             if descriptor is not None:
-                reserved_chars += 200
+                reserved_chars += _BUILTIN_TOOL_CONTEXT_CHARS
                 continue
-            reserved_chars += 600
-        reserved_chars += len(allowed_skills) * 800
+            reserved_chars += _EXTERNAL_TOOL_CONTEXT_CHARS
+        reserved_chars += len(allowed_skills) * _SKILL_CONTEXT_CHARS
         builtin_and_skill_tokens = (
-            max(0, (reserved_chars // 4) + 8) if reserved_chars > 0 else 0
+            max(
+                0,
+                (reserved_chars // _ESTIMATED_TOKEN_BYTES) + _ESTIMATED_TOKEN_OVERHEAD,
+            )
+            if reserved_chars > 0
+            else 0
         )
         mcp_tokens = (
             estimated_mcp_context_tokens
@@ -2398,7 +2416,11 @@ class AgentLlmSession:
             ensure_ascii=False,
             sort_keys=True,
         ).encode("utf-8")
-        return max(1, (len(serialized_payload) // 4) + 8)
+        return max(
+            1,
+            (len(serialized_payload) // _ESTIMATED_TOKEN_BYTES)
+            + _ESTIMATED_TOKEN_OVERHEAD,
+        )
 
     def _estimated_mcp_context_tokens_fallback(
         self,
@@ -2407,8 +2429,11 @@ class AgentLlmSession:
     ) -> int:
         if not allowed_mcp_servers:
             return 0
-        reserved_chars = len(allowed_mcp_servers) * 1200
-        return max(0, (reserved_chars // 4) + 8)
+        reserved_chars = len(allowed_mcp_servers) * _MCP_SERVER_CONTEXT_FALLBACK_CHARS
+        return max(
+            0,
+            (reserved_chars // _ESTIMATED_TOKEN_BYTES) + _ESTIMATED_TOKEN_OVERHEAD,
+        )
 
     async def _maybe_compact_history(
         self,
