@@ -471,6 +471,153 @@ console.log(JSON.stringify({
     assert payload["modelProfileCalls"] == 5
 
 
+def test_role_settings_save_uses_cached_skill_options_when_refresh_fails(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:skill-installer", name: "skill-installer", description: "Install skills.", scope: "builtin" },
+        { ref: "builtin:pptx-craft", name: "pptx-craft", description: "Craft decks.", scope: "builtin" },
+        { ref: "builtin:deepresearch", name: "deepresearch", description: "Research deeply.", scope: "builtin" },
+    ],
+};
+globalThis.__roleRecordsOverride = {
+    MainAgent: {
+        source_role_id: "MainAgent",
+        role_id: "MainAgent",
+        name: "Main Agent",
+        description: "Handles normal-mode runs directly.",
+        version: "1.0.0",
+        bound_agent_id: null,
+        execution_surface: "api",
+        tools: ["read_file", "shell"],
+        mcp_servers: [],
+        skills: ["builtin:skill-installer", "builtin:pptx-craft", "builtin:deepresearch"],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Handle the run directly.",
+        file_name: "main_agent.md",
+        content: "---\\nrole_id: MainAgent\\n---\\n\\nHandle the run directly.\\n",
+        deletable: false,
+    },
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+const initialSkillsHtml = document.getElementById("role-skills-picker").innerHTML;
+globalThis.__roleConfigOptionsErrorMessage = "Role options offline.";
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    initialSkillsHtml,
+    refreshedSkillsHtml: document.getElementById("role-skills-picker").innerHTML,
+    savePayload: globalThis.__saveCalls[0].payload,
+    notifications: globalThis.__feedbackNotifications,
+    statusText: document.getElementById("role-editor-status").textContent,
+}));
+""".strip(),
+    )
+
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    save_payload = cast(dict[str, JsonValue], payload["savePayload"])
+    assert "Unavailable" not in cast(str, payload["initialSkillsHtml"])
+    assert "Unavailable" not in cast(str, payload["refreshedSkillsHtml"])
+    assert save_payload["skills"] == [
+        "builtin:skill-installer",
+        "builtin:pptx-craft",
+        "builtin:deepresearch",
+    ]
+    assert notifications == [
+        {
+            "title": "Role Saved",
+            "message": "MainAgent saved and reloaded.",
+            "tone": "success",
+        }
+    ]
+    assert payload["statusText"] == "Saved and validated."
+
+
+def test_role_settings_validate_uses_cached_skill_options_when_refresh_fails(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:skill-installer", name: "skill-installer", description: "Install skills.", scope: "builtin" },
+        { ref: "builtin:pptx-craft", name: "pptx-craft", description: "Craft decks.", scope: "builtin" },
+        { ref: "builtin:deepresearch", name: "deepresearch", description: "Research deeply.", scope: "builtin" },
+    ],
+};
+globalThis.__roleRecordsOverride = {
+    MainAgent: {
+        source_role_id: "MainAgent",
+        role_id: "MainAgent",
+        name: "Main Agent",
+        description: "Handles normal-mode runs directly.",
+        version: "1.0.0",
+        bound_agent_id: null,
+        execution_surface: "api",
+        tools: ["read_file", "shell"],
+        mcp_servers: [],
+        skills: ["builtin:skill-installer", "builtin:pptx-craft", "builtin:deepresearch"],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Handle the run directly.",
+        file_name: "main_agent.md",
+        content: "---\\nrole_id: MainAgent\\n---\\n\\nHandle the run directly.\\n",
+        deletable: false,
+    },
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+globalThis.__roleConfigOptionsErrorMessage = "Role options offline.";
+
+await document.getElementById("validate-role-btn").onclick();
+
+console.log(JSON.stringify({
+    validatePayload: globalThis.__validatePayload,
+    notifications: globalThis.__feedbackNotifications,
+    statusText: document.getElementById("role-editor-status").textContent,
+    skillsHtml: document.getElementById("role-skills-picker").innerHTML,
+}));
+""".strip(),
+    )
+
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    validate_payload = cast(dict[str, JsonValue], payload["validatePayload"])
+    assert "Unavailable" not in cast(str, payload["skillsHtml"])
+    assert validate_payload["skills"] == [
+        "builtin:skill-installer",
+        "builtin:pptx-craft",
+        "builtin:deepresearch",
+    ]
+    assert notifications == [
+        {
+            "title": "Role Validated",
+            "message": "MainAgent passed validation.",
+            "tone": "success",
+        }
+    ]
+    assert payload["statusText"] == "Validated successfully."
+
+
 def test_role_settings_preserves_skill_checkbox_handlers_after_advisory_render(
     tmp_path: Path,
 ) -> None:
@@ -754,6 +901,330 @@ console.log(JSON.stringify({
     assert cast(dict[str, JsonValue], payload["savePayload"])["tools"] == []
 
 
+def test_role_settings_save_still_uses_backend_result_when_skill_options_never_loaded(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+globalThis.__roleConfigOptionsErrorMessage = "Role options offline.";
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+await document.getElementById("save-role-btn").onclick();
+
+    console.log(JSON.stringify({
+        saveCalls: globalThis.__saveCalls,
+        notifications: globalThis.__feedbackNotifications,
+        statusText: document.getElementById("role-editor-status").textContent,
+}));
+""".strip(),
+    )
+
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    assert len(cast(list[JsonValue], payload["saveCalls"])) == 1
+    assert notifications == [
+        {
+            "title": "Role Saved",
+            "message": "reviewer saved and reloaded.",
+            "tone": "success",
+        }
+    ]
+    assert payload["statusText"] == "Saved and validated."
+
+
+def test_role_settings_save_is_single_flight_on_double_click(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+let releaseSave;
+globalThis.__saveBlocker = new Promise(resolve => {
+    releaseSave = resolve;
+});
+
+const firstSave = document.getElementById("save-role-btn").onclick();
+const secondSave = document.getElementById("save-role-btn").onclick();
+await new Promise(resolve => setTimeout(resolve, 0));
+
+const saveCallsBeforeRelease = globalThis.__saveCalls.length;
+const saveButtonDisabledDuringAction = document.getElementById("save-role-btn").disabled;
+const validateButtonDisabledDuringAction = document.getElementById("validate-role-btn").disabled;
+
+releaseSave();
+await Promise.all([firstSave, secondSave]);
+
+console.log(JSON.stringify({
+    saveCallsBeforeRelease,
+    saveCallCount: globalThis.__saveCalls.length,
+    saveButtonDisabledDuringAction,
+    validateButtonDisabledDuringAction,
+    saveButtonDisabledAfter: document.getElementById("save-role-btn").disabled,
+}));
+""".strip(),
+    )
+
+    assert payload["saveCallsBeforeRelease"] == 1
+    assert payload["saveCallCount"] == 1
+    assert payload["saveButtonDisabledDuringAction"] is True
+    assert payload["validateButtonDisabledDuringAction"] is True
+    assert payload["saveButtonDisabledAfter"] is False
+
+
+def test_role_settings_validate_is_single_flight_on_double_click(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
+let releaseValidate;
+globalThis.__validateBlocker = new Promise(resolve => {
+    releaseValidate = resolve;
+});
+
+const firstValidate = document.getElementById("validate-role-btn").onclick();
+const secondValidate = document.getElementById("validate-role-btn").onclick();
+await new Promise(resolve => setTimeout(resolve, 0));
+
+const validateCallsBeforeRelease = globalThis.__validateCalls.length;
+
+releaseValidate();
+await Promise.all([firstValidate, secondValidate]);
+
+console.log(JSON.stringify({
+    validateCallsBeforeRelease,
+    validateCallCount: globalThis.__validateCalls.length,
+    saveButtonDisabledAfter: document.getElementById("save-role-btn").disabled,
+}));
+""".strip(),
+    )
+
+    assert payload["validateCallsBeforeRelease"] == 1
+    assert payload["validateCallCount"] == 1
+    assert payload["saveButtonDisabledAfter"] is False
+
+
+def test_role_settings_save_reloads_skills_and_retries_unknown_builtin_skill_error(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:skill-installer", name: "skill-installer", description: "Install skills.", scope: "builtin" },
+        { ref: "builtin:pptx-craft", name: "pptx-craft", description: "Craft decks.", scope: "builtin" },
+        { ref: "builtin:deepresearch", name: "deepresearch", description: "Research deeply.", scope: "builtin" },
+    ],
+};
+globalThis.__roleRecordsOverride = {
+    MainAgent: {
+        source_role_id: "MainAgent",
+        role_id: "MainAgent",
+        name: "Main Agent",
+        description: "Handles normal-mode runs directly.",
+        version: "1.0.0",
+        bound_agent_id: null,
+        execution_surface: "api",
+        tools: ["read_file", "shell"],
+        mcp_servers: [],
+        skills: ["builtin:skill-installer", "builtin:pptx-craft", "builtin:deepresearch"],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Handle the run directly.",
+        file_name: "main_agent.md",
+        content: "---\\nrole_id: MainAgent\\n---\\n\\nHandle the run directly.\\n",
+        deletable: false,
+    },
+};
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+globalThis.__saveErrorMessages = [
+    "Unknown skills: ['builtin:skill-installer', 'builtin:pptx-craft', 'builtin:deepresearch']",
+];
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    reloadSkillsCalls: globalThis.__reloadSkillsCalls,
+    saveCallCount: globalThis.__saveCalls.length,
+    notifications: globalThis.__feedbackNotifications,
+    statusText: document.getElementById("role-editor-status").textContent,
+}));
+""".strip(),
+    )
+
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    assert payload["reloadSkillsCalls"] == 1
+    assert payload["saveCallCount"] == 2
+    assert notifications == [
+        {
+            "title": "Role Saved",
+            "message": "MainAgent saved and reloaded.",
+            "tone": "success",
+        }
+    ]
+    assert payload["statusText"] == "Saved and validated."
+
+
+def test_role_settings_validate_reloads_skills_and_retries_unknown_builtin_skill_error(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:skill-installer", name: "skill-installer", description: "Install skills.", scope: "builtin" },
+        { ref: "builtin:pptx-craft", name: "pptx-craft", description: "Craft decks.", scope: "builtin" },
+        { ref: "builtin:deepresearch", name: "deepresearch", description: "Research deeply.", scope: "builtin" },
+    ],
+};
+globalThis.__roleRecordsOverride = {
+    MainAgent: {
+        source_role_id: "MainAgent",
+        role_id: "MainAgent",
+        name: "Main Agent",
+        description: "Handles normal-mode runs directly.",
+        version: "1.0.0",
+        bound_agent_id: null,
+        execution_surface: "api",
+        tools: ["read_file", "shell"],
+        mcp_servers: [],
+        skills: ["builtin:skill-installer", "builtin:pptx-craft", "builtin:deepresearch"],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Handle the run directly.",
+        file_name: "main_agent.md",
+        content: "---\\nrole_id: MainAgent\\n---\\n\\nHandle the run directly.\\n",
+        deletable: false,
+    },
+};
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+globalThis.__validateErrorMessages = [
+    "Unknown skills: ['builtin:skill-installer', 'builtin:pptx-craft', 'builtin:deepresearch']",
+];
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+await document.getElementById("validate-role-btn").onclick();
+
+console.log(JSON.stringify({
+    reloadSkillsCalls: globalThis.__reloadSkillsCalls,
+    validateCallCount: globalThis.__validateCalls.length,
+    notifications: globalThis.__feedbackNotifications,
+    statusText: document.getElementById("role-editor-status").textContent,
+}));
+""".strip(),
+    )
+
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    assert payload["reloadSkillsCalls"] == 1
+    assert payload["validateCallCount"] == 2
+    assert notifications == [
+        {
+            "title": "Role Validated",
+            "message": "MainAgent passed validation.",
+            "tone": "success",
+        }
+    ]
+    assert payload["statusText"] == "Validated successfully."
+
+
+def test_role_settings_save_shows_final_backend_error_after_reload_retry_fails(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "builtin:skill-installer", name: "skill-installer", description: "Install skills.", scope: "builtin" },
+        { ref: "builtin:pptx-craft", name: "pptx-craft", description: "Craft decks.", scope: "builtin" },
+        { ref: "builtin:deepresearch", name: "deepresearch", description: "Research deeply.", scope: "builtin" },
+    ],
+};
+globalThis.__roleRecordsOverride = {
+    MainAgent: {
+        source_role_id: "MainAgent",
+        role_id: "MainAgent",
+        name: "Main Agent",
+        description: "Handles normal-mode runs directly.",
+        version: "1.0.0",
+        bound_agent_id: null,
+        execution_surface: "api",
+        tools: ["read_file", "shell"],
+        mcp_servers: [],
+        skills: ["builtin:skill-installer", "builtin:pptx-craft", "builtin:deepresearch"],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Handle the run directly.",
+        file_name: "main_agent.md",
+        content: "---\\nrole_id: MainAgent\\n---\\n\\nHandle the run directly.\\n",
+        deletable: false,
+    },
+};
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+globalThis.__saveErrorMessages = [
+    "Unknown skills: ['builtin:skill-installer', 'builtin:pptx-craft', 'builtin:deepresearch']",
+    "Retry still failed.",
+];
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    reloadSkillsCalls: globalThis.__reloadSkillsCalls,
+    saveCallCount: globalThis.__saveCalls.length,
+    notifications: globalThis.__feedbackNotifications,
+    statusText: document.getElementById("role-editor-status").textContent,
+}));
+""".strip(),
+    )
+
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    assert payload["reloadSkillsCalls"] == 1
+    assert payload["saveCallCount"] == 2
+    assert notifications == [
+        {
+            "title": "Save Failed",
+            "message": "Retry still failed.",
+            "tone": "danger",
+        }
+    ]
+    assert payload["statusText"] == "Retry still failed."
+
+
 def test_role_settings_marks_main_agent_and_keeps_reserved_prompt_editable(
     tmp_path: Path,
 ) -> None:
@@ -1006,8 +1477,32 @@ export async function fetchRoleConfig(roleId) {
     return getRoleRecords()[roleId];
 }
 
+function shiftErrorMessage(key) {
+    if (!Array.isArray(globalThis[key]) || globalThis[key].length === 0) {
+        return "";
+    }
+    return String(globalThis[key].shift() || "");
+}
+
+async function awaitBlocker(key) {
+    if (!globalThis[key]) {
+        return;
+    }
+    const blocker = globalThis[key];
+    await blocker;
+    if (globalThis[key] === blocker) {
+        globalThis[key] = null;
+    }
+}
+
 export async function validateRoleConfig(payload) {
     globalThis.__validatePayload = payload;
+    globalThis.__validateCalls.push(payload);
+    await awaitBlocker("__validateBlocker");
+    const errorMessage = shiftErrorMessage("__validateErrorMessages");
+    if (errorMessage) {
+        throw new Error(errorMessage);
+    }
     return {
         valid: true,
         role: {
@@ -1021,6 +1516,11 @@ export async function validateRoleConfig(payload) {
 
 export async function saveRoleConfig(roleId, payload) {
     globalThis.__saveCalls.push({ roleId, payload });
+    await awaitBlocker("__saveBlocker");
+    const errorMessage = shiftErrorMessage("__saveErrorMessages");
+    if (errorMessage) {
+        throw new Error(errorMessage);
+    }
     const roleRecords = getRoleRecords();
     roleRecords[payload.role_id] = {
         ...payload,
@@ -1029,6 +1529,15 @@ export async function saveRoleConfig(roleId, payload) {
         content: `---\\nrole_id: ${payload.role_id}\\n---\\n\\n${payload.system_prompt}\\n`,
     };
     return roleRecords[payload.role_id];
+}
+
+export async function reloadSkillsConfig() {
+    globalThis.__reloadSkillsCalls += 1;
+    const errorMessage = shiftErrorMessage("__reloadSkillsErrorMessages");
+    if (errorMessage) {
+        throw new Error(errorMessage);
+    }
+    return { status: "ok" };
 }
 
 export async function deleteRoleConfig(roleId) {
@@ -1086,6 +1595,9 @@ const translations = {
     "settings.roles.save_failed": "Save Failed",
     "settings.roles.save_failed_message": "Save failed.",
     "settings.roles.save_failed_toast": "Failed to save role config.",
+    "settings.roles.options_stale_title": "Using Cached Role Options",
+    "settings.roles.options_stale_message": "Role options refresh failed. Used cached role options.",
+    "settings.roles.options_required_message": "Role options could not be refreshed and no cached options are available.",
     "settings.roles.default_current": "default (current: {profile})",
     "settings.roles.main_agent_only": "Main Agent only",
     "settings.roles.coordinator_root": "Coordinator root",
@@ -1391,8 +1903,15 @@ function installGlobals(elements) {{
     globalThis.__fetchRoleConfigOptionsCount = 0;
     globalThis.__fetchRoleConfigCalls = [];
     globalThis.__fetchModelProfilesCount = 0;
+    globalThis.__validateCalls = [];
     globalThis.__validatePayload = null;
     globalThis.__saveCalls = [];
+    globalThis.__saveBlocker = null;
+    globalThis.__validateBlocker = null;
+    globalThis.__saveErrorMessages = [];
+    globalThis.__validateErrorMessages = [];
+    globalThis.__reloadSkillsCalls = 0;
+    globalThis.__reloadSkillsErrorMessages = [];
     globalThis.__deleteRoleCalls = [];
     globalThis.__deleteRoleShouldFail = false;
     globalThis.__deleteRoleErrorMessage = "";

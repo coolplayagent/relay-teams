@@ -9,6 +9,7 @@ from relay_teams.interfaces.server.deps import (
     get_mcp_service,
     get_role_registry,
     get_role_settings_service,
+    get_skills_config_reload_service,
     get_skill_registry,
     get_tool_registry,
 )
@@ -28,6 +29,7 @@ from relay_teams.roles import (
 )
 from relay_teams.external_agents import ExternalAgentConfigService
 from relay_teams.roles.settings_service import RoleSettingsService
+from relay_teams.skills.config_reload_service import SkillsConfigReloadService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.validation import RequiredIdentifierStr
@@ -48,12 +50,20 @@ def get_role_config_options(
     tool_registry: ToolRegistry = Depends(get_tool_registry),
     mcp_service: McpService = Depends(get_mcp_service),
     skill_registry: SkillRegistry = Depends(get_skill_registry),
+    skills_reload_service: SkillsConfigReloadService = Depends(
+        get_skills_config_reload_service
+    ),
     external_agent_service: ExternalAgentConfigService = Depends(
         get_external_agent_config_service
     ),
 ) -> RoleConfigOptions:
     try:
         ensure_required_system_roles(role_registry)
+        skill_options = _load_role_skill_options(
+            role_registry=role_registry,
+            skill_registry=skill_registry,
+            skills_reload_service=skills_reload_service,
+        )
         return RoleConfigOptions(
             coordinator_role_id=role_registry.get_coordinator_role_id(),
             main_agent_role_id=role_registry.get_main_agent_role_id(),
@@ -67,15 +77,7 @@ def get_role_config_options(
             ),
             tools=tool_registry.list_configurable_names(),
             mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
-            skills=tuple(
-                RoleSkillOption(
-                    ref=skill.ref,
-                    name=skill.name,
-                    description=skill.description,
-                    scope=skill.scope,
-                )
-                for skill in skill_registry.list_skill_options()
-            ),
+            skills=skill_options,
             agents=tuple(
                 RoleAgentOption(
                     agent_id=agent.agent_id,
@@ -87,6 +89,8 @@ def get_role_config_options(
             execution_surfaces=tuple(surface for surface in ExecutionSurface),
         )
     except SystemRolesUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
@@ -171,3 +175,39 @@ def validate_role_config(
         return service.validate_role_document(draft)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _load_role_skill_options(
+    *,
+    role_registry: RoleRegistry,
+    skill_registry: SkillRegistry,
+    skills_reload_service: SkillsConfigReloadService,
+) -> tuple[RoleSkillOption, ...]:
+    skill_options = tuple(skill_registry.list_skill_options())
+    required_builtin_refs = _collect_required_builtin_skill_refs(role_registry)
+    available_refs = {skill.ref for skill in skill_options}
+    if not required_builtin_refs.issubset(available_refs):
+        reloaded_registry = skills_reload_service.reload_skills_config()
+        skill_options = tuple(reloaded_registry.list_skill_options())
+        available_refs = {skill.ref for skill in skill_options}
+        missing_refs = sorted(required_builtin_refs.difference(available_refs))
+        if missing_refs:
+            raise ValueError(f"Builtin skills are unavailable: {missing_refs}")
+    return tuple(
+        RoleSkillOption(
+            ref=skill.ref,
+            name=skill.name,
+            description=skill.description,
+            scope=skill.scope,
+        )
+        for skill in skill_options
+    )
+
+
+def _collect_required_builtin_skill_refs(role_registry: RoleRegistry) -> frozenset[str]:
+    return frozenset(
+        skill_name
+        for role in role_registry.list_roles()
+        for skill_name in role.skills
+        if skill_name.startswith("builtin:")
+    )

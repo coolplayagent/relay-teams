@@ -24,7 +24,7 @@ class SkillsConfigReloadService:
         self._role_registry: RoleRegistry = role_registry
         self._on_skill_reloaded: Callable[[SkillRegistry], None] = on_skill_reloaded
 
-    def reload_skills_config(self) -> None:
+    def reload_skills_config(self) -> SkillRegistry:
         with trace_span(
             LOGGER,
             component="skills.config",
@@ -41,3 +41,4 @@ class SkillsConfigReloadService:
                     consumer=f"skills.config_reload.role:{role.role_id}",
                 )
             self._on_skill_reloaded(skill_registry)
+            return skill_registry
