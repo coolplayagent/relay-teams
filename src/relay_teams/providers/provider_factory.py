@@ -16,6 +16,7 @@ from relay_teams.media import MediaAssetService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.metrics import MetricRecorder
 from relay_teams.notifications import NotificationService
+from relay_teams.paths import format_app_config_file_reference
 from relay_teams.providers.provider_contracts import (
     LLMProvider,
     MisconfiguredProvider,
@@ -122,10 +123,10 @@ def create_provider_factory(
             profile_name=role.model_profile,
         )
         if config_to_use is None:
-            config_dir = runtime_to_use.paths.config_dir / "model.json"
             return MisconfiguredProvider(
                 "No model profile is configured. "
-                f"Configure at least one profile in {config_dir}."
+                "Configure at least one profile in "
+                f"{format_app_config_file_reference('model.json', config_dir=runtime_to_use.paths.config_dir)}."
             )
 
         provider_registry = create_default_provider_registry(

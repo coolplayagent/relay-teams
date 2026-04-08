@@ -23,7 +23,7 @@ skills_app = typer.Typer(
         "Inspect skills discovered from built-in defaults and the app directory.\n\n"
         "Load order:\n"
         "1. built-in skills (builtin scope)\n"
-        "2. ~/.agent-teams/skills (app scope)\n\n"
+        "2. ~/.relay-teams/skills (app scope)\n\n"
         "If both scopes define the same skill name, both entries are kept and can "
         "be distinguished by canonical ref.\n\n"
         "Common usage:\n"

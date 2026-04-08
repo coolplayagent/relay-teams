@@ -127,7 +127,7 @@ def test_skills_help_explains_merge_order() -> None:
         "Inspect skills discovered from built-in defaults and the app directory."
         in normalized_output
     )
-    assert "~/.agent-teams/skills" in normalized_output
+    assert "~/.relay-teams/skills" in normalized_output
     assert "both entries are kept" in normalized_output
     assert "relay-teams skills show time" in normalized_output
 

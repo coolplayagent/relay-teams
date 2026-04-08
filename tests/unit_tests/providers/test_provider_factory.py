@@ -315,10 +315,7 @@ async def test_create_provider_factory_returns_misconfigured_provider_when_no_pr
     provider = factory(_build_role(model_profile="default"), None)
 
     assert isinstance(provider, MisconfiguredProvider)
-    with pytest.raises(
-        RuntimeError,
-        match=r"No model profile is configured",
-    ):
+    with pytest.raises(RuntimeError) as exc_info:
         await provider.generate(
             LLMRequest(
                 run_id="run-1",
@@ -333,6 +330,11 @@ async def test_create_provider_factory_returns_misconfigured_provider_when_no_pr
                 user_prompt="hello",
             )
         )
+
+    message = str(exc_info.value)
+    assert "No model profile is configured." in message
+    assert ".agent_teams" in message
+    assert "model.json" in message
 
 
 def test_create_provider_factory_filters_unknown_runtime_capabilities(

@@ -59,7 +59,7 @@ Each Feishu gateway account stores:
 
 Secrets are stored in the unified Agent Teams secret store. When a usable system
 keyring backend exists, that store uses keyring; otherwise it falls back to
-`~/.agent-teams/secrets.json`. They are not written back to the gateway account
+`~/.relay-teams/secrets.json` by default. They are not written back to the gateway account
 table or `.env`.
 
 Read APIs expose both the current `secret_config` payload and `secret_status`.
