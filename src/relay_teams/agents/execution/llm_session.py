@@ -2331,11 +2331,9 @@ class AgentLlmSession:
             trace_id=request.trace_id,
             messages=[prompt_message],
         )
-        return self._filter_model_messages(
-            self._message_repo.get_history_for_conversation(
-                self._conversation_id(request)
-            )
-        )
+        next_history = list(history)
+        next_history.append(prompt_message)
+        return next_history
 
     def _history_ends_with_user_prompt(
         self,

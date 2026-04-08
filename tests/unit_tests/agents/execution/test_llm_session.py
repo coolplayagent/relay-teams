@@ -132,12 +132,40 @@ def test_normalize_committable_messages_keeps_request_fields() -> None:
 class _FakeMessageRepo:
     def __init__(self, history: list[ModelRequest | ModelResponse]) -> None:
         self._history = history
+        self.append_calls: list[list[ModelRequest | ModelResponse]] = []
+        self.pruned_conversation_ids: list[str] = []
 
     def get_history_for_conversation(
         self,
         _conversation_id: str,
     ) -> list[ModelRequest | ModelResponse]:
         return list(self._history)
+
+    def prune_conversation_history_to_safe_boundary(self, conversation_id: str) -> None:
+        self.pruned_conversation_ids.append(conversation_id)
+
+    def append(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: list[ModelRequest | ModelResponse],
+    ) -> None:
+        _ = (
+            session_id,
+            workspace_id,
+            conversation_id,
+            agent_role_id,
+            instance_id,
+            task_id,
+            trace_id,
+        )
+        self.append_calls.append(list(messages))
 
 
 class _FakeMicrocompactService:
@@ -311,3 +339,36 @@ async def test_safe_max_output_tokens_accounts_for_full_prompt_budget() -> None:
 
     assert max_tokens is not None
     assert 1 <= max_tokens < 400
+
+
+def test_persist_user_prompt_keeps_microcompacted_history_in_memory() -> None:
+    session = object.__new__(AgentLlmSession)
+    compacted_history = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="[Compacted tool result]\ntool: read_file",
+                )
+            ]
+        )
+    ]
+    message_repo = _FakeMessageRepo(history=[])
+    session._message_repo = cast(MessageRepository, message_repo)
+
+    next_history = AgentLlmSession._persist_user_prompt_if_needed(
+        session,
+        request=_build_request(user_prompt="new prompt"),
+        history=list(compacted_history),
+        content="new prompt",
+    )
+
+    assert message_repo.pruned_conversation_ids == ["conv-1"]
+    assert len(message_repo.append_calls) == 1
+    assert next_history[:-1] == compacted_history
+    appended_message = next_history[-1]
+    assert isinstance(appended_message, ModelRequest)
+    appended_part = appended_message.parts[0]
+    assert isinstance(appended_part, UserPromptPart)
+    assert appended_part.content == "new prompt"

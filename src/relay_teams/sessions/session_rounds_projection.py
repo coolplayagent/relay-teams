@@ -163,6 +163,8 @@ def build_session_rounds(
             projected_microcompact = _project_microcompact_payload(payload)
             if projected_microcompact is not None:
                 microcompact_by_run[run_id] = projected_microcompact
+            elif _payload_reports_microcompact_state(payload):
+                microcompact_by_run.pop(run_id, None)
         if event_type in retry_clear_events:
             active_retry_by_run.pop(run_id, None)
     for run_id, retry_event in active_retry_by_run.items():
@@ -575,6 +577,19 @@ def _project_microcompact_payload(
         "compacted_message_count": compacted_message_count,
         "compacted_part_count": compacted_part_count,
     }
+
+
+def _payload_reports_microcompact_state(payload: dict[str, object]) -> bool:
+    return any(
+        key in payload
+        for key in (
+            "microcompact_applied",
+            "estimated_tokens_before_microcompact",
+            "estimated_tokens_after_microcompact",
+            "microcompact_compacted_message_count",
+            "microcompact_compacted_part_count",
+        )
+    )
 
 
 def _payload_non_negative_int(payload: dict[str, object], key: str) -> int:

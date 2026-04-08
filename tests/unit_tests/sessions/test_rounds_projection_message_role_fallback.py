@@ -220,6 +220,101 @@ def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
     assert part_kinds == ["tool-call", "tool-return", "retry-prompt"]
 
 
+def test_build_session_rounds_clears_stale_microcompact_badge_on_later_false_event(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_microcompact_clear.db"
+    session_id = "session-1"
+    run_id = "run-1"
+
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="Coordinator",
+            objective="answer the user",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    agent_repo.upsert_instance(
+        run_id=run_id,
+        trace_id=run_id,
+        session_id=session_id,
+        instance_id="inst-coordinator-1",
+        role_id="Coordinator",
+        workspace_id="default",
+        status=InstanceStatus.COMPLETED,
+    )
+    message_repo.append(
+        session_id=session_id,
+        workspace_id="default",
+        instance_id="inst-coordinator-1",
+        task_id="task-root",
+        trace_id=run_id,
+        agent_role_id="Coordinator",
+        messages=[
+            ModelRequest(parts=[UserPromptPart(content="remember this")]),
+            ModelResponse(parts=[TextPart(content="done")]),
+        ],
+    )
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda sid: cast(
+            list[dict[str, object]], message_repo.get_messages_by_session(sid)
+        ),
+        get_session_events=lambda _sid: [
+            {
+                "event_type": "model_step_started",
+                "trace_id": run_id,
+                "payload_json": json.dumps(
+                    {
+                        "role_id": "Coordinator",
+                        "instance_id": "inst-coordinator-1",
+                        "microcompact_applied": True,
+                        "estimated_tokens_before_microcompact": 100,
+                        "estimated_tokens_after_microcompact": 20,
+                        "microcompact_compacted_message_count": 1,
+                        "microcompact_compacted_part_count": 2,
+                    }
+                ),
+                "occurred_at": "2026-03-25T09:31:00+00:00",
+            },
+            {
+                "event_type": "model_step_finished",
+                "trace_id": run_id,
+                "payload_json": json.dumps(
+                    {
+                        "role_id": "Coordinator",
+                        "instance_id": "inst-coordinator-1",
+                        "microcompact_applied": False,
+                        "estimated_tokens_before_microcompact": 0,
+                        "estimated_tokens_after_microcompact": 0,
+                        "microcompact_compacted_message_count": 0,
+                        "microcompact_compacted_part_count": 0,
+                    }
+                ),
+                "occurred_at": "2026-03-25T09:32:00+00:00",
+            },
+        ],
+    )
+
+    round_item = next(item for item in rounds if item["run_id"] == run_id)
+
+    assert round_item["microcompact"] is None
+
+
 def test_build_session_rounds_summarizes_background_task_notification_intent(
     tmp_path: Path,
 ) -> None:

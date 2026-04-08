@@ -44,6 +44,7 @@ _TARGET_RATIO = 0.5
 _PROTECTED_TAIL_MESSAGES = 12
 DEFAULT_PROTECTED_TAIL_MESSAGES = _PROTECTED_TAIL_MESSAGES
 _SEVERE_HISTORY_PRESSURE_RATIO = 2.0
+_MIN_HISTORY_TOKEN_BUDGET = 1
 
 
 class ConversationTokenEstimator:
@@ -119,6 +120,14 @@ def build_conversation_compaction_budget(
             estimated_output_reserve_tokens=estimated_output_reserve_tokens,
             estimated_non_history_tokens=estimated_non_history_tokens,
         )
+    history_trigger_tokens = max(
+        _MIN_HISTORY_TOKEN_BUDGET,
+        int(context_window * _TRIGGER_RATIO) - estimated_non_history_tokens,
+    )
+    history_target_tokens = max(
+        _MIN_HISTORY_TOKEN_BUDGET,
+        int(context_window * _TARGET_RATIO) - estimated_non_history_tokens,
+    )
     return ConversationCompactionBudget(
         context_window=context_window,
         estimated_system_prompt_tokens=estimated_system_prompt_tokens,
@@ -126,12 +135,8 @@ def build_conversation_compaction_budget(
         estimated_tool_context_tokens=estimated_tool_context_tokens,
         estimated_output_reserve_tokens=estimated_output_reserve_tokens,
         estimated_non_history_tokens=estimated_non_history_tokens,
-        history_trigger_tokens=max(
-            0, int(context_window * _TRIGGER_RATIO) - estimated_non_history_tokens
-        ),
-        history_target_tokens=max(
-            0, int(context_window * _TARGET_RATIO) - estimated_non_history_tokens
-        ),
+        history_trigger_tokens=history_trigger_tokens,
+        history_target_tokens=history_target_tokens,
     )
 
 
@@ -333,7 +338,7 @@ class ConversationCompactionService:
                 "marker_id": marker.marker_id,
             },
         )
-        return self._message_repo.get_history_for_conversation(conversation_id)
+        return list(history[hidden_count:])
 
     def get_latest_summary(
         self,

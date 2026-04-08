@@ -10,6 +10,7 @@ import pytest
 
 import relay_teams.agents.execution.conversation_compaction as compaction_module
 from relay_teams.agents.execution.conversation_compaction import (
+    build_conversation_compaction_budget,
     ConversationCompactionBudget,
     ConversationCompactionPlan,
     ConversationCompactionService,
@@ -27,6 +28,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     TextPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 
@@ -109,6 +111,27 @@ def test_default_conversation_compaction_strategy_respects_threshold_and_tail() 
     assert plan.protected_tail_messages == 5
     assert plan.kept_message_count == 5
     assert plan.estimated_tokens_before >= plan.threshold_tokens
+
+
+def test_compaction_budget_keeps_positive_history_budget_under_high_pressure() -> None:
+    budget = build_conversation_compaction_budget(
+        context_window=100,
+        estimated_system_prompt_tokens=45,
+        estimated_user_prompt_tokens=20,
+        estimated_tool_context_tokens=20,
+        estimated_output_reserve_tokens=15,
+    )
+    strategy = DefaultConversationCompactionStrategy()
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="turn-" + ("x" * 200))]),
+        ModelResponse(parts=[TextPart(content="reply-" + ("y" * 200))]),
+    ]
+
+    plan = strategy.plan(history=history, budget=budget)
+
+    assert budget.history_trigger_tokens == 1
+    assert budget.history_target_tokens == 1
+    assert plan.should_compact is True
 
 
 @pytest.mark.asyncio
@@ -212,6 +235,101 @@ async def test_conversation_compaction_service_hides_messages_and_creates_marker
         )
         == "## Active summary\n- remember this"
     )
+
+
+@pytest.mark.asyncio
+async def test_conversation_compaction_service_preserves_microcompacted_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "conversation_compaction_suffix.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    message_repo = MessageRepository(
+        db_path,
+        session_history_marker_repo=marker_repo,
+    )
+    conversation_id = build_conversation_id("session-1", "writer")
+    message_repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="writer",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelRequest(parts=[UserPromptPart(content="turn-1")]),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="read_file",
+                        tool_call_id="call-1",
+                        content="original payload " * 800,
+                    )
+                ]
+            ),
+            ModelResponse(parts=[TextPart(content="done")]),
+        ],
+    )
+
+    service = ConversationCompactionService(
+        config=ModelEndpointConfig(
+            model="gpt-test",
+            base_url="https://example.test/v1",
+            api_key="secret",
+            context_window=100,
+        ),
+        retry_config=LlmRetryConfig(),
+        message_repo=message_repo,
+        session_history_marker_repo=marker_repo,
+        strategy=_FixedStrategy(
+            ConversationCompactionPlan(
+                should_compact=True,
+                estimated_tokens_before=120,
+                estimated_tokens_after=40,
+                threshold_tokens=80,
+                target_tokens=40,
+                compacted_message_count=1,
+                kept_message_count=2,
+                protected_tail_messages=2,
+                source_char_budget=12000,
+            )
+        ),
+    )
+    monkeypatch.setattr(compaction_module, "Agent", _FakeAgent)
+    monkeypatch.setattr(compaction_module, "ModelRequestNode", _FakeModelRequestNode)
+    monkeypatch.setattr(service, "_build_model", lambda: object())
+
+    next_history = await service.maybe_compact(
+        session_id="session-1",
+        role_id="writer",
+        conversation_id=conversation_id,
+        history=[
+            ModelRequest(parts=[UserPromptPart(content="turn-1")]),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="read_file",
+                        tool_call_id="call-1",
+                        content="[Compacted tool result]\ntool: read_file",
+                    )
+                ]
+            ),
+            ModelResponse(parts=[TextPart(content="done")]),
+        ],
+        budget=ConversationCompactionBudget(
+            context_window=100,
+            history_trigger_tokens=80,
+            history_target_tokens=40,
+        ),
+    )
+
+    assert len(next_history) == 2
+    compacted_message = next_history[0]
+    assert isinstance(compacted_message, ModelRequest)
+    compacted_part = compacted_message.parts[0]
+    assert isinstance(compacted_part, ToolReturnPart)
+    assert compacted_part.content == "[Compacted tool result]\ntool: read_file"
 
 
 def test_compaction_prompt_section_ignores_summaries_before_latest_clear(
