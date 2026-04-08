@@ -497,6 +497,211 @@ def test_validate_role_document_rejects_ambiguous_plain_skill_name(
         )
 
 
+def test_validate_role_document_reloads_builtin_skills_once_for_unknown_builtin_refs(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    app_skills_dir = tmp_path / "skills"
+    app_skills_dir.mkdir()
+    builtin_skills_dir = tmp_path / "builtin_skills"
+    _write_skill(
+        builtin_skills_dir / "skill-installer",
+        name="skill-installer",
+        description="Install skills.",
+        instructions="Install a skill.",
+    )
+    current_registry = SkillRegistry.from_skill_dirs(app_skills_dir=app_skills_dir)
+    reload_calls: list[int] = []
+
+    def reload_skill_registry() -> SkillRegistry:
+        reload_calls.append(1)
+        reloaded = SkillRegistry.from_skill_dirs(
+            app_skills_dir=app_skills_dir,
+            builtin_skills_dir=builtin_skills_dir,
+        )
+        nonlocal current_registry
+        current_registry = reloaded
+        return reloaded
+
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: current_registry,
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+        reload_skill_registry=reload_skill_registry,
+    )
+
+    result = service.validate_role_document(
+        RoleDocumentDraft(
+            role_id="writer",
+            name="Writer",
+            description="Drafts user-facing content.",
+            version="1.0.0",
+            tools=("dispatch_task",),
+            mcp_servers=(),
+            skills=("builtin:skill-installer",),
+            model_profile="default",
+            memory_profile=default_memory_profile(),
+            system_prompt="Write clearly.",
+        )
+    )
+
+    assert result.valid is True
+    assert result.role.skills == ("builtin:skill-installer",)
+    assert len(reload_calls) == 1
+
+
+def test_save_role_document_reloads_builtin_skills_once_for_unknown_builtin_refs(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    app_skills_dir = tmp_path / "skills"
+    app_skills_dir.mkdir()
+    builtin_skills_dir = tmp_path / "builtin_skills"
+    _write_skill(
+        builtin_skills_dir / "skill-installer",
+        name="skill-installer",
+        description="Install skills.",
+        instructions="Install a skill.",
+    )
+    current_registry = SkillRegistry.from_skill_dirs(app_skills_dir=app_skills_dir)
+    reload_calls: list[int] = []
+
+    def reload_skill_registry() -> SkillRegistry:
+        reload_calls.append(1)
+        reloaded = SkillRegistry.from_skill_dirs(
+            app_skills_dir=app_skills_dir,
+            builtin_skills_dir=builtin_skills_dir,
+        )
+        nonlocal current_registry
+        current_registry = reloaded
+        return reloaded
+
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: current_registry,
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+        reload_skill_registry=reload_skill_registry,
+    )
+
+    saved = service.save_role_document(
+        "writer",
+        RoleDocumentDraft(
+            role_id="writer",
+            name="Writer",
+            description="Drafts user-facing content.",
+            version="1.0.0",
+            tools=("dispatch_task",),
+            mcp_servers=(),
+            skills=("builtin:skill-installer",),
+            model_profile="default",
+            memory_profile=default_memory_profile(),
+            system_prompt="Write clearly.",
+        ),
+    )
+
+    assert saved.skills == ("builtin:skill-installer",)
+    assert len(reload_calls) == 1
+
+
+def test_validate_role_document_reports_final_error_when_builtin_skill_reload_fails(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    app_skills_dir = tmp_path / "skills"
+    app_skills_dir.mkdir()
+    current_registry = SkillRegistry.from_skill_dirs(app_skills_dir=app_skills_dir)
+    reload_calls: list[int] = []
+
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: current_registry,
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+        reload_skill_registry=lambda: (
+            reload_calls.append(1),
+            current_registry,
+        )[1],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Unknown skills: \\['builtin:skill-installer'\\]",
+    ):
+        service.validate_role_document(
+            RoleDocumentDraft(
+                role_id="writer",
+                name="Writer",
+                description="Drafts user-facing content.",
+                version="1.0.0",
+                tools=("dispatch_task",),
+                mcp_servers=(),
+                skills=("builtin:skill-installer",),
+                model_profile="default",
+                memory_profile=default_memory_profile(),
+                system_prompt="Write clearly.",
+            )
+        )
+
+    assert len(reload_calls) == 1
+
+
+def test_validate_role_document_does_not_reload_non_builtin_unknown_skills(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    app_skills_dir = tmp_path / "skills"
+    app_skills_dir.mkdir()
+    current_registry = SkillRegistry.from_skill_dirs(app_skills_dir=app_skills_dir)
+    reload_calls: list[int] = []
+
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: current_registry,
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+        reload_skill_registry=lambda: (
+            reload_calls.append(1),
+            current_registry,
+        )[1],
+    )
+
+    with pytest.raises(ValueError, match="Unknown skills: \\['missing_skill'\\]"):
+        service.validate_role_document(
+            RoleDocumentDraft(
+                role_id="writer",
+                name="Writer",
+                description="Drafts user-facing content.",
+                version="1.0.0",
+                tools=("dispatch_task",),
+                mcp_servers=(),
+                skills=("missing_skill",),
+                model_profile="default",
+                memory_profile=default_memory_profile(),
+                system_prompt="Write clearly.",
+            )
+        )
+
+    assert reload_calls == []
+
+
 def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:
     roles_dir = tmp_path / "roles"
     roles_dir.mkdir()
@@ -767,3 +972,17 @@ def _create_builtin_roles_dir(tmp_path: Path) -> Path:
     builtin_roles_dir = tmp_path / "builtin_roles"
     builtin_roles_dir.mkdir()
     return builtin_roles_dir
+
+
+def _write_skill(
+    directory: Path,
+    *,
+    name: str,
+    description: str,
+    instructions: str,
+) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n{instructions}\n",
+        encoding="utf-8",
+    )

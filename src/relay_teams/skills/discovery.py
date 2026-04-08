@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+from threading import RLock
 
 import yaml
 
@@ -54,6 +55,7 @@ class SkillsDirectory:
         self.max_depth = max_depth
         self.fallback_dirs = tuple(_resolve_dir(item) for item in fallback_dirs)
         self._skills: dict[str, Skill] = {}
+        self._lock = RLock()
 
     @classmethod
     def from_skill_dirs(
@@ -113,7 +115,7 @@ class SkillsDirectory:
                 "max_depth": self.max_depth,
             },
         ):
-            self._skills.clear()
+            discovered_skills: dict[str, Skill] = {}
             for scope, base_dir in self._iter_sources():
                 if not base_dir.exists():
                     continue
@@ -124,15 +126,19 @@ class SkillsDirectory:
                             continue
                         skill = self._load_skill(path=path, scope=scope)
                         if skill is not None:
-                            self._skills[skill.ref] = skill
+                            discovered_skills[skill.ref] = skill
                     except Exception as exc:
                         logger.warning("Failed to load skill at %s: %s", path, exc)
+            with self._lock:
+                self._skills = discovered_skills
 
     def list_skills(self) -> list[Skill]:
-        return list(self._skills.values())
+        with self._lock:
+            return list(self._skills.values())
 
     def get_skill(self, name: str) -> Skill | None:
-        return self._skills.get(name)
+        with self._lock:
+            return self._skills.get(name)
 
     def _iter_sources(self) -> tuple[tuple[SkillScope, Path], ...]:
         fallback_sources = tuple(

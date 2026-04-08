@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from tempfile import mkdtemp
+import threading
 from typing import cast
 
 from pydantic import JsonValue
@@ -217,6 +218,46 @@ def test_registry_from_config_dirs_creates_app_skills_directory(
 
     assert (app_config_dir / "skills").is_dir()
     assert registry.list_skill_definitions() == ()
+
+
+def test_skills_directory_discover_replaces_skill_cache_atomically(
+    tmp_path: Path,
+) -> None:
+    _write_skill(
+        tmp_path / "skills" / "alpha",
+        name="alpha",
+        description="alpha skill",
+        instructions="Use alpha.",
+    )
+    _write_skill(
+        tmp_path / "skills" / "beta",
+        name="beta",
+        description="beta skill",
+        instructions="Use beta.",
+    )
+    directory = SkillsDirectory(base_dir=tmp_path / "skills")
+    directory.discover()
+    original_load_skill = directory._load_skill
+    load_started = threading.Event()
+    allow_continue = threading.Event()
+
+    def blocking_load_skill(*, path: Path, scope: SkillScope):
+        if path.parent.name == "alpha":
+            load_started.set()
+            assert allow_continue.wait(timeout=5)
+        return original_load_skill(path=path, scope=scope)
+
+    directory._load_skill = blocking_load_skill
+    worker = threading.Thread(target=directory.discover)
+    worker.start()
+    assert load_started.wait(timeout=5)
+
+    refs_during_discover = {skill.ref for skill in directory.list_skills()}
+
+    allow_continue.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert refs_during_discover == {"app:alpha", "app:beta"}
 
 
 def test_registry_loads_builtin_skill_installer_definition(tmp_path: Path) -> None:

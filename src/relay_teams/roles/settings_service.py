@@ -42,6 +42,7 @@ class RoleSettingsService:
         get_skill_registry: Callable[[], SkillRegistry],
         get_external_agent_service: Callable[[], ExternalAgentConfigService] | None,
         on_roles_reloaded: Callable[[RoleRegistry], None],
+        reload_skill_registry: Callable[[], SkillRegistry] | None = None,
     ) -> None:
         self._roles_dir: Path = roles_dir
         self._builtin_roles_dir: Path = builtin_roles_dir
@@ -49,6 +50,7 @@ class RoleSettingsService:
         self._get_tool_registry: Callable[[], ToolRegistry] = get_tool_registry
         self._get_mcp_registry: Callable[[], McpRegistry] = get_mcp_registry
         self._get_skill_registry: Callable[[], SkillRegistry] = get_skill_registry
+        self._reload_skill_registry = reload_skill_registry
         self._get_external_agent_service = get_external_agent_service
         self._on_roles_reloaded: Callable[[RoleRegistry], None] = on_roles_reloaded
 
@@ -318,9 +320,8 @@ class RoleSettingsService:
             mcp_servers = definition.mcp_servers
             self._get_tool_registry().validate_known(tools)
             self._get_mcp_registry().validate_known(mcp_servers)
-            skills = self._get_skill_registry().resolve_known(
+            skills = self._resolve_strict_skills_with_recovery(
                 definition.skills,
-                strict=True,
                 consumer=consumer,
             )
             definition = definition.model_copy(
@@ -372,6 +373,30 @@ class RoleSettingsService:
                     f"Coordinator role must keep required tools: {missing}"
                 )
         return definition
+
+    def _resolve_strict_skills_with_recovery(
+        self,
+        skill_names: tuple[str, ...],
+        *,
+        consumer: str,
+    ) -> tuple[str, ...]:
+        try:
+            return self._get_skill_registry().resolve_known(
+                skill_names,
+                strict=True,
+                consumer=consumer,
+            )
+        except ValueError as exc:
+            if not _should_retry_builtin_skill_resolution(exc):
+                raise
+            if self._reload_skill_registry is None:
+                raise
+            reloaded_registry = self._reload_skill_registry()
+            return reloaded_registry.resolve_known(
+                skill_names,
+                strict=True,
+                consumer=consumer,
+            )
 
     def _canonicalize_role_capabilities_for_record(
         self,
@@ -484,3 +509,8 @@ def _normalize_optional_text(value: str | None) -> str | None:
     if not normalized:
         return None
     return normalized
+
+
+def _should_retry_builtin_skill_resolution(error: ValueError) -> bool:
+    message = str(error)
+    return "Unknown skills:" in message and "builtin:" in message

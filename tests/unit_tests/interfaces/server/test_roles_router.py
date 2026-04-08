@@ -11,6 +11,7 @@ from relay_teams.interfaces.server.deps import (
     get_mcp_service,
     get_role_registry,
     get_role_settings_service,
+    get_skills_config_reload_service,
     get_skill_registry,
     get_tool_registry,
 )
@@ -116,8 +117,11 @@ class _FakeMcpService:
 
 
 class _FakeSkillRegistry:
-    def list_skill_options(self) -> tuple[SkillOptionEntry, ...]:
-        return (
+    def __init__(
+        self,
+        options: tuple[SkillOptionEntry, ...] | None = None,
+    ) -> None:
+        self._options = options or (
             SkillOptionEntry(
                 ref="builtin:diff",
                 name="diff",
@@ -131,6 +135,19 @@ class _FakeSkillRegistry:
                 scope=SkillScope.APP,
             ),
         )
+
+    def list_skill_options(self) -> tuple[SkillOptionEntry, ...]:
+        return self._options
+
+
+class _FakeSkillsReloadService:
+    def __init__(self, registry: _FakeSkillRegistry | None = None) -> None:
+        self._registry = registry or _FakeSkillRegistry()
+        self.reload_calls = 0
+
+    def reload_skills_config(self) -> _FakeSkillRegistry:
+        self.reload_calls += 1
+        return self._registry
 
 
 class _FakeExternalAgentService:
@@ -148,6 +165,8 @@ def _create_test_client(
     *,
     registry: RoleRegistry | None = None,
     service: _FakeRoleSettingsService | None = None,
+    skill_registry: _FakeSkillRegistry | None = None,
+    skills_reload_service: _FakeSkillsReloadService | None = None,
 ) -> TestClient:
     app = FastAPI()
     app.include_router(roles.router, prefix="/api")
@@ -187,11 +206,18 @@ def _create_test_client(
             )
         )
     resolved_service = service or _FakeRoleSettingsService()
+    resolved_skill_registry = skill_registry or _FakeSkillRegistry()
+    resolved_skills_reload_service = skills_reload_service or _FakeSkillsReloadService(
+        resolved_skill_registry
+    )
     app.dependency_overrides[get_role_registry] = lambda: resolved_registry
     app.dependency_overrides[get_role_settings_service] = lambda: resolved_service
     app.dependency_overrides[get_tool_registry] = lambda: _FakeToolRegistry()
     app.dependency_overrides[get_mcp_service] = lambda: _FakeMcpService()
-    app.dependency_overrides[get_skill_registry] = lambda: _FakeSkillRegistry()
+    app.dependency_overrides[get_skill_registry] = lambda: resolved_skill_registry
+    app.dependency_overrides[get_skills_config_reload_service] = lambda: (
+        resolved_skills_reload_service
+    )
     app.dependency_overrides[get_external_agent_config_service] = lambda: (
         _FakeExternalAgentService()
     )
@@ -363,3 +389,123 @@ def test_get_role_config_options() -> None:
         ),
         execution_surfaces=tuple(surface for surface in ExecutionSurface),
     ).model_dump(mode="json")
+
+
+def test_get_role_config_options_reloads_missing_builtin_skills() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates the run.",
+            version="1.0.0",
+            tools=("dispatch_task",),
+            model_profile="default",
+            system_prompt="Coordinate the run.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Executes normal-mode runs.",
+            version="1.0.0",
+            tools=("dispatch_task",),
+            skills=("builtin:skill-installer",),
+            model_profile="default",
+            system_prompt="Handle the run directly.",
+        )
+    )
+    skill_registry = _FakeSkillRegistry(
+        (
+            SkillOptionEntry(
+                ref="app:time",
+                name="time",
+                description="Read the current time.",
+                scope=SkillScope.APP,
+            ),
+        )
+    )
+    reloaded_registry = _FakeSkillRegistry(
+        (
+            SkillOptionEntry(
+                ref="builtin:skill-installer",
+                name="skill-installer",
+                description="Install skills.",
+                scope=SkillScope.BUILTIN,
+            ),
+        )
+    )
+    reload_service = _FakeSkillsReloadService(reloaded_registry)
+    client = _create_test_client(
+        registry=registry,
+        skill_registry=skill_registry,
+        skills_reload_service=reload_service,
+    )
+
+    response = client.get("/api/roles:options")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["skills"] == [
+        {
+            "ref": "builtin:skill-installer",
+            "name": "skill-installer",
+            "description": "Install skills.",
+            "scope": "builtin",
+        }
+    ]
+    assert reload_service.reload_calls == 1
+
+
+def test_get_role_config_options_returns_503_when_builtin_skills_still_missing() -> (
+    None
+):
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates the run.",
+            version="1.0.0",
+            tools=("dispatch_task",),
+            model_profile="default",
+            system_prompt="Coordinate the run.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Executes normal-mode runs.",
+            version="1.0.0",
+            tools=("dispatch_task",),
+            skills=("builtin:skill-installer",),
+            model_profile="default",
+            system_prompt="Handle the run directly.",
+        )
+    )
+    skill_registry = _FakeSkillRegistry(
+        (
+            SkillOptionEntry(
+                ref="app:time",
+                name="time",
+                description="Read the current time.",
+                scope=SkillScope.APP,
+            ),
+        )
+    )
+    reload_service = _FakeSkillsReloadService(skill_registry)
+    client = _create_test_client(
+        registry=registry,
+        skill_registry=skill_registry,
+        skills_reload_service=reload_service,
+    )
+
+    response = client.get("/api/roles:options")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Builtin skills are unavailable: ['builtin:skill-installer']"
+    }
+    assert reload_service.reload_calls == 1

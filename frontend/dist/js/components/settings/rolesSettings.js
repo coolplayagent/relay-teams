@@ -8,6 +8,7 @@ import {
     fetchRoleConfig,
     fetchRoleConfigOptions,
     fetchRoleConfigs,
+    reloadSkillsConfig,
     saveRoleConfig,
     validateRoleConfig,
 } from '../../core/api.js';
@@ -31,6 +32,7 @@ let selectedRoleId = '';
 let selectedSourceRoleId = '';
 let promptPreviewMode = 'edit';
 let currentMemoryProfile = { enabled: true };
+let hasLoadedRoleConfigOptions = false;
 let currentSelections = {
     tools: [],
     mcp_servers: [],
@@ -39,6 +41,8 @@ let currentSelections = {
 let currentBoundAgentId = '';
 let currentExecutionSurface = 'api';
 let languageBound = false;
+let roleActionPromise = null;
+let roleActionRequestId = 0;
 
 export function bindRoleSettingsHandlers() {
     bindActionButton('add-role-btn', handleAddRole);
@@ -724,48 +728,71 @@ function handleAddRole() {
 }
 
 async function handleValidateRole() {
-    try {
-        await refreshRoleSettingsDependencies({ applyEditorState: true });
-        const draft = buildDraftFromForm();
-        const result = await validateRoleConfig(draft);
-        renderRoleStatus(t('settings.roles.validated_message'), 'success');
-        showToast({
-            title: t('settings.roles.validated'),
-            message: t('settings.roles.validated_toast').replace('{role_id}', result.role.role_id),
-            tone: 'success',
-        });
-    } catch (error) {
-        renderRoleStatus(error.message || t('settings.roles.validation_failed_message'), 'danger');
-        showToast({
-            title: t('settings.roles.validation_failed'),
-            message: error.message || t('settings.roles.validation_failed_toast'),
-            tone: 'danger',
-        });
-    }
+    return runRoleEditorAction(async requestId => {
+        try {
+            await refreshRoleSettingsDependencies();
+            const draft = buildDraftFromForm();
+            const result = await performRoleRequestWithBuiltinSkillRecovery(
+                () => validateRoleConfig(draft),
+            );
+            if (!isCurrentRoleActionRequest(requestId)) {
+                return;
+            }
+            renderRoleStatus(t('settings.roles.validated_message'), 'success');
+            showToast({
+                title: t('settings.roles.validated'),
+                message: t('settings.roles.validated_toast').replace('{role_id}', result.role.role_id),
+                tone: 'success',
+            });
+        } catch (error) {
+            if (!isCurrentRoleActionRequest(requestId)) {
+                return;
+            }
+            renderRoleStatus(error.message || t('settings.roles.validation_failed_message'), 'danger');
+            showToast({
+                title: t('settings.roles.validation_failed'),
+                message: error.message || t('settings.roles.validation_failed_toast'),
+                tone: 'danger',
+            });
+        }
+    });
 }
 
 async function handleSaveRole() {
-    try {
-        await refreshRoleSettingsDependencies({ applyEditorState: true });
-        const draft = buildDraftFromForm();
-        const saved = await saveRoleConfig(draft.role_id, draft);
-        selectedRoleId = saved.role_id;
-        selectedSourceRoleId = saved.role_id;
-        showToast({
-            title: t('settings.roles.saved'),
-            message: t('settings.roles.saved_toast').replace('{role_id}', saved.role_id),
-            tone: 'success',
-        });
-        await loadRoleSettingsPanel(saved.role_id);
-        renderRoleStatus(t('settings.roles.saved_message'), 'success');
-    } catch (error) {
-        renderRoleStatus(error.message || t('settings.roles.save_failed_message'), 'danger');
-        showToast({
-            title: t('settings.roles.save_failed'),
-            message: error.message || t('settings.roles.save_failed_toast'),
-            tone: 'danger',
-        });
-    }
+    return runRoleEditorAction(async requestId => {
+        try {
+            await refreshRoleSettingsDependencies();
+            const draft = buildDraftFromForm();
+            const saved = await performRoleRequestWithBuiltinSkillRecovery(
+                () => saveRoleConfig(draft.role_id, draft),
+            );
+            if (!isCurrentRoleActionRequest(requestId)) {
+                return;
+            }
+            selectedRoleId = saved.role_id;
+            selectedSourceRoleId = saved.role_id;
+            await loadRoleSettingsPanel(saved.role_id);
+            if (!isCurrentRoleActionRequest(requestId)) {
+                return;
+            }
+            renderRoleStatus(t('settings.roles.saved_message'), 'success');
+            showToast({
+                title: t('settings.roles.saved'),
+                message: t('settings.roles.saved_toast').replace('{role_id}', saved.role_id),
+                tone: 'success',
+            });
+        } catch (error) {
+            if (!isCurrentRoleActionRequest(requestId)) {
+                return;
+            }
+            renderRoleStatus(error.message || t('settings.roles.save_failed_message'), 'danger');
+            showToast({
+                title: t('settings.roles.save_failed'),
+                message: error.message || t('settings.roles.save_failed_toast'),
+                tone: 'danger',
+            });
+        }
+    });
 }
 
 async function handleDeleteRole(roleId) {
@@ -850,14 +877,23 @@ async function refreshRoleSettingsDependencies({ applyEditorState = false } = {}
     const selectedExecutionSurface = String(getInputValue('role-execution-surface-input')).trim()
         || currentExecutionSurface
         || 'api';
+    let roleOptionsReady = hasLoadedRoleConfigOptions;
+    let usedCachedRoleOptions = false;
     const [optionsResult, modelProfilesResult] = await Promise.allSettled([
         fetchRoleConfigOptions(),
         fetchModelProfiles(),
     ]);
     if (optionsResult.status === 'fulfilled') {
         roleConfigOptions = normalizeRoleConfigOptions(optionsResult.value);
+        hasLoadedRoleConfigOptions = true;
+        roleOptionsReady = true;
     } else {
-        roleConfigOptions = normalizeRoleConfigOptions(null);
+        if (!hasLoadedRoleConfigOptions) {
+            roleConfigOptions = normalizeRoleConfigOptions(null);
+            roleOptionsReady = false;
+        } else {
+            usedCachedRoleOptions = true;
+        }
         logError(
             'frontend.roles_settings.dependencies.role_options_failed',
             'Failed to load role options',
@@ -877,14 +913,76 @@ async function refreshRoleSettingsDependencies({ applyEditorState = false } = {}
             errorToPayload(modelProfilesResult.reason),
         );
     }
+    const dependencyState = {
+        roleOptionsReady,
+        usedCachedRoleOptions,
+        modelProfilesReady: modelProfilesResult.status === 'fulfilled',
+    };
     if (!applyEditorState) {
-        return;
+        return dependencyState;
     }
     renderModelProfileSelect(selectedModelProfile);
     renderBoundAgentSelect(selectedBoundAgentId);
     currentExecutionSurface = selectedExecutionSurface;
     renderExecutionSurfaceSelect(selectedExecutionSurface);
     renderRoleOptionPickers();
+    return dependencyState;
+}
+
+function runRoleEditorAction(action) {
+    if (roleActionPromise) {
+        return roleActionPromise;
+    }
+    const requestId = ++roleActionRequestId;
+    setRoleEditorActionBusy(true);
+    roleActionPromise = (async () => {
+        try {
+            return await action(requestId);
+        } finally {
+            if (roleActionRequestId === requestId) {
+                roleActionPromise = null;
+                setRoleEditorActionBusy(false);
+            }
+        }
+    })();
+    return roleActionPromise;
+}
+
+function isCurrentRoleActionRequest(requestId) {
+    return roleActionRequestId === requestId;
+}
+
+function setRoleEditorActionBusy(isBusy) {
+    [
+        'add-role-btn',
+        'save-role-btn',
+        'validate-role-btn',
+        'cancel-role-btn',
+    ].forEach(id => {
+        const button = document.getElementById(id);
+        if (button) {
+            button.disabled = isBusy;
+            button.dataset.busy = isBusy ? 'true' : 'false';
+        }
+    });
+}
+
+async function performRoleRequestWithBuiltinSkillRecovery(request) {
+    try {
+        return await request();
+    } catch (error) {
+        if (!shouldRetryBuiltinSkillRecovery(error)) {
+            throw error;
+        }
+        await reloadSkillsConfig();
+        await refreshRoleSettingsDependencies();
+        return request();
+    }
+}
+
+function shouldRetryBuiltinSkillRecovery(error) {
+    const message = String(error?.message || '').trim();
+    return message.includes('Unknown skills:') && /builtin:[\w-]+/.test(message);
 }
 
 function setPromptPreviewMode(mode) {

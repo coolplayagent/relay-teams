@@ -729,6 +729,7 @@ class ServerContainer:
             get_skill_registry=lambda: self.skill_registry,
             get_external_agent_service=lambda: self.external_agent_config_service,
             on_roles_reloaded=self._on_roles_reloaded,
+            reload_skill_registry=lambda: self.skills_config_reload_service.reload_skills_config(),
         )
         self.mcp_config_reload_service: McpConfigReloadService = McpConfigReloadService(
             mcp_config_manager=self.mcp_config_manager,
