@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 import json
+import re
 import time
 
 from fastapi import FastAPI, Request
@@ -230,6 +231,12 @@ def plan_fake_response(payload: object) -> dict[str, object]:
     messages = payload.get("messages")
     if not isinstance(messages, list):
         return {"kind": "text", "content": "fake-response"}
+    if _rolling_summary_compaction_mode(messages):
+        return _plan_rolling_summary_compaction_response(messages)
+    if _rolling_summary_phase_mode(messages):
+        return _plan_rolling_summary_phase_response(payload, messages)
+    if _rolling_summary_recall_mode(messages):
+        return _plan_rolling_summary_recall_response(messages)
     if _invalid_json_auto_recovery_mode(messages):
         return _plan_invalid_json_auto_recovery_response(payload, messages)
     if _rate_limit_retry_mode(messages):
@@ -250,6 +257,80 @@ def plan_fake_response(payload: object) -> dict[str, object]:
         if response_spec is not None:
             return response_spec
     return {"kind": "text", "content": build_fake_response_text(payload)}
+
+
+def _rolling_summary_compaction_mode(messages: list[object]) -> bool:
+    return _messages_contain_text(
+        messages,
+        "You maintain a rolling compact summary for one ongoing agent conversation.",
+    ) and _messages_contain_user_text(messages, "Transcript to absorb:")
+
+
+def _plan_rolling_summary_compaction_response(
+    messages: list[object],
+) -> dict[str, object]:
+    facts = _extract_exact_facts("\n".join(_iter_message_texts(messages)))
+    return {
+        "kind": "text",
+        "content": _render_rolling_summary_markdown(facts),
+    }
+
+
+def _rolling_summary_phase_mode(messages: list[object]) -> bool:
+    return "[rolling-summary-phase:" in _extract_last_user_text(messages)
+
+
+def _plan_rolling_summary_phase_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    phase = _extract_rolling_summary_phase(_extract_last_user_text(messages))
+    if phase is None:
+        return {"kind": "text", "content": "[fake-llm] invalid rolling summary phase"}
+    available_tools = _extract_available_tools(payload)
+    if "shell" not in available_tools:
+        return {
+            "kind": "text",
+            "content": "[fake-llm] shell is not available for this role.",
+        }
+    last_user_text = _extract_last_user_text(messages)
+    attempt = _next_scenario_attempt(
+        messages,
+        marker=f"[rolling-summary-phase:{phase}]",
+    )
+    block_count = _extract_rolling_summary_block_count(last_user_text)
+    if attempt <= block_count:
+        facts = _extract_exact_facts(last_user_text)
+        block_index = attempt - 1
+        return {
+            "kind": "tool_call",
+            "tool_name": "shell",
+            "tool_call_id": f"call-rolling-summary-phase-{phase}-{attempt}",
+            "arguments": {
+                "command": _build_rolling_summary_shell_command(
+                    phase=phase,
+                    facts=facts,
+                    line_count=_extract_rolling_summary_line_count(last_user_text),
+                    block_index=block_index,
+                )
+            },
+        }
+    return {
+        "kind": "text",
+        "content": f"phase-{phase}-done",
+    }
+
+
+def _rolling_summary_recall_mode(messages: list[object]) -> bool:
+    return "[rolling-summary-recall]" in _extract_last_user_text(messages)
+
+
+def _plan_rolling_summary_recall_response(messages: list[object]) -> dict[str, object]:
+    facts = _extract_exact_facts("\n".join(_iter_message_texts(messages)))
+    return {
+        "kind": "text",
+        "content": _render_rolling_summary_recall_text(facts),
+    }
 
 
 def _invalid_json_auto_recovery_mode(messages: list[object]) -> bool:
@@ -583,6 +664,24 @@ def _extract_available_tools(payload: dict[str, object]) -> set[str]:
     return result
 
 
+def _iter_message_texts(messages: list[object]) -> Iterator[str]:
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            yield content
+            continue
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                yield text
+
+
 def _extract_last_tool_call_id(messages: list[object]) -> str | None:
     for message in reversed(messages):
         if not isinstance(message, dict):
@@ -638,6 +737,198 @@ def _messages_contain_user_text(messages: list[object], snippet: str) -> bool:
             if isinstance(text, str) and normalized_snippet in text:
                 return True
     return False
+
+
+def _messages_contain_text(messages: list[object], snippet: str) -> bool:
+    normalized_snippet = snippet.strip()
+    if not normalized_snippet:
+        return False
+    for text in _iter_message_texts(messages):
+        if normalized_snippet in text:
+            return True
+    return False
+
+
+def _extract_rolling_summary_phase(text: str) -> int | None:
+    match = re.search(r"\[rolling-summary-phase:(\d+)\]", text)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _extract_rolling_summary_line_count(text: str) -> int:
+    match = re.search(r"line count:\s*(\d+)", text, flags=re.IGNORECASE)
+    if match is None:
+        return 260
+    return max(20, min(int(match.group(1)), 600))
+
+
+def _extract_rolling_summary_block_count(text: str) -> int:
+    match = re.search(r"block count:\s*(\d+)", text, flags=re.IGNORECASE)
+    if match is None:
+        return 4
+    return max(1, min(int(match.group(1)), 6))
+
+
+def _normalize_fact_text(value: str) -> str:
+    return value.replace("**", "").replace("`", "")
+
+
+def _extract_exact_facts(text: str) -> dict[str, object]:
+    normalized = _normalize_fact_text(text)
+    global_facts: dict[str, str] = {}
+    for label in ("codename", "recovery phrase", "key file", "version tag"):
+        match = re.search(
+            rf"{re.escape(label)}\s*[:=]\s*([^\n\r|]+)",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            continue
+        global_facts[label] = match.group(1).strip()
+    phase_anchors: dict[int, str] = {}
+    for match in re.finditer(
+        r"phase-(\d+)\s+anchor\s*[:=]\s*([^\n\r|]+)",
+        normalized,
+        flags=re.IGNORECASE,
+    ):
+        phase_anchors[int(match.group(1))] = match.group(2).strip()
+    phase_checksums: dict[int, str] = {}
+    for match in re.finditer(
+        r"phase-(\d+)\s+checksum\s*[:=]\s*([^\n\r|]+)",
+        normalized,
+        flags=re.IGNORECASE,
+    ):
+        phase_checksums[int(match.group(1))] = match.group(2).strip()
+    return {
+        "global_facts": global_facts,
+        "phase_anchors": phase_anchors,
+        "phase_checksums": phase_checksums,
+    }
+
+
+def _render_rolling_summary_markdown(facts: dict[str, object]) -> str:
+    global_facts = facts.get("global_facts")
+    phase_anchors = facts.get("phase_anchors")
+    phase_checksums = facts.get("phase_checksums")
+    if not isinstance(global_facts, dict):
+        global_facts = {}
+    if not isinstance(phase_anchors, dict):
+        phase_anchors = {}
+    if not isinstance(phase_checksums, dict):
+        phase_checksums = {}
+    phase_numbers = sorted(
+        {
+            int(phase)
+            for phase in phase_anchors.keys() | phase_checksums.keys()
+            if isinstance(phase, int)
+        }
+    )
+    if not phase_numbers:
+        title = "# Rolling Summary"
+    elif len(phase_numbers) == 1:
+        title = f"# Rolling Summary - Phase {phase_numbers[0]}"
+    else:
+        title = f"# Rolling Summary - Phases {phase_numbers[0]}-{phase_numbers[-1]}"
+    lines = [title, "", "## Global Facts (preserve exactly)"]
+    for label in ("codename", "recovery phrase", "key file", "version tag"):
+        value = global_facts.get(label)
+        if not isinstance(value, str) or not value:
+            continue
+        lines.append(f"- **{label}**: {value}")
+    for phase in phase_numbers:
+        anchor = phase_anchors.get(phase)
+        checksum = phase_checksums.get(phase)
+        lines.extend(
+            [
+                "",
+                f"## Phase-{phase} Exact Facts",
+                f"- **phase-{phase} anchor**: {anchor or '(missing)'}",
+                f"- **phase-{phase} checksum**: {checksum or '(missing)'}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Status",
+            "- Rolling-summary integration test summary rewritten deterministically.",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def _render_rolling_summary_recall_text(facts: dict[str, object]) -> str:
+    global_facts = facts.get("global_facts")
+    phase_anchors = facts.get("phase_anchors")
+    phase_checksums = facts.get("phase_checksums")
+    if not isinstance(global_facts, dict):
+        global_facts = {}
+    if not isinstance(phase_anchors, dict):
+        phase_anchors = {}
+    if not isinstance(phase_checksums, dict):
+        phase_checksums = {}
+    lines: list[str] = []
+    for label in ("codename", "recovery phrase", "key file", "version tag"):
+        value = global_facts.get(label)
+        if isinstance(value, str) and value:
+            lines.append(f"- {label}: {value}")
+    phase_numbers = sorted(
+        {
+            int(phase)
+            for phase in phase_anchors.keys() | phase_checksums.keys()
+            if isinstance(phase, int)
+        }
+    )
+    for phase in phase_numbers:
+        anchor = phase_anchors.get(phase)
+        checksum = phase_checksums.get(phase)
+        if isinstance(anchor, str) and anchor:
+            lines.append(f"- phase-{phase} anchor: {anchor}")
+        if isinstance(checksum, str) and checksum:
+            lines.append(f"- phase-{phase} checksum: {checksum}")
+    return "\n".join(lines).strip() or "[fake-llm] no rolling summary facts found"
+
+
+def _build_rolling_summary_shell_command(
+    *,
+    phase: int,
+    facts: dict[str, object],
+    line_count: int,
+    block_index: int,
+) -> str:
+    global_facts = facts.get("global_facts")
+    phase_anchors = facts.get("phase_anchors")
+    phase_checksums = facts.get("phase_checksums")
+    if not isinstance(global_facts, dict):
+        global_facts = {}
+    if not isinstance(phase_anchors, dict):
+        phase_anchors = {}
+    if not isinstance(phase_checksums, dict):
+        phase_checksums = {}
+    codename = str(global_facts.get("codename") or "UNKNOWN-CODENAME")
+    recovery_phrase = str(global_facts.get("recovery phrase") or "unknown recovery")
+    key_file = str(global_facts.get("key file") or "missing/path")
+    version_tag = str(global_facts.get("version tag") or "missing-version")
+    anchor = str(phase_anchors.get(phase) or f"phase-{phase}-anchor-missing")
+    checksum = str(phase_checksums.get(phase) or f"phase-{phase}-checksum-missing")
+    escaped_recovery_phrase = recovery_phrase.replace('"', '\\"')
+    escaped_key_file = key_file.replace('"', '\\"')
+    escaped_anchor = anchor.replace('"', '\\"')
+    escaped_checksum = checksum.replace('"', '\\"')
+    escaped_codename = codename.replace('"', '\\"')
+    escaped_version_tag = version_tag.replace('"', '\\"')
+    block_label = chr(ord("A") + (phase - 1) * 4 + block_index)
+    return (
+        f"for i in $(seq 1 {line_count}); do "
+        f'printf "ROLLING-SUMMARY-PHASE-{phase}-BLOCK-{block_label} | seq=%03d | codename={escaped_codename} | '
+        f"recovery phrase={escaped_recovery_phrase} | "
+        f"key file={escaped_key_file} | "
+        f"version tag={escaped_version_tag} | "
+        f"phase-{phase} anchor={escaped_anchor} | "
+        f"phase-{phase} checksum={escaped_checksum} | "
+        'payload=ROLLINGSUMMARYPAYLOADROLLINGSUMMARYPAYLOADROLLINGSUMMARYPAYLOADROLLINGSUMMARYPAYLOAD1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ\\n" '
+        '"$i"; done'
+    )
 
 
 def _next_scenario_attempt(messages: list[object], *, marker: str) -> int:

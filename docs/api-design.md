@@ -484,6 +484,13 @@ Response shape:
       "run_status": "running",
       "run_phase": "idle",
       "is_recoverable": true,
+      "microcompact": {
+        "applied": true,
+        "estimated_tokens_before": 139920,
+        "estimated_tokens_after": 9009,
+        "compacted_message_count": 1,
+        "compacted_part_count": 3
+      },
       "clear_marker_before": {
         "marker_id": "marker-1",
         "marker_type": "clear",
@@ -494,7 +501,7 @@ Response shape:
         "marker_id": "marker-2",
         "marker_type": "compaction",
         "created_at": "2026-03-11T12:10:00Z",
-        "label": "History compacted"
+        "label": "History compacted (rolling summary)"
       }
     }
   ],
@@ -510,8 +517,13 @@ Notes:
 - `retry_events` reflects the current retry card for the run timeline. The array is empty when no retry state should be shown and contains at most one entry.
 - Active retry countdowns are anchored to the event `occurred_at` timestamp, not to the browser receive time.
 - `retry_events[].phase` is `scheduled` while backoff is pending and `failed` when retries have been exhausted.
+- `microcompact` is present when the run used request-level prompt-view compaction. It is not a persisted history boundary and does not imply that a history marker was written.
+- `microcompact.estimated_tokens_before/after` reflects history-token estimates around the request-level microcompact pass, not the full prompt token total.
+- `microcompact` reflects the latest model-step payload for that run. If a later attempt in the same run reports `microcompact_applied = false`, the round projection clears the stale badge state instead of keeping the older value.
 - `clear_marker_before` is present on the first round after a session history clear boundary. The frontend uses it to render a divider and collapse older segments by default.
 - `compaction_marker_before` is present on the first round whose coordinator conversation continues after an automatic history compaction boundary. The frontend uses it to render a non-collapsing divider.
+- `compaction_marker_before.label` is `History compacted (rolling summary)` when the marker metadata reports `compaction_strategy = rolling_summary`; older markers without strategy metadata may still render as `History compacted`.
+- `microcompact` and `compaction_marker_before` may both be present on the same round. In that case the request first used microcompact and then also crossed a persisted full-compaction boundary.
 - Automatic history compaction is logical only. Older messages are marked hidden-from-context for model reads, but remain available to raw/history endpoints.
 - When legacy destructive clear behavior left a completed run with no persisted coordinator message rows, the round projection may synthesize one assistant text message from the persisted `run_completed.output`.
 

@@ -100,6 +100,7 @@ def build_session_rounds(
 
     retry_events_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
     completed_output_by_run: dict[str, dict[str, str]] = {}
+    microcompact_by_run: dict[str, dict[str, object]] = {}
     retry_clear_events = {
         RunEventType.MODEL_STEP_STARTED.value,
         RunEventType.MODEL_STEP_FINISHED.value,
@@ -154,6 +155,16 @@ def build_session_rounds(
                     "output": output,
                     "occurred_at": str(event.get("occurred_at") or ""),
                 }
+        if event_type in {
+            RunEventType.MODEL_STEP_STARTED.value,
+            RunEventType.MODEL_STEP_FINISHED.value,
+        }:
+            payload = _parse_event_payload(event.get("payload_json"))
+            projected_microcompact = _project_microcompact_payload(payload)
+            if projected_microcompact is not None:
+                microcompact_by_run[run_id] = projected_microcompact
+            elif _payload_reports_microcompact_state(payload):
+                microcompact_by_run.pop(run_id, None)
         if event_type in retry_clear_events:
             active_retry_by_run.pop(run_id, None)
     for run_id, retry_event in active_retry_by_run.items():
@@ -217,6 +228,7 @@ def build_session_rounds(
             "is_recoverable": runtime.is_recoverable if runtime is not None else False,
             "clear_marker_before": None,
             "compaction_marker_before": None,
+            "microcompact": microcompact_by_run.get(run_id),
         }
         rounds.append(round_item)
 
@@ -524,12 +536,79 @@ def _project_clear_marker(marker: dict[str, object]) -> dict[str, object]:
 
 
 def _project_compaction_marker(marker: dict[str, object]) -> dict[str, object]:
+    metadata = marker.get("metadata")
+    strategy = ""
+    if isinstance(metadata, dict):
+        strategy = str(metadata.get("compaction_strategy") or "")
     return {
         "marker_id": str(marker.get("marker_id") or ""),
         "marker_type": str(marker.get("marker_type") or ""),
         "created_at": str(marker.get("created_at") or ""),
-        "label": "History compacted",
+        "label": (
+            "History compacted (rolling summary)"
+            if strategy == "rolling_summary"
+            else "History compacted"
+        ),
     }
+
+
+def _project_microcompact_payload(
+    payload: dict[str, object],
+) -> dict[str, object] | None:
+    compacted_message_count = _read_non_negative_int_from_payload(
+        payload, "microcompact_compacted_message_count"
+    )
+    compacted_part_count = _read_non_negative_int_from_payload(
+        payload, "microcompact_compacted_part_count"
+    )
+    applied = payload.get("microcompact_applied") is True or (
+        compacted_message_count > 0 or compacted_part_count > 0
+    )
+    if not applied:
+        return None
+    return {
+        "applied": True,
+        "estimated_tokens_before": _read_non_negative_int_from_payload(
+            payload, "estimated_tokens_before_microcompact"
+        ),
+        "estimated_tokens_after": _read_non_negative_int_from_payload(
+            payload, "estimated_tokens_after_microcompact"
+        ),
+        "compacted_message_count": compacted_message_count,
+        "compacted_part_count": compacted_part_count,
+    }
+
+
+def _payload_reports_microcompact_state(payload: dict[str, object]) -> bool:
+    return any(
+        key in payload
+        for key in (
+            "microcompact_applied",
+            "estimated_tokens_before_microcompact",
+            "estimated_tokens_after_microcompact",
+            "microcompact_compacted_message_count",
+            "microcompact_compacted_part_count",
+        )
+    )
+
+
+def _read_non_negative_int_from_payload(payload: dict[str, object], key: str) -> int:
+    value = payload.get(key)
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float):
+        return max(0, int(value))
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return 0
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return 0
+    return 0
 
 
 def _round_matches_compaction_marker(

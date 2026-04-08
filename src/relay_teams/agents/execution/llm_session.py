@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 import asyncio
 import json
 import logging
 from copy import deepcopy
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from json import dumps
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -77,8 +77,15 @@ from relay_teams.agents.instances.instance_repository import AgentInstanceReposi
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.execution.conversation_compaction import (
+    build_conversation_compaction_budget,
+    ConversationCompactionBudget,
     ConversationCompactionService,
     ConversationTokenEstimator,
+    history_has_valid_tool_replay,
+    is_replayable_history,
+)
+from relay_teams.agents.execution.conversation_microcompact import (
+    ConversationMicrocompactService,
 )
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
@@ -137,6 +144,30 @@ if TYPE_CHECKING:
 
 LOGGER = get_logger(__name__)
 LLM_REQUEST_LIMIT = 500
+_ESTIMATED_TOKEN_BYTES = 4
+_ESTIMATED_TOKEN_OVERHEAD = 8
+_COMPACTION_OUTPUT_RESERVE_TOKENS = 32
+_MIN_AVAILABLE_OUTPUT_TOKENS = 1
+_BUILTIN_TOOL_CONTEXT_CHARS = 200
+_EXTERNAL_TOOL_CONTEXT_CHARS = 600
+_SKILL_CONTEXT_CHARS = 800
+_MCP_SERVER_CONTEXT_FALLBACK_CHARS = 1_200
+
+
+class _PreparedPromptContext(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        arbitrary_types_allowed=True,
+    )
+
+    history: tuple[ModelRequest | ModelResponse, ...]
+    system_prompt: str
+    budget: ConversationCompactionBudget
+    estimated_history_tokens_before_microcompact: int = 0
+    estimated_history_tokens_after_microcompact: int = 0
+    microcompact_compacted_message_count: int = 0
+    microcompact_compacted_part_count: int = 0
 
 
 class _AgentRunResult(Protocol):
@@ -146,6 +177,62 @@ class _AgentRunResult(Protocol):
     def new_messages(self) -> Sequence[ModelMessage]: ...
 
     def usage(self) -> object: ...
+
+
+class _AgentNodeStream(Protocol):
+    def __aiter__(self) -> AsyncIterator[object]: ...
+
+    def stream_text(self, *, delta: bool) -> AsyncIterator[str]: ...
+
+    def usage(self) -> object: ...
+
+
+class _AgentNodeStreamContext(Protocol):
+    async def __aenter__(self) -> _AgentNodeStream: ...
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc: object,
+        tb: object,
+    ) -> bool | None: ...
+
+
+class _StreamableModelRequestNode(Protocol):
+    def stream(self, ctx: object) -> _AgentNodeStreamContext: ...
+
+
+class _AgentRun(Protocol):
+    ctx: object
+    result: _AgentRunResult | None
+
+    async def __aenter__(self) -> "_AgentRun": ...
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc: object,
+        tb: object,
+    ) -> bool | None: ...
+
+    def __aiter__(self) -> "_AgentRun": ...
+
+    async def __anext__(self) -> object: ...
+
+    def new_messages(self) -> Sequence[ModelMessage]: ...
+
+    def usage(self) -> object: ...
+
+
+class _CoordinationAgent(Protocol):
+    def iter(
+        self,
+        prompt: str | None,
+        *,
+        deps: ToolDeps,
+        message_history: Sequence[ModelRequest | ModelResponse],
+        usage_limits: UsageLimits,
+    ) -> _AgentRun: ...
 
 
 def _resolve_allowed_tools(
@@ -200,6 +287,46 @@ def _content_payload(value: JsonValue | None) -> tuple[dict[str, JsonValue], ...
     return tuple(items)
 
 
+def _model_step_payload(
+    *,
+    role_id: str,
+    instance_id: str,
+    prepared_prompt: _PreparedPromptContext | None = None,
+) -> dict[str, JsonValue]:
+    payload: dict[str, JsonValue] = {
+        "role_id": role_id,
+        "instance_id": instance_id,
+    }
+    if prepared_prompt is None:
+        payload.update(
+            {
+                "microcompact_applied": False,
+                "estimated_tokens_before_microcompact": 0,
+                "estimated_tokens_after_microcompact": 0,
+                "microcompact_compacted_message_count": 0,
+                "microcompact_compacted_part_count": 0,
+            }
+        )
+        return payload
+    compacted_message_count = prepared_prompt.microcompact_compacted_message_count
+    compacted_part_count = prepared_prompt.microcompact_compacted_part_count
+    applied = compacted_message_count > 0 or compacted_part_count > 0
+    payload.update(
+        {
+            "microcompact_applied": applied,
+            "estimated_tokens_before_microcompact": (
+                prepared_prompt.estimated_history_tokens_before_microcompact
+            ),
+            "estimated_tokens_after_microcompact": (
+                prepared_prompt.estimated_history_tokens_after_microcompact
+            ),
+            "microcompact_compacted_message_count": compacted_message_count,
+            "microcompact_compacted_part_count": compacted_part_count,
+        }
+    )
+    return payload
+
+
 class AgentLlmSession:
     def __init__(
         self,
@@ -220,6 +347,7 @@ class AgentLlmSession:
         role_memory_service: RoleMemoryService | None,
         subagent_reflection_service: SubagentReflectionService | None,
         conversation_compaction_service: ConversationCompactionService | None,
+        conversation_microcompact_service: ConversationMicrocompactService | None,
         tool_registry: ToolRegistry,
         mcp_registry: McpRegistry,
         skill_registry: SkillRegistry,
@@ -257,6 +385,7 @@ class AgentLlmSession:
         self._role_memory_service = role_memory_service
         self._subagent_reflection_service = subagent_reflection_service
         self._conversation_compaction_service = conversation_compaction_service
+        self._conversation_microcompact_service = conversation_microcompact_service
         self._tool_registry = tool_registry
         self._mcp_registry = mcp_registry
         self._skill_registry = skill_registry
@@ -297,6 +426,20 @@ class AgentLlmSession:
         )
         total_attempts = total_attempts or (self._retry_config.max_retries + 1)
         agent_system_prompt = request.system_prompt
+        if self._metric_recorder is not None:
+            record_session_step(
+                self._metric_recorder,
+                workspace_id=resolved_workspace_id,
+                session_id=request.session_id,
+                run_id=request.run_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+            )
+        allowed_tools = _resolve_allowed_tools(
+            self._tool_registry,
+            self._allowed_tools,
+            session_id=request.session_id,
+        )
         self._run_event_hub.publish(
             RunEvent(
                 session_id=request.session_id,
@@ -307,46 +450,21 @@ class AgentLlmSession:
                 role_id=request.role_id,
                 event_type=RunEventType.MODEL_STEP_STARTED,
                 payload_json=dumps(
-                    {"role_id": request.role_id, "instance_id": request.instance_id}
+                    _model_step_payload(
+                        role_id=request.role_id,
+                        instance_id=request.instance_id,
+                    )
                 ),
             )
         )
-        if self._metric_recorder is not None:
-            record_session_step(
-                self._metric_recorder,
-                workspace_id=resolved_workspace_id,
-                session_id=request.session_id,
-                run_id=request.run_id,
-                instance_id=request.instance_id,
-                role_id=request.role_id,
-            )
-        history: list[ModelRequest | ModelResponse] = (
-            self._truncate_history_to_safe_boundary(
-                self._filter_model_messages(
-                    self._message_repo.get_history_for_conversation(
-                        resolved_conversation_id
-                    )
-                )
-            )
-        )
-        history = await self._maybe_compact_history(
+        (
+            prepared_prompt,
+            history,
+            agent_system_prompt,
+            agent,
+        ) = await self._build_agent_iteration_context(
             request=request,
-            history=history,
             conversation_id=resolved_conversation_id,
-        )
-        agent_system_prompt = self._inject_compaction_summary(
-            session_id=request.session_id,
-            conversation_id=resolved_conversation_id,
-            system_prompt=agent_system_prompt,
-        )
-        allowed_tools = _resolve_allowed_tools(
-            self._tool_registry,
-            self._allowed_tools,
-            session_id=request.session_id,
-        )
-        model_settings = await self._build_model_settings(
-            request=request,
-            history=history,
             system_prompt=agent_system_prompt,
             reserve_user_prompt_tokens=(
                 not skip_initial_user_prompt_persist and retry_number == 0
@@ -354,26 +472,6 @@ class AgentLlmSession:
             allowed_tools=allowed_tools,
             allowed_mcp_servers=self._allowed_mcp_servers,
             allowed_skills=self._allowed_skills,
-        )
-        agent = build_coordination_agent(
-            model_name=self._config.model,
-            base_url=self._config.base_url,
-            api_key=self._config.api_key,
-            headers=self._config.headers,
-            system_prompt=agent_system_prompt,
-            allowed_tools=allowed_tools,
-            model_settings=model_settings,
-            model_profile=resolve_openai_chat_model_profile(
-                base_url=self._config.base_url,
-                model_name=self._config.model,
-            ),
-            ssl_verify=self._config.ssl_verify,
-            connect_timeout_seconds=self._config.connect_timeout_seconds,
-            allowed_mcp_servers=self._allowed_mcp_servers,
-            allowed_skills=self._allowed_skills,
-            tool_registry=self._tool_registry,
-            mcp_registry=self._mcp_registry,
-            skill_registry=self._skill_registry,
         )
         deps = ToolDeps(
             task_repo=self._task_repo,
@@ -486,10 +584,11 @@ class AgentLlmSession:
                     async for node in agent_run:
                         control_ctx.raise_if_cancelled()
                         if isinstance(node, ModelRequestNode):
+                            streamable_node = cast(_StreamableModelRequestNode, node)
                             streamed_tool_calls = {}
                             usage_before = deepcopy(agent_run.usage())
                             # Stream text chunks from this model response in real-time
-                            async with node.stream(agent_run.ctx) as stream:
+                            async with streamable_node.stream(agent_run.ctx) as stream:
                                 stream_iter = getattr(stream, "__aiter__", None)
                                 if callable(stream_iter):
                                     text_lengths: dict[int, int] = {}
@@ -603,6 +702,20 @@ class AgentLlmSession:
                                         "instance_id": request.instance_id,
                                     },
                                 )
+                                (
+                                    prepared_prompt,
+                                    history,
+                                    agent_system_prompt,
+                                    agent,
+                                ) = await self._build_agent_iteration_context(
+                                    request=request,
+                                    conversation_id=resolved_conversation_id,
+                                    system_prompt=request.system_prompt,
+                                    reserve_user_prompt_tokens=False,
+                                    allowed_tools=allowed_tools,
+                                    allowed_mcp_servers=self._allowed_mcp_servers,
+                                    allowed_skills=self._allowed_skills,
+                                )
                                 seen_count = 0
                                 buffered_messages = []
                                 restarted = True
@@ -645,51 +758,19 @@ class AgentLlmSession:
                             )
                             attempt_messages_committed = True
                             # Restart iter() with injected messages appended to committed history
-                            history = self._truncate_history_to_safe_boundary(
-                                self._filter_model_messages(
-                                    self._message_repo.get_history_for_conversation(
-                                        resolved_conversation_id
-                                    )
-                                )
-                            )
-                            history = await self._maybe_compact_history(
+                            (
+                                prepared_prompt,
+                                history,
+                                agent_system_prompt,
+                                agent,
+                            ) = await self._build_agent_iteration_context(
                                 request=request,
-                                history=history,
-                                conversation_id=resolved_conversation_id,
-                            )
-                            agent_system_prompt = self._inject_compaction_summary(
-                                session_id=request.session_id,
                                 conversation_id=resolved_conversation_id,
                                 system_prompt=request.system_prompt,
-                            )
-                            model_settings = await self._build_model_settings(
-                                request=request,
-                                history=history,
-                                system_prompt=agent_system_prompt,
                                 reserve_user_prompt_tokens=False,
                                 allowed_tools=allowed_tools,
                                 allowed_mcp_servers=self._allowed_mcp_servers,
                                 allowed_skills=self._allowed_skills,
-                            )
-                            agent = build_coordination_agent(
-                                model_name=self._config.model,
-                                base_url=self._config.base_url,
-                                api_key=self._config.api_key,
-                                headers=self._config.headers,
-                                system_prompt=agent_system_prompt,
-                                allowed_tools=allowed_tools,
-                                model_settings=model_settings,
-                                model_profile=resolve_openai_chat_model_profile(
-                                    base_url=self._config.base_url,
-                                    model_name=self._config.model,
-                                ),
-                                ssl_verify=self._config.ssl_verify,
-                                connect_timeout_seconds=self._config.connect_timeout_seconds,
-                                allowed_mcp_servers=self._allowed_mcp_servers,
-                                allowed_skills=self._allowed_skills,
-                                tool_registry=self._tool_registry,
-                                mcp_registry=self._mcp_registry,
-                                skill_registry=self._skill_registry,
                             )
                             seen_count = 0
                             buffered_messages = []
@@ -703,7 +784,7 @@ class AgentLlmSession:
                         raise RuntimeError("Model run finished without a result object")
                     result = maybe_result
                     # Flush any remaining messages (e.g. final tool results)
-                    all_new = result.new_messages()
+                    all_new = maybe_result.new_messages()
                     to_save = self._drop_duplicate_leading_request(
                         history=history,
                         new_messages=list(all_new)[seen_count:],
@@ -736,7 +817,7 @@ class AgentLlmSession:
                     if len(history) > previous_history_size:
                         attempt_messages_committed = True
                     # Record and publish token usage
-                    usage = result.usage()
+                    usage = maybe_result.usage()
                     input_tokens = request_level_input_tokens
                     cached_input_tokens = request_level_cached_input_tokens
                     output_tokens = request_level_output_tokens
@@ -1029,7 +1110,11 @@ class AgentLlmSession:
                 role_id=request.role_id,
                 event_type=RunEventType.MODEL_STEP_FINISHED,
                 payload_json=dumps(
-                    {"role_id": request.role_id, "instance_id": request.instance_id}
+                    _model_step_payload(
+                        role_id=request.role_id,
+                        instance_id=request.instance_id,
+                        prepared_prompt=prepared_prompt,
+                    )
                 ),
             )
         )
@@ -1913,6 +1998,336 @@ class AgentLlmSession:
         safe_index = self._last_committable_index(messages)
         return messages[:safe_index]
 
+    def _load_safe_history_for_conversation(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        return self._truncate_history_to_safe_boundary(
+            self._filter_model_messages(
+                self._message_repo.get_history_for_conversation(conversation_id)
+            )
+        )
+
+    async def _prepare_prompt_context(
+        self,
+        *,
+        request: LLMRequest,
+        conversation_id: str,
+        system_prompt: str,
+        reserve_user_prompt_tokens: bool,
+        allowed_tools: tuple[str, ...],
+        allowed_mcp_servers: tuple[str, ...],
+        allowed_skills: tuple[str, ...],
+    ) -> _PreparedPromptContext:
+        history = self._load_safe_history_for_conversation(conversation_id)
+        source_history = list(history)
+        provisional_system_prompt = self._inject_compaction_summary(
+            session_id=request.session_id,
+            conversation_id=conversation_id,
+            system_prompt=system_prompt,
+        )
+        budget = await self._estimate_compaction_budget(
+            request=request,
+            history=history,
+            system_prompt=provisional_system_prompt,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
+        )
+        estimated_before_microcompact = (
+            ConversationTokenEstimator().estimate_history_tokens(history)
+        )
+        estimated_after_microcompact = estimated_before_microcompact
+        compacted_message_count = 0
+        compacted_part_count = 0
+        if self._conversation_microcompact_service is not None:
+            microcompact_result = self._conversation_microcompact_service.apply(
+                history=history,
+                budget=budget,
+            )
+            history = list(microcompact_result.messages)
+            estimated_before_microcompact = microcompact_result.estimated_tokens_before
+            estimated_after_microcompact = microcompact_result.estimated_tokens_after
+            compacted_message_count = microcompact_result.compacted_message_count
+            compacted_part_count = microcompact_result.compacted_part_count
+        history = await self._maybe_compact_history(
+            request=request,
+            history=history,
+            source_history=source_history,
+            conversation_id=conversation_id,
+            budget=budget,
+            estimated_tokens_before_microcompact=estimated_before_microcompact,
+            estimated_tokens_after_microcompact=estimated_after_microcompact,
+        )
+        history = self._coerce_history_to_provider_safe_sequence(
+            request=request,
+            history=history,
+        )
+        final_system_prompt = self._inject_compaction_summary(
+            session_id=request.session_id,
+            conversation_id=conversation_id,
+            system_prompt=system_prompt,
+        )
+        final_budget = await self._estimate_compaction_budget(
+            request=request,
+            history=history,
+            system_prompt=final_system_prompt,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
+        )
+        return _PreparedPromptContext(
+            history=tuple(history),
+            system_prompt=final_system_prompt,
+            budget=final_budget,
+            estimated_history_tokens_before_microcompact=estimated_before_microcompact,
+            estimated_history_tokens_after_microcompact=estimated_after_microcompact,
+            microcompact_compacted_message_count=compacted_message_count,
+            microcompact_compacted_part_count=compacted_part_count,
+        )
+
+    async def _build_agent_iteration_context(
+        self,
+        *,
+        request: LLMRequest,
+        conversation_id: str,
+        system_prompt: str,
+        reserve_user_prompt_tokens: bool,
+        allowed_tools: tuple[str, ...],
+        allowed_mcp_servers: tuple[str, ...],
+        allowed_skills: tuple[str, ...],
+    ) -> tuple[
+        _PreparedPromptContext,
+        list[ModelRequest | ModelResponse],
+        str,
+        _CoordinationAgent,
+    ]:
+        prepared_prompt = await self._prepare_prompt_context(
+            request=request,
+            conversation_id=conversation_id,
+            system_prompt=system_prompt,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
+        )
+        history = list(prepared_prompt.history)
+        prepared_system_prompt = prepared_prompt.system_prompt
+        model_settings = await self._build_model_settings(
+            request=request,
+            history=history,
+            system_prompt=prepared_system_prompt,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
+        )
+        agent = cast(
+            _CoordinationAgent,
+            build_coordination_agent(
+                model_name=self._config.model,
+                base_url=self._config.base_url,
+                api_key=self._config.api_key,
+                headers=self._config.headers,
+                system_prompt=prepared_system_prompt,
+                allowed_tools=allowed_tools,
+                model_settings=model_settings,
+                model_profile=resolve_openai_chat_model_profile(
+                    base_url=self._config.base_url,
+                    model_name=self._config.model,
+                ),
+                ssl_verify=self._config.ssl_verify,
+                connect_timeout_seconds=self._config.connect_timeout_seconds,
+                allowed_mcp_servers=allowed_mcp_servers,
+                allowed_skills=allowed_skills,
+                tool_registry=self._tool_registry,
+                mcp_registry=self._mcp_registry,
+                skill_registry=self._skill_registry,
+            ),
+        )
+        return prepared_prompt, history, prepared_system_prompt, agent
+
+    def _coerce_history_to_provider_safe_sequence(
+        self,
+        *,
+        request: LLMRequest,
+        history: Sequence[ModelRequest | ModelResponse],
+    ) -> list[ModelRequest | ModelResponse]:
+        candidate_history = list(history)
+        if is_replayable_history(candidate_history):
+            return candidate_history
+        replayable_start = self._first_tool_replayable_history_index(candidate_history)
+        if replayable_start > 0:
+            candidate_history = candidate_history[replayable_start:]
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.history.replayable_prefix.dropped",
+                message=(
+                    "Dropped a non-replayable history prefix before sending the "
+                    "provider request"
+                ),
+                payload={
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                    "dropped_message_count": replayable_start,
+                },
+            )
+        if candidate_history and is_replayable_history(candidate_history):
+            return candidate_history
+        if (
+            candidate_history
+            and not str(request.user_prompt or "").strip()
+            and history_has_valid_tool_replay(candidate_history)
+        ):
+            bridge_message = self._build_history_replay_bridge_message(request=request)
+            if bridge_message is not None:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="llm.history.replay_bridge.inserted",
+                    message=(
+                        "Inserted a synthetic user bridge before replaying "
+                        "assistant/tool-only history"
+                    ),
+                    payload={
+                        "role_id": request.role_id,
+                        "instance_id": request.instance_id,
+                        "message_count": len(candidate_history),
+                    },
+                )
+                return [bridge_message, *candidate_history]
+        if str(request.user_prompt or "").strip():
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.history.invalid_suffix.dropped",
+                message=(
+                    "Dropped non-replayable history and relied on the current user "
+                    "prompt to restart the provider request"
+                ),
+                payload={
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                    "message_count": len(candidate_history),
+                },
+            )
+            return []
+        bridge_message = self._build_history_replay_bridge_message(request=request)
+        if bridge_message is not None:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.history.replay_bridge.synthetic_only",
+                message=(
+                    "Fell back to a synthetic user bridge because no replayable "
+                    "history suffix remained"
+                ),
+                payload={
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                },
+            )
+            return [bridge_message]
+        return []
+
+    def _first_tool_replayable_history_index(
+        self,
+        history: Sequence[ModelRequest | ModelResponse],
+    ) -> int:
+        if not history:
+            return 0
+        for index in range(len(history)):
+            if history_has_valid_tool_replay(history[index:]):
+                return index
+        return len(history)
+
+    def _build_history_replay_bridge_message(
+        self,
+        *,
+        request: LLMRequest,
+    ) -> ModelRequest | None:
+        prompt = self._build_history_replay_bridge_prompt(request=request)
+        if not prompt:
+            return None
+        return ModelRequest(parts=[UserPromptPart(content=prompt)])
+
+    def _build_history_replay_bridge_prompt(
+        self,
+        *,
+        request: LLMRequest,
+    ) -> str:
+        intent_text = ""
+        run_intent_repo = getattr(self, "_run_intent_repo", None)
+        try:
+            if run_intent_repo is not None:
+                intent_text = run_intent_repo.get(
+                    request.run_id,
+                    fallback_session_id=request.session_id,
+                ).intent.strip()
+        except KeyError:
+            intent_text = ""
+        lines = [
+            "Continue the existing task using the compacted summary and preserved execution history.",
+            "Resume from the latest in-progress state without discarding prior decisions or artifacts.",
+        ]
+        if intent_text:
+            lines.extend(
+                [
+                    "",
+                    "Original task intent:",
+                    intent_text,
+                ]
+            )
+        return "\n".join(lines).strip()
+
+    async def _estimate_compaction_budget(
+        self,
+        *,
+        request: LLMRequest,
+        history: Sequence[ModelRequest | ModelResponse],
+        system_prompt: str,
+        reserve_user_prompt_tokens: bool,
+        allowed_tools: tuple[str, ...],
+        allowed_mcp_servers: tuple[str, ...],
+        allowed_skills: tuple[str, ...],
+    ) -> ConversationCompactionBudget:
+        del history
+        estimated_mcp_context_tokens: int | None = None
+        if self._config.context_window is not None and self._config.context_window > 0:
+            estimated_mcp_context_tokens = await self._estimated_mcp_context_tokens(
+                allowed_mcp_servers=allowed_mcp_servers
+            )
+        estimator = ConversationTokenEstimator()
+        estimated_system_prompt_tokens = max(
+            1,
+            (len(system_prompt.encode("utf-8")) // _ESTIMATED_TOKEN_BYTES)
+            + _ESTIMATED_TOKEN_OVERHEAD,
+        )
+        user_prompt = str(request.user_prompt or "").strip()
+        estimated_user_prompt_tokens = (
+            estimator.estimate_message_tokens(
+                ModelRequest(parts=[UserPromptPart(content=user_prompt)])
+            )
+            if reserve_user_prompt_tokens and user_prompt
+            else 0
+        )
+        estimated_tool_context_tokens = self._estimated_tool_context_tokens(
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
+            estimated_mcp_context_tokens=estimated_mcp_context_tokens,
+        )
+        return build_conversation_compaction_budget(
+            context_window=self._config.context_window,
+            estimated_system_prompt_tokens=estimated_system_prompt_tokens,
+            estimated_user_prompt_tokens=estimated_user_prompt_tokens,
+            estimated_tool_context_tokens=estimated_tool_context_tokens,
+            estimated_output_reserve_tokens=_COMPACTION_OUTPUT_RESERVE_TOKENS,
+        )
+
     async def _build_model_settings(
         self,
         *,
@@ -1924,11 +2339,6 @@ class AgentLlmSession:
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
     ) -> OpenAIChatModelSettings:
-        estimated_mcp_context_tokens: int | None = None
-        if self._config.context_window is not None and self._config.context_window > 0:
-            estimated_mcp_context_tokens = await self._estimated_mcp_context_tokens(
-                allowed_mcp_servers=allowed_mcp_servers
-            )
         model_settings: OpenAIChatModelSettings = {
             # Some OpenAI-compatible providers return cumulative usage in each stream chunk.
             # Enabling this flag makes pydantic-ai keep the last chunk usage instead of summing chunks.
@@ -1936,7 +2346,7 @@ class AgentLlmSession:
             "temperature": self._config.sampling.temperature,
             "top_p": self._config.sampling.top_p,
         }
-        max_tokens = self._safe_max_output_tokens(
+        max_tokens = await self._safe_max_output_tokens(
             request=request,
             history=history,
             system_prompt=system_prompt,
@@ -1944,7 +2354,6 @@ class AgentLlmSession:
             allowed_tools=allowed_tools,
             allowed_mcp_servers=allowed_mcp_servers,
             allowed_skills=allowed_skills,
-            estimated_mcp_context_tokens=estimated_mcp_context_tokens,
         )
         if max_tokens is not None:
             model_settings["max_tokens"] = max_tokens
@@ -1952,7 +2361,7 @@ class AgentLlmSession:
             model_settings["openai_reasoning_effort"] = request.thinking.effort
         return model_settings
 
-    def _safe_max_output_tokens(
+    async def _safe_max_output_tokens(
         self,
         *,
         request: LLMRequest,
@@ -1962,7 +2371,6 @@ class AgentLlmSession:
         allowed_tools: tuple[str, ...],
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
-        estimated_mcp_context_tokens: int | None = None,
     ) -> int | None:
         configured_max_tokens = self._config.sampling.max_tokens
         if configured_max_tokens is None:
@@ -1972,33 +2380,23 @@ class AgentLlmSession:
             return configured_max_tokens
         estimator = ConversationTokenEstimator()
         estimated_history_tokens = estimator.estimate_history_tokens(history)
-        estimated_system_prompt_tokens = max(
-            1, (len(system_prompt.encode("utf-8")) // 4) + 8
+        budget = await self._estimate_compaction_budget(
+            request=request,
+            history=history,
+            system_prompt=system_prompt,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
         )
-        user_prompt = str(request.user_prompt or "").strip()
-        estimated_user_prompt_tokens = (
-            estimator.estimate_message_tokens(
-                ModelRequest(parts=[UserPromptPart(content=user_prompt)])
-            )
-            if reserve_user_prompt_tokens and user_prompt
-            else 0
-        )
-        reserved_tokens = (
-            estimated_history_tokens
-            + estimated_system_prompt_tokens
-            + estimated_user_prompt_tokens
-            + self._estimated_tool_context_tokens(
-                allowed_tools=allowed_tools,
-                allowed_mcp_servers=allowed_mcp_servers,
-                allowed_skills=allowed_skills,
-                estimated_mcp_context_tokens=estimated_mcp_context_tokens,
-            )
-            + 32
-        )
+        reserved_tokens = estimated_history_tokens + budget.estimated_non_history_tokens
         available_output_tokens = context_window - reserved_tokens
         if available_output_tokens <= 0:
-            return 1
-        return max(1, min(configured_max_tokens, available_output_tokens))
+            return _MIN_AVAILABLE_OUTPUT_TOKENS
+        return max(
+            _MIN_AVAILABLE_OUTPUT_TOKENS,
+            min(configured_max_tokens, available_output_tokens),
+        )
 
     def _estimated_tool_context_tokens(
         self,
@@ -2014,12 +2412,17 @@ class AgentLlmSession:
         for tool_name in allowed_tools:
             descriptor = describe_builtin_tool(tool_name)
             if descriptor is not None:
-                reserved_chars += 200
+                reserved_chars += _BUILTIN_TOOL_CONTEXT_CHARS
                 continue
-            reserved_chars += 600
-        reserved_chars += len(allowed_skills) * 800
+            reserved_chars += _EXTERNAL_TOOL_CONTEXT_CHARS
+        reserved_chars += len(allowed_skills) * _SKILL_CONTEXT_CHARS
         builtin_and_skill_tokens = (
-            max(0, (reserved_chars // 4) + 8) if reserved_chars > 0 else 0
+            max(
+                0,
+                (reserved_chars // _ESTIMATED_TOKEN_BYTES) + _ESTIMATED_TOKEN_OVERHEAD,
+            )
+            if reserved_chars > 0
+            else 0
         )
         mcp_tokens = (
             estimated_mcp_context_tokens
@@ -2097,7 +2500,11 @@ class AgentLlmSession:
             ensure_ascii=False,
             sort_keys=True,
         ).encode("utf-8")
-        return max(1, (len(serialized_payload) // 4) + 8)
+        return max(
+            1,
+            (len(serialized_payload) // _ESTIMATED_TOKEN_BYTES)
+            + _ESTIMATED_TOKEN_OVERHEAD,
+        )
 
     def _estimated_mcp_context_tokens_fallback(
         self,
@@ -2106,15 +2513,22 @@ class AgentLlmSession:
     ) -> int:
         if not allowed_mcp_servers:
             return 0
-        reserved_chars = len(allowed_mcp_servers) * 1200
-        return max(0, (reserved_chars // 4) + 8)
+        reserved_chars = len(allowed_mcp_servers) * _MCP_SERVER_CONTEXT_FALLBACK_CHARS
+        return max(
+            0,
+            (reserved_chars // _ESTIMATED_TOKEN_BYTES) + _ESTIMATED_TOKEN_OVERHEAD,
+        )
 
     async def _maybe_compact_history(
         self,
         *,
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
+        source_history: Sequence[ModelRequest | ModelResponse] | None = None,
         conversation_id: str,
+        budget: ConversationCompactionBudget,
+        estimated_tokens_before_microcompact: int | None = None,
+        estimated_tokens_after_microcompact: int | None = None,
     ) -> list[ModelRequest | ModelResponse]:
         if self._conversation_compaction_service is None:
             return history
@@ -2123,6 +2537,10 @@ class AgentLlmSession:
             role_id=request.role_id,
             conversation_id=conversation_id,
             history=history,
+            source_history=source_history,
+            budget=budget,
+            estimated_tokens_before_microcompact=estimated_tokens_before_microcompact,
+            estimated_tokens_after_microcompact=estimated_tokens_after_microcompact,
         )
 
     def _inject_compaction_summary(
@@ -2168,11 +2586,9 @@ class AgentLlmSession:
             trace_id=request.trace_id,
             messages=[prompt_message],
         )
-        return self._filter_model_messages(
-            self._message_repo.get_history_for_conversation(
-                self._conversation_id(request)
-            )
-        )
+        next_history = list(history)
+        next_history.append(prompt_message)
+        return next_history
 
     def _history_ends_with_user_prompt(
         self,

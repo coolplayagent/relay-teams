@@ -797,11 +797,7 @@ class SessionService:
     def _project_history_marker_entry(
         marker: SessionHistoryMarkerRecord,
     ) -> dict[str, object]:
-        label = (
-            "History cleared"
-            if marker.marker_type == SessionHistoryMarkerType.CLEAR
-            else "History compacted"
-        )
+        label = _history_marker_label(marker)
         return {
             "entry_type": "marker",
             "marker_id": marker.marker_id,
@@ -1053,3 +1049,11 @@ class SessionService:
             ScopeRef(scope_type=ScopeType.CONVERSATION, scope_id=conversation_id),
         )
         return self._shared_store.snapshot_many(scopes)
+
+
+def _history_marker_label(marker: SessionHistoryMarkerRecord) -> str:
+    if marker.marker_type == SessionHistoryMarkerType.CLEAR:
+        return "History cleared"
+    if marker.metadata.get("compaction_strategy") == "rolling_summary":
+        return "History compacted (rolling summary)"
+    return "History compacted"

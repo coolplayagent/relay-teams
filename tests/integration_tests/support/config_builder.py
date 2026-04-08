@@ -39,6 +39,7 @@ def write_test_runtime_config(*, config_dir: Path, fake_llm_v1_base_url: str) ->
             "model": "fake-chat-model",
             "base_url": fake_llm_v1_base_url,
             "api_key": "test-api-key",
+            "context_window": 22000,
             "temperature": 0.0,
             "top_p": 1.0,
             "max_tokens": 256,

@@ -32,15 +32,19 @@ import relay_teams.agents.execution.llm_session as llm_module
 from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
-from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from relay_teams.agents.orchestration.task_execution_service import (
+    TaskExecutionService,
+)
 from relay_teams.media import MediaAssetService
 from relay_teams.mcp.mcp_models import McpToolSchema
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.agents.execution.system_prompts import PromptSkillInstruction
 from relay_teams.agents.execution.conversation_compaction import (
+    build_conversation_compaction_budget,
     ConversationCompactionService,
 )
 from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
+from relay_teams.agents.execution.llm_session import _PreparedPromptContext
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.providers.openai_compatible import OpenAICompatibleProvider
 from relay_teams.providers.model_config import ModelEndpointConfig, SamplingConfig
@@ -133,8 +137,20 @@ class _FakeConversationCompactionService:
         role_id: str,
         conversation_id: str,
         history: list[ModelRequest | ModelResponse],
+        source_history: list[ModelRequest | ModelResponse] | None = None,
+        budget: object | None = None,
+        estimated_tokens_before_microcompact: int | None = None,
+        estimated_tokens_after_microcompact: int | None = None,
     ) -> list[ModelRequest | ModelResponse]:
-        _ = (session_id, role_id, conversation_id)
+        _ = (
+            session_id,
+            role_id,
+            conversation_id,
+            budget,
+            source_history,
+            estimated_tokens_before_microcompact,
+            estimated_tokens_after_microcompact,
+        )
         return list(history)
 
     def build_prompt_section(
@@ -787,6 +803,13 @@ async def test_maybe_compact_history_returns_history_when_plan_does_not_trigger(
         request=request,
         history=history,
         conversation_id="conv-temp-role",
+        budget=build_conversation_compaction_budget(
+            context_window=32000,
+            estimated_system_prompt_tokens=0,
+            estimated_user_prompt_tokens=0,
+            estimated_tool_context_tokens=0,
+            estimated_output_reserve_tokens=0,
+        ),
     )
 
     assert compacted == history
@@ -869,7 +892,8 @@ async def test_generate_counts_current_user_prompt_in_context_budget(
     assert 1 <= bounded_max_tokens < configured_max_tokens
 
 
-def test_safe_max_output_tokens_does_not_double_count_persisted_user_prompt(
+@pytest.mark.asyncio
+async def test_safe_max_output_tokens_does_not_double_count_persisted_user_prompt(
     tmp_path: Path,
 ) -> None:
     fake_hub = _FakeRunEventHub()
@@ -906,7 +930,7 @@ def test_safe_max_output_tokens_does_not_double_count_persisted_user_prompt(
         ModelRequest(parts=[UserPromptPart(content="x" * 124_200)]),
     ]
 
-    persisted_budget = provider._session._safe_max_output_tokens(
+    persisted_budget = await provider._session._safe_max_output_tokens(
         request=request,
         history=history,
         system_prompt="system",
@@ -916,7 +940,7 @@ def test_safe_max_output_tokens_does_not_double_count_persisted_user_prompt(
         allowed_skills=(),
     )
     deduped_request = request.model_copy(update={"user_prompt": None})
-    deduped_budget = provider._session._safe_max_output_tokens(
+    deduped_budget = await provider._session._safe_max_output_tokens(
         request=deduped_request,
         history=history,
         system_prompt="system",
@@ -1026,7 +1050,7 @@ async def test_generate_recomputes_budget_after_injection_restart(
     _ = await provider.generate(request)
 
     assert len(scripted_agent.histories) >= 2
-    first_budget = provider._session._safe_max_output_tokens(
+    first_budget = await provider._session._safe_max_output_tokens(
         request=request,
         history=cast(list[ModelRequest | ModelResponse], scripted_agent.histories[0]),
         system_prompt="system",
@@ -1035,7 +1059,7 @@ async def test_generate_recomputes_budget_after_injection_restart(
         allowed_mcp_servers=(),
         allowed_skills=(),
     )
-    second_budget = provider._session._safe_max_output_tokens(
+    second_budget = await provider._session._safe_max_output_tokens(
         request=request,
         history=cast(list[ModelRequest | ModelResponse], scripted_agent.histories[-1]),
         system_prompt="system",
@@ -1173,7 +1197,7 @@ async def test_generate_recovery_does_not_rereserve_original_user_prompt_tokens(
         second_history,
         cast(str, request.user_prompt),
     )
-    expected_without_rereserve = provider._session._safe_max_output_tokens(
+    expected_without_rereserve = await provider._session._safe_max_output_tokens(
         request=request,
         history=second_history,
         system_prompt="system",
@@ -1182,7 +1206,7 @@ async def test_generate_recovery_does_not_rereserve_original_user_prompt_tokens(
         allowed_mcp_servers=(),
         allowed_skills=(),
     )
-    expected_with_rereserve = provider._session._safe_max_output_tokens(
+    expected_with_rereserve = await provider._session._safe_max_output_tokens(
         request=request,
         history=second_history,
         system_prompt="system",
@@ -1293,7 +1317,8 @@ async def test_generate_rebuilds_agent_when_restart_updates_compaction_summary(
 
     assert response == "ok"
     assert len(captured_system_prompts) == 2
-    assert captured_system_prompts[0] == "system"
+    assert captured_system_prompts[0].startswith("system")
+    assert captured_system_prompts[0].endswith("summary after restart")
     assert captured_system_prompts[1].endswith("summary after restart")
 
 
@@ -1349,7 +1374,7 @@ async def test_generate_reserves_context_for_registered_tools_and_skills(
     assert isinstance(settings_obj, dict)
     bounded_max_tokens = settings_obj.get("max_tokens")
     assert isinstance(bounded_max_tokens, int)
-    capped_with_tools = provider._session._safe_max_output_tokens(
+    capped_with_tools = await provider._session._safe_max_output_tokens(
         request=request,
         history=[],
         system_prompt="system",
@@ -1358,7 +1383,7 @@ async def test_generate_reserves_context_for_registered_tools_and_skills(
         allowed_mcp_servers=(),
         allowed_skills=("time",),
     )
-    uncapped_without_tools = provider._session._safe_max_output_tokens(
+    uncapped_without_tools = await provider._session._safe_max_output_tokens(
         request=request,
         history=[],
         system_prompt="system",
@@ -1614,7 +1639,7 @@ async def test_generate_omits_max_tokens_when_config_unset(
     assert isinstance(settings_obj, dict)
     assert "max_tokens" not in settings_obj
     assert (
-        provider._session._safe_max_output_tokens(
+        await provider._session._safe_max_output_tokens(
             request=request,
             history=[],
             system_prompt="system",
@@ -2472,6 +2497,228 @@ async def test_generate_does_not_retry_statusless_api_error_before_side_effects(
     assert exc_info.value.payload.error_message == "busy"
     history = message_repo.get_history("inst-statusless-error")
     assert len(history) == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_emits_model_step_started_before_retry_attempt_prompt_prep(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, _message_repo = _build_provider(
+        tmp_path / "retry_prompt_prep_started.db",
+        fake_hub,
+    )
+    provider._session._retry_config.jitter = False
+    provider._session._retry_config.max_retries = 1
+
+    request_error = APIStatusError(
+        "lock timeout",
+        response=httpx.Response(
+            409,
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        ),
+        body={"error": {"code": "conflict", "message": "busy"}},
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    original_prepare_prompt_context = provider._session._prepare_prompt_context
+    prepare_call_count = 0
+
+    async def _prepare_prompt_context_with_second_attempt_failure(
+        *,
+        request: LLMRequest,
+        conversation_id: str,
+        system_prompt: str,
+        reserve_user_prompt_tokens: bool,
+        allowed_tools: tuple[str, ...],
+        allowed_mcp_servers: tuple[str, ...],
+        allowed_skills: tuple[str, ...],
+    ) -> _PreparedPromptContext:
+        nonlocal prepare_call_count
+        prepare_call_count += 1
+        if prepare_call_count == 2:
+            raise RuntimeError("compaction rewrite failed")
+        return await original_prepare_prompt_context(
+            request=request,
+            conversation_id=conversation_id,
+            system_prompt=system_prompt,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
+        )
+
+    monkeypatch.setattr(
+        provider._session,
+        "_prepare_prompt_context",
+        _prepare_prompt_context_with_second_attempt_failure,
+    )
+    request = LLMRequest(
+        run_id="run-retry-prompt-prep-failure",
+        trace_id="run-retry-prompt-prep-failure",
+        task_id="task-retry-prompt-prep-failure",
+        session_id="session-retry-prompt-prep-failure",
+        workspace_id="default",
+        instance_id="inst-retry-prompt-prep-failure",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    with pytest.raises(RuntimeError, match="compaction rewrite failed"):
+        await provider.generate(request)
+
+    event_types = [event.event_type for event in fake_hub.events]
+    assert event_types.count(RunEventType.MODEL_STEP_STARTED) == 2
+    assert RunEventType.LLM_RETRY_SCHEDULED in event_types
+
+
+@pytest.mark.asyncio
+async def test_generate_rebuilds_prompt_context_after_tool_validation_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, _message_repo = _build_provider(
+        tmp_path / "validation_restart_prompt_context.db",
+        fake_hub,
+    )
+
+    validation_node = _FakeModelRequestNode(
+        SimpleNamespace(
+            input_tokens=0,
+            cache_read_tokens=0,
+            output_tokens=0,
+            total_tokens=0,
+            requests=1,
+            tool_calls=0,
+            details={},
+        )
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[validation_node],
+                messages_by_step=[
+                    [
+                        ModelResponse(
+                            parts=[
+                                ToolCallPart(
+                                    tool_name="shell",
+                                    args='{"command":"echo hi"}',
+                                    tool_call_id="call-1",
+                                )
+                            ]
+                        ),
+                        ModelRequest(
+                            parts=[
+                                RetryPromptPart(
+                                    content="Tool arguments were not valid JSON.",
+                                    tool_name="shell",
+                                    tool_call_id="call-1",
+                                )
+                            ]
+                        ),
+                    ]
+                ],
+                result=_ScriptedResult(response="unused", messages=[]),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="after restart")]),
+                    messages=[ModelResponse(parts=[TextPart(content="after restart")])],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _FakeModelRequestNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    prepare_reserve_flags: list[bool] = []
+    rebuilt_history = [
+        ModelRequest(parts=[UserPromptPart(content="rebuilt compacted history")])
+    ]
+
+    async def _prepare_prompt_context_for_restart(
+        *,
+        request: LLMRequest,
+        conversation_id: str,
+        system_prompt: str,
+        reserve_user_prompt_tokens: bool,
+        allowed_tools: tuple[str, ...],
+        allowed_mcp_servers: tuple[str, ...],
+        allowed_skills: tuple[str, ...],
+    ) -> _PreparedPromptContext:
+        _ = (
+            request,
+            conversation_id,
+            system_prompt,
+            allowed_tools,
+            allowed_mcp_servers,
+            allowed_skills,
+        )
+        prepare_reserve_flags.append(reserve_user_prompt_tokens)
+        history: tuple[ModelRequest | ModelResponse, ...]
+        if len(prepare_reserve_flags) == 1:
+            history = ()
+        else:
+            history = tuple(rebuilt_history)
+        return _PreparedPromptContext(
+            history=history,
+            system_prompt="system",
+            budget=build_conversation_compaction_budget(
+                context_window=32_000,
+                estimated_system_prompt_tokens=0,
+                estimated_user_prompt_tokens=0,
+                estimated_tool_context_tokens=0,
+                estimated_output_reserve_tokens=0,
+            ),
+        )
+
+    monkeypatch.setattr(
+        provider._session,
+        "_prepare_prompt_context",
+        _prepare_prompt_context_for_restart,
+    )
+
+    request = LLMRequest(
+        run_id="run-validation-restart",
+        trace_id="run-validation-restart",
+        task_id="task-validation-restart",
+        session_id="session-validation-restart",
+        workspace_id="default",
+        instance_id="inst-validation-restart",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "after restart"
+    assert prepare_reserve_flags == [True, False]
+    assert len(scripted_agent.histories) == 2
+    assert scripted_agent.histories[1] == rebuilt_history
 
 
 @pytest.mark.asyncio

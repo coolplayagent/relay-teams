@@ -14,6 +14,9 @@ def test_round_history_clear_ui_renders_segment_dividers_and_collapsed_history()
     components_css = (
         repo_root / "frontend" / "dist" / "css" / "components.css"
     ).read_text(encoding="utf-8")
+    i18n_script = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "i18n.js"
+    ).read_text(encoding="utf-8")
 
     assert "const expandedHistorySegments = new Set();" in timeline_script
     assert "splitRoundsByHistoryMarkers(rounds)" in timeline_script
@@ -25,6 +28,9 @@ def test_round_history_clear_ui_renders_segment_dividers_and_collapsed_history()
     assert "round-history-divider" in timeline_script
     assert "History cleared" in timeline_script
     assert "t('rounds.history_compacted')" in timeline_script
+    assert "renderMicrocompactBadge(round?.microcompact)" in timeline_script
+    assert "rounds.microcompact_badge" in timeline_script
+    assert "rounds.microcompact_title" in timeline_script
     assert "Show ${roundLabel}" in timeline_script
     assert "Hide ${roundLabel}" in timeline_script
 
@@ -38,3 +44,8 @@ def test_round_history_clear_ui_renders_segment_dividers_and_collapsed_history()
     assert ".round-clear-divider-title {" in components_css
     assert "body.light-theme .round-clear-divider-chip," in components_css
     assert "body.light-theme .round-history-divider-chip," in components_css
+    assert (
+        "'rounds.microcompact_badge': 'Microcompact {before} -> {after}',"
+        in i18n_script
+    )
+    assert "'rounds.microcompact_badge': '轻量压缩 {before} -> {after}'," in i18n_script

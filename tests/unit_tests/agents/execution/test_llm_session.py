@@ -3,15 +3,31 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from typing import cast
+
+import pytest
 
 from relay_teams.agents.execution.llm_session import AgentLlmSession
+from relay_teams.agents.execution.conversation_compaction import (
+    ConversationCompactionService,
+)
+from relay_teams.agents.execution.conversation_microcompact import (
+    ConversationMicrocompactService,
+    ConversationMicrocompactResult,
+)
+from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.providers.model_config import ModelEndpointConfig
+from relay_teams.providers.provider_contracts import LLMRequest
+from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
     ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
 )
 
 
@@ -112,3 +128,442 @@ def test_normalize_committable_messages_keeps_request_fields() -> None:
     assert normalized_request.timestamp == datetime(2026, 4, 2, 22, 44, 3, tzinfo=UTC)
     assert normalized_request.run_id == "run-123"
     assert normalized_request.metadata == {"source": "test"}
+
+
+class _FakeMessageRepo:
+    def __init__(self, history: list[ModelRequest | ModelResponse]) -> None:
+        self._history = history
+        self.append_calls: list[list[ModelRequest | ModelResponse]] = []
+        self.pruned_conversation_ids: list[str] = []
+
+    def get_history_for_conversation(
+        self,
+        _conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        return list(self._history)
+
+    def prune_conversation_history_to_safe_boundary(self, conversation_id: str) -> None:
+        self.pruned_conversation_ids.append(conversation_id)
+
+    def append(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: list[ModelRequest | ModelResponse],
+    ) -> None:
+        _ = (
+            session_id,
+            workspace_id,
+            conversation_id,
+            agent_role_id,
+            instance_id,
+            task_id,
+            trace_id,
+        )
+        self.append_calls.append(list(messages))
+
+
+class _FakeMicrocompactService:
+    def __init__(self, result: ConversationMicrocompactResult) -> None:
+        self.calls: list[object] = []
+        self._result = result
+
+    def apply(
+        self, *, history: list[ModelRequest | ModelResponse], budget: object
+    ) -> ConversationMicrocompactResult:
+        self.calls.append((list(history), budget))
+        return self._result
+
+
+class _FakeCompactionService:
+    def __init__(self, prompt_section: str = "") -> None:
+        self.calls: list[dict[str, object]] = []
+        self._prompt_section = prompt_section
+
+    async def maybe_compact(
+        self, **kwargs: object
+    ) -> list[ModelRequest | ModelResponse]:
+        self.calls.append(dict(kwargs))
+        history = kwargs["history"]
+        assert isinstance(history, list)
+        return history
+
+    def build_prompt_section(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+    ) -> str:
+        _ = (session_id, conversation_id)
+        return self._prompt_section
+
+
+class _FakeRunIntentRepo:
+    def __init__(self, intent: str) -> None:
+        self._intent = intent
+
+    def get(self, run_id: str, *, fallback_session_id: str | None = None) -> object:
+        _ = (run_id, fallback_session_id)
+        return type("_Intent", (), {"intent": self._intent})()
+
+
+async def _zero_mcp_context_tokens(
+    *,
+    allowed_mcp_servers: tuple[str, ...],
+) -> int:
+    _ = allowed_mcp_servers
+    return 0
+
+
+def _build_request(*, user_prompt: str | None = "User prompt") -> LLMRequest:
+    return LLMRequest(
+        run_id="run-1",
+        trace_id="trace-1",
+        task_id="task-1",
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id="conv-1",
+        instance_id="inst-1",
+        role_id="writer",
+        system_prompt="System prompt",
+        user_prompt=user_prompt,
+    )
+
+
+@pytest.mark.asyncio
+async def test_prepare_prompt_context_applies_microcompact_before_full_compaction() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    base_history = [
+        ModelRequest(parts=[UserPromptPart(content="summarize the file")]),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read_file",
+                    args='{"path":"README.md"}',
+                    tool_call_id="call-1",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="A" * 4000,
+                )
+            ]
+        ),
+    ]
+    microcompacted_history = [
+        base_history[0],
+        base_history[1],
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="[Compacted tool result]",
+                )
+            ]
+        ),
+    ]
+    session._config = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        context_window=600,
+    )
+    session._message_repo = cast(MessageRepository, _FakeMessageRepo(base_history))
+    microcompact_service = _FakeMicrocompactService(
+        ConversationMicrocompactResult(
+            messages=tuple(microcompacted_history),
+            estimated_tokens_before=260,
+            estimated_tokens_after=80,
+            compacted_message_count=1,
+            compacted_part_count=1,
+        )
+    )
+    compaction_service = _FakeCompactionService(
+        prompt_section="## Compacted Conversation Summary\nsummary"
+    )
+    session._conversation_microcompact_service = cast(
+        ConversationMicrocompactService,
+        microcompact_service,
+    )
+    session._conversation_compaction_service = cast(
+        ConversationCompactionService,
+        compaction_service,
+    )
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Summarize the file and preserve tool outputs."),
+    )
+    session._estimated_mcp_context_tokens = _zero_mcp_context_tokens
+    session._estimated_tool_context_tokens = lambda **_kwargs: 120
+
+    prepared = await AgentLlmSession._prepare_prompt_context(
+        session,
+        request=_build_request(),
+        conversation_id="conv-1",
+        system_prompt="System prompt",
+        reserve_user_prompt_tokens=True,
+        allowed_tools=("shell",),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+
+    assert list(prepared.history) == microcompacted_history
+    assert prepared.system_prompt.endswith("summary")
+    assert microcompact_service.calls
+    assert compaction_service.calls
+    compaction_call = compaction_service.calls[0]
+    assert compaction_call["history"] == microcompacted_history
+    assert compaction_call["source_history"] == base_history
+    assert compaction_call["estimated_tokens_before_microcompact"] == 260
+    assert compaction_call["estimated_tokens_after_microcompact"] == 80
+
+
+@pytest.mark.asyncio
+async def test_prepare_prompt_context_inserts_replay_bridge_for_resume_history() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    base_history = [
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read_file",
+                    args='{"path":"README.md"}',
+                    tool_call_id="call-1",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="README contents",
+                )
+            ]
+        ),
+    ]
+    session._config = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        context_window=600,
+    )
+    session._message_repo = cast(MessageRepository, _FakeMessageRepo(base_history))
+    session._conversation_microcompact_service = None
+    session._conversation_compaction_service = None
+    session._estimated_mcp_context_tokens = _zero_mcp_context_tokens
+    session._estimated_tool_context_tokens = lambda **_kwargs: 120
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Build the release handoff and keep prior artifacts."),
+    )
+
+    prepared = await AgentLlmSession._prepare_prompt_context(
+        session,
+        request=_build_request(user_prompt=None),
+        conversation_id="conv-1",
+        system_prompt="System prompt",
+        reserve_user_prompt_tokens=False,
+        allowed_tools=("shell",),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+
+    prepared_history = list(prepared.history)
+    assert len(prepared_history) == 3
+    bridge_message = prepared_history[0]
+    assert isinstance(bridge_message, ModelRequest)
+    bridge_part = bridge_message.parts[0]
+    assert isinstance(bridge_part, UserPromptPart)
+    assert "Original task intent:" in bridge_part.content
+    assert "Build the release handoff" in bridge_part.content
+    assert prepared_history[1:] == base_history
+
+
+def test_coerce_history_to_provider_safe_sequence_drops_orphan_tool_prefix() -> None:
+    session = object.__new__(AgentLlmSession)
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Investigate the preserved tool execution state."),
+    )
+    history = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="missing-call",
+                    content="orphaned",
+                )
+            ]
+        ),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read_file",
+                    args='{"path":"README.md"}',
+                    tool_call_id="call-1",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="README contents",
+                )
+            ]
+        ),
+    ]
+
+    repaired = AgentLlmSession._coerce_history_to_provider_safe_sequence(
+        session,
+        request=_build_request(user_prompt=None),
+        history=history,
+    )
+
+    assert len(repaired) == 3
+    bridge_message = repaired[0]
+    assert isinstance(bridge_message, ModelRequest)
+    bridge_part = bridge_message.parts[0]
+    assert isinstance(bridge_part, UserPromptPart)
+    assert "Investigate the preserved tool execution state." in bridge_part.content
+    assert repaired[1:] == history[1:]
+
+
+def test_coerce_history_to_provider_safe_sequence_keeps_bridge_when_prefix_drop_empties_history() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Resume the preserved execution state after repair."),
+    )
+    history = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="missing-call",
+                    content="orphaned",
+                )
+            ]
+        )
+    ]
+
+    repaired = AgentLlmSession._coerce_history_to_provider_safe_sequence(
+        session,
+        request=_build_request(user_prompt=None),
+        history=history,
+    )
+
+    assert len(repaired) == 1
+    bridge_message = repaired[0]
+    assert isinstance(bridge_message, ModelRequest)
+    bridge_part = bridge_message.parts[0]
+    assert isinstance(bridge_part, UserPromptPart)
+    assert "Resume the preserved execution state after repair." in bridge_part.content
+
+
+def test_coerce_history_to_provider_safe_sequence_prefers_explicit_user_prompt_over_bridge() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Resume the preserved execution state after repair."),
+    )
+    history = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="missing-call",
+                    content="orphaned",
+                )
+            ]
+        )
+    ]
+
+    repaired = AgentLlmSession._coerce_history_to_provider_safe_sequence(
+        session,
+        request=_build_request(user_prompt="restart from the latest user request"),
+        history=history,
+    )
+
+    assert repaired == []
+
+
+@pytest.mark.asyncio
+async def test_safe_max_output_tokens_accounts_for_full_prompt_budget() -> None:
+    session = object.__new__(AgentLlmSession)
+    session._config = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        context_window=500,
+    )
+    session._config.sampling.max_tokens = 400
+    session._estimated_mcp_context_tokens = _zero_mcp_context_tokens
+    session._estimated_tool_context_tokens = lambda **_kwargs: 120
+
+    max_tokens = await AgentLlmSession._safe_max_output_tokens(
+        session,
+        request=_build_request(user_prompt="U" * 240),
+        history=[ModelRequest(parts=[UserPromptPart(content="hello")])],
+        system_prompt="System prompt " + ("S" * 240),
+        reserve_user_prompt_tokens=True,
+        allowed_tools=("shell",),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+
+    assert max_tokens is not None
+    assert 1 <= max_tokens < 400
+
+
+def test_persist_user_prompt_keeps_microcompacted_history_in_memory() -> None:
+    session = object.__new__(AgentLlmSession)
+    compacted_history = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="[Compacted tool result]\ntool: read_file",
+                )
+            ]
+        )
+    ]
+    message_repo = _FakeMessageRepo(history=[])
+    session._message_repo = cast(MessageRepository, message_repo)
+
+    next_history = AgentLlmSession._persist_user_prompt_if_needed(
+        session,
+        request=_build_request(user_prompt="new prompt"),
+        history=list(compacted_history),
+        content="new prompt",
+    )
+
+    assert message_repo.pruned_conversation_ids == ["conv-1"]
+    assert len(message_repo.append_calls) == 1
+    assert next_history[:-1] == compacted_history
+    appended_message = next_history[-1]
+    assert isinstance(appended_message, ModelRequest)
+    appended_part = appended_message.parts[0]
+    assert isinstance(appended_part, UserPromptPart)
+    assert appended_part.content == "new prompt"
