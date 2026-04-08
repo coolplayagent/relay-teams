@@ -4,14 +4,18 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from threading import Thread
+from typing import cast
 from unittest.mock import patch
 
 import pytest
+from pydantic import JsonValue
 
 from relay_teams.logger import (
     configure_logging,
     get_logger,
     log_event,
+    log_model_output,
+    log_tool_error,
     shutdown_logging,
 )
 from relay_teams.logger import logger as logger_module
@@ -343,6 +347,405 @@ def test_windows_safe_handler_removes_existing_dest_before_copy(
 
     assert dest.read_text(encoding="utf-8") == "new content"
     assert log_file.read_text(encoding="utf-8") == ""
+
+
+def test_default_redaction_masks_sensitive_message_and_payload_values(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.redaction")
+        log_event(
+            logger,
+            logging.INFO,
+            event="unit.redaction",
+            message="structured redaction",
+            payload={
+                "authorization": "Bearer test-token",
+                "client_secret": "top-secret",
+                "url": "https://user:pass@example.test/path?api_key=query-secret",
+                "safe": "ok",
+            },
+        )
+        logger.error(
+            "Authorization: Bearer direct-token Cookie: sessionid=abc123; csrftoken=def456 https://user:pass@example.test/path?api_key=query-secret"
+        )
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert '"authorization": "***"' in backend_text
+        assert '"client_secret": "***"' in backend_text
+        assert "Bearer ***" in backend_text
+        assert "Cookie: sessionid=abc123; csrftoken=def456" in backend_text
+        assert "example.test/path?api_key=" in backend_text
+        assert "direct-token" not in backend_text
+        assert "abc123" in backend_text
+        assert "def456" in backend_text
+        assert "query-secret" not in backend_text
+        assert "user:pass@" not in backend_text
+        assert '"safe": "ok"' in backend_text
+    finally:
+        snapshot.restore()
+
+
+def test_nested_payload_redaction_masks_multi_level_maps(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.nested.redaction")
+        nested_payload: JsonValue = {
+            "provider": {
+                "auth": {
+                    "api_key": "nested-api-key",
+                    "client_secret": "nested-client-secret",
+                },
+                "endpoints": [
+                    {
+                        "url": "https://user:pass@example.test/path?token=query-token",
+                    },
+                    {
+                        "safe": "visible",
+                    },
+                ],
+                "tuple_payload": [
+                    {"authorization": "Bearer tuple-token"},
+                    "sk-tuple-secret",
+                ],
+            }
+        }
+        log_event(
+            logger,
+            logging.INFO,
+            event="unit.nested.redaction",
+            message="nested payload redaction",
+            payload=nested_payload,
+        )
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert '"api_key": "***"' in backend_text
+        assert '"client_secret": "***"' in backend_text
+        assert '"authorization": "***"' in backend_text
+        assert "example.test/path?token=" in backend_text
+        assert '"safe": "visible"' in backend_text
+        assert "nested-api-key" not in backend_text
+        assert "nested-client-secret" not in backend_text
+        assert "tuple-token" not in backend_text
+        assert "query-token" not in backend_text
+        assert "sk-tuple-secret" not in backend_text
+        assert "user:pass@" not in backend_text
+    finally:
+        snapshot.restore()
+
+
+def test_log_model_output_and_tool_error_redact_sensitive_content(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    try:
+        configure_logging(config_dir=config_dir)
+        log_model_output(
+            "role-1",
+            "Authorization: Bearer model-token https://user:pass@example.test/path?api_key=query-secret",
+        )
+        log_tool_error(
+            "role-1",
+            '{"Authorization": "Bearer tool-token", "url": "https://user:pass@example.test/path?api_key=query-secret"}',
+        )
+
+        shutdown_logging()
+
+        debug_text = (config_dir / "log" / "debug.log").read_text(encoding="utf-8")
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert "model-token" not in debug_text
+        assert "tool-token" not in backend_text
+        assert "query-secret" not in debug_text
+        assert "query-secret" not in backend_text
+        assert "example.test/path?api_key=" in debug_text
+        assert "example.test/path?api_key=" in backend_text
+    finally:
+        snapshot.restore()
+
+
+def test_exception_error_detail_is_redacted(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.exception")
+        try:
+            raise RuntimeError(
+                "failed calling https://user:pass@example.test/path?api_key=query-secret with sk-secret-token"
+            )
+        except RuntimeError:
+            logger.exception("request failed")
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert "request failed" in backend_text
+        assert "query-secret" not in backend_text
+        assert "sk-secret-token" not in backend_text
+        assert "user:pass@" not in backend_text
+        assert "example.test/path?api_key=" in backend_text
+    finally:
+        snapshot.restore()
+
+
+def test_log_event_snapshots_payload_before_async_formatting(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.payload.snapshot")
+        payload: JsonValue = {
+            "safe": "before",
+            "nested": {"safe": "inner-before"},
+            "items": ["before"],
+        }
+        log_event(
+            logger,
+            logging.INFO,
+            event="unit.payload.snapshot",
+            message="payload snapshot",
+            payload=payload,
+        )
+
+        payload_dict = cast(dict[str, JsonValue], payload)
+        payload_dict["safe"] = "after"
+        nested_payload = cast(dict[str, JsonValue], payload_dict["nested"])
+        nested_payload["safe"] = "inner-after"
+        items_payload = cast(list[JsonValue], payload_dict["items"])
+        items_payload[0] = "after"
+        payload_dict["secret"] = "mutated-secret"
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert '"safe": "before"' in backend_text
+        assert '"safe": "inner-before"' in backend_text
+        assert '"items": ["before"]' in backend_text
+        assert "mutated-secret" not in backend_text
+        assert '"safe": "after"' not in backend_text
+        assert '"safe": "inner-after"' not in backend_text
+        assert '"items": ["after"]' not in backend_text
+    finally:
+        snapshot.restore()
+
+
+def test_malformed_url_redaction_falls_back_without_dropping_log(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.malformed.url")
+        logger.error(
+            "request failed for http://[::1?token=query-secret but message still logs"
+        )
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert "request failed for" in backend_text
+        assert "but message still logs" in backend_text
+        assert "http://[::1?token=query-secret" not in backend_text
+        assert "query-secret" not in backend_text
+        assert "***" in backend_text
+    finally:
+        snapshot.restore()
+
+
+def test_redaction_keys_add_env_masks_custom_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    monkeypatch.setenv(
+        "AGENT_TEAMS_LOG_REDACTION_KEYS_ADD",
+        '["webhook_signature"]',
+    )
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.keys.add")
+        log_event(
+            logger,
+            logging.INFO,
+            event="unit.keys.add",
+            message="custom key redaction",
+            payload={"webhook_signature": "sig-12345", "safe": "ok"},
+        )
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert '"webhook_signature": "***"' in backend_text
+        assert "sig-12345" not in backend_text
+        assert '"safe": "ok"' in backend_text
+    finally:
+        snapshot.restore()
+
+
+def test_redaction_keys_replace_env_overrides_default_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    monkeypatch.setenv(
+        "AGENT_TEAMS_LOG_REDACTION_KEYS_REPLACE",
+        '["webhook_signature"]',
+    )
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.keys.replace")
+        log_event(
+            logger,
+            logging.INFO,
+            event="unit.keys.replace",
+            message="replace key redaction",
+            payload={"secret": "plainvalue", "webhook_signature": "sig-67890"},
+        )
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert '"secret": "plainvalue"' in backend_text
+        assert '"webhook_signature": "***"' in backend_text
+        assert "sig-67890" not in backend_text
+    finally:
+        snapshot.restore()
+
+
+def test_redaction_patterns_add_env_masks_custom_patterns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    monkeypatch.setenv(
+        "AGENT_TEAMS_LOG_REDACTION_PATTERNS_ADD",
+        '["CUST-[A-Z0-9]{6,}"]',
+    )
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.patterns.add")
+        logger.error("custom token CUST-ABC123XYZ")
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert "CUST-ABC123XYZ" not in backend_text
+        assert "***" in backend_text
+    finally:
+        snapshot.restore()
+
+
+def test_redaction_patterns_replace_env_overrides_default_patterns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    monkeypatch.setenv(
+        "AGENT_TEAMS_LOG_REDACTION_PATTERNS_REPLACE",
+        '["CUST-[A-Z0-9]{6,}"]',
+    )
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.patterns.replace")
+        logger.error("Bearer visible-token CUST-ABC123XYZ")
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert "Bearer visible-token" in backend_text
+        assert "CUST-ABC123XYZ" not in backend_text
+    finally:
+        snapshot.restore()
+
+
+def test_placeholder_is_treated_literally_for_default_patterns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    monkeypatch.setenv("AGENT_TEAMS_LOG_REDACTION_PLACEHOLDER", r"\1")
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.placeholder.default")
+        logger.error("secret sk-test-token")
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert "sk-test-token" not in backend_text
+        assert r"\1" in backend_text
+    finally:
+        snapshot.restore()
+
+
+def test_placeholder_is_treated_literally_for_custom_patterns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    monkeypatch.setenv("AGENT_TEAMS_LOG_REDACTION_PLACEHOLDER", "\\")
+    monkeypatch.setenv(
+        "AGENT_TEAMS_LOG_REDACTION_PATTERNS_ADD",
+        '["CUST-[A-Z0-9]{6,}"]',
+    )
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.placeholder.custom")
+        logger.error("custom token CUST-ABC123XYZ")
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert "CUST-ABC123XYZ" not in backend_text
+        assert "\\" in backend_text
+    finally:
+        snapshot.restore()
+
+
+def test_invalid_redaction_config_falls_back_to_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    monkeypatch.setenv("AGENT_TEAMS_LOG_REDACTION_KEYS_REPLACE", "not-json")
+    try:
+        configure_logging(config_dir=config_dir)
+        logger = get_logger("tests.unit.invalid.redaction")
+        log_event(
+            logger,
+            logging.INFO,
+            event="unit.invalid.redaction",
+            message="fallback redaction",
+            payload={"secret": "fallback-secret"},
+        )
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        assert "fallback-secret" not in backend_text
+        assert "Invalid AGENT_TEAMS_LOG_REDACTION_KEYS_REPLACE" in backend_text
+    finally:
+        snapshot.restore()
 
 
 class _RootLoggerSnapshot:
