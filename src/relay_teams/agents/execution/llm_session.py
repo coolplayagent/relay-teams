@@ -232,6 +232,15 @@ def _model_step_payload(
         "instance_id": instance_id,
     }
     if prepared_prompt is None:
+        payload.update(
+            {
+                "microcompact_applied": False,
+                "estimated_tokens_before_microcompact": 0,
+                "estimated_tokens_after_microcompact": 0,
+                "microcompact_compacted_message_count": 0,
+                "microcompact_compacted_part_count": 0,
+            }
+        )
         return payload
     compacted_message_count = prepared_prompt.microcompact_compacted_message_count
     compacted_part_count = prepared_prompt.microcompact_compacted_part_count
@@ -365,17 +374,6 @@ class AgentLlmSession:
             self._allowed_tools,
             session_id=request.session_id,
         )
-        prepared_prompt = await self._prepare_prompt_context(
-            request=request,
-            conversation_id=resolved_conversation_id,
-            system_prompt=agent_system_prompt,
-            reserve_user_prompt_tokens=(
-                not skip_initial_user_prompt_persist and retry_number == 0
-            ),
-            allowed_tools=allowed_tools,
-            allowed_mcp_servers=self._allowed_mcp_servers,
-            allowed_skills=self._allowed_skills,
-        )
         self._run_event_hub.publish(
             RunEvent(
                 session_id=request.session_id,
@@ -389,10 +387,20 @@ class AgentLlmSession:
                     _model_step_payload(
                         role_id=request.role_id,
                         instance_id=request.instance_id,
-                        prepared_prompt=prepared_prompt,
                     )
                 ),
             )
+        )
+        prepared_prompt = await self._prepare_prompt_context(
+            request=request,
+            conversation_id=resolved_conversation_id,
+            system_prompt=agent_system_prompt,
+            reserve_user_prompt_tokens=(
+                not skip_initial_user_prompt_persist and retry_number == 0
+            ),
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=self._allowed_mcp_servers,
+            allowed_skills=self._allowed_skills,
         )
         history = list(prepared_prompt.history)
         agent_system_prompt = prepared_prompt.system_prompt
