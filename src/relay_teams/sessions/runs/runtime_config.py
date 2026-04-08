@@ -12,7 +12,10 @@ from relay_teams.agents.execution.prompt_instructions import (
     load_prompt_instructions_config,
 )
 from relay_teams.env import load_merged_env_vars
-from relay_teams.paths import get_app_config_dir
+from relay_teams.paths import (
+    format_app_config_file_reference,
+    get_app_config_dir,
+)
 from relay_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     LlmRetryConfig,
@@ -155,7 +158,8 @@ def load_llm_profile_state(
     model_file = config_dir / "model.json"
     if not model_file.exists():
         raise FileNotFoundError(
-            f"model.json not found in {config_dir}. "
+            "model.json not found at "
+            f"{format_app_config_file_reference('model.json', config_dir=config_dir)}. "
             "Please create model.json with at least one profile."
         )
 

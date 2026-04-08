@@ -11,6 +11,7 @@ from pathlib import Path
 
 from relay_teams.logger import get_logger
 from relay_teams.net.clients import create_async_http_client
+from relay_teams.paths import get_app_bin_dir
 from relay_teams.tools.workspace_tools.github_cli_errors import (
     DownloadFailedError,
     ExtractionFailedError,
@@ -21,7 +22,7 @@ from relay_teams.tools.workspace_tools.github_cli_errors import (
 LOGGER = get_logger(__name__)
 
 VERSION = "2.88.1"
-BIN_DIR = Path.home() / ".agent-teams" / "bin"
+BIN_DIR: Path | None = None
 _gh_path_cache: Path | None = None
 _gh_path_lock = asyncio.Lock()
 
@@ -133,10 +134,11 @@ def get_bundled_gh_path() -> Path | None:
 
 
 def _bundled_gh_target_path(*, ensure_parent: bool = False) -> Path:
+    bin_dir = BIN_DIR if BIN_DIR is not None else get_app_bin_dir()
     if ensure_parent:
-        BIN_DIR.mkdir(parents=True, exist_ok=True)
+        bin_dir.mkdir(parents=True, exist_ok=True)
     extension = ".exe" if os.name == "nt" else ""
-    return BIN_DIR / f"gh{extension}"
+    return bin_dir / f"gh{extension}"
 
 
 async def _download_gh(target: Path) -> None:

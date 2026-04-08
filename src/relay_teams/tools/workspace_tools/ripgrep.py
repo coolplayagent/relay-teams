@@ -12,6 +12,7 @@ from pathlib import Path
 
 from relay_teams.logger import get_logger
 from relay_teams.net.clients import create_async_http_client
+from relay_teams.paths import get_app_bin_dir
 from relay_teams.tools.workspace_tools.ripgrep_errors import (
     DownloadFailedError,
     ExtractionFailedError,
@@ -24,7 +25,7 @@ from relay_teams.tools.workspace_tools.ripgrep_types import GrepMatch, GrepResul
 LOGGER = get_logger(__name__)
 
 VERSION = "14.1.1"
-BIN_DIR = Path.home() / ".agent-teams" / "bin"
+BIN_DIR: Path | None = None
 _rg_path_cache: Path | None = None
 _rg_path_lock = asyncio.Lock()
 
@@ -83,9 +84,10 @@ async def get_rg_path() -> Path:
     if _rg_path_cache and _rg_path_cache.is_file():
         return _rg_path_cache
 
-    BIN_DIR.mkdir(parents=True, exist_ok=True)
+    bin_dir = BIN_DIR if BIN_DIR is not None else get_app_bin_dir()
+    bin_dir.mkdir(parents=True, exist_ok=True)
     extension = ".exe" if os.name == "nt" else ""
-    local_path = BIN_DIR / f"rg{extension}"
+    local_path = bin_dir / f"rg{extension}"
 
     if local_path.is_file():
         _rg_path_cache = local_path

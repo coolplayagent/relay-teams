@@ -208,11 +208,12 @@ def test_get_project_config_dir_uses_project_root_when_available(
     tmp_path: Path,
 ) -> None:
     user_home_dir = tmp_path / "home"
+    monkeypatch.delenv("RELAY_TEAMS_CONFIG_DIR", raising=False)
     monkeypatch.setattr(root_paths, "get_user_home_dir", lambda: user_home_dir)
 
     config_dir = root_paths.get_project_config_dir()
 
-    assert config_dir == user_home_dir / ".agent-teams"
+    assert config_dir == user_home_dir / ".relay-teams"
 
 
 def test_get_project_config_dir_falls_back_to_cwd_when_git_root_is_missing(
@@ -220,11 +221,12 @@ def test_get_project_config_dir_falls_back_to_cwd_when_git_root_is_missing(
     tmp_path: Path,
 ) -> None:
     user_home_dir = tmp_path / "home"
+    monkeypatch.delenv("RELAY_TEAMS_CONFIG_DIR", raising=False)
     monkeypatch.setattr(root_paths, "get_user_home_dir", lambda: user_home_dir)
 
     config_dir = root_paths.get_project_config_dir()
 
-    assert config_dir == user_home_dir / ".agent-teams"
+    assert config_dir == user_home_dir / ".relay-teams"
 
 
 def test_get_project_config_dir_prefers_cwd_local_config_over_git_root(
@@ -232,11 +234,12 @@ def test_get_project_config_dir_prefers_cwd_local_config_over_git_root(
     tmp_path: Path,
 ) -> None:
     user_home_dir = tmp_path / "home"
+    monkeypatch.delenv("RELAY_TEAMS_CONFIG_DIR", raising=False)
     monkeypatch.setattr(root_paths, "get_user_home_dir", lambda: user_home_dir)
 
     config_dir = root_paths.get_project_config_dir()
 
-    assert config_dir == user_home_dir / ".agent-teams"
+    assert config_dir == user_home_dir / ".relay-teams"
 
 
 def test_get_project_config_dir_uses_project_root_override() -> None:
@@ -244,7 +247,7 @@ def test_get_project_config_dir_uses_project_root_override() -> None:
 
     config_dir = root_paths.get_project_config_dir(project_root=user_home_dir)
 
-    assert config_dir == Path.home().resolve() / ".agent-teams"
+    assert config_dir == Path.home().resolve() / ".relay-teams"
 
 
 def test_get_user_home_dir_returns_resolved_home() -> None:
@@ -253,11 +256,12 @@ def test_get_user_home_dir_returns_resolved_home() -> None:
 
 def test_get_user_config_dir_uses_resolved_home(monkeypatch, tmp_path: Path) -> None:
     user_home_dir = tmp_path / "home"
+    monkeypatch.delenv("RELAY_TEAMS_CONFIG_DIR", raising=False)
     monkeypatch.setattr(root_paths, "get_user_home_dir", lambda: user_home_dir)
 
     config_dir = root_paths.get_user_config_dir()
 
-    assert config_dir == user_home_dir / ".agent-teams"
+    assert config_dir == user_home_dir / ".relay-teams"
 
 
 def test_get_user_config_dir_uses_user_home_override(tmp_path: Path) -> None:
@@ -265,7 +269,7 @@ def test_get_user_config_dir_uses_user_home_override(tmp_path: Path) -> None:
 
     config_dir = root_paths.get_user_config_dir(user_home_dir=user_home_dir)
 
-    assert config_dir == user_home_dir.resolve() / ".agent-teams"
+    assert config_dir == user_home_dir.resolve() / ".relay-teams"
 
 
 def test_get_project_config_dir_resolves_user_supplied_root(tmp_path: Path) -> None:
@@ -274,7 +278,117 @@ def test_get_project_config_dir_resolves_user_supplied_root(tmp_path: Path) -> N
 
     config_dir = root_paths.get_project_config_dir(project_root=unresolved_project_root)
 
-    assert config_dir == Path.home().resolve() / ".agent-teams"
+    assert config_dir == Path.home().resolve() / ".relay-teams"
+
+
+def test_get_app_config_dir_prefers_environment_variable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    configured_dir = tmp_path / "runtime-config"
+    monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", str(configured_dir))
+
+    assert root_paths.get_app_config_dir() == configured_dir.resolve()
+
+
+def test_get_app_config_dir_ignores_blank_environment_variable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    user_home_dir = tmp_path / "home"
+    monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", "   ")
+    monkeypatch.setattr(root_paths, "get_user_home_dir", lambda: user_home_dir)
+
+    assert root_paths.get_app_config_dir() == user_home_dir / ".relay-teams"
+
+
+def test_get_app_config_dir_expands_tilde_environment_variable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    user_home_dir = tmp_path / "home"
+    user_home_dir.mkdir(parents=True)
+    monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", "~/custom-config")
+    monkeypatch.setenv("HOME", str(user_home_dir))
+    monkeypatch.setenv("USERPROFILE", str(user_home_dir))
+    monkeypatch.setattr(root_paths, "get_user_home_dir", lambda: user_home_dir)
+
+    assert (
+        root_paths.get_app_config_dir() == (user_home_dir / "custom-config").resolve()
+    )
+
+
+def test_get_app_config_dir_override_returns_resolved_environment_value(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    configured_dir = tmp_path / "override-config"
+    monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", str(configured_dir))
+
+    assert root_paths.get_app_config_dir_override() == configured_dir.resolve()
+
+
+def test_get_app_bin_dir_uses_app_config_dir_override(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    configured_dir = tmp_path / "override-config"
+    monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", str(configured_dir))
+
+    assert root_paths.get_app_bin_dir() == configured_dir.resolve() / "bin"
+
+
+def test_get_app_config_file_path_uses_explicit_config_dir(tmp_path: Path) -> None:
+    config_dir = tmp_path / "config"
+
+    assert root_paths.get_app_config_file_path("model.json", config_dir=config_dir) == (
+        config_dir.resolve() / "model.json"
+    )
+
+
+def test_format_app_config_file_reference_uses_file_path_without_env_override(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("RELAY_TEAMS_CONFIG_DIR", raising=False)
+    config_dir = tmp_path / "config"
+
+    assert (
+        root_paths.format_app_config_file_reference(
+            "model.json",
+            config_dir=config_dir,
+        )
+        == f'"{config_dir.resolve() / "model.json"}"'
+    )
+
+
+def test_format_app_config_file_reference_uses_file_path_with_env_override(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    configured_dir = tmp_path / "config"
+    monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", str(configured_dir))
+
+    assert (
+        root_paths.format_app_config_file_reference("model.json")
+        == f'"{configured_dir.resolve() / "model.json"}"'
+    )
+
+
+def test_format_app_config_file_reference_preserves_tilde_env_override(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    user_home_dir = tmp_path / "home"
+    user_home_dir.mkdir(parents=True)
+    monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", "~/custom-config")
+    monkeypatch.setenv("HOME", str(user_home_dir))
+    monkeypatch.setenv("USERPROFILE", str(user_home_dir))
+
+    assert (
+        root_paths.format_app_config_file_reference("model.json")
+        == f'"{(user_home_dir / "custom-config" / "model.json").resolve()}"'
+    )
 
 
 def test_resolve_start_dir_defaults_to_cwd(monkeypatch, tmp_path: Path) -> None:

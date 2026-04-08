@@ -37,12 +37,12 @@ sh setup.sh
 
 At minimum, complete the normal Agent Teams runtime setup first:
 
-- `~/.agent-teams/model.json`
-- optionally `~/.agent-teams/.env`
-- optionally `~/.agent-teams/secrets.json` when the machine has no usable keyring backend
-- optionally `~/.agent-teams/prompts.json`
+- `~/.relay-teams/model.json` by default, or the same files under `RELAY_TEAMS_CONFIG_DIR`
+- optionally `~/.relay-teams/.env`
+- optionally `~/.relay-teams/secrets.json` when the machine has no usable keyring backend
+- optionally `~/.relay-teams/prompts.json`
 - optionally one global instruction file:
-  - `~/.agent-teams/AGENTS.md`
+  - `~/.relay-teams/AGENTS.md`
   - otherwise `~/.claude/CLAUDE.md`
   - otherwise `~/.gemini/GEMINI.md`
 

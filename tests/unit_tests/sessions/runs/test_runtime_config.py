@@ -133,6 +133,7 @@ def test_load_llm_configs_error_mentions_model_file_only(tmp_path: Path) -> None
     with pytest.raises(FileNotFoundError) as exc_info:
         runtime_config.load_llm_configs(tmp_path, {})
 
+    assert f'"{tmp_path / "model.json"}"' in str(exc_info.value)
     assert "Please create model.json with at least one profile." in str(exc_info.value)
 
 
