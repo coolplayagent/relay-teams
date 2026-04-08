@@ -53,6 +53,15 @@ def _freeze_runtime_date_context(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _suppress_host_package_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        system_prompts,
+        "_resolve_package_tool_path",
+        lambda command_names: None,
+    )
+
+
 def _role(role_id: str) -> RoleDefinition:
     tools = ()
     if role_id.casefold() == "coordinator":
@@ -327,6 +336,8 @@ def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
     assert f"- Working Directory: {working_directory.resolve()}" in prompt
     assert "- Current Date: 2026-04-02" in prompt
     assert "- Runtime Timezone: HKT (UTC+08:00)" in prompt
+    assert "- Python Package Tool (pip): not found on PATH" in prompt
+    assert "- Python Package Tool (uv): not found on PATH" in prompt
     assert (
         "Do not trust your internal knowledge for the current date or time." in prompt
     )
@@ -351,6 +362,8 @@ def test_runtime_environment_prompt_mentions_github_when_token_and_system_gh_exi
     )
     assert "- Current Date: 2026-04-02" in prompt
     assert "- Runtime Timezone: HKT (UTC+08:00)" in prompt
+    assert "- Python Package Tool (pip): not found on PATH" in prompt
+    assert "- Python Package Tool (uv): not found on PATH" in prompt
     assert (
         "use the runtime date in this section as the default source of truth" in prompt
     )
@@ -372,6 +385,53 @@ def test_runtime_environment_prompt_mentions_on_demand_gh_when_only_token_exists
     assert "- GitHub CLI: token configured; gh will be resolved on demand" in prompt
     assert "- Current Date: 2026-04-02" in prompt
     assert "- Runtime Timezone: HKT (UTC+08:00)" in prompt
+    assert "- Python Package Tool (pip): not found on PATH" in prompt
+    assert "- Python Package Tool (uv): not found on PATH" in prompt
+
+
+def test_runtime_environment_prompt_mentions_package_tools_and_uv_fallback_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        system_prompts,
+        "_resolve_package_tool_path",
+        lambda command_names: (
+            Path("/usr/local/bin/pip")
+            if command_names == ("pip", "pip3")
+            else Path("/usr/local/bin/uv")
+        ),
+    )
+
+    prompt = system_prompts.build_environment_info_prompt(
+        working_directory=Path("/tmp/project")
+    )
+
+    assert "- Python Package Tool (pip): /usr/local/bin/pip" in prompt
+    assert "- Python Package Tool (uv): /usr/local/bin/uv" in prompt
+    assert (
+        "If pip install fails with externally-managed-environment (PEP 668), try "
+        "uv pip install <packages>." in prompt
+    )
+
+
+def test_runtime_environment_prompt_omits_uv_fallback_hint_when_uv_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        system_prompts,
+        "_resolve_package_tool_path",
+        lambda command_names: (
+            Path("/usr/local/bin/pip") if command_names == ("pip", "pip3") else None
+        ),
+    )
+
+    prompt = system_prompts.build_environment_info_prompt(
+        working_directory=Path("/tmp/project")
+    )
+
+    assert "- Python Package Tool (pip): /usr/local/bin/pip" in prompt
+    assert "- Python Package Tool (uv): not found on PATH" in prompt
+    assert "uv pip install <packages>" not in prompt
 
 
 def test_runtime_environment_prompt_uses_runtime_shell_summary(
@@ -400,6 +460,8 @@ def test_runtime_environment_prompt_uses_runtime_shell_summary(
     assert "powershell.exe" in prompt
     assert "- Current Date: 2026-04-02" in prompt
     assert "- Runtime Timezone: HKT (UTC+08:00)" in prompt
+    assert "- Python Package Tool (pip): not found on PATH" in prompt
+    assert "- Python Package Tool (uv): not found on PATH" in prompt
     assert (
         "Do not trust your internal knowledge for the current date or time." in prompt
     )
@@ -437,6 +499,8 @@ def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_co
     assert "## Orchestration Prompt" in result.workspace_context
     assert "- Current Date: 2026-04-02" in result.workspace_context
     assert "- Runtime Timezone: HKT (UTC+08:00)" in result.workspace_context
+    assert "- Python Package Tool (pip): not found on PATH" in result.workspace_context
+    assert "- Python Package Tool (uv): not found on PATH" in result.workspace_context
     assert result.prompt.index("## Orchestration Rules") < result.prompt.index(
         "## Available Roles"
     )
