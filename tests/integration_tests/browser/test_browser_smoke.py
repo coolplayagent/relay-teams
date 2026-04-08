@@ -12,12 +12,12 @@ from typing import cast
 from uuid import uuid4
 
 import httpx
-from agent_teams.env.web_config_models import (
+from relay_teams.env.web_config_models import (
     DEFAULT_SEARXNG_INSTANCE_SEEDS,
     DEFAULT_SEARXNG_INSTANCE_URL,
 )
-from agent_teams.gateway.acp_stdio import AcpGatewayServer, _AcpRequestContext
-from agent_teams.gateway.gateway_cli import _build_acp_stdio_runtime
+from relay_teams.gateway.acp_stdio import AcpGatewayServer, _AcpRequestContext
+from relay_teams.gateway.gateway_cli import _build_acp_stdio_runtime
 from pydantic import JsonValue
 from playwright.sync_api import Page
 from playwright.sync_api import expect
@@ -850,7 +850,7 @@ def test_browser_settings_save_role_and_agent_configs(
     page.locator("#agent-name-input").fill("Browser Agent")
     page.locator("#agent-description-input").fill("Browser integration agent.")
     page.locator("#agent-stdio-command-input").fill("python")
-    page.locator("#agent-stdio-args-input").fill("-m\nagent_teams")
+    page.locator("#agent-stdio-args-input").fill("-m\nrelay_teams")
     with page.expect_request(
         lambda request: (
             request.method == "PUT"
@@ -867,7 +867,7 @@ def test_browser_settings_save_role_and_agent_configs(
         "transport": {
             "transport": "stdio",
             "command": "python",
-            "args": ["-m", "agent_teams"],
+            "args": ["-m", "relay_teams"],
             "env": [],
         },
     }

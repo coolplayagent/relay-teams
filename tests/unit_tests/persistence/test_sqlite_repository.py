@@ -8,9 +8,9 @@ import threading
 
 from pytest import MonkeyPatch
 
-import agent_teams.persistence.sqlite_repository as sqlite_repository_module
-from agent_teams.persistence.sqlite_repository import SharedSqliteRepository
-from agent_teams.retrieval.sqlite_store import SqliteFts5RetrievalStore
+import relay_teams.persistence.sqlite_repository as sqlite_repository_module
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.retrieval.sqlite_store import SqliteFts5RetrievalStore
 
 
 class _DummyRepository(SharedSqliteRepository):

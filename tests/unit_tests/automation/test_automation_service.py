@@ -7,10 +7,10 @@ from typing import cast
 
 import pytest
 
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
-from agent_teams.automation import (
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.automation import (
     AutomationBoundSessionQueueService,
     AutomationExecutionHandle,
     AutomationEventRepository,
@@ -23,13 +23,13 @@ from agent_teams.automation import (
     AutomationScheduleMode,
     AutomationService,
 )
-from agent_teams.providers.token_usage_repo import TokenUsageRepository
-from agent_teams.sessions.runs.run_manager import RunManager
-from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-from agent_teams.sessions.session_repository import SessionRepository
-from agent_teams.sessions.session_service import SessionService
-from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.workspace import WorkspaceRepository, WorkspaceService
+from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.sessions.session_service import SessionService
+from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.workspace import WorkspaceRepository, WorkspaceService
 
 
 class _FakeRunManager:

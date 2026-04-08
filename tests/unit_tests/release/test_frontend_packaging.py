@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.release.frontend_packaging import copy_frontend_dist
+from relay_teams.release.frontend_packaging import copy_frontend_dist
 
 
 def test_copy_frontend_dist_copies_frontend_assets_into_package_tree(
@@ -18,7 +18,7 @@ def test_copy_frontend_dist_copies_frontend_assets_into_package_tree(
 
     copied_dir = copy_frontend_dist(project_root=project_root, build_lib=build_lib)
 
-    assert copied_dir == build_lib / "agent_teams" / "frontend" / "dist"
+    assert copied_dir == build_lib / "relay_teams" / "frontend" / "dist"
     assert (copied_dir / "index.html").read_text(encoding="utf-8") == "<html></html>"
     assert (copied_dir / "js" / "app.js").read_text(encoding="utf-8") == (
         "console.log('ready');"
@@ -31,7 +31,7 @@ def test_copy_frontend_dist_replaces_stale_assets(tmp_path: Path) -> None:
     source_dir.mkdir(parents=True)
     (source_dir / "index.html").write_text("<html>fresh</html>", encoding="utf-8")
     build_lib = tmp_path / "build-lib"
-    target_dir = build_lib / "agent_teams" / "frontend" / "dist"
+    target_dir = build_lib / "relay_teams" / "frontend" / "dist"
     target_dir.mkdir(parents=True)
     (target_dir / "stale.txt").write_text("stale", encoding="utf-8")
 

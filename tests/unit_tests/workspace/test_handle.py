@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.workspace import WorkspaceHandle
-from agent_teams.workspace.workspace_models import (
+from relay_teams.workspace import WorkspaceHandle
+from relay_teams.workspace.workspace_models import (
     WorkspaceLocations,
     WorkspaceRef,
     default_workspace_profile,

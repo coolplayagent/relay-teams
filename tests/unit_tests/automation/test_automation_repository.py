@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.automation import (
+from relay_teams.automation import (
     AutomationProjectRecord,
     AutomationProjectRepository,
     AutomationProjectStatus,

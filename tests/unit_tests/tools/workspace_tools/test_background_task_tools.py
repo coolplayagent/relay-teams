@@ -9,18 +9,18 @@ from typing import cast
 import pytest
 from pydantic_ai import Agent
 
-import agent_teams.tools.workspace_tools as workspace_tools_module
-from agent_teams.sessions.runs.background_tasks.models import (
+import relay_teams.tools.workspace_tools as workspace_tools_module
+from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.tools.runtime import ToolDeps, ToolExecutionError, ToolResultProjection
-from agent_teams.tools.runtime.models import ToolApprovalRequest
-from agent_teams.tools.workspace_tools import (
+from relay_teams.tools.runtime import ToolDeps, ToolExecutionError, ToolResultProjection
+from relay_teams.tools.runtime.models import ToolApprovalRequest
+from relay_teams.tools.workspace_tools import (
     register_background_tasks,
     register_list_background_tasks,
 )
-from agent_teams.tools.workspace_tools import shell as shell_module
+from relay_teams.tools.workspace_tools import shell as shell_module
 
 
 class _FakeAgent:

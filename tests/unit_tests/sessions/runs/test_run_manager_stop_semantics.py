@@ -8,32 +8,32 @@ from typing import cast
 
 import pytest
 
-from agent_teams.agents.orchestration.meta_agent import MetaAgent
-from agent_teams.media import content_parts_from_text
-from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
-from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
-from agent_teams.sessions.runs.assistant_errors import RunCompletionReason
-from agent_teams.sessions.runs.run_manager import RunManager
-from agent_teams.sessions.runs.run_models import IntentInput, RunResult
-from agent_teams.notifications import (
+from relay_teams.agents.orchestration.meta_agent import MetaAgent
+from relay_teams.media import content_parts_from_text
+from relay_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
+from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
+from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
+from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_models import IntentInput, RunResult
+from relay_teams.notifications import (
     NotificationChannel,
     NotificationConfig,
     NotificationRule,
     NotificationService,
     NotificationType,
 )
-from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.run_control_manager import RunControlManager
-from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.tools.runtime import ToolApprovalManager
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-from agent_teams.sessions.session_models import SessionRecord
-from agent_teams.sessions.session_repository import SessionRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
+from relay_teams.sessions.runs.run_control_manager import RunControlManager
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.tools.runtime import ToolApprovalManager
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.session_models import SessionRecord
+from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.agents.tasks.task_repository import TaskRepository
 
 
 class _MetaAgent:

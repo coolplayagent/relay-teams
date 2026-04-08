@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from agent_teams.roles.role_registry import RoleLoader
+from relay_teams.roles.role_registry import RoleLoader
 
 
 def test_role_loader_loads_markdown_role() -> None:

@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.tools.im_tools.path_resolution import resolve_im_file_path
-from agent_teams.workspace import WorkspaceHandle
-from agent_teams.workspace.workspace_models import (
+from relay_teams.tools.im_tools.path_resolution import resolve_im_file_path
+from relay_teams.workspace import WorkspaceHandle
+from relay_teams.workspace.workspace_models import (
     WorkspaceLocations,
     WorkspaceRef,
     default_workspace_profile,

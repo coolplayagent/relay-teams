@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agent_teams.automation import (
+from relay_teams.automation import (
     AutomationDeliveryEvent,
     AutomationFeishuBinding,
     AutomationFeishuBindingCandidate,
@@ -17,8 +17,8 @@ from agent_teams.automation import (
     AutomationRunConfig,
     AutomationScheduleMode,
 )
-from agent_teams.interfaces.server.deps import get_automation_service
-from agent_teams.interfaces.server.routers import automation
+from relay_teams.interfaces.server.deps import get_automation_service
+from relay_teams.interfaces.server.routers import automation
 
 
 class _FakeAutomationService:

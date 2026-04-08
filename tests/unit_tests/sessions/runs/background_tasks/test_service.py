@@ -7,21 +7,21 @@ from typing import Literal, cast
 
 import pytest
 
-from agent_teams.sessions.runs.background_tasks.command_runtime import (
+from relay_teams.sessions.runs.background_tasks.command_runtime import (
     normalize_timeout,
 )
-from agent_teams.sessions.runs.background_tasks.service import (
+from relay_teams.sessions.runs.background_tasks.service import (
     BackgroundTaskService,
 )
-from agent_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
-from agent_teams.sessions.runs.background_tasks.models import (
+from relay_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
+from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.sessions.runs.background_tasks.repository import (
+from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
-from agent_teams.workspace import WorkspaceHandle
+from relay_teams.workspace import WorkspaceHandle
 
 
 class _FakeBackgroundTaskManager:
@@ -424,7 +424,7 @@ async def test_background_task_service_retries_completion_delivery_after_sink_fa
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import service as service_module
+    from relay_teams.sessions.runs.background_tasks import service as service_module
 
     async def _fake_sleep(delay: float) -> None:
         _ = delay

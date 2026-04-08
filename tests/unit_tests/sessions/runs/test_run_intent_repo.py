@@ -8,15 +8,15 @@ import time
 
 import pytest
 
-from agent_teams.media import content_parts_from_text
-from agent_teams.sessions.runs.enums import ExecutionMode
-from agent_teams.sessions.runs.run_models import (
+from relay_teams.media import content_parts_from_text
+from relay_teams.sessions.runs.enums import ExecutionMode
+from relay_teams.sessions.runs.run_models import (
     IntentInput,
     RunThinkingConfig,
     RunTopologySnapshot,
 )
-from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
-from agent_teams.sessions.session_models import SessionMode
+from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from relay_teams.sessions.session_models import SessionMode
 
 
 def test_run_intent_repo_round_trips_yolo(tmp_path: Path) -> None:

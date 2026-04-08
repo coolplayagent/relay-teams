@@ -11,22 +11,22 @@ from typing import Callable, cast
 
 import pytest
 
-from agent_teams.sessions.runs.background_tasks.manager import (
+from relay_teams.sessions.runs.background_tasks.manager import (
     BackgroundTaskManager,
     MAX_BACKGROUND_TASKS,
     PROTECTED_RECENT_BACKGROUND_TASKS,
 )
-from agent_teams.sessions.runs.background_tasks.models import (
+from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.sessions.runs.background_tasks.repository import (
+from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
-from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.workspace import WorkspaceHandle
-from agent_teams.workspace.workspace_models import (
+from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.workspace import WorkspaceHandle
+from relay_teams.workspace.workspace_models import (
     WorkspaceLocations,
     WorkspaceRef,
     default_workspace_profile,
@@ -214,7 +214,7 @@ async def test_background_task_manager_writes_logs_via_to_thread(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(tmp_path / "background-terminal-log-thread.db")
     hub = RunEventHub()
@@ -350,7 +350,7 @@ async def test_background_task_manager_stop_falls_back_to_pid_without_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(tmp_path / "background-terminal-orphan-stop.db")
     hub = RunEventHub()
@@ -408,7 +408,7 @@ async def test_background_task_manager_stop_preserves_active_record_when_pid_fal
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(
         tmp_path / "background-terminal-orphan-stop-fail.db"
@@ -463,7 +463,7 @@ async def test_background_task_manager_stop_marks_terminal_stopped(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(tmp_path / "background-terminal-stop.db")
     hub = RunEventHub()
@@ -517,7 +517,7 @@ async def test_background_task_manager_stop_completes_when_close_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(tmp_path / "background-terminal-stop-close.db")
     hub = RunEventHub()
@@ -574,7 +574,7 @@ async def test_background_task_manager_stop_completes_when_close_fails(
 async def test_background_task_manager_stop_marks_tty_terminal_stopped(
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     if not (
         manager_module._posix_pty_supported() or manager_module._windows_tty_supported()
@@ -626,7 +626,7 @@ async def test_background_task_manager_stop_marks_tty_terminal_stopped(
 async def test_stop_all_for_run_can_leave_background_sessions_running(
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(tmp_path / "background-terminal-stop-filtered.db")
     hub = RunEventHub()
@@ -697,8 +697,8 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
-    from agent_teams.sessions.runs.background_tasks.command_runtime import (
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks.command_runtime import (
         CommandRuntimeKind,
         ResolvedCommandRuntime,
     )
@@ -806,7 +806,7 @@ async def test_background_task_manager_windows_tty_requires_supported_host(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(tmp_path / "exec-session-winpty-unsupported.db")
     hub = RunEventHub()
@@ -845,7 +845,7 @@ async def test_start_session_serializes_admission_with_async_lock(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(tmp_path / "exec-session-admission.db")
     hub = RunEventHub()
@@ -917,7 +917,7 @@ async def test_start_session_rolls_back_runtime_when_persistence_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(tmp_path / "exec-session-rollback.db")
     hub = RunEventHub()
@@ -1019,7 +1019,7 @@ async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(tmp_path / "background-terminal-prune-active.db")
     hub = RunEventHub()
@@ -1072,7 +1072,7 @@ async def test_prune_sessions_if_needed_keeps_active_records_when_stop_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from agent_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(
         tmp_path / "background-terminal-prune-active-stop-fail.db"

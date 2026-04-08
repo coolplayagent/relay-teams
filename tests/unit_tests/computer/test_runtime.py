@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
-from agent_teams.computer import (
+from relay_teams.computer import (
     DisabledComputerRuntime,
     LinuxDesktopRuntime,
     ScriptedComputerRuntime,
@@ -17,7 +17,7 @@ def test_build_default_computer_runtime_returns_scripted_runtime_in_fake_mode(
 ) -> None:
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
-    (docs_dir / "agent_teams.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    (docs_dir / "relay_teams.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
     monkeypatch.setenv("AGENT_TEAMS_COMPUTER_RUNTIME", "fake")
 
     runtime = build_default_computer_runtime(project_root=tmp_path)
@@ -34,7 +34,7 @@ def test_build_default_computer_runtime_returns_disabled_runtime_by_default(
 ) -> None:
     monkeypatch.delenv("AGENT_TEAMS_COMPUTER_RUNTIME", raising=False)
     monkeypatch.setattr(
-        "agent_teams.computer.runtime._platform_system",
+        "relay_teams.computer.runtime._platform_system",
         lambda: "windows",
     )
 
@@ -49,7 +49,7 @@ def test_build_default_computer_runtime_auto_detects_linux_runtime(
 ) -> None:
     monkeypatch.delenv("AGENT_TEAMS_COMPUTER_RUNTIME", raising=False)
     monkeypatch.setattr(
-        "agent_teams.computer.runtime._platform_system",
+        "relay_teams.computer.runtime._platform_system",
         lambda: "linux",
     )
 
@@ -64,7 +64,7 @@ def test_build_default_computer_runtime_returns_disabled_runtime_on_macos(
 ) -> None:
     monkeypatch.delenv("AGENT_TEAMS_COMPUTER_RUNTIME", raising=False)
     monkeypatch.setattr(
-        "agent_teams.computer.runtime._platform_system",
+        "relay_teams.computer.runtime._platform_system",
         lambda: "darwin",
     )
 

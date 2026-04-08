@@ -8,8 +8,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agent_teams.agents.execution import system_prompts
-from agent_teams.interfaces.server.deps import (
+from relay_teams.agents.execution import system_prompts
+from relay_teams.interfaces.server.deps import (
     get_mcp_registry,
     get_role_registry,
     get_skill_registry,
@@ -18,20 +18,20 @@ from agent_teams.interfaces.server.deps import (
     get_workspace_manager,
     get_workspace_service,
 )
-from agent_teams.interfaces.server.routers import prompts
-from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
-from agent_teams.mcp.mcp_registry import McpRegistry
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.skills.skill_models import SkillInstructionEntry
-from agent_teams.skills.skill_routing_models import (
+from relay_teams.interfaces.server.routers import prompts
+from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
+from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.skills.skill_models import SkillInstructionEntry
+from relay_teams.skills.skill_routing_models import (
     SkillPromptResult,
     SkillRoutingDiagnostics,
     SkillRoutingMode,
     SkillRoutingResult,
 )
-from agent_teams.tools.registry import ToolRegistry
-from agent_teams.workspace import (
+from relay_teams.tools.registry import ToolRegistry
+from relay_teams.workspace import (
     WorkspaceManager,
     WorkspaceRepository,
     WorkspaceService,

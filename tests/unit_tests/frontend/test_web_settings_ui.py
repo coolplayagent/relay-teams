@@ -8,7 +8,7 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from agent_teams.env.web_config_models import (
+from relay_teams.env.web_config_models import (
     DEFAULT_SEARXNG_INSTANCE_SEEDS,
     DEFAULT_SEARXNG_INSTANCE_URL,
 )

@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.providers.model_header_utils import model_header_secret_field_name
-from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
-from agent_teams.secrets import get_secret_store
-from agent_teams.sessions.runs import runtime_config
+from relay_teams.providers.model_header_utils import model_header_secret_field_name
+from relay_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
+from relay_teams.secrets import get_secret_store
+from relay_teams.sessions.runs import runtime_config
 
 
 def test_load_runtime_config_uses_project_config_dir_by_default(
@@ -38,7 +38,7 @@ def test_load_runtime_config_uses_project_config_dir_by_default(
     assert resolved.paths.config_dir == config_dir.resolve()
     assert resolved.paths.env_file == (config_dir / ".env").resolve()
     assert resolved.paths.roles_dir == (config_dir / "roles")
-    assert resolved.paths.db_path == (config_dir / "agent_teams.db")
+    assert resolved.paths.db_path == (config_dir / "relay_teams.db")
     assert resolved.paths.prompts_file == (config_dir / "prompts.json").resolve()
     assert resolved.llm_retry.max_retries == 5
     assert resolved.llm_retry.initial_delay_ms == 2000

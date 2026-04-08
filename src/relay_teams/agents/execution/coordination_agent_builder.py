@@ -1,0 +1,98 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModelSettings
+from pydantic_ai.profiles.openai import OpenAIModelProfile
+
+from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.agents.execution.recoverable_openai_chat_model import (
+    RecoverableOpenAIChatModel as OpenAIChatModel,
+)
+from relay_teams.net.llm_client import build_llm_http_client
+from relay_teams.providers.model_config import (
+    DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    ModelRequestHeader,
+)
+from relay_teams.providers.openai_support import build_openai_provider_for_endpoint
+from relay_teams.skills.skill_registry import SkillRegistry
+from relay_teams.tools.registry import ToolRegistry
+from relay_teams.tools.runtime import ToolDeps
+
+
+def build_coordination_agent(
+    *,
+    model_name: str,
+    base_url: str,
+    api_key: str | None,
+    headers: tuple[ModelRequestHeader, ...] = (),
+    system_prompt: str,
+    allowed_tools: tuple[str, ...],
+    model_settings: OpenAIChatModelSettings | None = None,
+    model_profile: OpenAIModelProfile | None = None,
+    ssl_verify: bool | None = None,
+    connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    allowed_mcp_servers: tuple[str, ...] = (),
+    allowed_skills: tuple[str, ...] = (),
+    tool_registry: ToolRegistry,
+    mcp_registry: McpRegistry | None = None,
+    skill_registry: SkillRegistry | None = None,
+) -> Agent[ToolDeps, str]:
+    """Build the lean meta-orchestrator for collaboration management.
+
+    It drives the full task lifecycle, evaluates task complexity, and chooses the
+    most suitable execution path.
+    """
+    toolsets = []
+    if mcp_registry and allowed_mcp_servers:
+        resolved_mcp_servers = mcp_registry.resolve_server_names(
+            allowed_mcp_servers,
+            strict=False,
+            consumer="agents.execution.coordination_agent_builder",
+        )
+        toolsets.extend(mcp_registry.get_toolsets(resolved_mcp_servers))
+
+    skill_tools = []
+    if skill_registry and allowed_skills:
+        resolved_skills = skill_registry.resolve_known(
+            allowed_skills,
+            strict=False,
+            consumer="agents.execution.coordination_agent_builder",
+        )
+        skill_tools = skill_registry.get_toolset_tools(resolved_skills)
+
+    llm_http_client = build_llm_http_client(
+        connect_timeout_seconds=connect_timeout_seconds,
+        ssl_verify=ssl_verify,
+    )
+    model = OpenAIChatModel(
+        model_name,
+        provider=build_openai_provider_for_endpoint(
+            base_url=base_url,
+            api_key=api_key,
+            headers=headers,
+            http_client=llm_http_client,
+        ),
+        profile=model_profile,
+    )
+    agent: Agent[ToolDeps, str] = Agent(
+        model=model,
+        deps_type=ToolDeps,
+        output_type=str,
+        instructions=system_prompt,
+        model_settings=model_settings,
+        toolsets=toolsets,
+        tools=skill_tools,
+        retries=5,
+    )
+    tool_registers = tool_registry.require(
+        tool_registry.resolve_known(
+            allowed_tools,
+            strict=False,
+            consumer="agents.execution.coordination_agent_builder",
+        )
+    )
+    for register in tool_registers:
+        register(agent)
+
+    return agent

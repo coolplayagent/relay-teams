@@ -6,9 +6,9 @@ import subprocess
 
 from typer.testing import CliRunner
 
-from agent_teams.interfaces.cli import app as cli_app
-from agent_teams.interfaces.server import cli as server_cli
-from agent_teams.interfaces.server.runtime_identity import (
+from relay_teams.interfaces.cli import app as cli_app
+from relay_teams.interfaces.server import cli as server_cli
+from relay_teams.interfaces.server.runtime_identity import (
     ServerHealthPayload,
     ServerRuntimeIdentity,
     SkillRegistrySanity,
@@ -26,10 +26,10 @@ class _FakeStartupInfo:
 def _runtime_identity(
     *,
     python_executable: str = "D:/workspace/agent_teams/.venv/Scripts/python.exe",
-    package_root: str = "D:/workspace/agent_teams/src/agent_teams",
+    package_root: str = "D:/workspace/agent_teams/src/relay_teams",
     config_dir: str = "C:/Users/test/.agent-teams",
-    builtin_roles_dir: str = "D:/workspace/agent_teams/src/agent_teams/builtin/roles",
-    builtin_skills_dir: str = "D:/workspace/agent_teams/src/agent_teams/builtin/skills",
+    builtin_roles_dir: str = "D:/workspace/agent_teams/src/relay_teams/builtin/roles",
+    builtin_skills_dir: str = "D:/workspace/agent_teams/src/relay_teams/builtin/skills",
 ) -> ServerRuntimeIdentity:
     return ServerRuntimeIdentity(
         python_executable=python_executable,
@@ -43,10 +43,10 @@ def _runtime_identity(
 def _health_payload(
     *,
     python_executable: str = "D:/workspace/agent_teams/.venv/Scripts/python.exe",
-    package_root: str = "D:/workspace/agent_teams/src/agent_teams",
+    package_root: str = "D:/workspace/agent_teams/src/relay_teams",
     config_dir: str = "C:/Users/test/.agent-teams",
-    builtin_roles_dir: str = "D:/workspace/agent_teams/src/agent_teams/builtin/roles",
-    builtin_skills_dir: str = "D:/workspace/agent_teams/src/agent_teams/builtin/skills",
+    builtin_roles_dir: str = "D:/workspace/agent_teams/src/relay_teams/builtin/roles",
+    builtin_skills_dir: str = "D:/workspace/agent_teams/src/relay_teams/builtin/skills",
 ) -> ServerHealthPayload:
     return ServerHealthPayload(
         status="ok",
@@ -398,7 +398,7 @@ def test_start_fails_for_mismatched_live_server_runtime(monkeypatch) -> None:
         "get_server_health",
         lambda base_url: _health_payload(
             python_executable="C:/Python312/python.exe",
-            package_root="C:/Users/test/AppData/Local/Programs/Python/Python312/Lib/site-packages/agent_teams",
+            package_root="C:/Users/test/AppData/Local/Programs/Python/Python312/Lib/site-packages/relay_teams",
         ),
     )
 
@@ -420,7 +420,7 @@ def test_start_fails_for_mismatched_live_builtin_roles_dir(monkeypatch) -> None:
         server_cli,
         "get_server_health",
         lambda base_url: _health_payload(
-            builtin_roles_dir="D:/workspace/other/src/agent_teams/builtin/roles"
+            builtin_roles_dir="D:/workspace/other/src/relay_teams/builtin/roles"
         ),
     )
 
@@ -442,7 +442,7 @@ def test_root_cli_autostart_rejects_mismatched_local_runtime(monkeypatch) -> Non
         "_get_server_health",
         lambda base_url: _health_payload(
             python_executable="C:/Python312/python.exe",
-            package_root="C:/Users/test/AppData/Local/Programs/Python/Python312/Lib/site-packages/agent_teams",
+            package_root="C:/Users/test/AppData/Local/Programs/Python/Python312/Lib/site-packages/relay_teams",
         ),
     )
     monkeypatch.setattr(
@@ -474,7 +474,7 @@ def test_root_cli_autostart_rejects_mismatched_builtin_roles_dir(monkeypatch) ->
         cli_app,
         "_get_server_health",
         lambda base_url: _health_payload(
-            builtin_roles_dir="D:/workspace/other/src/agent_teams/builtin/roles"
+            builtin_roles_dir="D:/workspace/other/src/relay_teams/builtin/roles"
         ),
     )
     monkeypatch.setattr(

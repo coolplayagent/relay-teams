@@ -3,11 +3,11 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agent_teams.interfaces.server.deps import get_session_service
-from agent_teams.interfaces.server.routers import sessions
-from agent_teams.providers import AgentTokenSummary, RunTokenUsage, SessionTokenUsage
-from agent_teams.roles import SystemRolesUnavailableError
-from agent_teams.sessions.session_models import SessionMode, SessionRecord
+from relay_teams.interfaces.server.deps import get_session_service
+from relay_teams.interfaces.server.routers import sessions
+from relay_teams.providers import AgentTokenSummary, RunTokenUsage, SessionTokenUsage
+from relay_teams.roles import SystemRolesUnavailableError
+from relay_teams.sessions.session_models import SessionMode, SessionRecord
 
 
 class _FakeSessionService:

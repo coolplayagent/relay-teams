@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.builtin import get_builtin_roles_dir
-from agent_teams.roles.role_registry import RoleLoader
+from relay_teams.builtin import get_builtin_roles_dir
+from relay_teams.roles.role_registry import RoleLoader
 
 
 def test_builtin_roles_mount_expected_write_tools() -> None:

@@ -55,8 +55,8 @@ not:
 
 Agent Teams app-scoped skill discovery reads from the app config directory skill path:
 
-- `src/agent_teams/skills/discovery.py:38`
-- `src/agent_teams/skills/discovery.py:106`
+- `src/relay_teams/skills/discovery.py:38`
+- `src/relay_teams/skills/discovery.py:106`
 
 That means the correct install target for runtime-visible app skills is:
 
@@ -68,9 +68,9 @@ not an arbitrary repository-local `skills/` folder, unless the runtime is explic
 
 The discovered runtime skill name comes from `SKILL.md` frontmatter `name`, not from the ClawHub slug:
 
-- `src/agent_teams/skills/discovery.py:215`
-- `src/agent_teams/skills/discovery.py:276`
-- `src/agent_teams/skills/discovery.py:284`
+- `src/relay_teams/skills/discovery.py:215`
+- `src/relay_teams/skills/discovery.py:276`
+- `src/relay_teams/skills/discovery.py:284`
 
 This is why a directory named `skill-creator-2/` was discovered by Agent Teams as the skill:
 
@@ -80,9 +80,9 @@ This is why a directory named `skill-creator-2/` was discovered by Agent Teams a
 
 Role skill authorization resolves against the discovered runtime name or canonical ref:
 
-- `src/agent_teams/skills/skill_registry.py:161`
-- `src/agent_teams/skills/skill_registry.py:172`
-- `src/agent_teams/skills/skill_registry.py:178`
+- `src/relay_teams/skills/skill_registry.py:161`
+- `src/relay_teams/skills/skill_registry.py:172`
+- `src/relay_teams/skills/skill_registry.py:178`
 
 When app and builtin scopes may collide, canonical refs are the stable choice:
 

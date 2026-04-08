@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 
-from agent_teams.gateway.gateway_models import (
+from relay_teams.gateway.gateway_models import (
     GatewayChannelType,
     GatewayMcpServerSpec,
     GatewaySessionRecord,
 )
-from agent_teams.gateway.gateway_session_repository import GatewaySessionRepository
+from relay_teams.gateway.gateway_session_repository import GatewaySessionRepository
 
 
 def test_gateway_session_repository_persists_mcp_state(tmp_path: Path) -> None:

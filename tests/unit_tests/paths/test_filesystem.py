@@ -7,7 +7,7 @@ from typing import cast
 
 import pytest
 
-from agent_teams.paths import filesystem
+from relay_teams.paths import filesystem
 
 
 def _windows_path(raw_path: str) -> Path:

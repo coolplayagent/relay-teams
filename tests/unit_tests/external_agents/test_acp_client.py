@@ -6,8 +6,8 @@ import asyncio
 import pytest
 from pydantic import JsonValue
 
-from agent_teams.external_agents.acp_client import StdioAcpTransportClient
-from agent_teams.external_agents.models import StdioTransportConfig
+from relay_teams.external_agents.acp_client import StdioAcpTransportClient
+from relay_teams.external_agents.models import StdioTransportConfig
 
 
 @pytest.mark.asyncio

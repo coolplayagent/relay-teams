@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.tools.runtime import ToolApprovalPolicy
+from relay_teams.tools.runtime import ToolApprovalPolicy
 
 
 def test_default_policy_requires_high_risk_tools() -> None:

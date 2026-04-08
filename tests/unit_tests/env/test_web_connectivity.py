@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import httpx
 
-from agent_teams.env.proxy_env import ProxyEnvInput, resolve_proxy_env_config
-from agent_teams.env.web_connectivity import (
+from relay_teams.env.proxy_env import ProxyEnvInput, resolve_proxy_env_config
+from relay_teams.env.web_connectivity import (
     WebConnectivityProbeRequest,
     WebConnectivityProbeService,
 )
@@ -49,7 +49,7 @@ def test_probe_web_connectivity_uses_head_by_default(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(
-        "agent_teams.env.web_connectivity.create_sync_http_client",
+        "relay_teams.env.web_connectivity.create_sync_http_client",
         lambda **_kwargs: fake_client,
     )
     service = WebConnectivityProbeService(
@@ -76,7 +76,7 @@ def test_probe_web_connectivity_falls_back_to_get(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(
-        "agent_teams.env.web_connectivity.create_sync_http_client",
+        "relay_teams.env.web_connectivity.create_sync_http_client",
         lambda **_kwargs: fake_client,
     )
     service = WebConnectivityProbeService(
@@ -103,7 +103,7 @@ def test_probe_web_connectivity_respects_semicolon_no_proxy_wildcards(
         ),
     )
     monkeypatch.setattr(
-        "agent_teams.env.web_connectivity.create_sync_http_client",
+        "relay_teams.env.web_connectivity.create_sync_http_client",
         lambda **_kwargs: fake_client,
     )
     service = WebConnectivityProbeService(
@@ -124,7 +124,7 @@ def test_probe_web_connectivity_respects_semicolon_no_proxy_wildcards(
 def test_probe_web_connectivity_returns_timeout_error(monkeypatch) -> None:
     fake_client = _FakeProbeClient(error=httpx.ReadTimeout("timed out"))
     monkeypatch.setattr(
-        "agent_teams.env.web_connectivity.create_sync_http_client",
+        "relay_teams.env.web_connectivity.create_sync_http_client",
         lambda **_kwargs: fake_client,
     )
     service = WebConnectivityProbeService(
@@ -149,7 +149,7 @@ def test_probe_web_connectivity_treats_http_404_as_reachable(monkeypatch) -> Non
         ),
     )
     monkeypatch.setattr(
-        "agent_teams.env.web_connectivity.create_sync_http_client",
+        "relay_teams.env.web_connectivity.create_sync_http_client",
         lambda **_kwargs: fake_client,
     )
     service = WebConnectivityProbeService(
@@ -181,7 +181,7 @@ def test_probe_web_connectivity_uses_override_proxy_config(monkeypatch) -> None:
         return fake_client
 
     monkeypatch.setattr(
-        "agent_teams.env.web_connectivity.create_sync_http_client",
+        "relay_teams.env.web_connectivity.create_sync_http_client",
         fake_create_sync_http_client,
     )
     service = WebConnectivityProbeService(

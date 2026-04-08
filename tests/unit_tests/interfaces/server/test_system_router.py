@@ -7,25 +7,25 @@ from pydantic import JsonValue
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agent_teams.env.proxy_env import ProxyEnvInput
-from agent_teams.external_agents import (
+from relay_teams.env.proxy_env import ProxyEnvInput
+from relay_teams.external_agents import (
     ExternalAgentConfig,
     ExternalAgentSummary,
     ExternalAgentTestResult,
     StdioTransportConfig,
 )
-from agent_teams.env.github_config_models import GitHubConfig
-from agent_teams.env.github_connectivity import GitHubConnectivityProbeRequest
-from agent_teams.env.github_connectivity import GitHubConnectivityProbeResult
-from agent_teams.env.web_config_models import (
+from relay_teams.env.github_config_models import GitHubConfig
+from relay_teams.env.github_connectivity import GitHubConnectivityProbeRequest
+from relay_teams.env.github_connectivity import GitHubConnectivityProbeResult
+from relay_teams.env.web_config_models import (
     DEFAULT_SEARXNG_INSTANCE_SEEDS,
     DEFAULT_SEARXNG_INSTANCE_URL,
     WebConfig,
     WebFallbackProvider,
     WebProvider,
 )
-from agent_teams.env.web_connectivity import WebConnectivityProbeResult
-from agent_teams.interfaces.server.deps import (
+from relay_teams.env.web_connectivity import WebConnectivityProbeResult
+from relay_teams.interfaces.server.deps import (
     get_config_status_service,
     get_environment_variable_service,
     get_external_agent_config_service,
@@ -39,17 +39,17 @@ from agent_teams.interfaces.server.deps import (
     get_ui_language_settings_service,
     get_web_config_service,
 )
-from agent_teams.interfaces.server.ui_language_models import (
+from relay_teams.interfaces.server.ui_language_models import (
     UiLanguage,
     UiLanguageSettings,
 )
-from agent_teams.interfaces.server.routers import system
-from agent_teams.providers.model_connectivity import (
+from relay_teams.interfaces.server.routers import system
+from relay_teams.providers.model_connectivity import (
     ModelConnectivityProbeRequest,
     ModelConnectivityProbeResult,
     ModelDiscoveryResult,
 )
-from agent_teams.providers.model_config import ProviderModelInfo, ProviderType
+from relay_teams.providers.model_config import ProviderModelInfo, ProviderType
 
 
 class _FakeSystemService:

@@ -17,8 +17,8 @@ node_modules
 package-lock.json
 package.json
 !frontend/package.json
-!src/agent_teams/builtin/skills/pptx-craft/package.json
-!src/agent_teams/builtin/skills/pptx-craft/designer/lib/html-to-pptx/package.json
+!src/relay_teams/builtin/skills/pptx-craft/package.json
+!src/relay_teams/builtin/skills/pptx-craft/designer/lib/html-to-pptx/package.json
 .claude
 .agent_teams/evals/
 !.agent_teams/
@@ -33,5 +33,5 @@ package.json
 .agent_teams/evals/datasets/*
 !.agent_teams/evals/datasets/*.jsonl
 logs/
-src/agent_teams/builtin/skills/pptx-craft/designer/lib/html-to-pptx/dist/
-src/agent_teams/builtin/skills/pptx-craft/designer/lib/html-to-pptx/node/dist/
+src/relay_teams/builtin/skills/pptx-craft/designer/lib/html-to-pptx/dist/
+src/relay_teams/builtin/skills/pptx-craft/designer/lib/html-to-pptx/node/dist/

@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from agent_teams.interfaces.server import config_paths
+from relay_teams.interfaces.server import config_paths
 
 
 def test_get_frontend_dist_dir_uses_git_root_when_available(
@@ -94,7 +94,7 @@ def test_package_frontend_dist_dir_uses_frontend_package_origin(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    package_dir = tmp_path / "site-packages" / "agent_teams" / "frontend"
+    package_dir = tmp_path / "site-packages" / "relay_teams" / "frontend"
     package_dir.mkdir(parents=True)
     package_init = package_dir / "__init__.py"
     package_init.write_text(
@@ -107,7 +107,7 @@ def test_package_frontend_dist_dir_uses_frontend_package_origin(
         "find_spec",
         lambda package_name: (
             SimpleNamespace(origin=str(package_init))
-            if package_name == "agent_teams.frontend"
+            if package_name == "relay_teams.frontend"
             else None
         ),
     )

@@ -4,22 +4,22 @@ from pathlib import Path
 import pytest
 from pydantic_ai.messages import UserPromptPart
 
-from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.sessions.runs.run_control_manager import RunControlManager
-from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.sessions.runs.run_runtime_repo import (
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.sessions.runs.run_control_manager import RunControlManager
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.sessions.runs.run_state_repo import RunStateRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
-from agent_teams.agents.tasks.enums import TaskStatus
-from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.sessions.runs.run_state_repo import RunStateRepository
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 
 def test_request_run_stop_cancels_run_task() -> None:

@@ -4,12 +4,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from agent_teams.gateway.feishu.inbound_runtime import FeishuInboundRuntime
-from agent_teams.gateway.feishu.message_pool_repository import (
+from relay_teams.gateway.feishu.inbound_runtime import FeishuInboundRuntime
+from relay_teams.gateway.feishu.message_pool_repository import (
     FeishuMessagePoolRepository,
 )
-from agent_teams.gateway.feishu.message_pool_service import FeishuMessagePoolService
-from agent_teams.gateway.feishu.models import (
+from relay_teams.gateway.feishu.message_pool_service import FeishuMessagePoolService
+from relay_teams.gateway.feishu.models import (
     FeishuEnvironment,
     FeishuMessageDeliveryStatus,
     FeishuMessageProcessingStatus,
@@ -18,19 +18,19 @@ from agent_teams.gateway.feishu.models import (
     FeishuTriggerSourceConfig,
     FeishuTriggerTargetConfig,
 )
-from agent_teams.media import content_parts_from_text
-from agent_teams.providers.token_usage_repo import SessionTokenUsage
-from agent_teams.sessions import ExternalSessionBindingRepository
-from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
-from agent_teams.sessions.runs.run_runtime_repo import (
+from relay_teams.media import content_parts_from_text
+from relay_teams.providers.token_usage_repo import SessionTokenUsage
+from relay_teams.sessions import ExternalSessionBindingRepository
+from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
+from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.sessions.session_models import SessionMode, SessionRecord
-from agent_teams.automation.automation_bound_session_queue_repository import (
+from relay_teams.sessions.session_models import SessionMode, SessionRecord
+from relay_teams.automation.automation_bound_session_queue_repository import (
     AutomationBoundSessionQueueRepository,
 )
 

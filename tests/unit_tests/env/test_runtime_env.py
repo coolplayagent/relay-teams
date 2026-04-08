@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.env import runtime_env
+from relay_teams.env import runtime_env
 
 
 def test_load_merged_env_vars_reads_app_env_file(tmp_path: Path) -> None:

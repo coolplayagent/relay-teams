@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.computer import (
+from relay_teams.computer import (
     BUILTIN_COMPUTER_TOOL_NAMES,
     ComputerActionRisk,
     ComputerPermissionScope,
@@ -12,7 +12,7 @@ from agent_teams.computer import (
     describe_external_acp_tool,
     describe_mcp_tool,
 )
-from agent_teams.mcp.mcp_models import McpConfigScope
+from relay_teams.mcp.mcp_models import McpConfigScope
 
 
 def test_describe_builtin_tool_returns_expected_descriptor() -> None:

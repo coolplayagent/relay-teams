@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Layout
-- Core package: `src/agent_teams/`
+- Core package: `src/relay_teams/`
 - Main modules:
   - `agents/`: agent models, execution flow, orchestration, and task domain
     - `agents/execution/`: prompt assembly, message persistence, subagent running, LLM session flow
@@ -30,7 +30,7 @@
   - `workspace/`: workspace ids, handles, memory, artifacts, and manager
 - Frontend assets: `frontend/dist/`
 - Tests:
-  - `tests/unit_tests/`: mirrors `src/agent_teams/` by module
+  - `tests/unit_tests/`: mirrors `src/relay_teams/` by module
   - `tests/integration_tests/api/`: HTTP/SSE integration flows
   - `tests/integration_tests/browser/`: browser scenarios
   - `tests/integration_tests/cli/`: CLI integration coverage
@@ -66,7 +66,7 @@
 - Prefer enums and Pydantic models over loose dictionaries.
 - Do not use `typing.Any`, `hasattr`, or `# type: ignore`.
 - Changed behavior must come with tests.
-- `tests/unit_tests/` should mirror `src/agent_teams/`. Add matching `__init__.py` files for new test directories.
+- `tests/unit_tests/` should mirror `src/relay_teams/`. Add matching `__init__.py` files for new test directories.
 - Prefer focused unit tests first. Add integration coverage when run/SSE/interface flows change.
 - For built-in PPT skills, when a user reports遮挡、重叠、溢出等版式问题, fix the artifact, upstream the reusable rule into the built-in ppt skill docs/tests, and verify end-to-end conversion before opening a PR.
 

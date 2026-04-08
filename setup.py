@@ -14,10 +14,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 
 def _load_frontend_packaging_module() -> ModuleType:
     module_path = (
-        PROJECT_ROOT / "src" / "agent_teams" / "release" / "frontend_packaging.py"
+        PROJECT_ROOT / "src" / "relay_teams" / "release" / "frontend_packaging.py"
     )
     spec = importlib.util.spec_from_file_location(
-        "agent_teams_release_frontend_packaging",
+        "relay_teams_release_frontend_packaging",
         module_path,
     )
     if spec is None or spec.loader is None:

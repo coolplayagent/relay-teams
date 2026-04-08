@@ -13,11 +13,11 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.sessions.session_history_marker_repository import (
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
-from agent_teams.workspace import build_conversation_id
+from relay_teams.workspace import build_conversation_id
 
 
 def test_message_repo_sanitizes_stale_task_status_error_on_read(tmp_path: Path) -> None:

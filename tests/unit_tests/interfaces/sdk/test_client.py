@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.interfaces.sdk.client import AgentTeamsClient
+from relay_teams.interfaces.sdk.client import AgentTeamsClient
 
 
 def test_reload_proxy_config_calls_expected_endpoint(monkeypatch) -> None:

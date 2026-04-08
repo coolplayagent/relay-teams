@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.env.web_config_models import (
+from relay_teams.env.web_config_models import (
     DEFAULT_SEARXNG_INSTANCE_URL,
     WebConfig,
     WebFallbackProvider,
     WebProvider,
 )
-from agent_teams.env.web_config_service import WebConfigService
-from agent_teams.env.web_secret_store import WebSecretStore
+from relay_teams.env.web_config_service import WebConfigService
+from relay_teams.env.web_secret_store import WebSecretStore
 
 
 class _FakeWebSecretStore(WebSecretStore):
@@ -75,7 +75,7 @@ def test_save_web_config_persists_provider_and_keyring_secret(
     config_dir.mkdir(parents=True)
     secret_store = _FakeWebSecretStore()
     monkeypatch.setattr(
-        "agent_teams.env.runtime_env.get_app_config_dir",
+        "relay_teams.env.runtime_env.get_app_config_dir",
         lambda user_home_dir=None: config_dir,
     )
     service = WebConfigService(
@@ -113,7 +113,7 @@ def test_save_web_config_removes_plaintext_api_key_from_env(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "agent_teams.env.runtime_env.get_app_config_dir",
+        "relay_teams.env.runtime_env.get_app_config_dir",
         lambda user_home_dir=None: config_dir,
     )
     service = WebConfigService(

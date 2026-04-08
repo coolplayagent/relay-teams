@@ -60,7 +60,7 @@ RUN python3 -m pip wheel --quiet --no-cache-dir \
         "uvicorn[standard]>=0.23.0" "httpx>=0.27.0"
 
 # -- Stage 2: project wheel (rebuilds when source changes) --
-COPY src/agent_teams/ src/agent_teams/
+COPY src/relay_teams/ src/relay_teams/
 COPY frontend/dist/ /opt/agent-runtime/frontend/dist/
 
 # Build only the project wheel; dependencies are already in the wheelhouse.

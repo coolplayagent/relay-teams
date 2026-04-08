@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.skills import SkillRegistry, SkillsConfigReloadService
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.skills import SkillRegistry, SkillsConfigReloadService
 
 
 def test_reload_skills_config_ignores_unknown_skills_on_existing_roles(
@@ -18,7 +18,7 @@ def test_reload_skills_config_ignores_unknown_skills_on_existing_roles(
     builtin_skills_dir = tmp_path / "builtin" / "skills"
     builtin_skills_dir.mkdir(parents=True)
     monkeypatch.setattr(
-        "agent_teams.skills.discovery.get_builtin_skills_dir_path",
+        "relay_teams.skills.discovery.get_builtin_skills_dir_path",
         lambda: builtin_skills_dir.resolve(),
     )
     role_registry = RoleRegistry()

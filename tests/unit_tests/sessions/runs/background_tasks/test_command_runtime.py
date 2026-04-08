@@ -5,8 +5,8 @@ import os
 
 import pytest
 
-from agent_teams.sessions.runs.background_tasks import command_runtime as runtime_module
-from agent_teams.sessions.runs.background_tasks.command_runtime import (
+from relay_teams.sessions.runs.background_tasks import command_runtime as runtime_module
+from relay_teams.sessions.runs.background_tasks.command_runtime import (
     CommandRuntimeKind,
     ResolvedCommandRuntime,
     kill_process_tree_by_pid,

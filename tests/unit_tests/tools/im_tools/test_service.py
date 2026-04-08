@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.automation import (
+from relay_teams.automation import (
     AutomationFeishuBinding,
     AutomationProjectRecord,
     AutomationProjectStatus,
@@ -14,7 +14,7 @@ from agent_teams.automation import (
     AutomationScheduleMode,
     AutomationDeliveryStatus,
 )
-from agent_teams.gateway.feishu.models import (
+from relay_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
     FEISHU_METADATA_CHAT_TYPE_KEY,
     FEISHU_METADATA_MESSAGE_ID_KEY,
@@ -25,19 +25,19 @@ from agent_teams.gateway.feishu.models import (
     FeishuTriggerSourceConfig,
     FeishuTriggerTargetConfig,
 )
-from agent_teams.gateway import (
+from relay_teams.gateway import (
     GatewayChannelType,
     GatewaySessionRecord,
 )
-from agent_teams.media import content_parts_from_text
-from agent_teams.sessions.runs.run_models import (
+from relay_teams.media import content_parts_from_text
+from relay_teams.sessions.runs.run_models import (
     IntentInput,
     RuntimePromptConversationContext,
 )
-from agent_teams.sessions.session_models import ProjectKind, SessionRecord
-from agent_teams.gateway.im import ImToolContextResolver, ImToolService
-from agent_teams.tools.registry import ToolResolutionContext
-from agent_teams.gateway.wechat.models import WeChatAccountRecord
+from relay_teams.sessions.session_models import ProjectKind, SessionRecord
+from relay_teams.gateway.im import ImToolContextResolver, ImToolService
+from relay_teams.tools.registry import ToolResolutionContext
+from relay_teams.gateway.wechat.models import WeChatAccountRecord
 
 
 _ENV = FeishuEnvironment(

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.roles.memory_repository import RoleMemoryRepository
-from agent_teams.roles.memory_service import RoleMemoryService
+from relay_teams.roles.memory_repository import RoleMemoryRepository
+from relay_teams.roles.memory_service import RoleMemoryService
 
 
 def test_role_memory_service_builds_injected_memory_and_preview(

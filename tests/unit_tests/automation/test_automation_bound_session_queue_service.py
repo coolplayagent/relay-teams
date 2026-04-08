@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
 
-from agent_teams.automation import (
+from relay_teams.automation import (
     AutomationBoundSessionQueueRepository,
     AutomationBoundSessionQueueService,
     AutomationBoundSessionQueueStatus,
@@ -17,16 +17,16 @@ from agent_teams.automation import (
     AutomationRunConfig,
     AutomationScheduleMode,
 )
-from agent_teams.gateway.feishu.models import FeishuEnvironment
-from agent_teams.media import content_parts_to_text
-from agent_teams.sessions.runs.run_models import IntentInput
-from agent_teams.sessions.runs.run_runtime_repo import (
+from relay_teams.gateway.feishu.models import FeishuEnvironment
+from relay_teams.media import content_parts_to_text
+from relay_teams.sessions.runs.run_models import IntentInput
+from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.sessions.session_models import ProjectKind, SessionRecord
+from relay_teams.sessions.session_models import ProjectKind, SessionRecord
 
 
 class _FakeSessionLookup:

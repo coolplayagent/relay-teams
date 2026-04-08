@@ -6,18 +6,18 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from agent_teams.gateway.acp_mcp_relay import AcpMcpRelay, GatewayAwareMcpRegistry
-from agent_teams.gateway.gateway_models import GatewayMcpServerSpec
-from agent_teams.interfaces.server.config_status_service import ConfigStatusService
-from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
-from agent_teams.mcp.mcp_registry import McpRegistry
-from agent_teams.sessions.runs.runtime_config import (
+from relay_teams.gateway.acp_mcp_relay import AcpMcpRelay, GatewayAwareMcpRegistry
+from relay_teams.gateway.gateway_models import GatewayMcpServerSpec
+from relay_teams.interfaces.server.config_status_service import ConfigStatusService
+from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
+from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.sessions.runs.runtime_config import (
     ModelConfigStatus,
     RuntimeConfig,
     RuntimePaths,
 )
-from agent_teams.skills.skill_models import SkillScope, SkillSummaryEntry
-from agent_teams.skills.skill_registry import SkillRegistry
+from relay_teams.skills.skill_models import SkillScope, SkillSummaryEntry
+from relay_teams.skills.skill_registry import SkillRegistry
 
 
 class _FakeSkillRegistry:
@@ -149,6 +149,6 @@ def _build_runtime_paths() -> RuntimePaths:
     return RuntimePaths(
         config_dir=Path("/tmp/config"),
         env_file=Path("/tmp/config/.env"),
-        db_path=Path("/tmp/config/agent_teams.db"),
+        db_path=Path("/tmp/config/relay_teams.db"),
         roles_dir=Path("/tmp/config/roles"),
     )

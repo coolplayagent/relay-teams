@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from agent_teams.gateway.feishu.models import (
+from relay_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
     FEISHU_METADATA_CHAT_TYPE_KEY,
     FEISHU_METADATA_PLATFORM_KEY,
@@ -15,16 +15,16 @@ from agent_teams.gateway.feishu.models import (
     FeishuTriggerSourceConfig,
     FeishuTriggerTargetConfig,
 )
-from agent_teams.gateway.feishu.notification_delivery import (
+from relay_teams.gateway.feishu.notification_delivery import (
     FeishuNotificationDispatcher,
 )
-from agent_teams.notifications import (
+from relay_teams.notifications import (
     NotificationChannel,
     NotificationContext,
     NotificationRequest,
     NotificationType,
 )
-from agent_teams.sessions.session_models import SessionMode, SessionRecord
+from relay_teams.sessions.session_models import SessionMode, SessionRecord
 
 
 class _FakeSessionRepo:

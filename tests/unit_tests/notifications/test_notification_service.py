@@ -4,9 +4,9 @@ from __future__ import annotations
 import json
 from typing import cast
 
-from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.run_models import RunEvent
-from agent_teams.notifications import (
+from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.notifications import (
     NotificationConfig,
     NotificationChannel,
     NotificationContext,
@@ -15,7 +15,7 @@ from agent_teams.notifications import (
     NotificationType,
     default_notification_config,
 )
-from agent_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.event_stream import RunEventHub
 
 
 class _FakeRunEventHub:

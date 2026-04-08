@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.skills import discovery
-from agent_teams.skills.discovery import SkillsDirectory
+from relay_teams.skills import discovery
+from relay_teams.skills.discovery import SkillsDirectory
 
 
 def test_get_user_skills_dir_uses_user_config_dir_when_home_not_provided(

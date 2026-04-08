@@ -8,15 +8,15 @@ from unittest.mock import patch
 
 import pytest
 
-from agent_teams.logger import (
+from relay_teams.logger import (
     configure_logging,
     get_logger,
     log_event,
     shutdown_logging,
 )
-from agent_teams.logger import logger as logger_module
-from agent_teams.logger.logger import _WindowsSafeTimedRotatingFileHandler
-from agent_teams.trace import bind_trace_context, trace_span
+from relay_teams.logger import logger as logger_module
+from relay_teams.logger.logger import _WindowsSafeTimedRotatingFileHandler
+from relay_teams.trace import bind_trace_context, trace_span
 
 
 def test_configure_logging_creates_backend_debug_and_frontend_logs(
@@ -315,7 +315,7 @@ def test_windows_safe_handler_copies_and_truncates_on_windows(
 
     dest = tmp_path / "test.log.2026-03-17"
 
-    with patch("agent_teams.logger.logger.sys") as mock_sys:
+    with patch("relay_teams.logger.logger.sys") as mock_sys:
         mock_sys.platform = "win32"
         handler.rotate(str(log_file), str(dest))
 
@@ -337,7 +337,7 @@ def test_windows_safe_handler_removes_existing_dest_before_copy(
     )
     handler.close()
 
-    with patch("agent_teams.logger.logger.sys") as mock_sys:
+    with patch("relay_teams.logger.logger.sys") as mock_sys:
         mock_sys.platform = "win32"
         handler.rotate(str(log_file), str(dest))
 

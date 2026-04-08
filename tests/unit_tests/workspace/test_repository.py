@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 
 import pytest
-from agent_teams.workspace import WorkspaceRepository
+from relay_teams.workspace import WorkspaceRepository
 
 
 def test_workspace_repository_supports_concurrent_reads(tmp_path: Path) -> None:

@@ -7,9 +7,9 @@ import json
 from pathlib import Path
 from typing import cast
 
-from agent_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
-from agent_teams.providers.model_config_manager import ModelConfigManager
-from agent_teams.secrets import AppSecretStore
+from relay_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
+from relay_teams.providers.model_config_manager import ModelConfigManager
+from relay_teams.secrets import AppSecretStore
 
 
 class _FileOnlySecretStore(AppSecretStore):

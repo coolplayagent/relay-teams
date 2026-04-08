@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.workspace import (
+from relay_teams.workspace import (
     FileScopeBackend,
     WorkspaceFileScope,
     WorkspaceManager,

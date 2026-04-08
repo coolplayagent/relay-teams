@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 
-from agent_teams.sessions import ExternalSessionBindingRepository
+from relay_teams.sessions import ExternalSessionBindingRepository
 
 
 def test_upsert_and_get_binding(tmp_path: Path) -> None:

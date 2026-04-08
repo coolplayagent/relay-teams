@@ -6,27 +6,27 @@ from pathlib import Path
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_SRC_ROOT = _REPO_ROOT / "src" / "agent_teams"
+_SRC_ROOT = _REPO_ROOT / "src" / "relay_teams"
 _ALLOWED_COMMIT_FILES = {
-    Path("src/agent_teams/persistence/db.py"),
+    Path("src/relay_teams/persistence/db.py"),
 }
 _SHARED_SQLITE_WRITERS = {
     Path(
-        "src/agent_teams/automation/automation_event_repository.py"
+        "src/relay_teams/automation/automation_event_repository.py"
     ): "AutomationEventRepository",
     Path(
-        "src/agent_teams/automation/automation_repository.py"
+        "src/relay_teams/automation/automation_repository.py"
     ): "AutomationProjectRepository",
     Path(
-        "src/agent_teams/gateway/gateway_session_repository.py"
+        "src/relay_teams/gateway/gateway_session_repository.py"
     ): "GatewaySessionRepository",
-    Path("src/agent_teams/metrics/stores/sqlite.py"): "SqliteMetricAggregateStore",
-    Path("src/agent_teams/persistence/shared_state_repo.py"): "SharedStateRepository",
-    Path("src/agent_teams/providers/token_usage_repo.py"): "TokenUsageRepository",
-    Path("src/agent_teams/retrieval/sqlite_store.py"): "SqliteFts5RetrievalStore",
-    Path("src/agent_teams/roles/memory_repository.py"): "RoleMemoryRepository",
-    Path("src/agent_teams/sessions/runs/run_intent_repo.py"): "RunIntentRepository",
-    Path("src/agent_teams/sessions/session_repository.py"): "SessionRepository",
+    Path("src/relay_teams/metrics/stores/sqlite.py"): "SqliteMetricAggregateStore",
+    Path("src/relay_teams/persistence/shared_state_repo.py"): "SharedStateRepository",
+    Path("src/relay_teams/providers/token_usage_repo.py"): "TokenUsageRepository",
+    Path("src/relay_teams/retrieval/sqlite_store.py"): "SqliteFts5RetrievalStore",
+    Path("src/relay_teams/roles/memory_repository.py"): "RoleMemoryRepository",
+    Path("src/relay_teams/sessions/runs/run_intent_repo.py"): "RunIntentRepository",
+    Path("src/relay_teams/sessions/session_repository.py"): "SessionRepository",
 }
 
 
