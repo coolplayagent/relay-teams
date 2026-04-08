@@ -42,6 +42,8 @@ LOGGER = get_logger(__name__)
 _TRIGGER_RATIO = 0.8
 _TARGET_RATIO = 0.5
 _PROTECTED_TAIL_MESSAGES = 12
+DEFAULT_PROTECTED_TAIL_MESSAGES = _PROTECTED_TAIL_MESSAGES
+_SEVERE_HISTORY_PRESSURE_RATIO = 2.0
 
 
 class ConversationTokenEstimator:
@@ -62,10 +64,12 @@ class ConversationCompactionPlan(BaseModel):
 
     should_compact: bool = False
     estimated_tokens_before: int = Field(default=0, ge=0)
+    estimated_tokens_after: int = Field(default=0, ge=0)
     threshold_tokens: int = Field(default=0, ge=0)
     target_tokens: int = Field(default=0, ge=0)
     compacted_message_count: int = Field(default=0, ge=0)
     kept_message_count: int = Field(default=0, ge=0)
+    protected_tail_messages: int = Field(default=DEFAULT_PROTECTED_TAIL_MESSAGES, ge=0)
     source_char_budget: int = Field(default=0, ge=0)
 
 
@@ -74,9 +78,61 @@ class ConversationCompactionStrategy:
         self,
         *,
         history: Sequence[ModelRequest | ModelResponse],
-        context_window: int | None,
+        budget: "ConversationCompactionBudget",
     ) -> ConversationCompactionPlan:
         raise NotImplementedError
+
+
+class ConversationCompactionBudget(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    context_window: int | None = Field(default=None)
+    estimated_system_prompt_tokens: int = Field(default=0, ge=0)
+    estimated_user_prompt_tokens: int = Field(default=0, ge=0)
+    estimated_tool_context_tokens: int = Field(default=0, ge=0)
+    estimated_output_reserve_tokens: int = Field(default=0, ge=0)
+    estimated_non_history_tokens: int = Field(default=0, ge=0)
+    history_trigger_tokens: int = Field(default=0, ge=0)
+    history_target_tokens: int = Field(default=0, ge=0)
+
+
+def build_conversation_compaction_budget(
+    *,
+    context_window: int | None,
+    estimated_system_prompt_tokens: int,
+    estimated_user_prompt_tokens: int,
+    estimated_tool_context_tokens: int,
+    estimated_output_reserve_tokens: int,
+) -> ConversationCompactionBudget:
+    estimated_non_history_tokens = (
+        estimated_system_prompt_tokens
+        + estimated_user_prompt_tokens
+        + estimated_tool_context_tokens
+        + estimated_output_reserve_tokens
+    )
+    if context_window is None or context_window <= 0:
+        return ConversationCompactionBudget(
+            context_window=context_window,
+            estimated_system_prompt_tokens=estimated_system_prompt_tokens,
+            estimated_user_prompt_tokens=estimated_user_prompt_tokens,
+            estimated_tool_context_tokens=estimated_tool_context_tokens,
+            estimated_output_reserve_tokens=estimated_output_reserve_tokens,
+            estimated_non_history_tokens=estimated_non_history_tokens,
+        )
+    return ConversationCompactionBudget(
+        context_window=context_window,
+        estimated_system_prompt_tokens=estimated_system_prompt_tokens,
+        estimated_user_prompt_tokens=estimated_user_prompt_tokens,
+        estimated_tool_context_tokens=estimated_tool_context_tokens,
+        estimated_output_reserve_tokens=estimated_output_reserve_tokens,
+        estimated_non_history_tokens=estimated_non_history_tokens,
+        history_trigger_tokens=max(
+            0, int(context_window * _TRIGGER_RATIO) - estimated_non_history_tokens
+        ),
+        history_target_tokens=max(
+            0, int(context_window * _TARGET_RATIO) - estimated_non_history_tokens
+        ),
+    )
 
 
 class DefaultConversationCompactionStrategy(ConversationCompactionStrategy):
@@ -91,38 +147,47 @@ class DefaultConversationCompactionStrategy(ConversationCompactionStrategy):
         self,
         *,
         history: Sequence[ModelRequest | ModelResponse],
-        context_window: int | None,
+        budget: ConversationCompactionBudget,
     ) -> ConversationCompactionPlan:
         message_count = len(history)
         estimated_tokens = self._estimator.estimate_history_tokens(history)
-        threshold_tokens = (
-            int(context_window * _TRIGGER_RATIO)
-            if context_window is not None and context_window > 0
-            else 0
-        )
-        target_tokens = (
-            int(context_window * _TARGET_RATIO)
-            if context_window is not None and context_window > 0
-            else 0
+        threshold_tokens = budget.history_trigger_tokens
+        target_tokens = budget.history_target_tokens
+        protected_tail_messages = _resolve_protected_tail_messages(
+            message_count=message_count,
+            estimated_tokens=estimated_tokens,
+            threshold_tokens=threshold_tokens,
         )
         if (
             threshold_tokens <= 0
             or target_tokens <= 0
             or estimated_tokens < threshold_tokens
-            or message_count <= (_PROTECTED_TAIL_MESSAGES + 1)
+            or message_count <= 1
         ):
             return ConversationCompactionPlan(
                 should_compact=False,
                 estimated_tokens_before=estimated_tokens,
+                estimated_tokens_after=estimated_tokens,
                 threshold_tokens=threshold_tokens,
                 target_tokens=target_tokens,
                 kept_message_count=message_count,
+                protected_tail_messages=protected_tail_messages,
             )
 
         message_tokens = [
             self._estimator.estimate_message_tokens(message) for message in history
         ]
-        max_compactable = max(0, message_count - _PROTECTED_TAIL_MESSAGES)
+        max_compactable = max(0, message_count - protected_tail_messages)
+        if max_compactable <= 0:
+            return ConversationCompactionPlan(
+                should_compact=False,
+                estimated_tokens_before=estimated_tokens,
+                estimated_tokens_after=estimated_tokens,
+                threshold_tokens=threshold_tokens,
+                target_tokens=target_tokens,
+                kept_message_count=message_count,
+                protected_tail_messages=protected_tail_messages,
+            )
         pending_tool_call_ids: set[str] = set()
         remaining_tokens = estimated_tokens
         latest_safe_split = 0
@@ -145,19 +210,23 @@ class DefaultConversationCompactionStrategy(ConversationCompactionStrategy):
             return ConversationCompactionPlan(
                 should_compact=False,
                 estimated_tokens_before=estimated_tokens,
+                estimated_tokens_after=estimated_tokens,
                 threshold_tokens=threshold_tokens,
                 target_tokens=target_tokens,
                 kept_message_count=message_count,
+                protected_tail_messages=protected_tail_messages,
             )
 
         kept_message_count = max(0, message_count - split_index)
         return ConversationCompactionPlan(
             should_compact=True,
             estimated_tokens_before=estimated_tokens,
+            estimated_tokens_after=max(0, remaining_tokens),
             threshold_tokens=threshold_tokens,
             target_tokens=target_tokens,
             compacted_message_count=split_index,
             kept_message_count=kept_message_count,
+            protected_tail_messages=protected_tail_messages,
             source_char_budget=min(max(target_tokens * 4, 12000), 48000),
         )
 
@@ -185,10 +254,13 @@ class ConversationCompactionService:
         role_id: str,
         conversation_id: str,
         history: Sequence[ModelRequest | ModelResponse],
+        budget: ConversationCompactionBudget,
+        estimated_tokens_before_microcompact: int | None = None,
+        estimated_tokens_after_microcompact: int | None = None,
     ) -> list[ModelRequest | ModelResponse]:
         plan = self._strategy.plan(
             history=history,
-            context_window=self._config.context_window,
+            budget=budget,
         )
         if not plan.should_compact:
             return list(history)
@@ -216,10 +288,23 @@ class ConversationCompactionService:
                 "conversation_id": conversation_id,
                 "role_id": role_id,
                 "summary_markdown": summary,
-                "estimated_tokens_before": str(plan.estimated_tokens_before),
+                "compaction_strategy": "rolling_summary",
+                "estimated_tokens_before": str(
+                    estimated_tokens_before_microcompact
+                    if estimated_tokens_before_microcompact is not None
+                    else plan.estimated_tokens_before
+                ),
+                "estimated_tokens_after_microcompact": str(
+                    estimated_tokens_after_microcompact
+                    if estimated_tokens_after_microcompact is not None
+                    else plan.estimated_tokens_before
+                ),
+                "estimated_tokens_after_compact": str(plan.estimated_tokens_after),
                 "threshold_tokens": str(plan.threshold_tokens),
                 "target_tokens": str(plan.target_tokens),
                 "compacted_message_count": str(plan.compacted_message_count),
+                "kept_message_count": str(plan.kept_message_count),
+                "protected_tail_messages": str(plan.protected_tail_messages),
             },
         )
         hidden_count = self._message_repo.hide_conversation_messages_for_compaction(
@@ -239,10 +324,12 @@ class ConversationCompactionService:
                 "role_id": role_id,
                 "conversation_id": conversation_id,
                 "estimated_tokens_before": plan.estimated_tokens_before,
+                "estimated_tokens_after_compact": plan.estimated_tokens_after,
                 "threshold_tokens": plan.threshold_tokens,
                 "target_tokens": plan.target_tokens,
                 "compacted_message_count": hidden_count,
                 "kept_message_count": plan.kept_message_count,
+                "protected_tail_messages": plan.protected_tail_messages,
                 "marker_id": marker.marker_id,
             },
         )
@@ -454,3 +541,28 @@ def _update_pending_tool_call_ids(
             continue
         if isinstance(part, (ToolReturnPart, RetryPromptPart)):
             pending_tool_call_ids.discard(tool_call_id)
+
+
+def _resolve_protected_tail_messages(
+    *,
+    message_count: int,
+    estimated_tokens: int,
+    threshold_tokens: int,
+    default_protected_tail_messages: int = DEFAULT_PROTECTED_TAIL_MESSAGES,
+) -> int:
+    if message_count <= 0:
+        return 0
+    if message_count == 1:
+        return 1
+    protected_tail_messages = min(
+        default_protected_tail_messages,
+        max(1, (message_count * 2) // 3),
+    )
+    if threshold_tokens > 0 and estimated_tokens >= int(
+        threshold_tokens * _SEVERE_HISTORY_PRESSURE_RATIO
+    ):
+        protected_tail_messages = min(
+            protected_tail_messages,
+            max(1, message_count // 4),
+        )
+    return min(protected_tail_messages, message_count - 1)

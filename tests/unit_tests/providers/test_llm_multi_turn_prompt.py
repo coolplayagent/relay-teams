@@ -38,6 +38,7 @@ from agent_teams.mcp.mcp_models import McpToolSchema
 from agent_teams.mcp.mcp_registry import McpRegistry
 from agent_teams.agents.execution.system_prompts import PromptSkillInstruction
 from agent_teams.agents.execution.conversation_compaction import (
+    build_conversation_compaction_budget,
     ConversationCompactionService,
 )
 from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
@@ -133,8 +134,18 @@ class _FakeConversationCompactionService:
         role_id: str,
         conversation_id: str,
         history: list[ModelRequest | ModelResponse],
+        budget: object | None = None,
+        estimated_tokens_before_microcompact: int | None = None,
+        estimated_tokens_after_microcompact: int | None = None,
     ) -> list[ModelRequest | ModelResponse]:
-        _ = (session_id, role_id, conversation_id)
+        _ = (
+            session_id,
+            role_id,
+            conversation_id,
+            budget,
+            estimated_tokens_before_microcompact,
+            estimated_tokens_after_microcompact,
+        )
         return list(history)
 
     def build_prompt_section(
@@ -787,6 +798,13 @@ async def test_maybe_compact_history_returns_history_when_plan_does_not_trigger(
         request=request,
         history=history,
         conversation_id="conv-temp-role",
+        budget=build_conversation_compaction_budget(
+            context_window=32000,
+            estimated_system_prompt_tokens=0,
+            estimated_user_prompt_tokens=0,
+            estimated_tool_context_tokens=0,
+            estimated_output_reserve_tokens=0,
+        ),
     )
 
     assert compacted == history
@@ -869,7 +887,8 @@ async def test_generate_counts_current_user_prompt_in_context_budget(
     assert 1 <= bounded_max_tokens < configured_max_tokens
 
 
-def test_safe_max_output_tokens_does_not_double_count_persisted_user_prompt(
+@pytest.mark.asyncio
+async def test_safe_max_output_tokens_does_not_double_count_persisted_user_prompt(
     tmp_path: Path,
 ) -> None:
     fake_hub = _FakeRunEventHub()
@@ -906,7 +925,7 @@ def test_safe_max_output_tokens_does_not_double_count_persisted_user_prompt(
         ModelRequest(parts=[UserPromptPart(content="x" * 124_200)]),
     ]
 
-    persisted_budget = provider._session._safe_max_output_tokens(
+    persisted_budget = await provider._session._safe_max_output_tokens(
         request=request,
         history=history,
         system_prompt="system",
@@ -916,7 +935,7 @@ def test_safe_max_output_tokens_does_not_double_count_persisted_user_prompt(
         allowed_skills=(),
     )
     deduped_request = request.model_copy(update={"user_prompt": None})
-    deduped_budget = provider._session._safe_max_output_tokens(
+    deduped_budget = await provider._session._safe_max_output_tokens(
         request=deduped_request,
         history=history,
         system_prompt="system",
@@ -1026,7 +1045,7 @@ async def test_generate_recomputes_budget_after_injection_restart(
     _ = await provider.generate(request)
 
     assert len(scripted_agent.histories) >= 2
-    first_budget = provider._session._safe_max_output_tokens(
+    first_budget = await provider._session._safe_max_output_tokens(
         request=request,
         history=cast(list[ModelRequest | ModelResponse], scripted_agent.histories[0]),
         system_prompt="system",
@@ -1035,7 +1054,7 @@ async def test_generate_recomputes_budget_after_injection_restart(
         allowed_mcp_servers=(),
         allowed_skills=(),
     )
-    second_budget = provider._session._safe_max_output_tokens(
+    second_budget = await provider._session._safe_max_output_tokens(
         request=request,
         history=cast(list[ModelRequest | ModelResponse], scripted_agent.histories[-1]),
         system_prompt="system",
@@ -1173,7 +1192,7 @@ async def test_generate_recovery_does_not_rereserve_original_user_prompt_tokens(
         second_history,
         cast(str, request.user_prompt),
     )
-    expected_without_rereserve = provider._session._safe_max_output_tokens(
+    expected_without_rereserve = await provider._session._safe_max_output_tokens(
         request=request,
         history=second_history,
         system_prompt="system",
@@ -1182,7 +1201,7 @@ async def test_generate_recovery_does_not_rereserve_original_user_prompt_tokens(
         allowed_mcp_servers=(),
         allowed_skills=(),
     )
-    expected_with_rereserve = provider._session._safe_max_output_tokens(
+    expected_with_rereserve = await provider._session._safe_max_output_tokens(
         request=request,
         history=second_history,
         system_prompt="system",
@@ -1293,7 +1312,8 @@ async def test_generate_rebuilds_agent_when_restart_updates_compaction_summary(
 
     assert response == "ok"
     assert len(captured_system_prompts) == 2
-    assert captured_system_prompts[0] == "system"
+    assert captured_system_prompts[0].startswith("system")
+    assert captured_system_prompts[0].endswith("summary after restart")
     assert captured_system_prompts[1].endswith("summary after restart")
 
 
@@ -1349,7 +1369,7 @@ async def test_generate_reserves_context_for_registered_tools_and_skills(
     assert isinstance(settings_obj, dict)
     bounded_max_tokens = settings_obj.get("max_tokens")
     assert isinstance(bounded_max_tokens, int)
-    capped_with_tools = provider._session._safe_max_output_tokens(
+    capped_with_tools = await provider._session._safe_max_output_tokens(
         request=request,
         history=[],
         system_prompt="system",
@@ -1358,7 +1378,7 @@ async def test_generate_reserves_context_for_registered_tools_and_skills(
         allowed_mcp_servers=(),
         allowed_skills=("time",),
     )
-    uncapped_without_tools = provider._session._safe_max_output_tokens(
+    uncapped_without_tools = await provider._session._safe_max_output_tokens(
         request=request,
         history=[],
         system_prompt="system",
@@ -1614,7 +1634,7 @@ async def test_generate_omits_max_tokens_when_config_unset(
     assert isinstance(settings_obj, dict)
     assert "max_tokens" not in settings_obj
     assert (
-        provider._session._safe_max_output_tokens(
+        await provider._session._safe_max_output_tokens(
             request=request,
             history=[],
             system_prompt="system",

@@ -14,6 +14,9 @@ from pydantic_ai.messages import ModelRequest, ModelResponse
 from agent_teams.agents.execution.conversation_compaction import (
     ConversationCompactionService,
 )
+from agent_teams.agents.execution.conversation_microcompact import (
+    ConversationMicrocompactService,
+)
 from agent_teams.agents.execution.llm_session import AgentLlmSession
 from agent_teams.computer import ComputerRuntime
 from agent_teams.media import ContentPart, MediaAssetService, MediaModality
@@ -138,6 +141,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 message_repo=message_repo,
                 session_history_marker_repo=session_history_marker_repo,
             ),
+            conversation_microcompact_service=ConversationMicrocompactService(),
             tool_registry=tool_registry,
             mcp_registry=mcp_registry,
             skill_registry=skill_registry,

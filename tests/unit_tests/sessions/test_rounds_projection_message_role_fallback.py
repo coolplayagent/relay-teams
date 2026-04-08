@@ -520,6 +520,7 @@ def test_build_session_rounds_marks_compaction_boundary_for_matching_conversatio
                 "created_at": "2026-03-25T09:00:00+00:00",
                 "metadata": {
                     "conversation_id": conversation_id,
+                    "compaction_strategy": "rolling_summary",
                 },
             }
         ],
@@ -532,5 +533,90 @@ def test_build_session_rounds_marks_compaction_boundary_for_matching_conversatio
         "marker_id": "marker-compaction-1",
         "marker_type": "compaction",
         "created_at": "2026-03-25T09:00:00+00:00",
-        "label": "History compacted",
+        "label": "History compacted (rolling summary)",
+    }
+
+
+def test_build_session_rounds_projects_microcompact_runtime_badge(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_microcompact.db"
+    session_id = "session-1"
+    run_id = "run-1"
+
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="Coordinator",
+            objective="answer the user",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    agent_repo.upsert_instance(
+        run_id=run_id,
+        trace_id=run_id,
+        session_id=session_id,
+        instance_id="inst-coordinator-1",
+        role_id="Coordinator",
+        workspace_id="default",
+        status=InstanceStatus.COMPLETED,
+    )
+    message_repo.append(
+        session_id=session_id,
+        workspace_id="default",
+        instance_id="inst-coordinator-1",
+        task_id="task-root",
+        trace_id=run_id,
+        agent_role_id="Coordinator",
+        messages=[
+            ModelRequest(parts=[UserPromptPart(content="remember this")]),
+            ModelResponse(parts=[TextPart(content="done")]),
+        ],
+    )
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda sid: cast(
+            list[dict[str, object]], message_repo.get_messages_by_session(sid)
+        ),
+        get_session_events=lambda _sid: [
+            {
+                "event_type": "model_step_finished",
+                "trace_id": run_id,
+                "payload_json": json.dumps(
+                    {
+                        "role_id": "Coordinator",
+                        "instance_id": "inst-coordinator-1",
+                        "microcompact_applied": True,
+                        "estimated_tokens_before_microcompact": 139920,
+                        "estimated_tokens_after_microcompact": 9009,
+                        "microcompact_compacted_message_count": 1,
+                        "microcompact_compacted_part_count": 3,
+                    }
+                ),
+                "occurred_at": "2026-03-25T09:31:00+00:00",
+            }
+        ],
+    )
+
+    round_item = next(item for item in rounds if item["run_id"] == run_id)
+
+    assert round_item["microcompact"] == {
+        "applied": True,
+        "estimated_tokens_before": 139920,
+        "estimated_tokens_after": 9009,
+        "compacted_message_count": 1,
+        "compacted_part_count": 3,
     }

@@ -845,10 +845,35 @@ function patchAllActiveRetryEvents() {
 }
 
 function renderRoundBadges(round, stateLabel, stateTone, approvalCount) {
+    const microcompactBadge = renderMicrocompactBadge(round?.microcompact);
     return `
         ${stateLabel ? `<span class="round-state-pill round-state-${stateTone}">${esc(stateLabel)}</span>` : ''}
         ${approvalCount > 0 ? `<span class="round-state-pill round-state-warning">${esc(t('rounds.pending_approvals').replace('{count}', String(approvalCount)))}</span>` : ''}
+        ${microcompactBadge}
     `;
+}
+
+function renderMicrocompactBadge(microcompact) {
+    if (!microcompact || microcompact.applied !== true) {
+        return '';
+    }
+    const before = formatRoundTokenCount(microcompact.estimated_tokens_before);
+    const after = formatRoundTokenCount(microcompact.estimated_tokens_after);
+    const messageCount = Number(microcompact.compacted_message_count || 0);
+    const partCount = Number(microcompact.compacted_part_count || 0);
+    const label = formatMessage('rounds.microcompact_badge', { before, after });
+    const title = formatMessage('rounds.microcompact_title', {
+        before: String(Number(microcompact.estimated_tokens_before || 0)),
+        after: String(Number(microcompact.estimated_tokens_after || 0)),
+        messages: String(messageCount),
+        parts: String(partCount),
+    });
+    return `<span class="round-state-pill round-state-idle" title="${esc(title)}">${esc(label)}</span>`;
+}
+
+function formatRoundTokenCount(value) {
+    const normalized = Math.max(0, Number(value || 0));
+    return normalized >= 1000 ? `${(normalized / 1000).toFixed(1)}k` : String(normalized);
 }
 
 function renderRoundRetryEvents(section, retryEvents) {

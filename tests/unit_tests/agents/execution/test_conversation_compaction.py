@@ -10,6 +10,7 @@ import pytest
 
 import agent_teams.agents.execution.conversation_compaction as compaction_module
 from agent_teams.agents.execution.conversation_compaction import (
+    ConversationCompactionBudget,
     ConversationCompactionPlan,
     ConversationCompactionService,
     ConversationCompactionStrategy,
@@ -22,7 +23,12 @@ from agent_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
 from agent_teams.workspace import build_conversation_id
-from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+)
 
 
 class _FixedStrategy(ConversationCompactionStrategy):
@@ -33,9 +39,9 @@ class _FixedStrategy(ConversationCompactionStrategy):
         self,
         *,
         history: Sequence[ModelRequest | ModelResponse],
-        context_window: int | None,
+        budget: ConversationCompactionBudget,
     ) -> ConversationCompactionPlan:
-        _ = (history, context_window)
+        _ = (history, budget)
         return self._plan
 
 
@@ -90,11 +96,18 @@ def test_default_conversation_compaction_strategy_respects_threshold_and_tail() 
         for index in range(20)
     ]
 
-    plan = strategy.plan(history=history, context_window=400)
+    budget = ConversationCompactionBudget(
+        context_window=400,
+        history_trigger_tokens=320,
+        history_target_tokens=200,
+    )
+
+    plan = strategy.plan(history=history, budget=budget)
 
     assert plan.should_compact is True
     assert plan.compacted_message_count > 0
-    assert plan.kept_message_count >= 12
+    assert plan.protected_tail_messages == 5
+    assert plan.kept_message_count == 5
     assert plan.estimated_tokens_before >= plan.threshold_tokens
 
 
@@ -138,10 +151,12 @@ async def test_conversation_compaction_service_hides_messages_and_creates_marker
             ConversationCompactionPlan(
                 should_compact=True,
                 estimated_tokens_before=90,
+                estimated_tokens_after=50,
                 threshold_tokens=80,
                 target_tokens=50,
                 compacted_message_count=2,
                 kept_message_count=2,
+                protected_tail_messages=6,
                 source_char_budget=12000,
             )
         ),
@@ -155,6 +170,13 @@ async def test_conversation_compaction_service_hides_messages_and_creates_marker
         role_id="writer",
         conversation_id=conversation_id,
         history=message_repo.get_history_for_conversation(conversation_id),
+        budget=ConversationCompactionBudget(
+            context_window=100,
+            history_trigger_tokens=80,
+            history_target_tokens=50,
+        ),
+        estimated_tokens_before_microcompact=120,
+        estimated_tokens_after_microcompact=84,
     )
 
     assert len(next_history) == 2
@@ -164,6 +186,12 @@ async def test_conversation_compaction_service_hides_messages_and_creates_marker
     )
     assert latest_marker is not None
     assert latest_marker.metadata["conversation_id"] == conversation_id
+    assert latest_marker.metadata["compaction_strategy"] == "rolling_summary"
+    assert latest_marker.metadata["estimated_tokens_before"] == "120"
+    assert latest_marker.metadata["estimated_tokens_after_microcompact"] == "84"
+    assert latest_marker.metadata["estimated_tokens_after_compact"] == "50"
+    assert latest_marker.metadata["kept_message_count"] == "2"
+    assert latest_marker.metadata["protected_tail_messages"] == "6"
     assert (
         latest_marker.metadata["summary_markdown"]
         == "## Active summary\n- remember this"
@@ -224,3 +252,26 @@ def test_compaction_prompt_section_ignores_summaries_before_latest_clear(
         )
         == ""
     )
+
+
+def test_default_conversation_compaction_strategy_compacts_short_history_when_severe() -> (
+    None
+):
+    strategy = DefaultConversationCompactionStrategy()
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="seed")]),
+        ModelResponse(parts=[TextPart(content="tool calls echoed " + ("x" * 600))]),
+        ModelRequest(parts=[UserPromptPart(content="tool results " + ("y" * 5000))]),
+        ModelResponse(parts=[TextPart(content="done")]),
+    ]
+    budget = ConversationCompactionBudget(
+        context_window=600,
+        history_trigger_tokens=200,
+        history_target_tokens=100,
+    )
+
+    plan = strategy.plan(history=history, budget=budget)
+
+    assert plan.should_compact is True
+    assert plan.protected_tail_messages == 1
+    assert plan.compacted_message_count >= 1

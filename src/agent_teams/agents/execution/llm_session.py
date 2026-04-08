@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 import asyncio
 import json
@@ -77,8 +77,13 @@ from agent_teams.agents.instances.instance_repository import AgentInstanceReposi
 from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from agent_teams.agents.execution.message_repository import MessageRepository
 from agent_teams.agents.execution.conversation_compaction import (
+    build_conversation_compaction_budget,
+    ConversationCompactionBudget,
     ConversationCompactionService,
     ConversationTokenEstimator,
+)
+from agent_teams.agents.execution.conversation_microcompact import (
+    ConversationMicrocompactService,
 )
 from agent_teams.persistence.shared_state_repo import SharedStateRepository
 from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
@@ -134,6 +139,22 @@ if TYPE_CHECKING:
 
 LOGGER = get_logger(__name__)
 LLM_REQUEST_LIMIT = 500
+
+
+class _PreparedPromptContext(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        arbitrary_types_allowed=True,
+    )
+
+    history: tuple[ModelRequest | ModelResponse, ...]
+    system_prompt: str
+    budget: ConversationCompactionBudget
+    estimated_history_tokens_before_microcompact: int = 0
+    estimated_history_tokens_after_microcompact: int = 0
+    microcompact_compacted_message_count: int = 0
+    microcompact_compacted_part_count: int = 0
 
 
 class _AgentRunResult(Protocol):
@@ -197,6 +218,37 @@ def _content_payload(value: JsonValue | None) -> tuple[dict[str, JsonValue], ...
     return tuple(items)
 
 
+def _model_step_payload(
+    *,
+    role_id: str,
+    instance_id: str,
+    prepared_prompt: _PreparedPromptContext | None = None,
+) -> dict[str, JsonValue]:
+    payload: dict[str, JsonValue] = {
+        "role_id": role_id,
+        "instance_id": instance_id,
+    }
+    if prepared_prompt is None:
+        return payload
+    compacted_message_count = prepared_prompt.microcompact_compacted_message_count
+    compacted_part_count = prepared_prompt.microcompact_compacted_part_count
+    applied = compacted_message_count > 0 or compacted_part_count > 0
+    payload.update(
+        {
+            "microcompact_applied": applied,
+            "estimated_tokens_before_microcompact": (
+                prepared_prompt.estimated_history_tokens_before_microcompact
+            ),
+            "estimated_tokens_after_microcompact": (
+                prepared_prompt.estimated_history_tokens_after_microcompact
+            ),
+            "microcompact_compacted_message_count": compacted_message_count,
+            "microcompact_compacted_part_count": compacted_part_count,
+        }
+    )
+    return payload
+
+
 class AgentLlmSession:
     def __init__(
         self,
@@ -217,6 +269,7 @@ class AgentLlmSession:
         role_memory_service: RoleMemoryService | None,
         subagent_reflection_service: SubagentReflectionService | None,
         conversation_compaction_service: ConversationCompactionService | None,
+        conversation_microcompact_service: ConversationMicrocompactService | None,
         tool_registry: ToolRegistry,
         mcp_registry: McpRegistry,
         skill_registry: SkillRegistry,
@@ -253,6 +306,7 @@ class AgentLlmSession:
         self._role_memory_service = role_memory_service
         self._subagent_reflection_service = subagent_reflection_service
         self._conversation_compaction_service = conversation_compaction_service
+        self._conversation_microcompact_service = conversation_microcompact_service
         self._tool_registry = tool_registry
         self._mcp_registry = mcp_registry
         self._skill_registry = skill_registry
@@ -292,6 +346,31 @@ class AgentLlmSession:
         )
         total_attempts = total_attempts or (self._retry_config.max_retries + 1)
         agent_system_prompt = request.system_prompt
+        if self._metric_recorder is not None:
+            record_session_step(
+                self._metric_recorder,
+                workspace_id=resolved_workspace_id,
+                session_id=request.session_id,
+                run_id=request.run_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+            )
+        allowed_tools = _resolve_allowed_tools(
+            self._tool_registry,
+            self._allowed_tools,
+            session_id=request.session_id,
+        )
+        prepared_prompt = await self._prepare_prompt_context(
+            request=request,
+            conversation_id=resolved_conversation_id,
+            system_prompt=agent_system_prompt,
+            reserve_user_prompt_tokens=(
+                not skip_initial_user_prompt_persist and retry_number == 0
+            ),
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=self._allowed_mcp_servers,
+            allowed_skills=self._allowed_skills,
+        )
         self._run_event_hub.publish(
             RunEvent(
                 session_id=request.session_id,
@@ -302,43 +381,16 @@ class AgentLlmSession:
                 role_id=request.role_id,
                 event_type=RunEventType.MODEL_STEP_STARTED,
                 payload_json=dumps(
-                    {"role_id": request.role_id, "instance_id": request.instance_id}
+                    _model_step_payload(
+                        role_id=request.role_id,
+                        instance_id=request.instance_id,
+                        prepared_prompt=prepared_prompt,
+                    )
                 ),
             )
         )
-        if self._metric_recorder is not None:
-            record_session_step(
-                self._metric_recorder,
-                workspace_id=resolved_workspace_id,
-                session_id=request.session_id,
-                run_id=request.run_id,
-                instance_id=request.instance_id,
-                role_id=request.role_id,
-            )
-        history: list[ModelRequest | ModelResponse] = (
-            self._truncate_history_to_safe_boundary(
-                self._filter_model_messages(
-                    self._message_repo.get_history_for_conversation(
-                        resolved_conversation_id
-                    )
-                )
-            )
-        )
-        history = await self._maybe_compact_history(
-            request=request,
-            history=history,
-            conversation_id=resolved_conversation_id,
-        )
-        agent_system_prompt = self._inject_compaction_summary(
-            session_id=request.session_id,
-            conversation_id=resolved_conversation_id,
-            system_prompt=agent_system_prompt,
-        )
-        allowed_tools = _resolve_allowed_tools(
-            self._tool_registry,
-            self._allowed_tools,
-            session_id=request.session_id,
-        )
+        history = list(prepared_prompt.history)
+        agent_system_prompt = prepared_prompt.system_prompt
         model_settings = await self._build_model_settings(
             request=request,
             history=history,
@@ -639,23 +691,17 @@ class AgentLlmSession:
                             )
                             attempt_messages_committed = True
                             # Restart iter() with injected messages appended to committed history
-                            history = self._truncate_history_to_safe_boundary(
-                                self._filter_model_messages(
-                                    self._message_repo.get_history_for_conversation(
-                                        resolved_conversation_id
-                                    )
-                                )
-                            )
-                            history = await self._maybe_compact_history(
+                            prepared_prompt = await self._prepare_prompt_context(
                                 request=request,
-                                history=history,
-                                conversation_id=resolved_conversation_id,
-                            )
-                            agent_system_prompt = self._inject_compaction_summary(
-                                session_id=request.session_id,
                                 conversation_id=resolved_conversation_id,
                                 system_prompt=request.system_prompt,
+                                reserve_user_prompt_tokens=False,
+                                allowed_tools=allowed_tools,
+                                allowed_mcp_servers=self._allowed_mcp_servers,
+                                allowed_skills=self._allowed_skills,
                             )
+                            history = list(prepared_prompt.history)
+                            agent_system_prompt = prepared_prompt.system_prompt
                             model_settings = await self._build_model_settings(
                                 request=request,
                                 history=history,
@@ -1023,7 +1069,11 @@ class AgentLlmSession:
                 role_id=request.role_id,
                 event_type=RunEventType.MODEL_STEP_FINISHED,
                 payload_json=dumps(
-                    {"role_id": request.role_id, "instance_id": request.instance_id}
+                    _model_step_payload(
+                        role_id=request.role_id,
+                        instance_id=request.instance_id,
+                        prepared_prompt=prepared_prompt,
+                    )
                 ),
             )
         )
@@ -1907,7 +1957,91 @@ class AgentLlmSession:
         safe_index = self._last_committable_index(messages)
         return messages[:safe_index]
 
-    async def _build_model_settings(
+    def _load_safe_history_for_conversation(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        return self._truncate_history_to_safe_boundary(
+            self._filter_model_messages(
+                self._message_repo.get_history_for_conversation(conversation_id)
+            )
+        )
+
+    async def _prepare_prompt_context(
+        self,
+        *,
+        request: LLMRequest,
+        conversation_id: str,
+        system_prompt: str,
+        reserve_user_prompt_tokens: bool,
+        allowed_tools: tuple[str, ...],
+        allowed_mcp_servers: tuple[str, ...],
+        allowed_skills: tuple[str, ...],
+    ) -> _PreparedPromptContext:
+        history = self._load_safe_history_for_conversation(conversation_id)
+        provisional_system_prompt = self._inject_compaction_summary(
+            session_id=request.session_id,
+            conversation_id=conversation_id,
+            system_prompt=system_prompt,
+        )
+        budget = await self._estimate_compaction_budget(
+            request=request,
+            history=history,
+            system_prompt=provisional_system_prompt,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
+        )
+        estimated_before_microcompact = (
+            ConversationTokenEstimator().estimate_history_tokens(history)
+        )
+        estimated_after_microcompact = estimated_before_microcompact
+        compacted_message_count = 0
+        compacted_part_count = 0
+        if self._conversation_microcompact_service is not None:
+            microcompact_result = self._conversation_microcompact_service.apply(
+                history=history,
+                budget=budget,
+            )
+            history = list(microcompact_result.messages)
+            estimated_before_microcompact = microcompact_result.estimated_tokens_before
+            estimated_after_microcompact = microcompact_result.estimated_tokens_after
+            compacted_message_count = microcompact_result.compacted_message_count
+            compacted_part_count = microcompact_result.compacted_part_count
+        history = await self._maybe_compact_history(
+            request=request,
+            history=history,
+            conversation_id=conversation_id,
+            budget=budget,
+            estimated_tokens_before_microcompact=estimated_before_microcompact,
+            estimated_tokens_after_microcompact=estimated_after_microcompact,
+        )
+        final_system_prompt = self._inject_compaction_summary(
+            session_id=request.session_id,
+            conversation_id=conversation_id,
+            system_prompt=system_prompt,
+        )
+        final_budget = await self._estimate_compaction_budget(
+            request=request,
+            history=history,
+            system_prompt=final_system_prompt,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
+        )
+        return _PreparedPromptContext(
+            history=tuple(history),
+            system_prompt=final_system_prompt,
+            budget=final_budget,
+            estimated_history_tokens_before_microcompact=estimated_before_microcompact,
+            estimated_history_tokens_after_microcompact=estimated_after_microcompact,
+            microcompact_compacted_message_count=compacted_message_count,
+            microcompact_compacted_part_count=compacted_part_count,
+        )
+
+    async def _estimate_compaction_budget(
         self,
         *,
         request: LLMRequest,
@@ -1917,55 +2051,14 @@ class AgentLlmSession:
         allowed_tools: tuple[str, ...],
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
-    ) -> OpenAIChatModelSettings:
+    ) -> ConversationCompactionBudget:
+        del history
         estimated_mcp_context_tokens: int | None = None
         if self._config.context_window is not None and self._config.context_window > 0:
             estimated_mcp_context_tokens = await self._estimated_mcp_context_tokens(
                 allowed_mcp_servers=allowed_mcp_servers
             )
-        model_settings: OpenAIChatModelSettings = {
-            # Some OpenAI-compatible providers return cumulative usage in each stream chunk.
-            # Enabling this flag makes pydantic-ai keep the last chunk usage instead of summing chunks.
-            "openai_continuous_usage_stats": True,
-            "temperature": self._config.sampling.temperature,
-            "top_p": self._config.sampling.top_p,
-        }
-        max_tokens = self._safe_max_output_tokens(
-            request=request,
-            history=history,
-            system_prompt=system_prompt,
-            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
-            allowed_tools=allowed_tools,
-            allowed_mcp_servers=allowed_mcp_servers,
-            allowed_skills=allowed_skills,
-            estimated_mcp_context_tokens=estimated_mcp_context_tokens,
-        )
-        if max_tokens is not None:
-            model_settings["max_tokens"] = max_tokens
-        if request.thinking.enabled and request.thinking.effort is not None:
-            model_settings["openai_reasoning_effort"] = request.thinking.effort
-        return model_settings
-
-    def _safe_max_output_tokens(
-        self,
-        *,
-        request: LLMRequest,
-        history: Sequence[ModelRequest | ModelResponse],
-        system_prompt: str,
-        reserve_user_prompt_tokens: bool,
-        allowed_tools: tuple[str, ...],
-        allowed_mcp_servers: tuple[str, ...],
-        allowed_skills: tuple[str, ...],
-        estimated_mcp_context_tokens: int | None = None,
-    ) -> int | None:
-        configured_max_tokens = self._config.sampling.max_tokens
-        if configured_max_tokens is None:
-            return None
-        context_window = self._config.context_window
-        if context_window is None or context_window <= 0:
-            return configured_max_tokens
         estimator = ConversationTokenEstimator()
-        estimated_history_tokens = estimator.estimate_history_tokens(history)
         estimated_system_prompt_tokens = max(
             1, (len(system_prompt.encode("utf-8")) // 4) + 8
         )
@@ -1977,18 +2070,82 @@ class AgentLlmSession:
             if reserve_user_prompt_tokens and user_prompt
             else 0
         )
-        reserved_tokens = (
-            estimated_history_tokens
-            + estimated_system_prompt_tokens
-            + estimated_user_prompt_tokens
-            + self._estimated_tool_context_tokens(
-                allowed_tools=allowed_tools,
-                allowed_mcp_servers=allowed_mcp_servers,
-                allowed_skills=allowed_skills,
-                estimated_mcp_context_tokens=estimated_mcp_context_tokens,
-            )
-            + 32
+        estimated_tool_context_tokens = self._estimated_tool_context_tokens(
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
+            estimated_mcp_context_tokens=estimated_mcp_context_tokens,
         )
+        return build_conversation_compaction_budget(
+            context_window=self._config.context_window,
+            estimated_system_prompt_tokens=estimated_system_prompt_tokens,
+            estimated_user_prompt_tokens=estimated_user_prompt_tokens,
+            estimated_tool_context_tokens=estimated_tool_context_tokens,
+            estimated_output_reserve_tokens=32,
+        )
+
+    async def _build_model_settings(
+        self,
+        *,
+        request: LLMRequest,
+        history: Sequence[ModelRequest | ModelResponse],
+        system_prompt: str,
+        reserve_user_prompt_tokens: bool,
+        allowed_tools: tuple[str, ...],
+        allowed_mcp_servers: tuple[str, ...],
+        allowed_skills: tuple[str, ...],
+    ) -> OpenAIChatModelSettings:
+        model_settings: OpenAIChatModelSettings = {
+            # Some OpenAI-compatible providers return cumulative usage in each stream chunk.
+            # Enabling this flag makes pydantic-ai keep the last chunk usage instead of summing chunks.
+            "openai_continuous_usage_stats": True,
+            "temperature": self._config.sampling.temperature,
+            "top_p": self._config.sampling.top_p,
+        }
+        max_tokens = await self._safe_max_output_tokens(
+            request=request,
+            history=history,
+            system_prompt=system_prompt,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
+        )
+        if max_tokens is not None:
+            model_settings["max_tokens"] = max_tokens
+        if request.thinking.enabled and request.thinking.effort is not None:
+            model_settings["openai_reasoning_effort"] = request.thinking.effort
+        return model_settings
+
+    async def _safe_max_output_tokens(
+        self,
+        *,
+        request: LLMRequest,
+        history: Sequence[ModelRequest | ModelResponse],
+        system_prompt: str,
+        reserve_user_prompt_tokens: bool,
+        allowed_tools: tuple[str, ...],
+        allowed_mcp_servers: tuple[str, ...],
+        allowed_skills: tuple[str, ...],
+    ) -> int | None:
+        configured_max_tokens = self._config.sampling.max_tokens
+        if configured_max_tokens is None:
+            return None
+        context_window = self._config.context_window
+        if context_window is None or context_window <= 0:
+            return configured_max_tokens
+        estimator = ConversationTokenEstimator()
+        estimated_history_tokens = estimator.estimate_history_tokens(history)
+        budget = await self._estimate_compaction_budget(
+            request=request,
+            history=history,
+            system_prompt=system_prompt,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+            allowed_tools=allowed_tools,
+            allowed_mcp_servers=allowed_mcp_servers,
+            allowed_skills=allowed_skills,
+        )
+        reserved_tokens = estimated_history_tokens + budget.estimated_non_history_tokens
         available_output_tokens = context_window - reserved_tokens
         if available_output_tokens <= 0:
             return 1
@@ -2109,6 +2266,9 @@ class AgentLlmSession:
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
         conversation_id: str,
+        budget: ConversationCompactionBudget,
+        estimated_tokens_before_microcompact: int | None = None,
+        estimated_tokens_after_microcompact: int | None = None,
     ) -> list[ModelRequest | ModelResponse]:
         if self._conversation_compaction_service is None:
             return history
@@ -2117,6 +2277,9 @@ class AgentLlmSession:
             role_id=request.role_id,
             conversation_id=conversation_id,
             history=history,
+            budget=budget,
+            estimated_tokens_before_microcompact=estimated_tokens_before_microcompact,
+            estimated_tokens_after_microcompact=estimated_tokens_after_microcompact,
         )
 
     def _inject_compaction_summary(
