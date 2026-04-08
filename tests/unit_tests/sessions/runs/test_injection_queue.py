@@ -1,5 +1,5 @@
-from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.enums import InjectionSource
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
+from relay_teams.sessions.runs.enums import InjectionSource
 
 
 def test_injection_manager_isolated_by_recipient() -> None:

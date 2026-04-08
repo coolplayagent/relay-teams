@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Barrier
 
-from agent_teams.providers.token_usage_repo import TokenUsageRepository
-from agent_teams.sessions.session_history_marker_repository import (
+from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
 

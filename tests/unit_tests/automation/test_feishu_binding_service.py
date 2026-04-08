@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.automation import (
+from relay_teams.automation import (
     AutomationFeishuBinding,
     AutomationFeishuBindingService,
 )
-from agent_teams.sessions import ExternalSessionBindingRepository
-from agent_teams.sessions.session_repository import SessionRepository
+from relay_teams.sessions import ExternalSessionBindingRepository
+from relay_teams.sessions.session_repository import SessionRepository
 
 
 class _FakeAccount:

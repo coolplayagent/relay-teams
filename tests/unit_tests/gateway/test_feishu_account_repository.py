@@ -6,8 +6,8 @@ import sqlite3
 
 import pytest
 
-from agent_teams.gateway.feishu.account_repository import FeishuAccountRepository
-from agent_teams.gateway.feishu.models import (
+from relay_teams.gateway.feishu.account_repository import FeishuAccountRepository
+from relay_teams.gateway.feishu.models import (
     FeishuGatewayAccountRecord,
     FeishuGatewayAccountStatus,
 )

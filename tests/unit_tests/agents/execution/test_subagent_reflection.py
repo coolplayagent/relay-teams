@@ -9,12 +9,12 @@ import httpx
 import pytest
 from openai import APIStatusError
 
-import agent_teams.agents.execution.subagent_reflection as reflection_module
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.agents.execution.subagent_reflection import SubagentReflectionService
-from agent_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
-from agent_teams.roles.memory_service import RoleMemoryService
-from agent_teams.roles.role_models import RoleDefinition
+import relay_teams.agents.execution.subagent_reflection as reflection_module
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
+from relay_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
+from relay_teams.roles.memory_service import RoleMemoryService
+from relay_teams.roles.role_models import RoleDefinition
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 

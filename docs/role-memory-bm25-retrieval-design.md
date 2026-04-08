@@ -199,8 +199,8 @@ Papers:
 
 The repository already contains a general retrieval layer:
 
-- scope kinds include `memory` in `src/agent_teams/retrieval/retrieval_models.py`
-- local storage is backed by SQLite FTS5 in `src/agent_teams/retrieval/sqlite_store.py`
+- scope kinds include `memory` in `src/relay_teams/retrieval/retrieval_models.py`
+- local storage is backed by SQLite FTS5 in `src/relay_teams/retrieval/sqlite_store.py`
 - query-time field weighting is already supported through `title_weight`, `body_weight`, and `keyword_weight`
 - the schema is already documented in `docs/database-schema.md`
 - skill routing already proves the architectural pattern in `docs/skill-routing-design.md`
@@ -504,7 +504,7 @@ Memory retrieval should remain inside backend service boundaries.
 
 Suggested ownership:
 
-- retrieval backend stays in `agent_teams.retrieval`
+- retrieval backend stays in `relay_teams.retrieval`
 - memory-specific indexing and ranking policy lives with role memory services, not in interface routers
 - interfaces expose diagnostics and previews, but should not implement ranking logic directly
 
@@ -583,6 +583,6 @@ This matches the repository's current architecture, keeps the system explainable
 - `docs/role-workspace-memory-design.md`
 - `docs/skill-routing-design.md`
 - `docs/database-schema.md`
-- `src/agent_teams/retrieval/retrieval_models.py`
-- `src/agent_teams/retrieval/sqlite_store.py`
-- `src/agent_teams/skills/skill_routing_service.py`
+- `src/relay_teams/retrieval/retrieval_models.py`
+- `src/relay_teams/retrieval/sqlite_store.py`
+- `src/relay_teams/skills/skill_routing_service.py`

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.providers.provider_contracts import EchoProvider
-from agent_teams.providers.model_config import ModelEndpointConfig, ProviderType
-from agent_teams.providers.provider_registry import (
+from relay_teams.providers.provider_contracts import EchoProvider
+from relay_teams.providers.model_config import ModelEndpointConfig, ProviderType
+from relay_teams.providers.provider_registry import (
     ProviderRegistry,
     create_default_provider_registry,
     list_provider_models,

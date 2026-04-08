@@ -4,25 +4,25 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.agents.orchestration.settings_service import (
+from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
-from agent_teams.gateway.feishu.account_repository import FeishuAccountRepository
-from agent_teams.gateway.feishu.gateway_service import FeishuGatewayService
-from agent_teams.gateway.feishu.models import (
+from relay_teams.gateway.feishu.account_repository import FeishuAccountRepository
+from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
+from relay_teams.gateway.feishu.models import (
     FeishuGatewayAccountCreateInput,
     FeishuGatewayAccountStatus,
     FeishuTriggerSecretConfig,
 )
-from agent_teams.gateway.feishu.secret_store import FeishuTriggerSecretStore
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.sessions.external_session_binding_repository import (
+from relay_teams.gateway.feishu.secret_store import FeishuTriggerSecretStore
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
-from agent_teams.sessions.runs.run_models import RunTopologySnapshot
-from agent_teams.sessions.session_models import SessionMode
-from agent_teams.workspace import WorkspaceRepository, WorkspaceService
+from relay_teams.sessions.runs.run_models import RunTopologySnapshot
+from relay_teams.sessions.session_models import SessionMode
+from relay_teams.workspace import WorkspaceRepository, WorkspaceService
 
 
 class _FakeSecretStore(FeishuTriggerSecretStore):

@@ -8,21 +8,21 @@ from collections.abc import Sequence
 
 import pytest
 
-import agent_teams.agents.execution.conversation_compaction as compaction_module
-from agent_teams.agents.execution.conversation_compaction import (
+import relay_teams.agents.execution.conversation_compaction as compaction_module
+from relay_teams.agents.execution.conversation_compaction import (
     ConversationCompactionBudget,
     ConversationCompactionPlan,
     ConversationCompactionService,
     ConversationCompactionStrategy,
     DefaultConversationCompactionStrategy,
 )
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
-from agent_teams.sessions.session_history_marker_models import SessionHistoryMarkerType
-from agent_teams.sessions.session_history_marker_repository import (
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
+from relay_teams.sessions.session_history_marker_models import SessionHistoryMarkerType
+from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
-from agent_teams.workspace import build_conversation_id
+from relay_teams.workspace import build_conversation_id
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,

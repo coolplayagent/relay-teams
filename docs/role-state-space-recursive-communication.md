@@ -32,7 +32,7 @@ The runtime now stores durable role memory separately inside the `roles` domain.
 - `role_id` is used as the authoritative identity for role-scoped state-space and memory ownership.
 
 Reference:
-- `src/agent_teams/roles/models.py`
+- `src/relay_teams/roles/models.py`
 
 ### 3.2 `agents` module
 
@@ -40,11 +40,11 @@ Reference:
 - They hold runtime bindings (`instance_id`, `workspace_id`, `conversation_id`) and execute state transitions under role boundaries.
 
 Reference:
-- `src/agent_teams/agents/models.py`
+- `src/relay_teams/agents/models.py`
 
 ### 3.3 `coordination` module
 
-`src/agent_teams/coordination/role_communication.py` provides concrete coordination capabilities:
+`src/relay_teams/coordination/role_communication.py` provides concrete coordination capabilities:
 
 - `RoleStateSpace` and `RoleStateTransition`: role-defined state-space boundary.
 - `RoleInstanceExecution` and `execute_role_transition(...)`: instance execution inside role boundary.
@@ -106,15 +106,15 @@ Stop condition:
 
 - Keep role boundary checks in coordination layer, not in ad-hoc prompt text.
 - Keep imports at module top-level for dependency visibility.
-- Keep public coordination interfaces exported from `agent_teams.coordination.__init__`.
+- Keep public coordination interfaces exported from `relay_teams.coordination.__init__`.
 - Add unit tests that mirror coordination path in `tests/unit_tests/coordination/`.
 
 ## 6. Related Source Files
 
-- `src/agent_teams/coordination/role_communication.py`
-- `src/agent_teams/coordination/__init__.py`
-- `src/agent_teams/roles/models.py`
-- `src/agent_teams/agents/models.py`
+- `src/relay_teams/coordination/role_communication.py`
+- `src/relay_teams/coordination/__init__.py`
+- `src/relay_teams/roles/models.py`
+- `src/relay_teams/agents/models.py`
 - `tests/unit_tests/coordination/test_role_communication.py`
 - `docs/role-workspace-memory-design.md`
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent_teams.sessions.runs.assistant_errors import (
+from relay_teams.sessions.runs.assistant_errors import (
     INVALID_TOOL_ARGS_RECOVERY_MESSAGE,
     NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE,
     build_assistant_error_message,

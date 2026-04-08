@@ -5,7 +5,7 @@ import httpx
 from pathlib import Path
 from typer.testing import CliRunner
 
-from agent_teams.interfaces.cli import app as cli_app
+from relay_teams.interfaces.cli import app as cli_app
 from integration_tests.support.environment import IntegrationEnvironment
 
 runner = CliRunner()

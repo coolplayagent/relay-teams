@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.gateway.session_ingress_service import (
+from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressRequest,
     GatewaySessionIngressService,
     GatewaySessionIngressStatus,
 )
-from agent_teams.media import content_parts_from_text
-from agent_teams.sessions.runs.run_models import IntentInput
-from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.media import content_parts_from_text
+from relay_teams.sessions.runs.run_models import IntentInput
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 
 
 class _FakeRunService:

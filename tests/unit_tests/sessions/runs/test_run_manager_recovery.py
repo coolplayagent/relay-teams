@@ -8,48 +8,54 @@ from typing import Literal, cast
 
 import pytest
 
-from agent_teams.agents.orchestration.meta_agent import MetaAgent
-from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.media import content_parts_from_text
-from agent_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
-from agent_teams.sessions.runs.run_control_manager import RunControlManager
-from agent_teams.sessions.runs.enums import InjectionSource, RunEventType
-from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.sessions.runs.injection_queue import RunInjectionManager
-from agent_teams.sessions.runs.background_tasks.models import (
+from relay_teams.agents.orchestration.meta_agent import MetaAgent
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.media import content_parts_from_text
+from relay_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
+from relay_teams.sessions.runs.run_control_manager import RunControlManager
+from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
+from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from agent_teams.sessions.runs.background_tasks.service import (
+from relay_teams.sessions.runs.background_tasks.service import (
     BackgroundTaskService,
 )
-from agent_teams.sessions.runs.background_tasks.manager import (
+from relay_teams.sessions.runs.background_tasks.manager import (
     BackgroundTaskManager,
 )
-from agent_teams.sessions.runs.run_manager import AutoRecoveryReason, RunManager
-from agent_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
-from agent_teams.sessions.runs.assistant_errors import RunCompletionReason
-from agent_teams.sessions.runs.recoverable_pause import (
+from relay_teams.sessions.runs.run_manager import AutoRecoveryReason, RunManager
+from relay_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
+from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
+from relay_teams.sessions.runs.recoverable_pause import (
     RecoverableRunPauseError,
     RecoverableRunPausePayload,
 )
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.sessions.runs.run_intent_repo import RunIntentRepository
-from agent_teams.sessions.runs.run_runtime_repo import (
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketStatus
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.sessions.runs.run_state_repo import RunStateRepository
-from agent_teams.sessions.session_models import SessionRecord
-from agent_teams.sessions.session_repository import SessionRepository
-from agent_teams.agents.tasks.enums import TaskStatus
-from agent_teams.agents.tasks.task_repository import TaskRepository
-from agent_teams.tools.runtime import ToolApprovalManager
-from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.sessions.runs.run_state_repo import RunStateRepository
+from relay_teams.sessions.session_models import SessionRecord
+from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.tools.runtime import ToolApprovalManager
+from relay_teams.tools.workspace_tools.shell_approval_repo import (
+    ShellApprovalRepository,
+    ShellApprovalScope,
+)
+from relay_teams.tools.workspace_tools.shell_policy import ShellRuntimeFamily
+from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 
 class _MetaAgent:
@@ -106,6 +112,7 @@ def _build_manager(
     run_state_repo = RunStateRepository(db_path)
     run_runtime_repo = RunRuntimeRepository(db_path)
     approval_ticket_repo = ApprovalTicketRepository(db_path)
+    shell_approval_repo = ShellApprovalRepository(db_path)
     hub = RunEventHub(event_log=event_log, run_state_repo=run_state_repo)
     active_run_registry = ActiveSessionRunRegistry(run_runtime_repo=run_runtime_repo)
     control.bind_runtime(
@@ -136,6 +143,7 @@ def _build_manager(
         background_task_manager=background_task_manager,
         background_task_service=background_task_service,
         notification_service=None,
+        shell_approval_repo=shell_approval_repo,
     )
 
 
@@ -981,6 +989,138 @@ def test_resume_run_allows_stopped_run_with_pending_tool_approval(
 
     assert session_id == "session-1"
     assert "run-existing" in manager._resume_requested_runs
+
+
+def test_resolve_tool_approval_persists_shell_exact_grant(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_shell_approval.db"
+    manager = _build_manager(db_path)
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    workspace_key = str((tmp_path / "workspace").resolve())
+    ApprovalTicketRepository(db_path).upsert_requested(
+        tool_call_id="call-shell-1",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="shell",
+        args_preview='{"command":"git status"}',
+        metadata={
+            "workspace_key": workspace_key,
+            "runtime_family": "git-bash",
+            "normalized_command": "git status",
+            "prefix_candidates": ["git status"],
+        },
+    )
+
+    manager.resolve_tool_approval("run-existing", "call-shell-1", "approve_exact")
+
+    shell_repo = ShellApprovalRepository(db_path)
+    assert (
+        shell_repo.get(
+            workspace_key=workspace_key,
+            runtime_family=ShellRuntimeFamily.GIT_BASH,
+            scope=ShellApprovalScope.EXACT,
+            value="git status",
+        )
+        is not None
+    )
+
+
+def test_resolve_tool_approval_does_not_persist_shell_grant_from_resolved_ticket(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_shell_resolved_ticket.db"
+    manager = _build_manager(db_path)
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    workspace_key = str((tmp_path / "workspace").resolve())
+    ticket_repo = ApprovalTicketRepository(db_path)
+    created = ticket_repo.upsert_requested(
+        tool_call_id="call-shell-1",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="shell",
+        args_preview='{"command":"git status"}',
+        metadata={
+            "workspace_key": workspace_key,
+            "runtime_family": "git-bash",
+            "normalized_command": "git status",
+            "prefix_candidates": ["git status"],
+        },
+    )
+    ticket_repo.resolve(
+        tool_call_id=created.tool_call_id,
+        status=ApprovalTicketStatus.APPROVED,
+    )
+
+    manager.resolve_tool_approval("run-existing", "call-shell-1", "approve_exact")
+
+    shell_repo = ShellApprovalRepository(db_path)
+    assert (
+        shell_repo.get(
+            workspace_key=workspace_key,
+            runtime_family=ShellRuntimeFamily.GIT_BASH,
+            scope=ShellApprovalScope.EXACT,
+            value="git status",
+        )
+        is None
+    )
+
+
+def test_resolve_tool_approval_rejects_cross_run_ticket_for_shell_grant(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_shell_cross_run_ticket.db"
+    manager = _build_manager(db_path)
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    workspace_key = str((tmp_path / "workspace").resolve())
+    ApprovalTicketRepository(db_path).upsert_requested(
+        tool_call_id="call-shell-other",
+        run_id="run-other",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="shell",
+        args_preview='{"command":"git status"}',
+        metadata={
+            "workspace_key": workspace_key,
+            "runtime_family": "git-bash",
+            "normalized_command": "git status",
+            "prefix_candidates": ["git status"],
+        },
+    )
+
+    with pytest.raises(KeyError, match="call-shell-other"):
+        manager.resolve_tool_approval(
+            "run-existing", "call-shell-other", "approve_exact"
+        )
+
+    shell_repo = ShellApprovalRepository(db_path)
+    assert (
+        shell_repo.get(
+            workspace_key=workspace_key,
+            runtime_family=ShellRuntimeFamily.GIT_BASH,
+            scope=ShellApprovalScope.EXACT,
+            value="git status",
+        )
+        is None
+    )
 
 
 def test_resume_run_rejects_running_run(tmp_path: Path) -> None:

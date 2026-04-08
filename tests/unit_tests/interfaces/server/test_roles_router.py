@@ -4,9 +4,9 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agent_teams.computer import ExecutionSurface
-from agent_teams.external_agents import ExternalAgentOption, ExternalAgentTransportType
-from agent_teams.interfaces.server.deps import (
+from relay_teams.computer import ExecutionSurface
+from relay_teams.external_agents import ExternalAgentOption, ExternalAgentTransportType
+from relay_teams.interfaces.server.deps import (
     get_external_agent_config_service,
     get_mcp_service,
     get_role_registry,
@@ -14,9 +14,9 @@ from agent_teams.interfaces.server.deps import (
     get_skill_registry,
     get_tool_registry,
 )
-from agent_teams.interfaces.server.routers import roles
-from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSummary
-from agent_teams.roles import (
+from relay_teams.interfaces.server.routers import roles
+from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSummary
+from relay_teams.roles import (
     NormalModeRoleOption,
     RoleConfigSource,
     RoleAgentOption,
@@ -29,8 +29,8 @@ from agent_teams.roles import (
     SystemRolesUnavailableError,
     RoleValidationResult,
 )
-from agent_teams.skills.skill_models import SkillOptionEntry, SkillScope
-from agent_teams.roles import default_memory_profile
+from relay_teams.skills.skill_models import SkillOptionEntry, SkillScope
+from relay_teams.roles import default_memory_profile
 
 
 class _FakeRoleSettingsService:

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.tools.workspace_tools.command_canonicalization import (
+from relay_teams.tools.workspace_tools.command_canonicalization import (
     canonicalize_shell_command,
 )
 

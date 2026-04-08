@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from agent_teams.computer import (
+from relay_teams.computer import (
     ComputerObservation,
     ComputerWindow,
     LinuxDesktopRuntime,

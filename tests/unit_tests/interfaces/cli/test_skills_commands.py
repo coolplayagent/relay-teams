@@ -7,9 +7,9 @@ import re
 
 from typer.testing import CliRunner
 
-from agent_teams.interfaces.cli import app as cli_app
-from agent_teams.skills.discovery import SkillsDirectory
-from agent_teams.skills.skill_registry import SkillRegistry
+from relay_teams.interfaces.cli import app as cli_app
+from relay_teams.skills.discovery import SkillsDirectory
+from relay_teams.skills.skill_registry import SkillRegistry
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -24,7 +24,7 @@ def test_skills_list_returns_builtin_and_app_skill_entries_in_json_output(
 ) -> None:
     registry = _build_registry(tmp_path)
     monkeypatch.setattr(
-        "agent_teams.skills.skill_cli.load_skill_registry", lambda: registry
+        "relay_teams.skills.skill_cli.load_skill_registry", lambda: registry
     )
 
     result = runner.invoke(cli_app.app, ["skills", "list", "--format", "json"])
@@ -76,7 +76,7 @@ def test_skills_show_returns_effective_skill_details(
 ) -> None:
     registry = _build_registry(tmp_path)
     monkeypatch.setattr(
-        "agent_teams.skills.skill_cli.load_skill_registry", lambda: registry
+        "relay_teams.skills.skill_cli.load_skill_registry", lambda: registry
     )
 
     result = runner.invoke(
@@ -106,7 +106,7 @@ def test_skills_show_returns_effective_skill_details(
 def test_skills_list_table_output_is_rendered(tmp_path: Path, monkeypatch) -> None:
     registry = _build_registry(tmp_path)
     monkeypatch.setattr(
-        "agent_teams.skills.skill_cli.load_skill_registry", lambda: registry
+        "relay_teams.skills.skill_cli.load_skill_registry", lambda: registry
     )
 
     result = runner.invoke(cli_app.app, ["skills", "list"])
@@ -129,7 +129,7 @@ def test_skills_help_explains_merge_order() -> None:
     )
     assert "~/.agent-teams/skills" in normalized_output
     assert "both entries are kept" in normalized_output
-    assert "agent-teams skills show time" in normalized_output
+    assert "relay-teams skills show time" in normalized_output
 
 
 def test_skills_list_help_includes_examples_and_source_behavior() -> None:
@@ -142,7 +142,7 @@ def test_skills_list_help_includes_examples_and_source_behavior() -> None:
     )
     assert "both entries are shown" in normalized_output
     assert "--source" in normalized_output
-    assert "agent-teams skills list --source builtin" in normalized_output
+    assert "relay-teams skills list --source builtin" in normalized_output
 
 
 def test_skills_show_help_describes_effective_skill_resolution() -> None:
@@ -153,7 +153,7 @@ def test_skills_show_help_describes_effective_skill_resolution() -> None:
     assert "Show a single skill definition." in normalized_output
     assert "canonical ref such as app:time or builtin:time" in normalized_output
     assert "Skill canonical ref or unique plain name to inspect." in normalized_output
-    assert "agent-teams skills show time --format json" in normalized_output
+    assert "relay-teams skills show time --format json" in normalized_output
 
 
 def _build_registry(tmp_path: Path) -> SkillRegistry:

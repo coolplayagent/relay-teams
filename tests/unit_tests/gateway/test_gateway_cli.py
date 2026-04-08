@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import agent_teams.gateway.gateway_cli as gateway_cli
+import relay_teams.gateway.gateway_cli as gateway_cli
 
 
 class _FakeMcpService:

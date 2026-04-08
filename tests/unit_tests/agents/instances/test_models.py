@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import pytest
 
-from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.agents.instances.models import create_subagent_instance
-from agent_teams.workspace import build_instance_conversation_id
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.models import create_subagent_instance
+from relay_teams.workspace import build_instance_conversation_id
 
 
 def test_create_subagent_instance_requires_conversation_without_session() -> None:

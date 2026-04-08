@@ -6,7 +6,7 @@ from pathlib import Path
 def main() -> None:
     pyproject_path = Path("/build/pyproject.toml")
     text = pyproject_path.read_text(encoding="utf-8")
-    eval_entrypoint = 'agent-teams-evals = "agent_teams_evals.run:app"\n'
+    eval_entrypoint = 'relay-teams-evals = "relay_teams_evals.run:app"\n'
 
     if eval_entrypoint not in text:
         raise SystemExit("expected eval entrypoint not found in pyproject.toml")

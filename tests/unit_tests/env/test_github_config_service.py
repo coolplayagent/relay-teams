@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.env.github_config_models import GitHubConfig
-from agent_teams.env.github_config_service import GitHubConfigService
-from agent_teams.env.github_secret_store import GitHubSecretStore
+from relay_teams.env.github_config_models import GitHubConfig
+from relay_teams.env.github_config_service import GitHubConfigService
+from relay_teams.env.github_secret_store import GitHubSecretStore
 
 
 class _FakeGitHubSecretStore(GitHubSecretStore):
@@ -51,7 +51,7 @@ def test_save_github_config_persists_keyring_secret(
     config_dir.mkdir(parents=True)
     secret_store = _FakeGitHubSecretStore()
     monkeypatch.setattr(
-        "agent_teams.env.runtime_env.get_app_config_dir",
+        "relay_teams.env.runtime_env.get_app_config_dir",
         lambda user_home_dir=None: config_dir,
     )
     service = GitHubConfigService(
@@ -76,7 +76,7 @@ def test_save_github_config_removes_plaintext_env_tokens(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "agent_teams.env.runtime_env.get_app_config_dir",
+        "relay_teams.env.runtime_env.get_app_config_dir",
         lambda user_home_dir=None: config_dir,
     )
     service = GitHubConfigService(
@@ -103,7 +103,7 @@ def test_save_github_config_falls_back_to_env_when_keyring_unavailable(
     )
     secret_store = _FakeGitHubSecretStore(can_persist=False)
     monkeypatch.setattr(
-        "agent_teams.env.runtime_env.get_app_config_dir",
+        "relay_teams.env.runtime_env.get_app_config_dir",
         lambda user_home_dir=None: config_dir,
     )
     service = GitHubConfigService(

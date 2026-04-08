@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from agent_teams.automation import (
+from relay_teams.automation import (
     AutomationBoundSessionQueueRepository,
     AutomationBoundSessionQueueService,
     AutomationCleanupStatus,
@@ -17,17 +17,17 @@ from agent_teams.automation import (
     AutomationRunConfig,
     AutomationScheduleMode,
 )
-from agent_teams.gateway.feishu.models import FeishuEnvironment
-from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.sessions.runs.run_models import RunEvent
-from agent_teams.sessions.runs.run_runtime_repo import (
+from relay_teams.gateway.feishu.models import FeishuEnvironment
+from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.sessions.session_models import ProjectKind, SessionRecord
+from relay_teams.sessions.session_models import ProjectKind, SessionRecord
 
 
 class _FakeSessionLookup:

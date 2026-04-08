@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from agent_teams.env import (
+from relay_teams.env import (
     ProxyEnvInput,
     apply_proxy_env_to_process_env,
     build_subprocess_env,
@@ -16,7 +16,7 @@ from agent_teams.env import (
     proxy_applies_to_url,
     resolve_proxy_env_config,
 )
-from agent_teams.env.proxy_env import resolve_ssl_verify
+from relay_teams.env.proxy_env import resolve_ssl_verify
 
 
 def test_extract_proxy_env_vars_normalizes_upper_and_lowercase_keys() -> None:
@@ -209,7 +209,7 @@ def test_load_proxy_env_config_applies_password_from_secret_store(
             return "secret"
 
     monkeypatch.setattr(
-        "agent_teams.env.proxy_env.get_proxy_secret_store",
+        "relay_teams.env.proxy_env.get_proxy_secret_store",
         lambda: _FakeSecretStore(),
     )
 
@@ -237,7 +237,7 @@ def test_load_proxy_env_config_keeps_password_from_env_when_user_forces_it(
             return "from-keyring"
 
     monkeypatch.setattr(
-        "agent_teams.env.proxy_env.get_proxy_secret_store",
+        "relay_teams.env.proxy_env.get_proxy_secret_store",
         lambda: _FakeSecretStore(),
     )
 

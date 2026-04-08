@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cool-play-agent-teams"
+name = "relay-teams"
 dynamic = ["version"]
 description = "Role-driven multi-agent framework with strong typing and tool-based collaboration."
 readme = "README.md"
@@ -41,8 +41,8 @@ dev = [
 ]
 
 [project.scripts]
-agent-teams = "agent_teams.interfaces.cli.app:main"
-agent-teams-evals = "agent_teams_evals.run:app"
+relay-teams = "relay_teams.interfaces.cli.app:main"
+relay-teams-evals = "relay_teams_evals.run:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit_tests", "tests/integration_tests"]
@@ -52,16 +52,16 @@ pythonpath = ["src", "tests", "."]
 where = ["src"]
 
 [tool.setuptools.dynamic]
-version = { attr = "agent_teams._version.__version__" }
+version = { attr = "relay_teams._version.__version__" }
 
 [tool.setuptools.package-data]
-"agent_teams.builtin" = [
+"relay_teams.builtin" = [
   "config/*.json",
   "logging/*.ini",
   "roles/*.md",
   "skills/**/*",
 ]
-"agent_teams.tools" = ["*/*.txt"]
+"relay_teams.tools" = ["*/*.txt"]
 
 [dependency-groups]
 evals = [
@@ -81,8 +81,9 @@ exclude = [
   ".venv",
   "**/__pycache__",
   "**/node_modules",
-  "src/agent_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx",
+  "src/relay_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx",
 ]
 
 [tool.ruff]
-extend-exclude = ["src/agent_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx"]
+extend-exclude = ["src/relay_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx"]
+

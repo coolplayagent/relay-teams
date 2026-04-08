@@ -62,7 +62,7 @@
 
 ### 4.1 统一日志基础设施
 
-1. 新增运行时日志模块（示例：`src/agent_teams/runtime/logging.py`），负责：
+1. 新增运行时日志模块（示例：`src/relay_teams/runtime/logging.py`），负责：
    - 初始化标准 `logging`；
    - 输出 JSON formatter；
    - 注入公共字段（service/env/version/hostname）；
@@ -173,17 +173,17 @@
 
 ## 9. 结合当前代码的优先改造点（具体到目录）
 
-1. `src/agent_teams/runtime/console.py`
+1. `src/relay_teams/runtime/console.py`
    - 将 `print` 输出迁移到结构化 logger；保留 CLI 展示时做双通道输出。
-2. `src/agent_teams/interfaces/server/routers/runs.py`
+2. `src/relay_teams/interfaces/server/routers/runs.py`
    - 补 `request started/completed`，并在异常分支写入 `run_id/request_id`。
-3. `src/agent_teams/coordination/coordinator.py`
+3. `src/relay_teams/coordination/coordinator.py`
    - 现有 debug 文本日志升级为结构化事件（event + IDs + duration）。
-4. `src/agent_teams/coordination/task_execution_service.py`
+4. `src/relay_teams/coordination/task_execution_service.py`
    - 补工具调用结果、重试、超时等关键字段。
-5. `src/agent_teams/providers/llm.py`
+5. `src/relay_teams/providers/llm.py`
    - 增加模型请求/响应统计（token、latency、provider error code）。
-6. `src/agent_teams/sessions/runs/event_log.py`
+6. `src/relay_teams/sessions/runs/event_log.py`
    - 对事件写入失败进行明确告警与重试日志。
 
 ---

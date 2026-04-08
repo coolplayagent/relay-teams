@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_teams.automation import (
+from relay_teams.automation import (
     AutomationCleanupStatus,
     AutomationDeliveryEvent,
     AutomationDeliveryRepository,
@@ -15,13 +15,13 @@ from agent_teams.automation import (
     AutomationRunConfig,
     AutomationScheduleMode,
 )
-from agent_teams.gateway.feishu.models import FeishuEnvironment
-from agent_teams.media import content_parts_from_text
-from agent_teams.notifications import NotificationContext, NotificationType
-from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.sessions.runs.run_models import RunEvent, RunResult
-from agent_teams.sessions.runs.run_runtime_repo import (
+from relay_teams.gateway.feishu.models import FeishuEnvironment
+from relay_teams.media import content_parts_from_text
+from relay_teams.notifications import NotificationContext, NotificationType
+from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.run_models import RunEvent, RunResult
+from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRecord,
     RunRuntimeRepository,

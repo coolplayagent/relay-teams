@@ -9,8 +9,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from agent_teams.gateway.wechat.client import WeChatClient
-from agent_teams.gateway.wechat.models import (
+from relay_teams.gateway.wechat.client import WeChatClient
+from relay_teams.gateway.wechat.models import (
     WeChatAccountRecord,
     WeChatLoginSession,
 )
@@ -84,7 +84,7 @@ def test_start_qr_login_accepts_success_payload_with_ret(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
 
@@ -116,7 +116,7 @@ def test_start_qr_login_raises_runtime_error_for_provider_failure(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
 
@@ -145,7 +145,7 @@ def test_wait_qr_login_retries_read_timeout(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
 
@@ -182,7 +182,7 @@ def test_send_text_message_builds_wechat_bot_message_payload(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
 
@@ -234,7 +234,7 @@ def test_send_text_message_raises_runtime_error_for_provider_failure(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
 
@@ -286,15 +286,15 @@ def test_send_file_uploads_to_cdn_and_sends_file_message(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.secrets.token_hex",
+        "relay_teams.gateway.wechat.client.secrets.token_hex",
         lambda _: "ignored-in-test",
     )
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.secrets.token_bytes",
+        "relay_teams.gateway.wechat.client.secrets.token_bytes",
         lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
     )
 
@@ -386,15 +386,15 @@ def test_send_file_routes_image_as_image_message(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.secrets.token_hex",
+        "relay_teams.gateway.wechat.client.secrets.token_hex",
         lambda _: "image-key",
     )
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.secrets.token_bytes",
+        "relay_teams.gateway.wechat.client.secrets.token_bytes",
         lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
     )
 
@@ -467,15 +467,15 @@ def test_send_file_extracts_nested_upload_param(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.secrets.token_hex",
+        "relay_teams.gateway.wechat.client.secrets.token_hex",
         lambda _: "nested-key",
     )
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.secrets.token_bytes",
+        "relay_teams.gateway.wechat.client.secrets.token_bytes",
         lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
     )
 
@@ -527,15 +527,15 @@ def test_send_file_extracts_nested_camel_case_upload_param(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.secrets.token_hex",
+        "relay_teams.gateway.wechat.client.secrets.token_hex",
         lambda _: "camel-key",
     )
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.secrets.token_bytes",
+        "relay_teams.gateway.wechat.client.secrets.token_bytes",
         lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
     )
 
@@ -588,15 +588,15 @@ def test_send_file_uses_upload_full_url_when_present(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.secrets.token_hex",
+        "relay_teams.gateway.wechat.client.secrets.token_hex",
         lambda _: "full-url-key",
     )
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.secrets.token_bytes",
+        "relay_teams.gateway.wechat.client.secrets.token_bytes",
         lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
     )
 
@@ -632,15 +632,15 @@ def test_send_file_raises_diagnostic_error_when_upload_param_missing(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.secrets.token_hex",
+        "relay_teams.gateway.wechat.client.secrets.token_hex",
         lambda _: "missing-key",
     )
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.secrets.token_bytes",
+        "relay_teams.gateway.wechat.client.secrets.token_bytes",
         lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
     )
 
@@ -674,7 +674,7 @@ def test_send_typing_raises_runtime_error_for_provider_failure(
     )
 
     monkeypatch.setattr(
-        "agent_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
 

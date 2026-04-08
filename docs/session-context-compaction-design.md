@@ -28,7 +28,7 @@
 
 ### 3.1 `agent-teams-main` 原实现
 
-主流程位于 `src/agent_teams/agents/execution/llm_session.py`：
+主流程位于 `src/relay_teams/agents/execution/llm_session.py`：
 
 ```text
 load history
@@ -39,7 +39,7 @@ load history
 -> call model
 ```
 
-full compaction 位于 `src/agent_teams/agents/execution/conversation_compaction.py`：
+full compaction 位于 `src/relay_teams/agents/execution/conversation_compaction.py`：
 
 - 按固定比例估算阈值
 - 重写滚动 markdown summary
@@ -167,13 +167,13 @@ load conversation history
 -> call model
 ```
 
-对应入口位于 `src/agent_teams/agents/execution/llm_session.py` 中的 `_prepare_prompt_context(...)`。
+对应入口位于 `src/relay_teams/agents/execution/llm_session.py` 中的 `_prepare_prompt_context(...)`。
 
 ## 6. 关键设计
 
 ### 6.1 `microcompact`
 
-新模块：`src/agent_teams/agents/execution/conversation_microcompact.py`
+新模块：`src/relay_teams/agents/execution/conversation_microcompact.py`
 
 职责：
 
@@ -267,18 +267,18 @@ Microcompact 139.9k -> 9.0k
 
 本次改动的主要代码位置：
 
-- `src/agent_teams/agents/execution/llm_session.py`
+- `src/relay_teams/agents/execution/llm_session.py`
   - 新增统一 `_prepare_prompt_context(...)`
   - compaction 与 token 预算统一由该入口编排
-- `src/agent_teams/agents/execution/conversation_microcompact.py`
+- `src/relay_teams/agents/execution/conversation_microcompact.py`
   - 新增发送前轻量压缩
-- `src/agent_teams/agents/execution/conversation_compaction.py`
+- `src/relay_teams/agents/execution/conversation_compaction.py`
   - 新增 `ConversationCompactionBudget`
   - full compaction 改为接收完整 prompt 预算
   - marker metadata 扩展
-- `src/agent_teams/sessions/session_service.py`
+- `src/relay_teams/sessions/session_service.py`
   - marker label 支持区分 rolling summary compaction
-- `src/agent_teams/sessions/session_rounds_projection.py`
+- `src/relay_teams/sessions/session_rounds_projection.py`
   - rounds 投影同步显示 rolling-summary label
   - rounds 投影新增 `microcompact` 运行时字段
 - `frontend/dist/js/components/rounds/timeline.js`

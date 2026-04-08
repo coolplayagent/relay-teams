@@ -3,7 +3,7 @@
 ## 1. Storage
 
 - Engine: SQLite
-- Database file: `~/.agent-teams/agent_teams.db`
+- Database file: `~/.agent-teams/relay_teams.db`
 - Foreign keys: enabled on each connection (`PRAGMA foreign_keys = ON`)
 - Runtime logs are file-based and stored under `~/.agent-teams/log/backend.log`, `~/.agent-teams/log/debug.log`, and `~/.agent-teams/log/frontend.log`
 
@@ -629,21 +629,22 @@ Primary query keys used by repositories:
 
 ## 3.1 Code Ownership
 
-- `agent_teams.persistence`: shared SQLite connection setup, scope models, and `shared_state`.
-- `agent_teams.sessions`: `sessions`, `external_session_bindings`, `session_history_markers`.
-- `agent_teams.external_agents`: `external_agent_sessions`.
-- `agent_teams.workspace`: `workspaces`.
-- `agent_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`, `background_tasks`.
-- `agent_teams.agents`: `agent_instances`.
-- `agent_teams.agents.tasks`: `tasks`.
-- `agent_teams.agents.execution`: `messages`.
-- `agent_teams.tools.runtime`: `approval_tickets`.
-- `agent_teams.providers`: `token_usage`.
-- `agent_teams.gateway.feishu`: `feishu_gateway_accounts`, `feishu_message_pool`.
-- `agent_teams.automation`: `automation_execution_events`.
-- `agent_teams.gateway`: `gateway_sessions`.
-- `agent_teams.gateway.wechat`: `wechat_accounts`, `wechat_inbound_queue`.
-- `agent_teams.roles`: `role_memories`.
+- `relay_teams.persistence`: shared SQLite connection setup, scope models, and `shared_state`.
+- `relay_teams.sessions`: `sessions`, `external_session_bindings`, `session_history_markers`.
+- `relay_teams.external_agents`: `external_agent_sessions`.
+- `relay_teams.workspace`: `workspaces`.
+- `relay_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`, `background_tasks`.
+- `relay_teams.agents`: `agent_instances`.
+- `relay_teams.agents.tasks`: `tasks`.
+- `relay_teams.agents.execution`: `messages`.
+- `relay_teams.tools.runtime`: `approval_tickets`.
+- `relay_teams.tools.workspace_tools`: `shell_approval_grants`.
+- `relay_teams.providers`: `token_usage`.
+- `relay_teams.gateway.feishu`: `feishu_gateway_accounts`, `feishu_message_pool`.
+- `relay_teams.automation`: `automation_execution_events`.
+- `relay_teams.gateway`: `gateway_sessions`.
+- `relay_teams.gateway.wechat`: `wechat_accounts`, `wechat_inbound_queue`.
+- `relay_teams.roles`: `role_memories`.
 
 ---
 
@@ -684,6 +685,20 @@ Notes:
 - `target_role_id` stores an optional one-run direct-chat override, such as a leading `@Role` mention from the web composer.
 - `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later.
 - `conversation_context_json` stores optional source-channel context, including Feishu group-chat markers used by runtime prompt assembly and the automation direct-send override used by IM-bound scheduled runs.
+
+---
+
+### 2.9.0 `approval_tickets` and `shell_approval_grants`
+
+`approval_tickets` persists pending and reusable tool-approval records. Shell tickets also store `metadata_json`, which carries normalized command data used when the operator resolves a pending shell approval as `approve_exact` or `approve_prefix`.
+
+`shell_approval_grants` stores project-scoped reusable shell approvals keyed by:
+- `workspace_key`
+- `runtime_family`
+- `scope` (`exact` or `prefix`)
+- `value`
+
+These grants are local-only runtime permissions. They are separate from per-run approval tickets and are used only by the shell tool in non-`yolo` runs.
 
 ---
 

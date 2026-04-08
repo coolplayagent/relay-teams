@@ -8,12 +8,12 @@ import pytest
 from openai import APIError, APIStatusError
 from pydantic_ai.exceptions import ModelAPIError
 
-from agent_teams.providers.llm_retry import (
+from relay_teams.providers.llm_retry import (
     compute_retry_delay_ms,
     extract_retry_error_info,
     run_with_llm_retry,
 )
-from agent_teams.providers.model_config import LlmRetryConfig
+from relay_teams.providers.model_config import LlmRetryConfig
 
 
 class _HeaderAPIError(APIError):

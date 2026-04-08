@@ -5,12 +5,12 @@ from typing import cast
 
 import pytest
 
-from agent_teams.agents.execution import (
+from relay_teams.agents.execution import (
     coordination_agent_builder as coordination_agent,
 )
-from agent_teams.mcp.mcp_registry import McpRegistry
-from agent_teams.skills.skill_registry import SkillRegistry
-from agent_teams.tools.registry import ToolRegistry, ToolResolutionContext
+from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.skills.skill_registry import SkillRegistry
+from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 
 
 class _FakeOpenAIProvider:

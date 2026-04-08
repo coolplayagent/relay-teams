@@ -7,15 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.metrics import (
+from relay_teams.metrics import (
     DEFAULT_DEFINITIONS,
     MetricRecorder,
     MetricRegistry,
     MetricScope,
     SqliteMetricAggregateStore,
 )
-from agent_teams.metrics.sinks import AggregateStoreSink
-from agent_teams.retrieval import (
+from relay_teams.metrics.sinks import AggregateStoreSink
+from relay_teams.retrieval import (
     RetrievalBackendKind,
     RetrievalDocument,
     RetrievalHit,
@@ -25,7 +25,7 @@ from agent_teams.retrieval import (
     RetrievalService,
     RetrievalStats,
 )
-from agent_teams.trace import bind_trace_context
+from relay_teams.trace import bind_trace_context
 
 
 class _FakeRetrievalStore:
@@ -156,7 +156,7 @@ def test_retrieval_service_emits_metrics_and_trace_without_leaking_query_text(
     ):
         with caplog.at_level(
             logging.DEBUG,
-            logger="agent_teams.backend.retrieval.retrieval_service",
+            logger="relay_teams.backend.retrieval.retrieval_service",
         ):
             hits = service.search(
                 query=RetrievalQuery(
@@ -187,8 +187,8 @@ def test_retrieval_service_emits_metrics_and_trace_without_leaking_query_text(
         time_window_minutes=60,
     )
     recorded_metric_names = {point.metric_name for point in points}
-    assert "agent_teams.retrieval.searches" in recorded_metric_names
-    assert "agent_teams.retrieval.search_duration_ms" in recorded_metric_names
+    assert "relay_teams.retrieval.searches" in recorded_metric_names
+    assert "relay_teams.retrieval.search_duration_ms" in recorded_metric_names
     assert any(
         '"retrieval_scope_kind": "skill"' in point.tags_json
         and '"retrieval_operation": "search"' in point.tags_json
@@ -224,7 +224,7 @@ def test_retrieval_service_records_failure_metrics_for_search(tmp_path: Path) ->
         time_window_minutes=60,
     )
     assert any(
-        point.metric_name == "agent_teams.retrieval.search_failures" for point in points
+        point.metric_name == "relay_teams.retrieval.search_failures" for point in points
     )
     assert any('"status": "failure"' in point.tags_json for point in points)
 
@@ -264,7 +264,7 @@ def test_retrieval_service_records_document_count_gauge(tmp_path: Path) -> None:
         time_window_minutes=60,
     )
     assert any(
-        point.metric_name == "agent_teams.retrieval.document_count" and point.value == 2
+        point.metric_name == "relay_teams.retrieval.document_count" and point.value == 2
         for point in points
     )
 

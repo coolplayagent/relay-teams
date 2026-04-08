@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typer.testing import CliRunner
 
-from agent_teams.interfaces.cli import app as cli_app
+from relay_teams.interfaces.cli import app as cli_app
 
 runner = CliRunner()
 
@@ -105,7 +105,7 @@ def test_roles_prompt_without_role_id_shows_available_roles(monkeypatch) -> None
     assert captured == ["/api/roles"]
     assert "Missing required option: --role-id" in result.output
     assert "Coordinator" in result.output
-    assert "Usage: agent-teams roles prompt --role-id <role_id>" in result.output
+    assert "Usage: relay-teams roles prompt --role-id <role_id>" in result.output
 
 
 def test_roles_prompt_default_output_prints_full_prompt(monkeypatch) -> None:

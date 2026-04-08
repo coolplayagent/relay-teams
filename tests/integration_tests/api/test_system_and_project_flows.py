@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from agent_teams.env.web_config_models import DEFAULT_SEARXNG_INSTANCE_SEEDS
+from relay_teams.env.web_config_models import DEFAULT_SEARXNG_INSTANCE_SEEDS
 
 from integration_tests.support.api_helpers import stream_run_until_terminal
 

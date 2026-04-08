@@ -5,18 +5,18 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agent_teams.gateway.feishu import (
+from relay_teams.gateway.feishu import (
     FeishuAccountNameConflictError,
     FeishuGatewayAccountCreateInput,
     FeishuGatewayAccountRecord,
     FeishuGatewayAccountStatus,
     FeishuGatewayAccountUpdateInput,
 )
-from agent_teams.interfaces.server.deps import (
+from relay_teams.interfaces.server.deps import (
     get_feishu_gateway_service,
     get_feishu_subscription_service,
 )
-from agent_teams.interfaces.server.routers import feishu_gateway
+from relay_teams.interfaces.server.routers import feishu_gateway
 
 
 class _FakeFeishuGatewayService:

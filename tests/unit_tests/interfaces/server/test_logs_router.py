@@ -6,8 +6,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agent_teams.interfaces.server.routers import logs
-from agent_teams.logger import configure_logging, shutdown_logging
+from relay_teams.interfaces.server.routers import logs
+from relay_teams.logger import configure_logging, shutdown_logging
 
 
 def test_frontend_logs_route_writes_frontend_log_only(tmp_path: Path) -> None:

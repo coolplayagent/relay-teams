@@ -7,11 +7,11 @@ from typing import cast
 import httpx
 import pytest
 
-from agent_teams.computer import ComputerActionRisk
-from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.tools.runtime import ToolApprovalPolicy, ToolExecutionError
-from agent_teams.tools.web_tools import common, webfetch
-from agent_teams.tools.web_tools.preapproved import is_preapproved_webfetch_url
+from relay_teams.computer import ComputerActionRisk
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.tools.runtime import ToolApprovalPolicy, ToolExecutionError
+from relay_teams.tools.web_tools import common, webfetch
+from relay_teams.tools.web_tools.preapproved import is_preapproved_webfetch_url
 
 
 def _dict_list(value: object) -> list[dict[str, object]]:

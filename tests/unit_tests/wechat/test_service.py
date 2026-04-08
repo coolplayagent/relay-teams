@@ -14,29 +14,29 @@ import pytest
 
 from pydantic import JsonValue
 
-from agent_teams.gateway.gateway_models import GatewayChannelType, GatewaySessionRecord
-from agent_teams.gateway.gateway_session_service import GatewaySessionService
-from agent_teams.gateway.im import ImSessionCommandService, ImToolService
-from agent_teams.gateway.wechat.account_repository import WeChatAccountRepository
-from agent_teams.gateway.wechat.client import WeChatClient
-from agent_teams.gateway.wechat.inbound_queue_repository import (
+from relay_teams.gateway.gateway_models import GatewayChannelType, GatewaySessionRecord
+from relay_teams.gateway.gateway_session_service import GatewaySessionService
+from relay_teams.gateway.im import ImSessionCommandService, ImToolService
+from relay_teams.gateway.wechat.account_repository import WeChatAccountRepository
+from relay_teams.gateway.wechat.client import WeChatClient
+from relay_teams.gateway.wechat.inbound_queue_repository import (
     WeChatInboundQueueRepository,
 )
-from agent_teams.gateway.wechat.models import (
+from relay_teams.gateway.wechat.models import (
     WeChatAccountRecord,
     WeChatInboundMessage,
     WeChatInboundQueueRecord,
     WeChatInboundQueueStatus,
     WeChatMessageItem,
 )
-from agent_teams.gateway.wechat.secret_store import WeChatSecretStore
-from agent_teams.gateway.wechat.service import WeChatGatewayService
-from agent_teams.media import content_parts_from_text
-from agent_teams.sessions import SessionService
-from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.run_manager import RunManager
-from agent_teams.sessions.runs.run_models import RunEvent, RunResult
-from agent_teams.sessions.session_models import SessionMode
+from relay_teams.gateway.wechat.secret_store import WeChatSecretStore
+from relay_teams.gateway.wechat.service import WeChatGatewayService
+from relay_teams.media import content_parts_from_text
+from relay_teams.sessions import SessionService
+from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_models import RunEvent, RunResult
+from relay_teams.sessions.session_models import SessionMode
 
 _RECEIPT_CREATED = "\u6536\u5230\uff0c\u6b63\u5728\u5904\u7406\u3002"
 _RECEIPT_QUEUED = "\u6536\u5230\uff0c\u5df2\u8fdb\u5165\u6392\u961f\u3002\u5f53\u524d\u4f1a\u8bdd\u524d\u9762\u8fd8\u6709 1 \u6761\u6d88\u606f\u3002"

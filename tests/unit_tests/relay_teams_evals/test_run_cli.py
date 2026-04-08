@@ -1,0 +1,611 @@
+from __future__ import annotations
+
+import json
+import sys
+import time
+import types
+from pathlib import Path
+from typing import cast
+
+from typer.testing import CliRunner
+
+from relay_teams_evals.checkpoint import EvalCheckpointStore, build_checkpoint_signature
+from relay_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
+from relay_teams_evals.run import _normalize_item_ids, _validate_unique_item_ids, app
+from relay_teams_evals.run_config import RunConfig
+
+runner = CliRunner()
+
+
+def _item(item_id: str) -> EvalItem:
+    return EvalItem(item_id=item_id, dataset="jsonl", intent=f"intent-{item_id}")
+
+
+def _result(item_id: str, *, score: float, passed: bool = True) -> EvalResult:
+    return EvalResult(
+        item_id=item_id,
+        dataset="jsonl",
+        run_id=f"run-{item_id}",
+        session_id=f"session-{item_id}",
+        outcome=RunOutcome.COMPLETED,
+        passed=passed,
+        score=score,
+        scorer_name="keyword",
+        token_usage=TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        duration_seconds=0.1,
+    )
+
+
+class _FakeBackend:
+    def __init__(self, _config) -> None:
+        pass
+
+
+class _FakeScorer:
+    @property
+    def name(self) -> str:
+        return "keyword"
+
+
+class _FakeLoader:
+    def __init__(self, items: list[EvalItem], dataset_name: str | None = None) -> None:
+        self._items = items
+        self._dataset_name = dataset_name
+
+    def load(self, _path: Path) -> list[EvalItem]:
+        return list(self._items)
+
+
+def _install_fake_backend_module(monkeypatch) -> None:
+    backend_module = types.ModuleType("relay_teams_evals.backends.agent_teams")
+    setattr(backend_module, "AgentTeamsBackend", _FakeBackend)
+    monkeypatch.setitem(
+        cast(dict[str, types.ModuleType], sys.modules),
+        "relay_teams_evals.backends.agent_teams",
+        backend_module,
+    )
+
+
+def test_validate_unique_item_ids_rejects_duplicates() -> None:
+    items = [_item("a"), _item("a")]
+
+    try:
+        _validate_unique_item_ids(items)
+    except ValueError as exc:
+        assert "Duplicate item_id values are not supported: a" == str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected duplicate item ids to fail")
+
+
+def test_normalize_item_ids_supports_csv_and_repeated_values() -> None:
+    assert _normalize_item_ids(["a,b", " b ", "c, d"]) == ["a", "b", "c", "d"]
+
+
+def test_normalize_item_ids_rejects_empty_values() -> None:
+    try:
+        _normalize_item_ids(["a,,b"])
+    except ValueError as exc:
+        assert "--item-ids contains an empty item id" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected empty item ids to fail")
+
+
+def test_run_resumes_completed_items_and_keeps_report_order(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"item_id":"placeholder","intent":"demo"}\n', encoding="utf-8"
+    )
+    output_dir = tmp_path / "results"
+    items = [_item("a"), _item("b"), _item("c")]
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        output_dir=output_dir,
+        concurrency=2,
+        save_artifacts=False,
+        report_format="json",
+    )
+    checkpoint_store = EvalCheckpointStore(output_dir)
+    checkpoint_store.ensure_initialized(
+        build_checkpoint_signature(
+            cfg,
+            dataset_path=dataset_path,
+            item_ids=tuple(item.item_id for item in items),
+        )
+    )
+    checkpoint_store.append_result(_result("b", score=0.2, passed=False))
+
+    run_calls: list[str] = []
+
+    class FakeEvalRunner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run_item(self, item: EvalItem) -> EvalResult:
+            run_calls.append(item.item_id)
+            if item.item_id == "a":
+                time.sleep(0.05)
+                return _result("a", score=1.0, passed=True)
+            if item.item_id == "c":
+                time.sleep(0.01)
+                return _result("c", score=0.7, passed=True)
+            raise AssertionError(f"unexpected item: {item.item_id}")
+
+    monkeypatch.setattr(
+        "relay_teams_evals.run_config.load_run_config",
+        lambda _path: cfg,
+    )
+    _install_fake_backend_module(monkeypatch)
+    monkeypatch.setattr(
+        "relay_teams_evals.loaders.jsonl_loader.JsonlLoader",
+        lambda dataset_name: _FakeLoader(items, dataset_name),
+    )
+    monkeypatch.setattr(
+        "relay_teams_evals.scorers.keyword_scorer.KeywordScorer",
+        _FakeScorer,
+    )
+    monkeypatch.setattr("relay_teams_evals.runner.EvalRunner", FakeEvalRunner)
+
+    config_file = tmp_path / "eval.yaml"
+    config_file.write_text("unused: true\n", encoding="utf-8")
+    result = runner.invoke(app, ["run", "--config", str(config_file)])
+
+    assert result.exit_code == 0
+    assert set(run_calls) == {"a", "c"}
+    assert "b" not in run_calls
+    assert "Resuming from checkpoint: 1 completed, 2 remaining" in result.output
+
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    assert [entry["item_id"] for entry in report["results"]] == ["a", "b", "c"]
+
+    loaded = checkpoint_store.load_results()
+    assert sorted(loaded) == ["a", "b", "c"]
+
+
+def test_run_restart_archives_previous_output_dir_before_new_run(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"item_id":"placeholder","intent":"demo"}\n', encoding="utf-8"
+    )
+    output_dir = tmp_path / "results"
+    output_dir.mkdir()
+    (output_dir / "stale.txt").write_text("old-run", encoding="utf-8")
+    items = [_item("a")]
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        output_dir=output_dir,
+        save_artifacts=False,
+        report_format="json",
+    )
+    run_calls: list[str] = []
+
+    class FakeEvalRunner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run_item(self, item: EvalItem) -> EvalResult:
+            run_calls.append(item.item_id)
+            return _result(item.item_id, score=1.0, passed=True)
+
+    monkeypatch.setattr(
+        "relay_teams_evals.run_config.load_run_config",
+        lambda _path: cfg,
+    )
+    _install_fake_backend_module(monkeypatch)
+    monkeypatch.setattr(
+        "relay_teams_evals.loaders.jsonl_loader.JsonlLoader",
+        lambda dataset_name: _FakeLoader(items, dataset_name),
+    )
+    monkeypatch.setattr(
+        "relay_teams_evals.scorers.keyword_scorer.KeywordScorer",
+        _FakeScorer,
+    )
+    monkeypatch.setattr("relay_teams_evals.runner.EvalRunner", FakeEvalRunner)
+
+    config_file = tmp_path / "eval.yaml"
+    config_file.write_text("unused: true\n", encoding="utf-8")
+    result = runner.invoke(app, ["run", "--config", str(config_file), "--restart"])
+
+    assert result.exit_code == 0
+    assert run_calls == ["a"]
+    archived_dirs = [
+        path for path in tmp_path.iterdir() if path.name.startswith("results.")
+    ]
+    assert len(archived_dirs) == 1
+    assert (archived_dirs[0] / "stale.txt").read_text(encoding="utf-8") == "old-run"
+    assert (output_dir / "report.json").exists()
+    assert (output_dir / "checkpoint.meta.json").exists()
+
+
+def test_run_fails_when_checkpoint_signature_does_not_match(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"item_id":"placeholder","intent":"demo"}\n', encoding="utf-8"
+    )
+    output_dir = tmp_path / "results"
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        output_dir=output_dir,
+        save_artifacts=False,
+        report_format="json",
+    )
+    existing_items = (_item("a"),)
+    checkpoint_store = EvalCheckpointStore(output_dir)
+    checkpoint_store.ensure_initialized(
+        build_checkpoint_signature(
+            cfg,
+            dataset_path=dataset_path,
+            item_ids=tuple(item.item_id for item in existing_items),
+        )
+    )
+
+    run_calls: list[str] = []
+
+    class FakeEvalRunner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run_item(self, item: EvalItem) -> EvalResult:
+            run_calls.append(item.item_id)
+            return _result(item.item_id, score=1.0, passed=True)
+
+    monkeypatch.setattr(
+        "relay_teams_evals.run_config.load_run_config",
+        lambda _path: cfg,
+    )
+    _install_fake_backend_module(monkeypatch)
+    monkeypatch.setattr(
+        "relay_teams_evals.loaders.jsonl_loader.JsonlLoader",
+        lambda dataset_name: _FakeLoader([_item("a"), _item("b")], dataset_name),
+    )
+    monkeypatch.setattr(
+        "relay_teams_evals.scorers.keyword_scorer.KeywordScorer",
+        _FakeScorer,
+    )
+    monkeypatch.setattr("relay_teams_evals.runner.EvalRunner", FakeEvalRunner)
+
+    config_file = tmp_path / "eval.yaml"
+    config_file.write_text("unused: true\n", encoding="utf-8")
+    result = runner.invoke(app, ["run", "--config", str(config_file)])
+
+    assert result.exit_code == 1
+    assert (
+        "Checkpoint signature does not match the current eval configuration."
+        in result.output
+    )
+    assert run_calls == []
+
+
+def test_run_rejects_rerun_without_item_ids(monkeypatch, tmp_path: Path) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"item_id":"placeholder","intent":"demo"}\n', encoding="utf-8"
+    )
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        output_dir=tmp_path / "results",
+        save_artifacts=False,
+        report_format="json",
+    )
+    monkeypatch.setattr(
+        "relay_teams_evals.run_config.load_run_config",
+        lambda _path: cfg,
+    )
+
+    config_file = tmp_path / "eval.yaml"
+    config_file.write_text("unused: true\n", encoding="utf-8")
+    result = runner.invoke(app, ["run", "--config", str(config_file), "--rerun"])
+
+    assert result.exit_code == 1
+    assert "--rerun requires at least one --item-ids value" in result.output
+
+
+def test_run_rejects_empty_item_id_from_csv(monkeypatch, tmp_path: Path) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"item_id":"placeholder","intent":"demo"}\n', encoding="utf-8"
+    )
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        output_dir=tmp_path / "results",
+        save_artifacts=False,
+        report_format="json",
+    )
+    monkeypatch.setattr(
+        "relay_teams_evals.run_config.load_run_config",
+        lambda _path: cfg,
+    )
+
+    config_file = tmp_path / "eval.yaml"
+    config_file.write_text("unused: true\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["run", "--config", str(config_file), "--item-ids", "a,,b"],
+    )
+
+    assert result.exit_code == 1
+    assert "--item-ids contains an empty item id" in result.output
+
+
+def test_run_rerun_reexecutes_selected_item_and_updates_full_report(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"item_id":"placeholder","intent":"demo"}\n', encoding="utf-8"
+    )
+    output_dir = tmp_path / "results"
+    items = [_item("a"), _item("b"), _item("c")]
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        output_dir=output_dir,
+        save_artifacts=False,
+        report_format="json",
+    )
+    checkpoint_store = EvalCheckpointStore(output_dir)
+    checkpoint_store.ensure_initialized(
+        build_checkpoint_signature(
+            cfg,
+            dataset_path=dataset_path,
+            item_ids=tuple(item.item_id for item in items),
+        )
+    )
+    checkpoint_store.append_result(_result("a", score=0.1, passed=False))
+    checkpoint_store.append_result(_result("b", score=0.2, passed=False))
+    checkpoint_store.append_result(_result("c", score=0.3, passed=True))
+
+    run_calls: list[str] = []
+
+    class FakeEvalRunner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run_item(self, item: EvalItem) -> EvalResult:
+            run_calls.append(item.item_id)
+            return _result(item.item_id, score=1.0, passed=True)
+
+    monkeypatch.setattr(
+        "relay_teams_evals.run_config.load_run_config",
+        lambda _path: cfg,
+    )
+    _install_fake_backend_module(monkeypatch)
+    monkeypatch.setattr(
+        "relay_teams_evals.loaders.jsonl_loader.JsonlLoader",
+        lambda dataset_name: _FakeLoader(items, dataset_name),
+    )
+    monkeypatch.setattr(
+        "relay_teams_evals.scorers.keyword_scorer.KeywordScorer",
+        _FakeScorer,
+    )
+    monkeypatch.setattr("relay_teams_evals.runner.EvalRunner", FakeEvalRunner)
+
+    config_file = tmp_path / "eval.yaml"
+    config_file.write_text("unused: true\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["run", "--config", str(config_file), "--item-ids", "b", "--rerun"],
+    )
+
+    assert result.exit_code == 0
+    assert run_calls == ["b"]
+    assert "Rerunning 1 item(s) against existing results" in result.output
+
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    by_id = {entry["item_id"]: entry for entry in report["results"]}
+    assert [entry["item_id"] for entry in report["results"]] == ["a", "b", "c"]
+    assert by_id["a"]["score"] == 0.1
+    assert by_id["b"]["score"] == 1.0
+    assert by_id["c"]["score"] == 0.3
+
+    loaded = checkpoint_store.load_results()
+    assert loaded["b"].score == 1.0
+
+
+def test_run_rerun_supports_csv_item_ids_and_concurrency(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"item_id":"placeholder","intent":"demo"}\n', encoding="utf-8"
+    )
+    output_dir = tmp_path / "results"
+    items = [_item("a"), _item("b"), _item("c")]
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        output_dir=output_dir,
+        concurrency=1,
+        save_artifacts=False,
+        report_format="json",
+    )
+    checkpoint_store = EvalCheckpointStore(output_dir)
+    checkpoint_store.ensure_initialized(
+        build_checkpoint_signature(
+            cfg,
+            dataset_path=dataset_path,
+            item_ids=tuple(item.item_id for item in items),
+        )
+    )
+    checkpoint_store.append_result(_result("a", score=0.1, passed=False))
+    checkpoint_store.append_result(_result("b", score=0.2, passed=False))
+    checkpoint_store.append_result(_result("c", score=0.3, passed=True))
+
+    run_calls: list[str] = []
+
+    class FakeEvalRunner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run_item(self, item: EvalItem) -> EvalResult:
+            run_calls.append(item.item_id)
+            return _result(item.item_id, score=1.0, passed=True)
+
+    monkeypatch.setattr(
+        "relay_teams_evals.run_config.load_run_config",
+        lambda _path: cfg,
+    )
+    _install_fake_backend_module(monkeypatch)
+    monkeypatch.setattr(
+        "relay_teams_evals.loaders.jsonl_loader.JsonlLoader",
+        lambda dataset_name: _FakeLoader(items, dataset_name),
+    )
+    monkeypatch.setattr(
+        "relay_teams_evals.scorers.keyword_scorer.KeywordScorer",
+        _FakeScorer,
+    )
+    monkeypatch.setattr("relay_teams_evals.runner.EvalRunner", FakeEvalRunner)
+
+    config_file = tmp_path / "eval.yaml"
+    config_file.write_text("unused: true\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(config_file),
+            "--item-ids",
+            "a,b",
+            "--rerun",
+            "--concurrency",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert set(run_calls) == {"a", "b"}
+    assert "Rerunning 2 item(s) against existing results" in result.output
+    assert "concurrency=2" in result.output
+
+    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    by_id = {entry["item_id"]: entry for entry in report["results"]}
+    assert [entry["item_id"] for entry in report["results"]] == ["a", "b", "c"]
+    assert by_id["a"]["score"] == 1.0
+    assert by_id["b"]["score"] == 1.0
+    assert by_id["c"]["score"] == 0.3
+
+
+def test_run_supports_csv_and_repeated_item_id_filters(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"item_id":"placeholder","intent":"demo"}\n', encoding="utf-8"
+    )
+    output_dir = tmp_path / "results"
+    items = [_item("a"), _item("b"), _item("c"), _item("d")]
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        output_dir=output_dir,
+        save_artifacts=False,
+        report_format="json",
+    )
+    run_calls: list[str] = []
+
+    class FakeEvalRunner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run_item(self, item: EvalItem) -> EvalResult:
+            run_calls.append(item.item_id)
+            return _result(item.item_id, score=1.0, passed=True)
+
+    monkeypatch.setattr(
+        "relay_teams_evals.run_config.load_run_config",
+        lambda _path: cfg,
+    )
+    _install_fake_backend_module(monkeypatch)
+    monkeypatch.setattr(
+        "relay_teams_evals.loaders.jsonl_loader.JsonlLoader",
+        lambda dataset_name: _FakeLoader(items, dataset_name),
+    )
+    monkeypatch.setattr(
+        "relay_teams_evals.scorers.keyword_scorer.KeywordScorer",
+        _FakeScorer,
+    )
+    monkeypatch.setattr("relay_teams_evals.runner.EvalRunner", FakeEvalRunner)
+
+    config_file = tmp_path / "eval.yaml"
+    config_file.write_text("unused: true\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--config",
+            str(config_file),
+            "--item-ids",
+            "a, b",
+            "--item-ids",
+            "c",
+            "--item-ids",
+            "a",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert run_calls == ["a", "b", "c"]
+    assert "Filtered to 3 items by item_ids" in result.output
+
+
+def test_run_does_not_print_rerun_command_for_failed_result(
+    monkeypatch, tmp_path: Path
+) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text(
+        '{"item_id":"placeholder","intent":"demo"}\n', encoding="utf-8"
+    )
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        output_dir=tmp_path / "results",
+        save_artifacts=False,
+        report_format="json",
+    )
+    items = [_item("demo")]
+
+    class FakeEvalRunner:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run_item(self, item: EvalItem) -> EvalResult:
+            return EvalResult(
+                item_id=item.item_id,
+                dataset="jsonl",
+                run_id="",
+                session_id="",
+                outcome=RunOutcome.FAILED,
+                passed=False,
+                score=0.0,
+                scorer_name="keyword",
+                scorer_detail="instance image build failed",
+                error="Instance image 'sweb.eval.x86_64.demo:latest' failed to build.",
+                build_log_path="logs/build_images/demo/build_image.log",
+                build_error_summary="ModuleNotFoundError: No module named 'pkg_resources'",
+                token_usage=TokenUsage(),
+                duration_seconds=0.1,
+            )
+
+    monkeypatch.setattr(
+        "relay_teams_evals.run_config.load_run_config",
+        lambda _path: cfg,
+    )
+    _install_fake_backend_module(monkeypatch)
+    monkeypatch.setattr(
+        "relay_teams_evals.loaders.jsonl_loader.JsonlLoader",
+        lambda dataset_name: _FakeLoader(items, dataset_name),
+    )
+    monkeypatch.setattr(
+        "relay_teams_evals.scorers.keyword_scorer.KeywordScorer",
+        _FakeScorer,
+    )
+    monkeypatch.setattr("relay_teams_evals.runner.EvalRunner", FakeEvalRunner)
+
+    config_file = tmp_path / "eval.yaml"
+    config_file.write_text("unused: true\n", encoding="utf-8")
+    result = runner.invoke(app, ["run", "--config", str(config_file)])
+
+    assert result.exit_code == 0
+    assert "build_log: logs/build_images/demo/build_image.log" in result.output
+    assert "rerun:" not in result.output

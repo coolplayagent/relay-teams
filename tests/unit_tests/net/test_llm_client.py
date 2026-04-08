@@ -6,9 +6,9 @@ from collections.abc import Iterator
 import httpx
 import pytest
 
-from agent_teams.env.proxy_env import ProxyEnvConfig
-from agent_teams.net import llm_client
-from agent_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
+from relay_teams.env.proxy_env import ProxyEnvConfig
+from relay_teams.net import llm_client
+from relay_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 
 
 _SSL_VERIFY_DISABLED = 0

@@ -14,16 +14,16 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.sessions.session_rounds_projection import build_session_rounds
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.media import content_parts_from_text
-from agent_teams.sessions.runs.run_models import RunResult
-from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-from agent_teams.agents.tasks.task_repository import TaskRepository
-from agent_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
-from agent_teams.workspace import build_conversation_id
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.sessions.session_rounds_projection import build_session_rounds
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.media import content_parts_from_text
+from relay_teams.sessions.runs.run_models import RunResult
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.workspace import build_conversation_id
 
 
 def test_build_session_rounds_maps_role_by_instance_across_runs(tmp_path: Path) -> None:

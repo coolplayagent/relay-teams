@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.retrieval import (
+from relay_teams.retrieval import (
     RetrievalDocument,
     RetrievalQuery,
     RetrievalScopeConfig,
@@ -242,7 +242,7 @@ def test_sqlite_store_requires_fts5_support(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "agent_teams.retrieval.sqlite_store.sqlite_supports_fts5",
+        "relay_teams.retrieval.sqlite_store.sqlite_supports_fts5",
         lambda _conn: False,
     )
 

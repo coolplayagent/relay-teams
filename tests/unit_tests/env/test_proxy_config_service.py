@@ -4,13 +4,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from agent_teams.env.proxy_config_service import ProxyConfigService
-from agent_teams.env.proxy_env import (
+from relay_teams.env.proxy_config_service import ProxyConfigService
+from relay_teams.env.proxy_env import (
     ProxyEnvConfig,
     ProxyEnvInput,
     sync_proxy_env_to_process_env,
 )
-from agent_teams.env.proxy_secret_store import ProxySecretStore
+from relay_teams.env.proxy_secret_store import ProxySecretStore
 
 
 class _FakeProxySecretStore(ProxySecretStore):
@@ -52,7 +52,7 @@ def _clear_proxy_env(monkeypatch) -> None:
 
 def _set_test_app_config_dir(monkeypatch, config_dir: Path) -> None:
     monkeypatch.setattr(
-        "agent_teams.env.runtime_env.get_app_config_dir",
+        "relay_teams.env.runtime_env.get_app_config_dir",
         lambda user_home_dir=None: config_dir,
     )
 

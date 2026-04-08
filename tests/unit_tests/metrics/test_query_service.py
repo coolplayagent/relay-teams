@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from agent_teams.metrics import (
+from relay_teams.metrics import (
     DEFAULT_DEFINITIONS,
     MetricRecorder,
     MetricRegistry,
@@ -12,7 +12,7 @@ from agent_teams.metrics import (
     MetricsScopeSelector,
     SqliteMetricAggregateStore,
 )
-from agent_teams.metrics.sinks import AggregateStoreSink
+from relay_teams.metrics.sinks import AggregateStoreSink
 
 
 def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
@@ -33,43 +33,43 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
         status="success",
     )
     recorder.emit(
-        definition_name="agent_teams.session.steps", value=2, tags=tags, occurred_at=now
+        definition_name="relay_teams.session.steps", value=2, tags=tags, occurred_at=now
     )
     recorder.emit(
-        definition_name="agent_teams.llm.input_tokens",
+        definition_name="relay_teams.llm.input_tokens",
         value=120,
         tags=tags,
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.llm.cached_input_tokens",
+        definition_name="relay_teams.llm.cached_input_tokens",
         value=48,
         tags=tags,
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.llm.output_tokens",
+        definition_name="relay_teams.llm.output_tokens",
         value=24,
         tags=tags,
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.tool.calls", value=2, tags=tags, occurred_at=now
+        definition_name="relay_teams.tool.calls", value=2, tags=tags, occurred_at=now
     )
     recorder.emit(
-        definition_name="agent_teams.tool.duration_ms",
+        definition_name="relay_teams.tool.duration_ms",
         value=300,
         tags=tags,
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.tool.failures",
+        definition_name="relay_teams.tool.failures",
         value=1,
         tags=MetricTagSet(**(tags.model_dump() | {"status": "failure"})),
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.retrieval.searches",
+        definition_name="relay_teams.retrieval.searches",
         value=4,
         tags=MetricTagSet(
             session_id="session-1",
@@ -84,7 +84,7 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.retrieval.search_duration_ms",
+        definition_name="relay_teams.retrieval.search_duration_ms",
         value=200,
         tags=MetricTagSet(
             session_id="session-1",
@@ -99,7 +99,7 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.retrieval.search_failures",
+        definition_name="relay_teams.retrieval.search_failures",
         value=1,
         tags=MetricTagSet(
             session_id="session-1",
@@ -114,7 +114,7 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.retrieval.document_count",
+        definition_name="relay_teams.retrieval.document_count",
         value=10,
         tags=MetricTagSet(
             session_id="session-1",
@@ -129,7 +129,7 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.retrieval.document_count",
+        definition_name="relay_teams.retrieval.document_count",
         value=12,
         tags=MetricTagSet(
             session_id="session-1",
@@ -144,7 +144,7 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
         occurred_at=now + timedelta(minutes=1),
     )
     recorder.emit(
-        definition_name="agent_teams.retrieval.document_count",
+        definition_name="relay_teams.retrieval.document_count",
         value=5,
         tags=MetricTagSet(
             session_id="session-1",
@@ -170,25 +170,25 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
         status="success",
     )
     recorder.emit(
-        definition_name="agent_teams.llm.input_tokens",
+        definition_name="relay_teams.llm.input_tokens",
         value=30,
         tags=reviewer_tags,
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.llm.output_tokens",
+        definition_name="relay_teams.llm.output_tokens",
         value=12,
         tags=reviewer_tags,
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.tool.calls",
+        definition_name="relay_teams.tool.calls",
         value=1,
         tags=reviewer_tags,
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.tool.duration_ms",
+        definition_name="relay_teams.tool.duration_ms",
         value=80,
         tags=reviewer_tags,
         occurred_at=now,
@@ -204,13 +204,13 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
         status="completed",
     )
     recorder.emit(
-        definition_name="agent_teams.gateway.operations",
+        definition_name="relay_teams.gateway.operations",
         value=1,
         tags=gateway_request_tags,
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.gateway.operation_duration_ms",
+        definition_name="relay_teams.gateway.operation_duration_ms",
         value=420,
         tags=gateway_request_tags,
         occurred_at=now,
@@ -226,13 +226,13 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
         status="success",
     )
     recorder.emit(
-        definition_name="agent_teams.gateway.operations",
+        definition_name="relay_teams.gateway.operations",
         value=1,
         tags=gateway_prompt_start_tags,
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.gateway.operation_duration_ms",
+        definition_name="relay_teams.gateway.operation_duration_ms",
         value=110,
         tags=gateway_prompt_start_tags,
         occurred_at=now,
@@ -248,13 +248,13 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
         status="success",
     )
     recorder.emit(
-        definition_name="agent_teams.gateway.operations",
+        definition_name="relay_teams.gateway.operations",
         value=1,
         tags=gateway_first_update_tags,
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.gateway.operation_duration_ms",
+        definition_name="relay_teams.gateway.operation_duration_ms",
         value=180,
         tags=gateway_first_update_tags,
         occurred_at=now,
@@ -269,19 +269,19 @@ def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:
         status="failed",
     )
     recorder.emit(
-        definition_name="agent_teams.gateway.operations",
+        definition_name="relay_teams.gateway.operations",
         value=1,
         tags=gateway_mcp_tags,
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.gateway.operation_duration_ms",
+        definition_name="relay_teams.gateway.operation_duration_ms",
         value=75,
         tags=gateway_mcp_tags,
         occurred_at=now,
     )
     recorder.emit(
-        definition_name="agent_teams.gateway.operation_failures",
+        definition_name="relay_teams.gateway.operation_failures",
         value=1,
         tags=gateway_mcp_tags,
         occurred_at=now,

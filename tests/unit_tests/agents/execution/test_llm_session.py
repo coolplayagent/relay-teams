@@ -7,19 +7,19 @@ from typing import cast
 
 import pytest
 
-from agent_teams.agents.execution.llm_session import AgentLlmSession
-from agent_teams.agents.execution.conversation_compaction import (
+from relay_teams.agents.execution.llm_session import AgentLlmSession
+from relay_teams.agents.execution.conversation_compaction import (
     ConversationCompactionService,
 )
-from agent_teams.agents.execution.conversation_microcompact import (
+from relay_teams.agents.execution.conversation_microcompact import (
     ConversationMicrocompactService,
     ConversationMicrocompactResult,
 )
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
-from agent_teams.mcp.mcp_registry import McpRegistry
-from agent_teams.providers.model_config import ModelEndpointConfig
-from agent_teams.providers.provider_contracts import LLMRequest
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
+from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.providers.model_config import ModelEndpointConfig
+from relay_teams.providers.provider_contracts import LLMRequest
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,

@@ -35,17 +35,17 @@ def _load_package_data(project_root: Path) -> dict[str, tuple[str, ...]]:
 
 
 def _tool_description_files(project_root: Path) -> tuple[Path, ...]:
-    tool_root = project_root / "src" / "agent_teams" / "tools"
+    tool_root = project_root / "src" / "relay_teams" / "tools"
     return tuple(sorted(tool_root.rglob("*.txt")))
 
 
 def _builtin_role_files(project_root: Path) -> tuple[Path, ...]:
-    builtin_root = project_root / "src" / "agent_teams" / "builtin" / "roles"
+    builtin_root = project_root / "src" / "relay_teams" / "builtin" / "roles"
     return tuple(sorted(builtin_root.glob("*.md")))
 
 
 def _builtin_skill_files(project_root: Path) -> tuple[Path, ...]:
-    builtin_root = project_root / "src" / "agent_teams" / "builtin" / "skills"
+    builtin_root = project_root / "src" / "relay_teams" / "builtin" / "skills"
     return tuple(
         sorted(
             path
@@ -85,7 +85,7 @@ def test_tool_description_files_are_declared_in_package_data() -> None:
     for description_file in description_files:
         matched = False
         for package_name, patterns in package_data.items():
-            if not package_name.startswith("agent_teams.tools"):
+            if not package_name.startswith("relay_teams.tools"):
                 continue
             package_root = project_root / "src" / Path(*package_name.split("."))
             if not description_file.is_relative_to(package_root):
@@ -115,7 +115,7 @@ def test_tool_package_data_declarations_match_existing_description_files() -> No
 
     stale_declarations: list[str] = []
     for package_name, patterns in package_data.items():
-        if not package_name.startswith("agent_teams.tools"):
+        if not package_name.startswith("relay_teams.tools"):
             continue
         package_root = project_root / "src" / Path(*package_name.split("."))
         matched = False
@@ -142,8 +142,8 @@ def test_builtin_role_files_are_declared_in_package_data() -> None:
     project_root = _project_root()
     package_data = _load_package_data(project_root)
     role_files = _builtin_role_files(project_root)
-    builtin_package_root = project_root / "src" / "agent_teams" / "builtin"
-    builtin_patterns = package_data.get("agent_teams.builtin", ())
+    builtin_package_root = project_root / "src" / "relay_teams" / "builtin"
+    builtin_patterns = package_data.get("relay_teams.builtin", ())
 
     missing_files = [
         str(role_file.relative_to(project_root / "src"))
@@ -165,8 +165,8 @@ def test_builtin_package_data_includes_live_role_matches() -> None:
     project_root = _project_root()
     package_data = _load_package_data(project_root)
     role_files = _builtin_role_files(project_root)
-    builtin_package_root = project_root / "src" / "agent_teams" / "builtin"
-    builtin_patterns = package_data.get("agent_teams.builtin", ())
+    builtin_package_root = project_root / "src" / "relay_teams" / "builtin"
+    builtin_patterns = package_data.get("relay_teams.builtin", ())
 
     matching_patterns = [
         pattern
@@ -189,8 +189,8 @@ def test_builtin_skill_files_are_declared_in_package_data() -> None:
     project_root = _project_root()
     package_data = _load_package_data(project_root)
     skill_files = _builtin_skill_files(project_root)
-    builtin_package_root = project_root / "src" / "agent_teams" / "builtin"
-    builtin_patterns = package_data.get("agent_teams.builtin", ())
+    builtin_package_root = project_root / "src" / "relay_teams" / "builtin"
+    builtin_patterns = package_data.get("relay_teams.builtin", ())
 
     missing_files = [
         str(skill_file.relative_to(project_root / "src"))
@@ -212,8 +212,8 @@ def test_builtin_package_data_includes_live_skill_matches() -> None:
     project_root = _project_root()
     package_data = _load_package_data(project_root)
     skill_files = _builtin_skill_files(project_root)
-    builtin_package_root = project_root / "src" / "agent_teams" / "builtin"
-    builtin_patterns = package_data.get("agent_teams.builtin", ())
+    builtin_package_root = project_root / "src" / "relay_teams" / "builtin"
+    builtin_patterns = package_data.get("relay_teams.builtin", ())
 
     matching_patterns = [
         pattern

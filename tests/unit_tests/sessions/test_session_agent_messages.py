@@ -4,24 +4,24 @@ from pathlib import Path
 
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-from agent_teams.agents.instances.enums import InstanceStatus
-from agent_teams.sessions.runs.event_stream import RunEventHub
-from agent_teams.sessions.session_service import SessionService
-from agent_teams.agents.instances.instance_repository import AgentInstanceRepository
-from agent_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from agent_teams.sessions.runs.event_log import EventLog
-from agent_teams.agents.execution.message_repository import MessageRepository
-from agent_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-from agent_teams.sessions.session_repository import SessionRepository
-from agent_teams.sessions.session_history_marker_repository import (
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.session_service import SessionService
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
-from agent_teams.sessions.session_history_marker_models import (
+from relay_teams.sessions.session_history_marker_models import (
     SessionHistoryMarkerType,
 )
-from agent_teams.agents.tasks.task_repository import TaskRepository
-from agent_teams.providers.token_usage_repo import TokenUsageRepository
-from agent_teams.workspace import build_conversation_id
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.workspace import build_conversation_id
 
 
 def _build_service(db_path: Path) -> SessionService:

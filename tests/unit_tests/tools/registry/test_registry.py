@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_teams.tools.registry import ToolRegistry, ToolResolutionContext
+from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 
 
 def _register_alpha(_: object) -> None:
@@ -16,7 +16,7 @@ def _register_beta(_: object) -> None:
 
 def _register_unavailable(_: object) -> None:
     raise ModuleNotFoundError(
-        "No module named 'agent_teams.tools.workspace_tools.legacy_tool'"
+        "No module named 'relay_teams.tools.workspace_tools.legacy_tool'"
     )
 
 

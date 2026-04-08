@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.sessions.runs.run_models import RuntimePromptConversationContext
-from agent_teams.skills import (
+from relay_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.sessions.runs.run_models import RuntimePromptConversationContext
+from relay_teams.skills import (
     SkillIndexService,
     SkillRegistry,
     SkillRoutingContext,
@@ -16,7 +16,7 @@ from agent_teams.skills import (
     SkillsDirectory,
     build_skill_routing_query_text,
 )
-from agent_teams.skills.skill_models import SkillInstructionEntry
+from relay_teams.skills.skill_models import SkillInstructionEntry
 
 
 def test_skill_index_documents_include_instruction_script_and_resource_summaries(

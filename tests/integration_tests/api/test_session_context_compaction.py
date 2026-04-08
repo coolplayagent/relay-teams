@@ -17,7 +17,7 @@ from integration_tests.support.environment import IntegrationEnvironment
 _GLOBAL_FACTS = {
     "codename": "ORBIT-LANTERN",
     "recovery phrase": "cyan maple 2719",
-    "key file": "src/agent_teams/agents/execution/llm_session.py",
+    "key file": "src/relay_teams/agents/execution/llm_session.py",
     "version tag": "2026-04-08-it",
 }
 _PHASE_ANCHORS = {
@@ -235,7 +235,7 @@ def _expected_recall_text(*, max_phase: int) -> str:
 
 
 def _database_path(integration_env: IntegrationEnvironment) -> Path:
-    return integration_env.config_dir / "agent_teams.db"
+    return integration_env.config_dir / "relay_teams.db"
 
 
 def _fetch_session_markers(

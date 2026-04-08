@@ -5,17 +5,17 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.computer import ExecutionSurface
-from agent_teams.mcp.mcp_registry import McpRegistry
-from agent_teams.roles import (
+from relay_teams.computer import ExecutionSurface
+from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.roles import (
     RoleDocumentDraft,
     RoleConfigSource,
     RoleRegistry,
     default_memory_profile,
 )
-from agent_teams.roles.settings_service import RoleSettingsService
-from agent_teams.skills.skill_registry import SkillRegistry
-from agent_teams.tools.registry import build_default_registry
+from relay_teams.roles.settings_service import RoleSettingsService
+from relay_teams.skills.skill_registry import SkillRegistry
+from relay_teams.tools.registry import build_default_registry
 
 
 def test_save_role_document_renames_role_file_and_reloads_registry(

@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.tools.workspace_tools.edit import (
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.tools.workspace_tools.edit import (
     _project_edit_result,
     apply_edit,
     edit_file_with_guard,
     replace_content,
 )
-from agent_teams.tools.workspace_tools.edit_state import (
+from relay_teams.tools.workspace_tools.edit_state import (
     assert_file_was_read,
     load_file_read_state,
     record_file_read,

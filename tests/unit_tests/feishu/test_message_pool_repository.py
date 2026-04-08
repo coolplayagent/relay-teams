@@ -5,10 +5,10 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from agent_teams.gateway.feishu.message_pool_repository import (
+from relay_teams.gateway.feishu.message_pool_repository import (
     FeishuMessagePoolRepository,
 )
-from agent_teams.gateway.feishu.models import (
+from relay_teams.gateway.feishu.models import (
     FeishuMessageDeliveryStatus,
     FeishuMessagePoolRecord,
     FeishuMessageProcessingStatus,

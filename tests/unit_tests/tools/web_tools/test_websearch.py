@@ -6,14 +6,14 @@ from typing import cast
 import httpx
 import pytest
 
-from agent_teams.env.web_config_models import (
+from relay_teams.env.web_config_models import (
     DEFAULT_SEARXNG_INSTANCE_URL,
     WebConfig,
     WebFallbackProvider,
     WebProvider,
 )
-from agent_teams.tools.runtime import ToolExecutionError
-from agent_teams.tools.web_tools import websearch
+from relay_teams.tools.runtime import ToolExecutionError
+from relay_teams.tools.web_tools import websearch
 
 
 def test_web_search_request_normalizes_domain_filters() -> None:

@@ -6,13 +6,13 @@ from typing import cast
 
 import pytest
 
-from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.tools.runtime.context import ToolDeps
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.tools.runtime.context import ToolDeps
 
 
 class TestIsBinaryFile:
     def test_binary_extension_zip(self, tmp_path):
-        from agent_teams.tools.workspace_tools.read import is_binary_file
+        from relay_teams.tools.workspace_tools.read import is_binary_file
 
         test_file = tmp_path / "test.zip"
         test_file.write_bytes(b"PK\x03\x04")
@@ -20,7 +20,7 @@ class TestIsBinaryFile:
         assert is_binary_file(test_file, 4) is True
 
     def test_binary_extension_exe(self, tmp_path):
-        from agent_teams.tools.workspace_tools.read import is_binary_file
+        from relay_teams.tools.workspace_tools.read import is_binary_file
 
         test_file = tmp_path / "test.exe"
         test_file.write_bytes(b"MZ")
@@ -28,7 +28,7 @@ class TestIsBinaryFile:
         assert is_binary_file(test_file, 2) is True
 
     def test_text_file(self, tmp_path):
-        from agent_teams.tools.workspace_tools.read import is_binary_file
+        from relay_teams.tools.workspace_tools.read import is_binary_file
 
         test_file = tmp_path / "test.py"
         test_file.write_text("def hello():\n    print('world')")
@@ -36,7 +36,7 @@ class TestIsBinaryFile:
         assert is_binary_file(test_file, test_file.stat().st_size) is False
 
     def test_null_byte(self, tmp_path):
-        from agent_teams.tools.workspace_tools.read import is_binary_file
+        from relay_teams.tools.workspace_tools.read import is_binary_file
 
         test_file = tmp_path / "test.txt"
         test_file.write_bytes(b"hello\x00world")
@@ -44,7 +44,7 @@ class TestIsBinaryFile:
         assert is_binary_file(test_file, 11) is True
 
     def test_empty_file(self, tmp_path):
-        from agent_teams.tools.workspace_tools.read import is_binary_file
+        from relay_teams.tools.workspace_tools.read import is_binary_file
 
         test_file = tmp_path / "empty.txt"
         test_file.touch()
@@ -55,7 +55,7 @@ class TestIsBinaryFile:
 class TestReadFileContent:
     @pytest.mark.asyncio
     async def test_read_file_all_lines(self, tmp_path):
-        from agent_teams.tools.workspace_tools.read import read_file_content
+        from relay_teams.tools.workspace_tools.read import read_file_content
 
         test_file = tmp_path / "test.py"
         test_file.write_text("line1\nline2\nline3\n")
@@ -71,7 +71,7 @@ class TestReadFileContent:
 
     @pytest.mark.asyncio
     async def test_read_with_offset(self, tmp_path):
-        from agent_teams.tools.workspace_tools.read import read_file_content
+        from relay_teams.tools.workspace_tools.read import read_file_content
 
         test_file = tmp_path / "test.py"
         test_file.write_text("line1\nline2\nline3\nline4\nline5\n")
@@ -83,7 +83,7 @@ class TestReadFileContent:
 
     @pytest.mark.asyncio
     async def test_read_line_limit(self, tmp_path):
-        from agent_teams.tools.workspace_tools.read import read_file_content
+        from relay_teams.tools.workspace_tools.read import read_file_content
 
         test_file = tmp_path / "test.py"
         test_file.write_text("\n".join([f"line{i}" for i in range(20)]))
@@ -97,7 +97,7 @@ class TestReadFileContent:
 
     @pytest.mark.asyncio
     async def test_read_empty_file(self, tmp_path):
-        from agent_teams.tools.workspace_tools.read import read_file_content
+        from relay_teams.tools.workspace_tools.read import read_file_content
 
         test_file = tmp_path / "empty.txt"
         test_file.touch()
@@ -110,7 +110,7 @@ class TestReadFileContent:
 
 class TestReadDirectory:
     def test_read_directory(self, tmp_path):
-        from agent_teams.tools.workspace_tools.read import read_directory
+        from relay_teams.tools.workspace_tools.read import read_directory
 
         (tmp_path / "dir1").mkdir()
         (tmp_path / "file1.txt").touch()
@@ -125,7 +125,7 @@ class TestReadDirectory:
         assert truncated is False
 
     def test_read_directory_with_offset(self, tmp_path):
-        from agent_teams.tools.workspace_tools.read import read_directory
+        from relay_teams.tools.workspace_tools.read import read_directory
 
         (tmp_path / "a.txt").touch()
         (tmp_path / "b.txt").touch()
@@ -139,7 +139,7 @@ class TestReadDirectory:
         assert truncated is True
 
     def test_read_directory_sorted(self, tmp_path):
-        from agent_teams.tools.workspace_tools.read import read_directory
+        from relay_teams.tools.workspace_tools.read import read_directory
 
         (tmp_path / "z.txt").touch()
         (tmp_path / "a.txt").touch()
@@ -153,7 +153,7 @@ class TestReadDirectory:
 
 
 def test_project_read_result_keeps_output_first_shape() -> None:
-    from agent_teams.tools.workspace_tools.read import _project_read_result
+    from relay_teams.tools.workspace_tools.read import _project_read_result
 
     projected = _project_read_result(
         output="<content>\n1: hello\n</content>",
@@ -177,7 +177,7 @@ def test_project_read_result_keeps_output_first_shape() -> None:
 async def test_resolve_read_instruction_sections_injects_nested_agents_once(
     tmp_path: Path,
 ) -> None:
-    from agent_teams.tools.workspace_tools.read import resolve_read_instruction_sections
+    from relay_teams.tools.workspace_tools.read import resolve_read_instruction_sections
 
     workspace_root = tmp_path / "workspace"
     source_dir = workspace_root / "src" / "components"
@@ -218,10 +218,10 @@ async def test_resolve_read_instruction_sections_injects_nested_agents_once(
 async def test_resolve_read_instruction_sections_skips_preloaded_paths(
     tmp_path: Path,
 ) -> None:
-    from agent_teams.agents.execution.prompt_instruction_state import (
+    from relay_teams.agents.execution.prompt_instruction_state import (
         record_prompt_instruction_loaded,
     )
-    from agent_teams.tools.workspace_tools.read import resolve_read_instruction_sections
+    from relay_teams.tools.workspace_tools.read import resolve_read_instruction_sections
 
     workspace_root = tmp_path / "workspace"
     source_dir = workspace_root / "src"

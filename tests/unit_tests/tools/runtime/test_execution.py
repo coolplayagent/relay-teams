@@ -11,32 +11,32 @@ from pathlib import Path
 from tempfile import mkdtemp
 from typing import cast
 
-from agent_teams.persistence.shared_state_repo import SharedStateRepository
-from agent_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
-from agent_teams.notifications import NotificationService, default_notification_config
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry
-from agent_teams.sessions.runs.enums import RunEventType
-from agent_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
+from relay_teams.notifications import NotificationService, default_notification_config
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.event_stream import RunEventHub
 
-from agent_teams.tools.runtime.approval_ticket_repo import (
+from relay_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRepository,
     ApprovalTicketStatus,
 )
-from agent_teams.sessions.runs.run_runtime_repo import (
+from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from agent_teams.tools.runtime import (
+from relay_teams.tools.runtime import (
     ToolApprovalPolicy,
     ToolContext,
     ToolExecutionError,
     ToolResultProjection,
     execute_tool,
 )
-from agent_teams.tools.runtime.persisted_state import load_tool_call_state
-from agent_teams.tools.runtime.persisted_state import ToolApprovalMode
+from relay_teams.tools.runtime.persisted_state import load_tool_call_state
+from relay_teams.tools.runtime.persisted_state import ToolApprovalMode
 
 
 class _FakeRunEventHub:

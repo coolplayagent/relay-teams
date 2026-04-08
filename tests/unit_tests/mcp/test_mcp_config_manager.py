@@ -5,8 +5,8 @@ import json
 import os
 from pathlib import Path
 
-from agent_teams.mcp import mcp_config_manager as config_manager
-from agent_teams.mcp.mcp_models import McpConfigScope
+from relay_teams.mcp import mcp_config_manager as config_manager
+from relay_teams.mcp.mcp_models import McpConfigScope
 
 
 def _clear_proxy_env(monkeypatch) -> None:
@@ -26,7 +26,7 @@ def _clear_proxy_env(monkeypatch) -> None:
 
 def _set_test_app_config_dir(monkeypatch, config_dir: Path) -> None:
     monkeypatch.setattr(
-        "agent_teams.env.runtime_env.get_app_config_dir",
+        "relay_teams.env.runtime_env.get_app_config_dir",
         lambda user_home_dir=None: config_dir,
     )
 

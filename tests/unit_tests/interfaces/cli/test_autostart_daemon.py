@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.interfaces.cli import app as cli_app
+from relay_teams.interfaces.cli import app as cli_app
 
 
 class _FakeStartupInfo:
@@ -40,7 +40,7 @@ def test_start_server_daemon_hides_windows_console(monkeypatch) -> None:
     assert list(args[0]) == [
         cli_app.sys.executable,
         "-m",
-        "agent_teams",
+        "relay_teams",
         "server",
         "start",
         "--host",

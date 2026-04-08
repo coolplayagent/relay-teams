@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import httpx
 
-from agent_teams.net.clients import create_sync_http_client
+from relay_teams.net.clients import create_sync_http_client
 
 _SSL_VERIFY_DISABLED = 0
 _SSL_VERIFY_REQUIRED = 2

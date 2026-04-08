@@ -3,12 +3,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_teams.mcp import (
+from relay_teams.mcp import (
     McpConfigManager,
     McpConfigReloadService,
 )
-from agent_teams.roles.role_models import RoleDefinition
-from agent_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
 
 
 def test_reload_mcp_config_ignores_unknown_servers_on_existing_roles(

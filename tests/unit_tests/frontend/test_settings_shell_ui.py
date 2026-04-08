@@ -807,6 +807,7 @@ globalThis.window = {{}};
         check=False,
         cwd=str(repo_root),
         text=True,
+        encoding="utf-8",
         timeout=30,
     )
 

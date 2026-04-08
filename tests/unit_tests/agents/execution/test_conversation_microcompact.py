@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from agent_teams.agents.execution.conversation_compaction import (
+from relay_teams.agents.execution.conversation_compaction import (
     ConversationCompactionBudget,
 )
-from agent_teams.agents.execution.conversation_microcompact import (
+from relay_teams.agents.execution.conversation_microcompact import (
     ConversationMicrocompactService,
 )
 from pydantic_ai.messages import (

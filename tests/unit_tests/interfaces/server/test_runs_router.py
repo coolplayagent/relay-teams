@@ -4,15 +4,16 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from agent_teams.interfaces.server.deps import get_run_service
-from agent_teams.interfaces.server.routers import runs
-from agent_teams.sessions.runs.run_models import IntentInput
+from relay_teams.interfaces.server.deps import get_run_service
+from relay_teams.interfaces.server.routers import runs
+from relay_teams.sessions.runs.run_models import IntentInput
 
 
 class _FakeRunService:
     def __init__(self) -> None:
         self.resumed_run_ids: list[str] = []
         self.started_run_ids: list[str] = []
+        self.resolved_tool_approvals: list[tuple[str, str, str, str]] = []
         self.raise_on_tool_approval = False
         self.created_run_inputs: list[IntentInput] = []
         self.background_tasks: dict[str, dict[str, object]] = {
@@ -43,6 +44,7 @@ class _FakeRunService:
             raise RuntimeError(
                 "Run run-1 is stopped. Resume the run before resolving tool approval."
             )
+        self.resolved_tool_approvals.append((run_id, tool_call_id, action, feedback))
 
     def ensure_run_started(self, run_id: str) -> None:
         self.started_run_ids.append(run_id)
@@ -218,6 +220,22 @@ def test_resolve_tool_approval_route_returns_conflict_for_stopped_run() -> None:
     assert response.json()["detail"] == (
         "Run run-1 is stopped. Resume the run before resolving tool approval."
     )
+
+
+def test_resolve_tool_approval_route_accepts_approve_exact() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs/run-1/tool-approvals/call-1/resolve",
+        json={"action": "approve_exact", "feedback": "persist this"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "action": "approve_exact"}
+    assert fake_service.resolved_tool_approvals == [
+        ("run-1", "call-1", "approve_exact", "persist this")
+    ]
 
 
 def test_resume_route_rejects_none_like_run_id() -> None:

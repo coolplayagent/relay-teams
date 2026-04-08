@@ -5,8 +5,8 @@ import json
 
 from typer.testing import CliRunner
 
-from agent_teams.interfaces.cli import app as cli_app
-from agent_teams.mcp.mcp_models import (
+from relay_teams.interfaces.cli import app as cli_app
+from relay_teams.mcp.mcp_models import (
     McpConfigScope,
     McpServerSummary,
     McpServerToolsSummary,
@@ -55,7 +55,7 @@ class _FailingMcpService:
 
 def test_mcp_list_supports_json_output(monkeypatch) -> None:
     monkeypatch.setattr(
-        "agent_teams.mcp.mcp_cli.load_mcp_service",
+        "relay_teams.mcp.mcp_cli.load_mcp_service",
         lambda: _FakeMcpService(),
     )
 
@@ -70,7 +70,7 @@ def test_mcp_list_supports_json_output(monkeypatch) -> None:
 
 def test_mcp_tools_renders_table_by_default(monkeypatch) -> None:
     monkeypatch.setattr(
-        "agent_teams.mcp.mcp_cli.load_mcp_service",
+        "relay_teams.mcp.mcp_cli.load_mcp_service",
         lambda: _FakeMcpService(),
     )
 
@@ -84,7 +84,7 @@ def test_mcp_tools_renders_table_by_default(monkeypatch) -> None:
 
 def test_mcp_tools_surfaces_connection_error(monkeypatch) -> None:
     monkeypatch.setattr(
-        "agent_teams.mcp.mcp_cli.load_mcp_service",
+        "relay_teams.mcp.mcp_cli.load_mcp_service",
         lambda: _FailingMcpService(),
     )
 
@@ -92,3 +92,11 @@ def test_mcp_tools_surfaces_connection_error(monkeypatch) -> None:
 
     assert result.exit_code != 0
     assert "Failed to connect MCP server 'broken-server'" in result.output
+
+
+def test_mcp_help_uses_relay_teams_examples() -> None:
+    result = runner.invoke(cli_app.app, ["mcp", "--help"])
+
+    assert result.exit_code == 0
+    assert "relay-teams mcp list" in result.output
+    assert "relay-teams mcp tools filesystem" in result.output

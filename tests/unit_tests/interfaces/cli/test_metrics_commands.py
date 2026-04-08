@@ -4,7 +4,7 @@ import re
 
 from typer.testing import CliRunner
 
-from agent_teams.interfaces.cli import app as cli_app
+from relay_teams.interfaces.cli import app as cli_app
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")

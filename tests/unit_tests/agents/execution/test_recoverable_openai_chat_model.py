@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from agent_teams.agents.execution.recoverable_openai_chat_model import (
+from relay_teams.agents.execution.recoverable_openai_chat_model import (
     RecoverableOpenAIChatModel,
 )
 from pydantic_ai.models import ModelRequestParameters
