@@ -443,6 +443,40 @@ def test_coerce_history_to_provider_safe_sequence_drops_orphan_tool_prefix() -> 
     assert repaired[1:] == history[1:]
 
 
+def test_coerce_history_to_provider_safe_sequence_keeps_bridge_when_prefix_drop_empties_history() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Resume the preserved execution state after repair."),
+    )
+    history = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="missing-call",
+                    content="orphaned",
+                )
+            ]
+        )
+    ]
+
+    repaired = AgentLlmSession._coerce_history_to_provider_safe_sequence(
+        session,
+        request=_build_request(user_prompt=None),
+        history=history,
+    )
+
+    assert len(repaired) == 1
+    bridge_message = repaired[0]
+    assert isinstance(bridge_message, ModelRequest)
+    bridge_part = bridge_message.parts[0]
+    assert isinstance(bridge_part, UserPromptPart)
+    assert "Resume the preserved execution state after repair." in bridge_part.content
+
+
 @pytest.mark.asyncio
 async def test_safe_max_output_tokens_accounts_for_full_prompt_budget() -> None:
     session = object.__new__(AgentLlmSession)

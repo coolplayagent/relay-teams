@@ -2095,7 +2095,7 @@ class AgentLlmSession:
                     "dropped_message_count": replayable_start,
                 },
             )
-        if is_replayable_history(candidate_history):
+        if candidate_history and is_replayable_history(candidate_history):
             return candidate_history
         if history_has_valid_tool_replay(candidate_history):
             bridge_message = self._build_history_replay_bridge_message(request=request)
