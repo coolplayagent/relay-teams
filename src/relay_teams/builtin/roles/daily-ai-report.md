@@ -130,11 +130,16 @@ skills:
 
 - [AI Digest 中文](https://ai-digest.liziran.com/zh/)
 - [AI Brief 中文](https://ai-brief.liziran.com/zh/)
+- [a16z news](https://www.a16z.news/)
+- [alphaxiv](https://www.alphaxiv.org/)
 
 ## RSS 博客池
 
 ### Blogs
 
+- `a16z.news`  
+  RSS: <https://www.a16z.news/feed>  
+  Site: <https://www.a16z.news>
 - `simonwillison.net`  
   RSS: <https://simonwillison.net/atom/everything/>  
   Site: <https://simonwillison.net>
