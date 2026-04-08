@@ -30,7 +30,7 @@ There were two separate causes:
 
 1. **Wrong install directory for Agent Teams runtime discovery**
    - `clawhub` installed to the current working directory's `skills/`
-   - `agent-teams` runtime discovers app skills from `~/.agent-teams/skills`
+   - `agent-teams` runtime discovers app skills from `~/.relay-teams/skills` by default
    - result: install succeeded, runtime discovery failed
 
 2. **Published slug differed from runtime skill name**
@@ -60,7 +60,7 @@ Agent Teams app-scoped skill discovery reads from the app config directory skill
 
 That means the correct install target for runtime-visible app skills is:
 
-- `~/.agent-teams/skills`
+- `~/.relay-teams/skills`
 
 not an arbitrary repository-local `skills/` folder, unless the runtime is explicitly configured to use that path.
 
@@ -97,20 +97,20 @@ When app and builtin scopes may collide, canonical refs are the stable choice:
 Use ClawHub with the Agent Teams app config dir as workdir:
 
 ```bash
-clawhub --workdir ~/.agent-teams install <slug>
+clawhub --workdir ~/.relay-teams install <slug>
 ```
 
 This ensures the resulting skill lands under:
 
 ```text
-~/.agent-teams/skills/<slug>
+~/.relay-teams/skills/<slug>
 ```
 
 ### Rule 2: Read `SKILL.md` after install
 
 After installation, inspect:
 
-- `~/.agent-teams/skills/<slug>/SKILL.md`
+- `~/.relay-teams/skills/<slug>/SKILL.md`
 
 The frontmatter `name` is the actual runtime identity used by Agent Teams.
 
@@ -204,7 +204,7 @@ slug: skill-creator-2
 name: skill-creator
 scope: app
 ref: app:skill-creator
-path: ~/.agent-teams/skills/skill-creator-2
+path: ~/.relay-teams/skills/skill-creator-2
 ```
 
 ### Why this matters
@@ -272,7 +272,7 @@ This would make future capability upgrades much stronger because the operator ca
 
 ### Documentation
 
-1. document that Agent Teams runtime app skills live under `~/.agent-teams/skills`
+1. document that Agent Teams runtime app skills live under `~/.relay-teams/skills` by default
 2. document that ClawHub slug may differ from Agent Teams runtime skill name
 3. recommend canonical refs when binding app skills to roles
 4. document the verification workflow after installation
@@ -290,7 +290,7 @@ This would make future capability upgrades much stronger because the operator ca
 
 When installing a new ClawHub skill for Agent Teams runtime use:
 
-1. install into `~/.agent-teams`
+1. install into `~/.relay-teams`
 2. inspect the installed `SKILL.md`
 3. read the frontmatter `name`
 4. bind the role using `app:<name>`

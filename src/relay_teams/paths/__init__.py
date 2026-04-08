@@ -17,7 +17,11 @@ from relay_teams.paths.filesystem import (
     unlink_path,
 )
 from relay_teams.paths.root_paths import (
+    format_app_config_file_reference,
+    get_app_bin_dir,
     get_app_config_dir,
+    get_app_config_dir_override,
+    get_app_config_file_path,
     get_project_config_dir,
     get_project_log_dir,
     get_project_root_or_none,
@@ -26,7 +30,11 @@ from relay_teams.paths.root_paths import (
 )
 
 __all__ = [
+    "format_app_config_file_reference",
+    "get_app_bin_dir",
     "get_app_config_dir",
+    "get_app_config_dir_override",
+    "get_app_config_file_path",
     "get_project_config_dir",
     "get_project_log_dir",
     "get_project_root_or_none",

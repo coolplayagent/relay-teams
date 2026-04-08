@@ -27,7 +27,7 @@ def _runtime_identity(
     *,
     python_executable: str = "D:/workspace/agent_teams/.venv/Scripts/python.exe",
     package_root: str = "D:/workspace/agent_teams/src/relay_teams",
-    config_dir: str = "C:/Users/test/.agent-teams",
+    config_dir: str = "C:/Users/test/.relay-teams",
     builtin_roles_dir: str = "D:/workspace/agent_teams/src/relay_teams/builtin/roles",
     builtin_skills_dir: str = "D:/workspace/agent_teams/src/relay_teams/builtin/skills",
 ) -> ServerRuntimeIdentity:
@@ -44,7 +44,7 @@ def _health_payload(
     *,
     python_executable: str = "D:/workspace/agent_teams/.venv/Scripts/python.exe",
     package_root: str = "D:/workspace/agent_teams/src/relay_teams",
-    config_dir: str = "C:/Users/test/.agent-teams",
+    config_dir: str = "C:/Users/test/.relay-teams",
     builtin_roles_dir: str = "D:/workspace/agent_teams/src/relay_teams/builtin/roles",
     builtin_skills_dir: str = "D:/workspace/agent_teams/src/relay_teams/builtin/skills",
 ) -> ServerHealthPayload:

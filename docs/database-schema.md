@@ -3,9 +3,9 @@
 ## 1. Storage
 
 - Engine: SQLite
-- Database file: `~/.agent-teams/relay_teams.db`
+- Database file: default `~/.relay-teams/relay_teams.db`, overrideable with `RELAY_TEAMS_CONFIG_DIR`
 - Foreign keys: enabled on each connection (`PRAGMA foreign_keys = ON`)
-- Runtime logs are file-based and stored under `~/.agent-teams/log/backend.log`, `~/.agent-teams/log/debug.log`, and `~/.agent-teams/log/frontend.log`
+- Runtime logs are file-based and stored under the resolved config dir, by default `~/.relay-teams/log/backend.log`, `~/.relay-teams/log/debug.log`, and `~/.relay-teams/log/frontend.log`
 
 ## 1.1 Application-Layer Constraints
 
@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS external_agent_sessions (
 Purpose: persistent mapping between one internal `session_id + role_id` pair and the reused remote ACP session created for the bound external agent.
 
 Notes:
-- `agent_id` references one configured entry in `~/.agent-teams/agents.json`.
+- `agent_id` references one configured entry in the resolved app config dir `agents.json`, by default `~/.relay-teams/agents.json`.
 - `transport` stores the outbound ACP transport type used by that saved agent config.
 - `external_session_id` is the remote ACP session identifier returned by the external agent and reused for later turns in the same internal session.
 - `status` stores the last-known remote session health, currently `ready` or `failed`.

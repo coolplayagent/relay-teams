@@ -53,7 +53,7 @@ def test_start_runs_uvicorn_and_tracks_managed_process(
         lambda: ServerRuntimeIdentity(
             python_executable="D:/workspace/agent_teams/.venv/Scripts/python.exe",
             package_root="D:/workspace/agent_teams/src/relay_teams",
-            config_dir="C:/Users/test/.agent-teams",
+            config_dir="C:/Users/test/.relay-teams",
             builtin_roles_dir="D:/workspace/agent_teams/src/relay_teams/builtin/roles",
             builtin_skills_dir="D:/workspace/agent_teams/src/relay_teams/builtin/skills",
         ),

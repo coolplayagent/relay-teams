@@ -33,7 +33,7 @@ Each connected WeChat account stores:
 
 The bot token is stored in the unified Agent Teams secret store, not in SQLite.
 When a usable system keyring backend exists, that store uses keyring; otherwise
-it falls back to `~/.agent-teams/secrets.json`.
+it falls back to `~/.relay-teams/secrets.json` by default.
 
 Enabled accounts run a background long-poll worker. For each accepted message:
 

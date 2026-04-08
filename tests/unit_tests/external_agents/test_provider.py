@@ -346,7 +346,7 @@ class _FakeHostToolBridge:
             "command": "python",
             "args": ["-m", "relay_teams.external_agents.host_tool_stdio_server"],
             "env": [
-                {"name": "AGENT_TEAMS_CONFIG_DIR", "value": str(config_dir)},
+                {"name": "RELAY_TEAMS_CONFIG_DIR", "value": str(config_dir)},
                 {"name": "AGENT_TEAMS_HOST_TOOL_RUN_ID", "value": request.run_id},
                 {"name": "AGENT_TEAMS_HOST_TOOL_TASK_ID", "value": request.task_id},
             ],

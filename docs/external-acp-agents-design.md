@@ -15,7 +15,7 @@ This keeps the role system as the stable product surface while allowing the exec
 
 ## 2. Configuration Model
 
-External agents are stored in `~/.agent-teams/agents.json`.
+External agents are stored in the resolved app config dir `agents.json`, by default `~/.relay-teams/agents.json`.
 
 Each agent record contains:
 
@@ -54,7 +54,7 @@ Rules:
 - runtime resolution reattaches secret values only at execution time
 
 When a usable system keyring backend exists, the secret store uses keyring.
-Otherwise it falls back to `~/.agent-teams/secrets.json`.
+Otherwise it falls back to the resolved app config dir `secrets.json`, by default `~/.relay-teams/secrets.json`.
 
 ## 4. Role Binding
 
