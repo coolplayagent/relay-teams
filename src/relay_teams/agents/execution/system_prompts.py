@@ -7,6 +7,7 @@ import os
 import platform
 from collections.abc import Sequence
 from pathlib import Path
+import shutil
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -154,6 +155,7 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
     github_line = _build_github_cli_environment_line()
     if github_line:
         lines.append(github_line)
+    lines.extend(_build_python_package_environment_lines())
     return "\n".join(lines)
 
 
@@ -184,6 +186,39 @@ def _build_github_cli_environment_line() -> str | None:
     if system_gh_path is not None:
         return f"- GitHub CLI: token configured; using system gh at {system_gh_path}"
     return "- GitHub CLI: token configured; gh will be resolved on demand"
+
+
+def _build_python_package_environment_lines() -> list[str]:
+    pip_path = _resolve_package_tool_path(("pip", "pip3"))
+    uv_path = _resolve_package_tool_path(("uv",))
+    lines = [
+        "- Python Package Tool (pip): " + _format_package_tool_status(pip_path),
+        "- Python Package Tool (uv): " + _format_package_tool_status(uv_path),
+    ]
+    if uv_path is not None:
+        lines.append(
+            "- Python Package Install Hint: If pip install fails with "
+            "externally-managed-environment (PEP 668), try uv pip install "
+            "<packages>."
+        )
+    return lines
+
+
+def _resolve_package_tool_path(command_names: tuple[str, ...]) -> Path | None:
+    for command_name in command_names:
+        resolved = shutil.which(command_name)
+        if not resolved:
+            continue
+        resolved_path = Path(resolved)
+        if resolved_path.is_file():
+            return resolved_path
+    return None
+
+
+def _format_package_tool_status(tool_path: Path | None) -> str:
+    if tool_path is None:
+        return "not found on PATH"
+    return str(tool_path)
 
 
 def _get_github_cli_environment_status() -> tuple[bool, Path | None]:
