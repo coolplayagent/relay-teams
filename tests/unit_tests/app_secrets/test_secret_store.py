@@ -188,6 +188,23 @@ def test_rename_owner_preserves_unreadable_keyring_entry(tmp_path: Path) -> None
     assert store.deleted_coordinates == []
 
 
+class _UnavailableKeyringBackend:
+    @property
+    def priority(self) -> float:
+        raise RuntimeError("backend unavailable")
+
+
+class _RuntimeErrorKeyringSecretStore(AppSecretStore):
+    def _get_keyring_backend(self) -> object | None:
+        return _UnavailableKeyringBackend()
+
+
+def test_has_usable_keyring_backend_ignores_backend_runtime_errors() -> None:
+    store = _RuntimeErrorKeyringSecretStore()
+
+    assert store.has_usable_keyring_backend() is False
+
+
 def test_delete_owner_removes_all_secret_fields(tmp_path: Path) -> None:
     store = _FileOnlySecretStore()
     store.set_secret(

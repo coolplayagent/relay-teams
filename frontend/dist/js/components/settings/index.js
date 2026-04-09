@@ -17,7 +17,7 @@ import {
 import { bindProxySettingsHandlers, loadProxyStatusPanel } from './proxySettings.js';
 import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings.js';
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from './webSettings.js';
-import { bindSystemStatusHandlers, loadMcpStatusPanel } from './systemStatus.js';
+import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
 import { bindAppearanceHandlers, loadAppearancePanel, initAppearanceOnStartup } from './appearanceSettings.js';
 import { t, translateDocument } from '../../utils/i18n.js';
 
@@ -852,6 +852,13 @@ function createModal() {
                                         <div class="proxy-probe-status" id="github-probe-status" style="display:none;"></div>
                                     </section>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-panel" id="skills-panel" style="display:none;">
+                        <div class="settings-section">
+                            <div class="settings-content-stack">
+                                <div class="status-stack" id="skills-status"></div>
                             </div>
                         </div>
                     </div>

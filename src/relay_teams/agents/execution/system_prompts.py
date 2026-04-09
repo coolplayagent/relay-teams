@@ -155,6 +155,9 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
     github_line = _build_github_cli_environment_line()
     if github_line:
         lines.append(github_line)
+    clawhub_line = _build_clawhub_environment_line()
+    if clawhub_line:
+        lines.append(clawhub_line)
     lines.extend(_build_python_package_environment_lines())
     return "\n".join(lines)
 
@@ -186,6 +189,17 @@ def _build_github_cli_environment_line() -> str | None:
     if system_gh_path is not None:
         return f"- GitHub CLI: token configured; using system gh at {system_gh_path}"
     return "- GitHub CLI: token configured; gh will be resolved on demand"
+
+
+def _build_clawhub_environment_line() -> str | None:
+    token_configured, clawhub_path = _get_clawhub_environment_status()
+    if not token_configured:
+        return None
+    if clawhub_path is not None:
+        return (
+            f"- ClawHub CLI: token configured; using system clawhub at {clawhub_path}"
+        )
+    return "- ClawHub CLI: token configured"
 
 
 def _build_python_package_environment_lines() -> list[str]:
@@ -242,6 +256,25 @@ def _get_github_cli_environment_status() -> tuple[bool, Path | None]:
     except Exception:
         system_gh_path = None
     return True, system_gh_path
+
+
+def _get_clawhub_environment_status() -> tuple[bool, Path | None]:
+    try:
+        from relay_teams.env.clawhub_config_service import ClawHubConfigService
+        from relay_teams.env.clawhub_cli import resolve_existing_clawhub_path
+        from relay_teams.paths import get_app_config_dir
+    except Exception:
+        return False, None
+
+    try:
+        config = ClawHubConfigService(
+            config_dir=get_app_config_dir()
+        ).get_clawhub_config()
+    except Exception:
+        return False, None
+    if config.token is None:
+        return False, None
+    return True, resolve_existing_clawhub_path()
 
 
 async def build_runtime_system_prompt(

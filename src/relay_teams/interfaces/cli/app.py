@@ -33,6 +33,7 @@ from relay_teams.mcp.mcp_cli import mcp_app
 from relay_teams.paths import get_project_config_dir
 from relay_teams.roles.role_cli import build_roles_app
 from relay_teams.sessions.session_models import SessionMode
+from relay_teams.skills.clawhub_cli import build_clawhub_app
 from relay_teams.skills.skill_cli import skills_app
 
 app = typer.Typer(no_args_is_help=False, pretty_exceptions_enable=False)
@@ -225,6 +226,11 @@ metrics_app = build_metrics_app(
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
 )
+clawhub_app = build_clawhub_app(
+    request_json=_module_request_json,
+    auto_start_if_needed=_module_auto_start,
+    default_base_url=DEFAULT_BASE_URL,
+)
 
 
 def _stream_events(base_url: str, run_id: str, debug: bool) -> None:
@@ -337,6 +343,7 @@ app.add_typer(approvals_app, name="approvals")
 app.add_typer(env_app, name="env")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(skills_app, name="skills")
+app.add_typer(clawhub_app, name="clawhub")
 app.add_typer(metrics_app, name="metrics")
 app.add_typer(gateway_app, name="gateway")
 

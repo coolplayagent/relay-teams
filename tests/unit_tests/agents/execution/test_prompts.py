@@ -45,6 +45,17 @@ def _suppress_host_github_prompt_line(
 
 
 @pytest.fixture(autouse=True)
+def _suppress_host_clawhub_prompt_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_clawhub_environment_status",
+        lambda: (False, None),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _freeze_runtime_date_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         system_prompts,
@@ -387,6 +398,42 @@ def test_runtime_environment_prompt_mentions_on_demand_gh_when_only_token_exists
     assert "- Runtime Timezone: HKT (UTC+08:00)" in prompt
     assert "- Python Package Tool (pip): not found on PATH" in prompt
     assert "- Python Package Tool (uv): not found on PATH" in prompt
+
+
+def test_runtime_environment_prompt_mentions_clawhub_when_token_and_binary_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    system_clawhub_path = Path("/usr/bin/clawhub")
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_clawhub_environment_status",
+        lambda: (True, system_clawhub_path),
+    )
+
+    prompt = system_prompts.build_environment_info_prompt(
+        working_directory=Path("/tmp/project")
+    )
+
+    assert (
+        "- ClawHub CLI: token configured; using system clawhub at "
+        f"{system_clawhub_path}" in prompt
+    )
+
+
+def test_runtime_environment_prompt_mentions_clawhub_when_only_token_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_clawhub_environment_status",
+        lambda: (True, None),
+    )
+
+    prompt = system_prompts.build_environment_info_prompt(
+        working_directory=Path("/tmp/project")
+    )
+
+    assert "- ClawHub CLI: token configured" in prompt
 
 
 def test_runtime_environment_prompt_mentions_package_tools_and_uv_fallback_hint(

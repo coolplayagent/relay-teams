@@ -387,6 +387,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     mock_roles_settings_path = tmp_path / "mockRolesSettings.mjs"
     mock_trigger_settings_path = tmp_path / "mockTriggerSettings.mjs"
     mock_web_settings_path = tmp_path / "mockWebSettings.mjs"
+    mock_clawhub_settings_path = tmp_path / "mockClawHubSettings.mjs"
     mock_github_settings_path = tmp_path / "mockGitHubSettings.mjs"
     mock_system_status_path = tmp_path / "mockSystemStatus.mjs"
     mock_appearance_path = tmp_path / "mockAppearanceSettings.mjs"
@@ -502,6 +503,18 @@ export async function loadWebSettingsPanel() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_clawhub_settings_path.write_text(
+        """
+export function bindClawHubSettingsHandlers() {
+    globalThis.__bindCalls.clawhub += 1;
+}
+
+export async function loadClawHubSettingsPanel() {
+    globalThis.__loadCalls.clawhub += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_github_settings_path.write_text(
         """
 export function bindGitHubSettingsHandlers() {
@@ -593,6 +606,7 @@ export function translateDocument() {
         .replace("./orchestrationSettings.js", "./mockOrchestrationSettings.mjs")
         .replace("./triggerSettings.js", "./mockTriggerSettings.mjs")
         .replace("./webSettings.js", "./mockWebSettings.mjs")
+        .replace("./clawhubSettings.js", "./mockClawHubSettings.mjs")
         .replace("./githubSettings.js", "./mockGitHubSettings.mjs")
         .replace("./proxySettings.js", "./mockProxySettings.mjs")
         .replace("./rolesSettings.js", "./mockRolesSettings.mjs")
@@ -770,6 +784,7 @@ globalThis.__bindCalls = {{
     environment: 0,
     notifications: 0,
     web: 0,
+    clawhub: 0,
     github: 0,
     proxy: 0,
     system: 0,
@@ -783,6 +798,7 @@ globalThis.__loadCalls = {{
     environment: 0,
     notifications: 0,
     web: 0,
+    clawhub: 0,
     github: 0,
     proxy: 0,
     mcp: 0,

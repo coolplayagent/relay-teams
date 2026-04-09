@@ -36,6 +36,7 @@ from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.environment_variable_service import EnvironmentVariableService
 from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.env.proxy_config_service import ProxyConfigService
@@ -128,6 +129,9 @@ from relay_teams.sessions import (
     SessionService,
 )
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
+from relay_teams.skills.clawhub_install_service import ClawHubSkillInstallService
+from relay_teams.skills.clawhub_search_service import ClawHubSkillSearchService
+from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
@@ -221,6 +225,22 @@ class ServerContainer:
         self.github_config_service: GitHubConfigService = GitHubConfigService(
             config_dir=config_dir,
             get_proxy_config=self.proxy_config_service.get_proxy_config,
+        )
+        self.clawhub_config_service: ClawHubConfigService = ClawHubConfigService(
+            config_dir=config_dir
+        )
+        self.clawhub_search_service: ClawHubSkillSearchService = (
+            ClawHubSkillSearchService(
+                config_dir=config_dir,
+                get_clawhub_config=self.clawhub_config_service.get_clawhub_config,
+            )
+        )
+        self.clawhub_install_service: ClawHubSkillInstallService = (
+            ClawHubSkillInstallService(
+                config_dir=config_dir,
+                get_clawhub_config=self.clawhub_config_service.get_clawhub_config,
+                on_skill_installed=self._reload_skills_config,
+            )
         )
         self.ui_language_settings_service = UiLanguageSettingsService(
             config_dir=config_dir
@@ -745,6 +765,10 @@ class ServerContainer:
                 on_skill_reloaded=self._on_skill_reloaded,
             )
         )
+        self.clawhub_skill_service: ClawHubSkillService = ClawHubSkillService(
+            config_dir=config_dir,
+            on_skill_mutated=self._reload_skills_config,
+        )
 
     def _build_runtime_services(self) -> None:
         def get_task_execution_service() -> TaskExecutionService:
@@ -959,6 +983,15 @@ class ServerContainer:
             role_registry=self.role_registry,
             on_skill_reloaded=self._on_skill_reloaded,
         )
+        self.clawhub_install_service = ClawHubSkillInstallService(
+            config_dir=self.config_dir,
+            get_clawhub_config=self.clawhub_config_service.get_clawhub_config,
+            on_skill_installed=self._reload_skills_config,
+        )
+        self.clawhub_skill_service = ClawHubSkillService(
+            config_dir=self.config_dir,
+            on_skill_mutated=self._reload_skills_config,
+        )
         self._refresh_coordinator_runtime()
         self._refresh_runtime_dependents()
 
@@ -966,6 +999,9 @@ class ServerContainer:
         self.mcp_registry = mcp_registry
         self.mcp_service.replace_registry(mcp_registry)
         self._refresh_coordinator_runtime()
+
+    def _reload_skills_config(self) -> None:
+        self.skills_config_reload_service.reload_skills_config()
 
     def _on_skill_reloaded(self, skill_registry: SkillRegistry) -> None:
         skill_runtime_service = self._build_skill_runtime_service(

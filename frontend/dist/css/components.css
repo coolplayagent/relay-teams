@@ -5436,8 +5436,28 @@
     grid-template-columns: 128px minmax(0, 1fr) 128px;
 }
 
+.proxy-inline-field-actions {
+    grid-template-columns: 128px minmax(0, 1fr);
+}
+
 .proxy-inline-field-compact {
     max-width: 320px;
+}
+
+.settings-inline-action-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+    width: 100%;
+}
+
+.settings-inline-action-row .section-action-btn {
+    flex: 0 0 auto;
+}
+
+.settings-inline-action-row .proxy-inline-test-btn {
+    width: auto;
+    justify-self: auto;
 }
 
 .proxy-inline-test-btn {

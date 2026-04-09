@@ -84,6 +84,61 @@ class AgentTeamsClient:
     def get_github_config(self) -> dict[str, JsonValue]:
         return self._request_json("GET", "/api/system/configs/github")
 
+    def get_clawhub_config(self) -> dict[str, JsonValue]:
+        return self._request_json("GET", "/api/system/configs/clawhub")
+
+    def list_clawhub_skills(self) -> list[dict[str, JsonValue]]:
+        data = self._request_json("GET", "/api/system/configs/clawhub/skills")
+        raw = data.get("data")
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+        return []
+
+    def search_clawhub_skills(
+        self,
+        *,
+        query: str,
+        limit: int | None = None,
+        token: str | None = None,
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {"query": query}
+        if limit is not None:
+            payload["limit"] = limit
+        if token is not None:
+            payload["token"] = token
+        return self._request_json(
+            "POST",
+            "/api/system/configs/clawhub/skills:search",
+            payload,
+        )
+
+    def install_clawhub_skill(
+        self,
+        *,
+        slug: str,
+        version: str | None = None,
+        force: bool | None = None,
+        token: str | None = None,
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {"slug": slug}
+        if version is not None:
+            payload["version"] = version
+        if force is not None:
+            payload["force"] = force
+        if token is not None:
+            payload["token"] = token
+        return self._request_json(
+            "POST",
+            "/api/system/configs/clawhub/skills:install",
+            payload,
+        )
+
+    def get_clawhub_skill(self, skill_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "GET",
+            f"/api/system/configs/clawhub/skills/{quote(skill_id, safe='')}",
+        )
+
     def save_proxy_config(
         self,
         *,
@@ -129,6 +184,31 @@ class AgentTeamsClient:
     ) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {"token": token}
         return self._request_json("PUT", "/api/system/configs/github", payload)
+
+    def save_clawhub_config(
+        self,
+        *,
+        token: str | None = None,
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {"token": token}
+        return self._request_json("PUT", "/api/system/configs/clawhub", payload)
+
+    def save_clawhub_skill(
+        self,
+        skill_id: str,
+        payload: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "PUT",
+            f"/api/system/configs/clawhub/skills/{quote(skill_id, safe='')}",
+            payload,
+        )
+
+    def delete_clawhub_skill(self, skill_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "DELETE",
+            f"/api/system/configs/clawhub/skills/{quote(skill_id, safe='')}",
+        )
 
     def probe_web_connectivity(
         self,
@@ -181,6 +261,19 @@ class AgentTeamsClient:
         if timeout_ms is not None:
             payload["timeout_ms"] = timeout_ms
         return self._request_json("POST", "/api/system/configs/github:probe", payload)
+
+    def probe_clawhub_connectivity(
+        self,
+        *,
+        token: str | None = None,
+        timeout_ms: int | None = None,
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {}
+        if token is not None:
+            payload["token"] = token
+        if timeout_ms is not None:
+            payload["timeout_ms"] = timeout_ms
+        return self._request_json("POST", "/api/system/configs/clawhub:probe", payload)
 
     def create_session(
         self,

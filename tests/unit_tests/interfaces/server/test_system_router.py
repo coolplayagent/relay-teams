@@ -14,6 +14,11 @@ from relay_teams.external_agents import (
     ExternalAgentTestResult,
     StdioTransportConfig,
 )
+from relay_teams.env.clawhub_config_models import ClawHubConfig
+from relay_teams.env.clawhub_connectivity import (
+    ClawHubConnectivityProbeRequest,
+    ClawHubConnectivityProbeResult,
+)
 from relay_teams.env.github_config_models import GitHubConfig
 from relay_teams.env.github_connectivity import GitHubConnectivityProbeRequest
 from relay_teams.env.github_connectivity import GitHubConnectivityProbeResult
@@ -26,6 +31,10 @@ from relay_teams.env.web_config_models import (
 )
 from relay_teams.env.web_connectivity import WebConnectivityProbeResult
 from relay_teams.interfaces.server.deps import (
+    get_clawhub_config_service,
+    get_clawhub_install_service,
+    get_clawhub_search_service,
+    get_clawhub_skill_service,
     get_config_status_service,
     get_environment_variable_service,
     get_external_agent_config_service,
@@ -54,6 +63,16 @@ from relay_teams.providers.model_config import (
     ProviderModelInfo,
     ProviderType,
 )
+from relay_teams.skills.clawhub_models import (
+    ClawHubSkillDetail,
+    ClawHubSkillInstallRequest,
+    ClawHubSkillInstallResult,
+    ClawHubSkillSearchRequest,
+    ClawHubSkillSearchResult,
+    ClawHubSkillSummary,
+    ClawHubSkillWriteRequest,
+)
+from relay_teams.skills.skill_models import SkillScope
 
 
 class _FakeSystemService:
@@ -65,6 +84,7 @@ class _FakeSystemService:
         )
         self.saved_proxy_config: dict[str, object] | None = None
         self.saved_web_config: dict[str, object] | None = None
+        self.saved_clawhub_config: dict[str, object] | None = None
         self.saved_github_config: dict[str, object] | None = None
         self.saved_ui_language_settings: dict[str, object] | None = None
         self.proxy_save_error: RuntimeError | None = None
@@ -74,6 +94,22 @@ class _FakeSystemService:
                 name="Codex Local",
                 description="Runs Codex via stdio",
                 transport=StdioTransportConfig(command="codex", args=("--serve",)),
+            )
+        }
+        self.clawhub_skills: dict[str, ClawHubSkillDetail] = {
+            "skill-creator-2": ClawHubSkillDetail(
+                skill_id="skill-creator-2",
+                runtime_name="skill-creator",
+                description="Create Codex skills.",
+                ref="app:skill-creator",
+                scope=SkillScope.APP,
+                directory="/tmp/.relay-teams/skills/skill-creator-2",
+                manifest_path="/tmp/.relay-teams/skills/skill-creator-2/SKILL.md",
+                valid=True,
+                error=None,
+                instructions="Create skills safely.",
+                manifest_content="---\nname: skill-creator\n---\nCreate skills safely.\n",
+                files=(),
             )
         }
 
@@ -192,6 +228,117 @@ class _FakeSystemService:
     def save_github_config(self, config: GitHubConfig) -> None:
         self.saved_github_config = config.model_dump(mode="json")
 
+    def get_clawhub_config(self) -> ClawHubConfig:
+        return ClawHubConfig(token=None)
+
+    def save_clawhub_config(self, config: ClawHubConfig) -> None:
+        self.saved_clawhub_config = config.model_dump(mode="json")
+
+    def search(self, request: ClawHubSkillSearchRequest) -> ClawHubSkillSearchResult:
+        return ClawHubSkillSearchResult.model_validate(
+            {
+                "ok": True,
+                "query": request.query,
+                "items": [
+                    {
+                        "slug": "skill-creator",
+                        "version": "v0.1.0",
+                        "title": "Skill Creator",
+                        "score": 66.021,
+                    }
+                ],
+                "clawhub_path": "/usr/bin/clawhub",
+                "latency_ms": 42,
+                "checked_at": "2026-04-09T12:00:00Z",
+                "diagnostics": {
+                    "binary_available": True,
+                    "token_configured": False,
+                    "installation_attempted": False,
+                    "installed_during_search": False,
+                    "registry": "https://mirror-cn.clawhub.com",
+                },
+            }
+        )
+
+    def install(self, request: ClawHubSkillInstallRequest) -> ClawHubSkillInstallResult:
+        return ClawHubSkillInstallResult.model_validate(
+            {
+                "ok": True,
+                "slug": request.slug,
+                "requested_version": request.version,
+                "installed_skill": {
+                    "skill_id": request.slug,
+                    "runtime_name": "skill-creator",
+                    "description": "Create Codex skills.",
+                    "ref": "app:skill-creator",
+                    "scope": "app",
+                    "directory": f"/tmp/.relay-teams/skills/{request.slug}",
+                    "manifest_path": f"/tmp/.relay-teams/skills/{request.slug}/SKILL.md",
+                    "valid": True,
+                    "error": None,
+                },
+                "clawhub_path": "/usr/bin/clawhub",
+                "latency_ms": 63,
+                "checked_at": "2026-04-09T12:05:00Z",
+                "diagnostics": {
+                    "binary_available": True,
+                    "token_configured": False,
+                    "installation_attempted": False,
+                    "installed_during_install": False,
+                    "registry": "https://mirror-cn.clawhub.com",
+                    "workdir": "/tmp/.relay-teams",
+                    "skills_reloaded": True,
+                },
+                "retryable": False,
+                "error_code": None,
+                "error_message": None,
+            }
+        )
+
+    def list_skills(self) -> tuple[ClawHubSkillSummary, ...]:
+        return tuple(
+            ClawHubSkillSummary(
+                skill_id=skill.skill_id,
+                runtime_name=skill.runtime_name,
+                description=skill.description,
+                ref=skill.ref,
+                scope=skill.scope,
+                directory=skill.directory,
+                manifest_path=skill.manifest_path,
+                valid=skill.valid,
+                error=skill.error,
+            )
+            for skill in self.clawhub_skills.values()
+        )
+
+    def get_skill(self, skill_id: str) -> ClawHubSkillDetail:
+        return self.clawhub_skills[skill_id]
+
+    def save_skill(
+        self,
+        skill_id: str,
+        request: ClawHubSkillWriteRequest,
+    ) -> ClawHubSkillDetail:
+        skill = ClawHubSkillDetail(
+            skill_id=skill_id,
+            runtime_name=request.runtime_name,
+            description=request.description,
+            ref=f"app:{request.runtime_name}",
+            scope=SkillScope.APP,
+            directory=f"/tmp/.relay-teams/skills/{skill_id}",
+            manifest_path=f"/tmp/.relay-teams/skills/{skill_id}/SKILL.md",
+            valid=True,
+            error=None,
+            instructions=request.instructions,
+            manifest_content=None,
+            files=request.files,
+        )
+        self.clawhub_skills[skill_id] = skill
+        return skill
+
+    def delete_skill(self, skill_id: str) -> None:
+        self.clawhub_skills.pop(skill_id)
+
     def reload_mcp_config(self) -> None:
         return None
 
@@ -274,7 +421,27 @@ class _FakeSystemService:
     def probe_connectivity(
         self,
         request: object,
-    ) -> ModelConnectivityProbeResult | GitHubConnectivityProbeResult:
+    ) -> (
+        ModelConnectivityProbeResult
+        | GitHubConnectivityProbeResult
+        | ClawHubConnectivityProbeResult
+    ):
+        if isinstance(request, ClawHubConnectivityProbeRequest):
+            return ClawHubConnectivityProbeResult.model_validate(
+                {
+                    "ok": True,
+                    "clawhub_path": "/usr/bin/clawhub",
+                    "clawhub_version": "clawhub 0.4.2",
+                    "exit_code": 0,
+                    "latency_ms": 37,
+                    "checked_at": "2026-04-09T08:00:00Z",
+                    "diagnostics": {
+                        "binary_available": True,
+                        "token_configured": True,
+                    },
+                    "retryable": False,
+                }
+            )
         if isinstance(request, GitHubConnectivityProbeRequest):
             return GitHubConnectivityProbeResult.model_validate(
                 {
@@ -374,6 +541,10 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_proxy_config_service] = lambda: fake_service
     app.dependency_overrides[get_ui_language_settings_service] = lambda: fake_service
     app.dependency_overrides[get_web_config_service] = lambda: fake_service
+    app.dependency_overrides[get_clawhub_config_service] = lambda: fake_service
+    app.dependency_overrides[get_clawhub_install_service] = lambda: fake_service
+    app.dependency_overrides[get_clawhub_search_service] = lambda: fake_service
+    app.dependency_overrides[get_clawhub_skill_service] = lambda: fake_service
     app.dependency_overrides[get_github_config_service] = lambda: fake_service
     app.dependency_overrides[get_external_agent_config_service] = lambda: fake_service
     return TestClient(app)
@@ -528,6 +699,42 @@ def test_save_github_config() -> None:
     assert service.saved_github_config == {"token": "ghp_secret"}
 
 
+def test_get_clawhub_config() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/clawhub")
+
+    assert response.status_code == 200
+    assert response.json() == {"token": None}
+
+
+def test_save_clawhub_config() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/clawhub",
+        json={"token": "ch_secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.saved_clawhub_config == {"token": "ch_secret"}
+
+
+def test_probe_clawhub_connectivity() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/clawhub:probe",
+        json={"token": "ch_secret", "timeout_ms": 2500},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["clawhub_version"] == "clawhub 0.4.2"
+
+
 def test_probe_github_connectivity() -> None:
     client = _create_test_client(_FakeSystemService())
 
@@ -539,6 +746,133 @@ def test_probe_github_connectivity() -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["username"] == "octocat"
+
+
+def test_list_clawhub_skills() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/clawhub/skills")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "skill_id": "skill-creator-2",
+            "runtime_name": "skill-creator",
+            "description": "Create Codex skills.",
+            "ref": "app:skill-creator",
+            "scope": "app",
+            "directory": "/tmp/.relay-teams/skills/skill-creator-2",
+            "manifest_path": "/tmp/.relay-teams/skills/skill-creator-2/SKILL.md",
+            "valid": True,
+            "error": None,
+        }
+    ]
+
+
+def test_search_clawhub_skills() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/clawhub/skills:search",
+        json={"query": "skill creator", "limit": 5},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "query": "skill creator",
+        "items": [
+            {
+                "slug": "skill-creator",
+                "title": "Skill Creator",
+                "version": "v0.1.0",
+                "score": 66.021,
+            }
+        ],
+        "clawhub_path": "/usr/bin/clawhub",
+        "latency_ms": 42,
+        "checked_at": "2026-04-09T12:00:00Z",
+        "diagnostics": {
+            "binary_available": True,
+            "token_configured": False,
+            "installation_attempted": False,
+            "installed_during_search": False,
+            "registry": "https://mirror-cn.clawhub.com",
+        },
+        "retryable": False,
+        "error_code": None,
+        "error_message": None,
+    }
+
+
+def test_install_clawhub_skill() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/clawhub/skills:install",
+        json={"slug": "skill-creator-2", "version": "v1.2.3", "force": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "slug": "skill-creator-2",
+        "requested_version": "v1.2.3",
+        "installed_skill": {
+            "skill_id": "skill-creator-2",
+            "runtime_name": "skill-creator",
+            "description": "Create Codex skills.",
+            "ref": "app:skill-creator",
+            "scope": "app",
+            "directory": "/tmp/.relay-teams/skills/skill-creator-2",
+            "manifest_path": "/tmp/.relay-teams/skills/skill-creator-2/SKILL.md",
+            "valid": True,
+            "error": None,
+        },
+        "clawhub_path": "/usr/bin/clawhub",
+        "latency_ms": 63,
+        "checked_at": "2026-04-09T12:05:00Z",
+        "diagnostics": {
+            "binary_available": True,
+            "token_configured": False,
+            "installation_attempted": False,
+            "installed_during_install": False,
+            "registry": "https://mirror-cn.clawhub.com",
+            "workdir": "/tmp/.relay-teams",
+            "skills_reloaded": True,
+        },
+        "retryable": False,
+        "error_code": None,
+        "error_message": None,
+    }
+
+
+def test_save_and_delete_clawhub_skill() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    save_response = client.put(
+        "/api/system/configs/clawhub/skills/demo-skill",
+        json={
+            "runtime_name": "demo-skill",
+            "description": "Demo skill",
+            "instructions": "Use with care.",
+            "files": [
+                {
+                    "path": "scripts/run.py",
+                    "content": "print('ok')\n",
+                    "encoding": "utf-8",
+                }
+            ],
+        },
+    )
+    delete_response = client.delete("/api/system/configs/clawhub/skills/demo-skill")
+
+    assert save_response.status_code == 200
+    assert save_response.json()["skill_id"] == "demo-skill"
+    assert save_response.json()["runtime_name"] == "demo-skill"
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"status": "ok"}
 
 
 def test_save_orchestration_config() -> None:

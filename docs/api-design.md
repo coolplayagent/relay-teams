@@ -227,6 +227,175 @@ The request may include:
 - optional `token`
 - optional `timeout_ms`
 
+### `GET /system/configs/clawhub`
+
+Returns the saved ClawHub configuration.
+Fields:
+- `token`: optional value rehydrated from the unified secret store
+
+The ClawHub settings currently exist to support authenticated `clawhub` shell workflows and future ClawHub-backed skill operations. When configured, the runtime injects `CLAWHUB_TOKEN` into shell subprocess environments.
+When no explicit ClawHub site or registry override exists, China-oriented environments default ClawHub subprocesses to `https://mirror-cn.clawhub.com` through both `CLAWHUB_SITE` and `CLAWHUB_REGISTRY`.
+Legacy plaintext `CLAWHUB_TOKEN` values still found in `.env` are migrated into the secret store on read and removed from `.env`.
+
+### `PUT /system/configs/clawhub`
+
+Saves the ClawHub configuration.
+`token` is optional. The backend persists it through the unified secret store and removes any managed `CLAWHUB_TOKEN` entries from `.env`.
+
+### `POST /system/configs/clawhub:probe`
+
+Runs a lightweight ClawHub CLI probe using the supplied or persisted token.
+
+The probe currently verifies:
+- a token is configured
+- `clawhub` is available on `PATH` or can be resolved from npm's global bin directory
+- if `clawhub` is missing, the backend attempts to install it automatically with `npm install -g clawhub`, preferring `https://mirrors.huaweicloud.com/repository/npm/`
+- `clawhub --cli-version` can run with `CLAWHUB_TOKEN` injected
+
+Response fields include:
+- `ok`
+- `clawhub_path`
+- `clawhub_version`
+- `exit_code`
+- `latency_ms`
+- `diagnostics.binary_available`
+- `diagnostics.token_configured`
+- `diagnostics.installation_attempted`
+- `diagnostics.installed_during_probe`
+- optional `error_code`
+- optional `error_message`
+
+The request may include:
+- optional `token`
+- optional `timeout_ms`
+
+### `GET /system/configs/clawhub/skills`
+
+Returns app-scoped ClawHub-managed skills discovered under the app config skill directory.
+
+Each item includes:
+- `skill_id`: directory id under `~/.relay-teams/skills`
+- `runtime_name`: runtime skill name parsed from `SKILL.md` front matter when valid
+- `description`
+- `ref`: canonical runtime ref such as `app:skill-creator` when valid
+- `scope`: always `app`
+- `directory`
+- `manifest_path`
+- `valid`
+- `error`
+
+Notes:
+- `skill_id` is the on-disk directory identity.
+- `runtime_name` is the runtime authorization identity used by the skill registry.
+- These values may differ.
+
+### `POST /system/configs/clawhub/skills:search`
+
+Searches the remote ClawHub registry by keyword or slug using the local `clawhub` CLI.
+
+The search currently:
+- auto-installs `clawhub` with `npm install -g clawhub` when missing, preferring `https://mirrors.huaweicloud.com/repository/npm/`
+- injects the saved or supplied `CLAWHUB_TOKEN` when present
+- applies China defaults for both `CLAWHUB_SITE` and `CLAWHUB_REGISTRY`
+
+Request body:
+- `query`
+- optional `limit`
+- optional `token`
+
+Response fields include:
+- `ok`
+- `query`
+- `items[]`
+  - `slug`
+  - `title`
+  - optional `version`
+  - optional `score`
+- `clawhub_path`
+- `latency_ms`
+- `checked_at`
+- `diagnostics.binary_available`
+- `diagnostics.token_configured`
+- `diagnostics.installation_attempted`
+- `diagnostics.installed_during_search`
+- optional `diagnostics.registry`
+- optional `error_code`
+- optional `error_message`
+
+### `POST /system/configs/clawhub/skills:install`
+
+Installs a remote ClawHub skill into the Agent Teams app config directory by running `clawhub --workdir <app-config-dir> install <slug>`.
+
+The install currently:
+- auto-installs `clawhub` with `npm install -g clawhub` when missing, preferring `https://mirrors.huaweicloud.com/repository/npm/`
+- injects the saved or supplied `CLAWHUB_TOKEN` when present
+- applies China defaults for both `CLAWHUB_SITE` and `CLAWHUB_REGISTRY`
+- verifies the installed skill can be discovered from the Agent Teams app skill directory after the CLI succeeds
+- reloads the runtime skill registry when invoked through the running server container
+
+Request body:
+- `slug`
+- optional `version`
+- optional `force`
+- optional `token`
+
+Response fields include:
+- `ok`
+- `slug`
+- optional `requested_version`
+- optional `installed_skill`
+  - `skill_id`
+  - `runtime_name`
+  - `description`
+  - `ref`
+  - `scope`
+  - `directory`
+  - `manifest_path`
+  - `valid`
+  - optional `error`
+- `clawhub_path`
+- `latency_ms`
+- `checked_at`
+- `diagnostics.binary_available`
+- `diagnostics.token_configured`
+- `diagnostics.installation_attempted`
+- `diagnostics.installed_during_install`
+- optional `diagnostics.registry`
+- optional `diagnostics.workdir`
+- `diagnostics.skills_reloaded`
+- optional `error_code`
+- optional `error_message`
+
+### `GET /system/configs/clawhub/skills/{skill_id}`
+
+Returns one ClawHub-managed app skill snapshot.
+
+In addition to summary fields, the payload includes:
+- `instructions`
+- `manifest_content`
+- `files[]`: relative file path, content, and encoding (`utf-8` or `base64`)
+
+### `PUT /system/configs/clawhub/skills/{skill_id}`
+
+Creates or replaces one app-scoped ClawHub-managed skill directory and reloads the runtime skill registry.
+
+Request body:
+- `runtime_name`
+- `description`
+- `instructions`
+- optional `files[]`
+
+The backend always regenerates `SKILL.md` from these structured fields and treats the request as the full desired directory snapshot for managed files.
+
+Validation rules:
+- `skill_id` and `runtime_name` must be identifier-like values
+- app-scoped runtime names must be unique across other ClawHub-managed app skills
+- file paths must be relative and may not target `SKILL.md`
+
+### `DELETE /system/configs/clawhub/skills/{skill_id}`
+
+Deletes one ClawHub-managed app skill directory and reloads the runtime skill registry.
+
 ### `GET /system/configs/agents`
 
 Returns configured external ACP agents.

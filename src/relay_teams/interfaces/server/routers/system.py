@@ -4,6 +4,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, JsonValue
 
+from relay_teams.env.clawhub_config_models import ClawHubConfig
+from relay_teams.env.clawhub_config_service import ClawHubConfigService
+from relay_teams.env.clawhub_connectivity import (
+    ClawHubConnectivityProbeRequest,
+    ClawHubConnectivityProbeResult,
+)
 from relay_teams.env.environment_variable_models import (
     EnvironmentVariableCatalog,
     EnvironmentVariableRecord,
@@ -33,6 +39,10 @@ from relay_teams.env.web_connectivity import (
     WebConnectivityProbeResult,
 )
 from relay_teams.interfaces.server.deps import (
+    get_clawhub_config_service,
+    get_clawhub_install_service,
+    get_clawhub_search_service,
+    get_clawhub_skill_service,
     get_config_status_service,
     get_environment_variable_service,
     get_external_agent_config_service,
@@ -75,6 +85,18 @@ from relay_teams.providers.model_connectivity import (
     ModelConnectivityProbeResult,
 )
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
+from relay_teams.skills.clawhub_install_service import ClawHubSkillInstallService
+from relay_teams.skills.clawhub_models import (
+    ClawHubSkillSearchRequest,
+    ClawHubSkillSearchResult,
+    ClawHubSkillInstallRequest,
+    ClawHubSkillInstallResult,
+    ClawHubSkillDetail,
+    ClawHubSkillSummary,
+    ClawHubSkillWriteRequest,
+)
+from relay_teams.skills.clawhub_search_service import ClawHubSkillSearchService
+from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/system", tags=["System"])
@@ -424,6 +446,121 @@ def save_github_config(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/configs/clawhub")
+def get_clawhub_config(
+    service: ClawHubConfigService = Depends(get_clawhub_config_service),
+) -> ClawHubConfig:
+    return service.get_clawhub_config()
+
+
+@router.put("/configs/clawhub")
+def save_clawhub_config(
+    req: ClawHubConfig,
+    service: ClawHubConfigService = Depends(get_clawhub_config_service),
+) -> dict[str, str]:
+    try:
+        service.save_clawhub_config(req)
+        return {"status": "ok"}
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/configs/clawhub:probe")
+def probe_clawhub_connectivity(
+    req: ClawHubConnectivityProbeRequest,
+    service: ClawHubConfigService = Depends(get_clawhub_config_service),
+) -> ClawHubConnectivityProbeResult:
+    try:
+        return service.probe_connectivity(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/configs/clawhub/skills",
+    response_model=list[ClawHubSkillSummary],
+)
+def list_clawhub_skills(
+    service: ClawHubSkillService = Depends(get_clawhub_skill_service),
+) -> tuple[ClawHubSkillSummary, ...]:
+    return service.list_skills()
+
+
+@router.post(
+    "/configs/clawhub/skills:search",
+    response_model=ClawHubSkillSearchResult,
+)
+def search_clawhub_skills(
+    req: ClawHubSkillSearchRequest,
+    service: ClawHubSkillSearchService = Depends(get_clawhub_search_service),
+) -> ClawHubSkillSearchResult:
+    try:
+        return service.search(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/configs/clawhub/skills:install",
+    response_model=ClawHubSkillInstallResult,
+)
+def install_clawhub_skill(
+    req: ClawHubSkillInstallRequest,
+    service: ClawHubSkillInstallService = Depends(get_clawhub_install_service),
+) -> ClawHubSkillInstallResult:
+    try:
+        return service.install(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/configs/clawhub/skills/{skill_id}",
+    response_model=ClawHubSkillDetail,
+)
+def get_clawhub_skill(
+    skill_id: RequiredIdentifierStr,
+    service: ClawHubSkillService = Depends(get_clawhub_skill_service),
+) -> ClawHubSkillDetail:
+    try:
+        return service.get_skill(skill_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put(
+    "/configs/clawhub/skills/{skill_id}",
+    response_model=ClawHubSkillDetail,
+)
+def save_clawhub_skill(
+    skill_id: RequiredIdentifierStr,
+    req: ClawHubSkillWriteRequest,
+    service: ClawHubSkillService = Depends(get_clawhub_skill_service),
+) -> ClawHubSkillDetail:
+    try:
+        return service.save_skill(skill_id, req)
+    except (KeyError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/configs/clawhub/skills/{skill_id}")
+def delete_clawhub_skill(
+    skill_id: RequiredIdentifierStr,
+    service: ClawHubSkillService = Depends(get_clawhub_skill_service),
+) -> dict[str, str]:
+    try:
+        service.delete_skill(skill_id)
+        return {"status": "ok"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class NotificationConfigRequest(BaseModel):

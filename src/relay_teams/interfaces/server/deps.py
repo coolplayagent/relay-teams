@@ -10,6 +10,7 @@ from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
 from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.environment_variable_service import EnvironmentVariableService
 from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.external_agents import ExternalAgentConfigService
@@ -38,6 +39,9 @@ from relay_teams.roles.settings_service import RoleSettingsService
 from relay_teams.sessions import SessionService
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
+from relay_teams.skills.clawhub_install_service import ClawHubSkillInstallService
+from relay_teams.skills.clawhub_search_service import ClawHubSkillSearchService
+from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.tools.registry import ToolRegistry
@@ -127,6 +131,10 @@ def get_external_agent_config_service(request: Request) -> ExternalAgentConfigSe
     return get_container(request).external_agent_config_service
 
 
+def get_clawhub_config_service(request: Request) -> ClawHubConfigService:
+    return get_container(request).clawhub_config_service
+
+
 def get_github_config_service(request: Request) -> GitHubConfigService:
     return get_container(request).github_config_service
 
@@ -173,6 +181,18 @@ def get_skill_registry(request: Request) -> SkillRegistry:
 
 def get_skill_runtime_service(request: Request) -> SkillRuntimeService:
     return get_container(request).skill_runtime_service
+
+
+def get_clawhub_skill_service(request: Request) -> ClawHubSkillService:
+    return get_container(request).clawhub_skill_service
+
+
+def get_clawhub_search_service(request: Request) -> ClawHubSkillSearchService:
+    return get_container(request).clawhub_search_service
+
+
+def get_clawhub_install_service(request: Request) -> ClawHubSkillInstallService:
+    return get_container(request).clawhub_install_service
 
 
 def get_metrics_service(request: Request) -> MetricsService:
