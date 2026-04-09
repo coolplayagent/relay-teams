@@ -428,6 +428,69 @@ console.log(JSON.stringify({
     assert payload["baseUrlValue"] == "https://custom.example/v1"
 
 
+def test_selecting_maas_prefills_fixed_base_url_and_disables_input(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider").value = "maas";
+document.getElementById("profile-provider").onchange();
+
+console.log(JSON.stringify({
+    baseUrlValue: document.getElementById("profile-base-url").value,
+    baseUrlDisabled: document.getElementById("profile-base-url").disabled,
+}));
+""".strip(),
+    )
+
+    assert (
+        payload["baseUrlValue"]
+        == "http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/"
+    )
+    assert payload["baseUrlDisabled"] is True
+
+
+def test_switching_from_maas_to_other_provider_clears_base_url(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider").value = "maas";
+document.getElementById("profile-provider").onchange();
+document.getElementById("profile-provider").value = "openai_compatible";
+document.getElementById("profile-provider").onchange();
+
+console.log(JSON.stringify({
+    providerValue: document.getElementById("profile-provider").value,
+    baseUrlValue: document.getElementById("profile-base-url").value,
+    baseUrlDisabled: document.getElementById("profile-base-url").disabled,
+}));
+""".strip(),
+    )
+
+    assert payload["providerValue"] == "openai_compatible"
+    assert payload["baseUrlValue"] == ""
+    assert payload["baseUrlDisabled"] is False
+
+
 def test_fetching_models_keeps_full_browser_list_when_model_input_is_partial(
     tmp_path: Path,
 ) -> None:
@@ -633,6 +696,146 @@ console.log(JSON.stringify({
     assert payload["apiKeyValue"] == "saved-secret-key"
     assert payload["apiKeyType"] == "text"
     assert payload["toggleTitle"] == "Hide API key"
+
+
+def test_maas_password_toggle_reveals_and_masks_draft_value(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider").value = "maas";
+document.getElementById("profile-provider").onchange();
+document.getElementById("profile-maas-password").value = "relay-password";
+document.getElementById("profile-maas-password").oninput();
+const beforeToggle = {
+    passwordType: document.getElementById("profile-maas-password").type,
+    toggleDisplay: document.getElementById("toggle-profile-maas-password-btn").style.display,
+    toggleTitle: document.getElementById("toggle-profile-maas-password-btn").title,
+};
+document.getElementById("toggle-profile-maas-password-btn").onclick();
+const revealed = {
+    passwordType: document.getElementById("profile-maas-password").type,
+    passwordValue: document.getElementById("profile-maas-password").value,
+    toggleTitle: document.getElementById("toggle-profile-maas-password-btn").title,
+    toggleClassName: document.getElementById("toggle-profile-maas-password-btn").className,
+};
+document.getElementById("toggle-profile-maas-password-btn").onclick();
+
+console.log(JSON.stringify({
+    beforeToggle,
+    revealed,
+    finalType: document.getElementById("profile-maas-password").type,
+    finalValue: document.getElementById("profile-maas-password").value,
+    finalToggleTitle: document.getElementById("toggle-profile-maas-password-btn").title,
+}));
+""".strip(),
+    )
+
+    before_toggle = cast(dict[str, JsonValue], payload["beforeToggle"])
+    revealed = cast(dict[str, JsonValue], payload["revealed"])
+    assert before_toggle["passwordType"] == "password"
+    assert before_toggle["toggleDisplay"] == "inline-flex"
+    assert before_toggle["toggleTitle"] == "Show password"
+    assert revealed["passwordType"] == "text"
+    assert revealed["passwordValue"] == "relay-password"
+    assert revealed["toggleTitle"] == "Hide password"
+    assert revealed["toggleClassName"] == "secure-input-btn is-active"
+    assert payload["finalType"] == "password"
+    assert payload["finalValue"] == "relay-password"
+    assert payload["finalToggleTitle"] == "Show password"
+
+
+def test_edit_maas_profile_toggle_reveals_saved_password(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+const beforeToggle = {
+    passwordType: document.getElementById("profile-maas-password").type,
+    passwordPlaceholder: document.getElementById("profile-maas-password").placeholder,
+    toggleDisplay: document.getElementById("toggle-profile-maas-password-btn").style.display,
+    toggleTitle: document.getElementById("toggle-profile-maas-password-btn").title,
+};
+document.getElementById("toggle-profile-maas-password-btn").onclick();
+
+console.log(JSON.stringify({
+    beforeToggle,
+    revealedType: document.getElementById("profile-maas-password").type,
+    revealedValue: document.getElementById("profile-maas-password").value,
+    toggleTitle: document.getElementById("toggle-profile-maas-password-btn").title,
+    toggleClassName: document.getElementById("toggle-profile-maas-password-btn").className,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        default: {
+            provider: "maas",
+            model: "maas-chat",
+            base_url: "http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/",
+            maas_auth: {
+                username: "relay-user",
+                password: "relay-password",
+                has_password: true,
+            },
+            is_default: true,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42 };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: [] };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+    )
+
+    before_toggle = cast(dict[str, JsonValue], payload["beforeToggle"])
+    assert before_toggle["passwordType"] == "password"
+    assert before_toggle["passwordPlaceholder"] == "************"
+    assert before_toggle["toggleDisplay"] == "inline-flex"
+    assert before_toggle["toggleTitle"] == "Show password"
+    assert payload["revealedType"] == "text"
+    assert payload["revealedValue"] == "relay-password"
+    assert payload["toggleTitle"] == "Hide password"
+    assert payload["toggleClassName"] == "secure-input-btn is-active"
 
 
 def test_edit_profile_allows_renaming_and_sends_source_name(tmp_path: Path) -> None:
@@ -862,6 +1065,84 @@ console.log(JSON.stringify({
     ]
 
 
+def test_saving_maas_profile_sends_maas_auth_payload(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-name").value = "maas-profile";
+document.getElementById("profile-provider").value = "maas";
+document.getElementById("profile-provider").onchange();
+document.getElementById("profile-model").value = "maas-chat";
+document.getElementById("profile-maas-username").value = "relay-user";
+document.getElementById("profile-maas-password").value = "relay-password";
+
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    savedProfile: globalThis.__savedProfile,
+    apiKeyGroupDisplay: document.getElementById("profile-api-key-group").style.display,
+    maasFieldDisplay: document.getElementById("profile-maas-auth-fields").style.display,
+}));
+""".strip(),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    maas_auth = cast(dict[str, JsonValue], saved_profile_body["maas_auth"])
+    assert saved_profile["name"] == "maas-profile"
+    assert saved_profile_body["provider"] == "maas"
+    assert "api_key" not in saved_profile_body
+    assert (
+        saved_profile_body["base_url"]
+        == "http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/"
+    )
+    assert maas_auth == {
+        "username": "relay-user",
+        "password": "relay-password",
+    }
+    assert payload["apiKeyGroupDisplay"] == "none"
+    assert payload["maasFieldDisplay"] == "grid"
+
+
+def test_selecting_maas_disables_model_discovery(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider").value = "maas";
+document.getElementById("profile-provider").onchange();
+
+console.log(JSON.stringify({
+    fetchDisabled: document.getElementById("fetch-profile-models-btn").disabled,
+    fetchTitle: document.getElementById("fetch-profile-models-btn").title,
+}));
+""".strip(),
+    )
+
+    assert payload["fetchDisabled"] is True
+    assert (
+        payload["fetchTitle"]
+        == "MAAS model discovery is not supported. Enter the model name manually."
+    )
+
+
 def _run_model_profiles_script(
     tmp_path: Path,
     runner_source: str,
@@ -947,6 +1228,8 @@ const translations = {
     "settings.model.no_models_loaded": "No Models Loaded",
     "settings.model.show_api_key": "Show API key",
     "settings.model.hide_api_key": "Hide API key",
+    "settings.model.show_password": "Show password",
+    "settings.model.hide_password": "Hide password",
     "settings.model.default_badge": "Default",
     "settings.model.no_model": "No model",
     "settings.model.no_endpoint": "No endpoint",
@@ -1059,8 +1342,13 @@ function createElements() {{
         ["profile-model", createElement("block")],
         ["profile-model-menu", createElement("none")],
         ["profile-base-url", createElement("block")],
+        ["profile-api-key-group", createElement("block")],
         ["profile-api-key", createElement("block")],
         ["toggle-profile-api-key-btn", createElement("none")],
+        ["profile-maas-auth-fields", createElement("none")],
+        ["profile-maas-username", createElement("block")],
+        ["profile-maas-password", createElement("block")],
+        ["toggle-profile-maas-password-btn", createElement("none")],
             ["profile-temperature", createElement("block")],
             ["profile-top-p", createElement("block")],
             ["profile-max-tokens", createElement("block")],

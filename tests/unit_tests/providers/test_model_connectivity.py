@@ -7,7 +7,9 @@ from typing import cast
 import httpx
 import pytest
 
+from relay_teams.providers.maas_auth import MaaSLoginError
 from relay_teams.providers.model_config import (
+    MaaSAuthConfig,
     ModelEndpointConfig,
     ModelRequestHeader,
     ProviderType,
@@ -67,6 +69,33 @@ class _FakeHttpClient:
             raise self._error
         assert self._response is not None
         return self._response
+
+
+class _FakeMaaSTokenService:
+    def __init__(self, tokens: list[str], captured: dict[str, object]) -> None:
+        self._tokens = tokens
+        self._captured = captured
+
+    def get_token_sync(
+        self,
+        *,
+        auth_config: MaaSAuthConfig,
+        ssl_verify: bool | None,
+        connect_timeout_seconds: float,
+        force_refresh: bool = False,
+    ) -> str:
+        calls = self._captured.setdefault("maas_token_calls", [])
+        assert isinstance(calls, list)
+        calls.append(
+            {
+                "username": auth_config.username,
+                "password": auth_config.password,
+                "ssl_verify": ssl_verify,
+                "connect_timeout_seconds": connect_timeout_seconds,
+                "force_refresh": force_refresh,
+            }
+        )
+        return self._tokens.pop(0)
 
 
 def test_probe_uses_saved_profile_and_returns_usage(monkeypatch) -> None:
@@ -329,6 +358,252 @@ def test_probe_allows_header_only_override(monkeypatch) -> None:
     assert headers["Authorization"] == "Bearer header-only"
 
 
+def test_probe_supports_maas_provider(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: _FakeMaaSTokenService(["maas-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(200, json={"usage": {"total_tokens": 3}}),
+            )
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.MAAS,
+                model="maas-chat",
+                base_url="https://maas.example/api/v2",
+                maas_auth=MaaSAuthConfig(
+                    username="relay-user",
+                    password="relay-password",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is True
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["X-Auth-Token"] == "maas-token"
+    assert headers["app-id"] == "RelayTeams"
+    assert "Authorization" not in headers
+    token_calls = cast(list[dict[str, object]], captured["maas_token_calls"])
+    assert token_calls[0]["force_refresh"] is False
+
+
+def test_probe_merges_saved_maas_password_when_override_omits_it(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: _runtime_config(
+            profile_name="maas-profile",
+            provider=ProviderType.MAAS,
+            model="maas-chat",
+            base_url="https://maas.example/api/v2",
+            api_key=None,
+            maas_auth=MaaSAuthConfig(
+                username="saved-user",
+                password="saved-password",
+            ),
+        )
+    )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: _FakeMaaSTokenService(["maas-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(200, json={"usage": {"total_tokens": 2}}),
+            )
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            profile_name="maas-profile",
+            override=ModelConnectivityProbeOverride(
+                maas_auth=MaaSAuthConfig(username="edited-user"),
+            ),
+        )
+    )
+
+    assert result.ok is True
+    token_calls = cast(list[dict[str, object]], captured["maas_token_calls"])
+    assert token_calls[0]["username"] == "edited-user"
+    assert token_calls[0]["password"] == "saved-password"
+
+
+def test_probe_returns_maas_auth_error_for_invalid_credentials(monkeypatch) -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    class _InvalidCredentialsTokenService:
+        def get_token_sync(
+            self,
+            *,
+            auth_config: MaaSAuthConfig,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> str:
+            raise MaaSLoginError(
+                "invalid username or password",
+                status_code=401,
+            )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: _InvalidCredentialsTokenService(),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.MAAS,
+                model="maas-chat",
+                base_url="https://maas.example/api/v2",
+                maas_auth=MaaSAuthConfig(
+                    username="relay-user",
+                    password="relay-password",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.error_code == "auth_invalid"
+    assert result.retryable is False
+    assert result.diagnostics.auth_valid is False
+
+
+def test_probe_returns_retryable_maas_login_service_error(monkeypatch) -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    class _UnavailableTokenService:
+        def get_token_sync(
+            self,
+            *,
+            auth_config: MaaSAuthConfig,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> str:
+            raise MaaSLoginError(
+                "MAAS auth service unavailable",
+                status_code=503,
+            )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: _UnavailableTokenService(),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.MAAS,
+                model="maas-chat",
+                base_url="https://maas.example/api/v2",
+                maas_auth=MaaSAuthConfig(
+                    username="relay-user",
+                    password="relay-password",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.error_code == "provider_error"
+    assert result.retryable is True
+    assert result.diagnostics.auth_valid is True
+
+
+def test_probe_refreshes_maas_token_after_unauthorized_response(monkeypatch) -> None:
+    captured: dict[str, object] = {"requests": []}
+    responses = [
+        httpx.Response(401, json={"error": {"message": "expired"}}),
+        httpx.Response(200, json={"usage": {"total_tokens": 1}}),
+    ]
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    token_service = _FakeMaaSTokenService(["expired-token", "fresh-token"], captured)
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: token_service,
+    )
+
+    def build_client(**kwargs: object) -> _FakeHttpClient:
+        requests = cast(list[dict[str, object]], captured["requests"])
+        local_capture: dict[str, object] = {}
+        requests.append(local_capture)
+        return _FakeHttpClient(captured=local_capture, response=responses.pop(0))
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        build_client,
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.MAAS,
+                model="maas-chat",
+                base_url="https://maas.example/api/v2",
+                maas_auth=MaaSAuthConfig(
+                    username="relay-user",
+                    password="relay-password",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is True
+    requests = cast(list[dict[str, object]], captured["requests"])
+    first_headers = cast(dict[str, str], requests[0]["headers"])
+    second_headers = cast(dict[str, str], requests[1]["headers"])
+    assert first_headers["X-Auth-Token"] == "expired-token"
+    assert second_headers["X-Auth-Token"] == "fresh-token"
+    token_calls = cast(list[dict[str, object]], captured["maas_token_calls"])
+    assert token_calls[0]["force_refresh"] is False
+    assert token_calls[1]["force_refresh"] is True
+
+
+def test_discover_models_returns_unsupported_for_maas() -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.MAAS,
+                base_url="https://maas.example/api/v2",
+                maas_auth=MaaSAuthConfig(
+                    username="relay-user",
+                    password="relay-password",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.error_code == "unsupported_provider"
+    assert (
+        result.error_message
+        == "MAAS model discovery is not supported. Enter the model name manually."
+    )
+
+
 def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
@@ -552,6 +827,51 @@ def test_discover_models_returns_invalid_response_error(monkeypatch) -> None:
     assert result.retryable is False
 
 
+def test_probe_maas_supports_event_stream_wrapped_json(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: _FakeMaaSTokenService(["maas-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=(
+                        b'data: {"id":"cmpl-test","usage":{"total_tokens":3}}\n\n'
+                        b"data: [DONE]\n\n"
+                    ),
+                ),
+            )
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.MAAS,
+                model="maas-chat",
+                base_url="https://maas.example/api/v2",
+                maas_auth=MaaSAuthConfig(
+                    username="relay-user",
+                    password="relay-password",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is True
+    assert result.token_usage is not None
+    assert result.token_usage.total_tokens == 3
+
+
 def test_probe_requires_source_config() -> None:
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 
@@ -595,12 +915,18 @@ def _runtime_config(
     *,
     profile_name: str = "default",
     default_model_profile: str | None = None,
+    provider: ProviderType = ProviderType.OPENAI_COMPATIBLE,
+    model: str = "saved-model",
+    base_url: str = "https://example.test/v1",
+    api_key: str | None = "saved-api-key",
+    maas_auth: MaaSAuthConfig | None = None,
 ) -> RuntimeConfig:
     config = ModelEndpointConfig(
-        provider=ProviderType.OPENAI_COMPATIBLE,
-        model="saved-model",
-        base_url="https://example.test/v1",
-        api_key="saved-api-key",
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        maas_auth=maas_auth,
         ssl_verify=True,
         sampling=SamplingConfig(
             temperature=1.0,

@@ -16,9 +16,12 @@ from relay_teams.paths import (
     format_app_config_file_reference,
     get_app_config_dir,
 )
+from relay_teams.providers.maas_auth import maas_password_secret_field_name
 from relay_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_MAAS_BASE_URL,
     LlmRetryConfig,
+    MaaSAuthConfig,
     ModelEndpointConfig,
     ModelRequestHeader,
     ProviderType,
@@ -35,6 +38,7 @@ from relay_teams.secrets import get_secret_store
 
 _MODEL_PROFILE_SECRET_NAMESPACE = "model_profile"
 _MODEL_PROFILE_SECRET_FIELD = "api_key"
+_MODEL_PROFILE_MAAS_PASSWORD_FIELD = maas_password_secret_field_name()
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
@@ -187,8 +191,25 @@ def load_llm_profile_state(
         )
         provider_raw = cfg.get("provider", ProviderType.OPENAI_COMPATIBLE.value)
         provider = ProviderType(provider_raw)
+        if provider == ProviderType.MAAS:
+            base_url = DEFAULT_MAAS_BASE_URL
+        maas_auth = _resolve_profile_maas_auth(
+            config_dir=config_dir,
+            profile_name=name,
+            raw_value=cfg.get("maas_auth"),
+            env_values=env_values,
+        )
 
-        if not model or not base_url or (not api_key and not headers):
+        if not model or not base_url:
+            raise ValueError(
+                f"Invalid profile '{name}': missing required fields (model, base_url)."
+            )
+        if provider == ProviderType.MAAS:
+            if maas_auth is None or maas_auth.password is None:
+                raise ValueError(
+                    f"Invalid profile '{name}': MAAS profiles require maas_auth with a password."
+                )
+        elif not api_key and not headers:
             raise ValueError(
                 f"Invalid profile '{name}': missing required fields (model, base_url, api_key or headers)."
             )
@@ -213,6 +234,7 @@ def load_llm_profile_state(
             base_url=base_url,
             api_key=api_key or None,
             headers=headers,
+            maas_auth=maas_auth,
             ssl_verify=ssl_verify,
             context_window=(
                 int(context_window_raw)
@@ -375,6 +397,46 @@ def _resolve_profile_headers(
             )
         )
     return tuple(resolved_bindings)
+
+
+def _resolve_profile_maas_auth(
+    *,
+    config_dir: Path,
+    profile_name: str,
+    raw_value: object,
+    env_values: Mapping[str, str],
+) -> MaaSAuthConfig | None:
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, dict):
+        raise ValueError(
+            f"Invalid profile '{profile_name}': maas_auth must be an object."
+        )
+    payload = dict(raw_value)
+    normalized_payload: dict[str, str] = {}
+
+    username = payload.get("username")
+    if isinstance(username, str) and username.strip():
+        normalized_payload["username"] = username.strip()
+
+    password = payload.get("password")
+    if isinstance(password, str) and password.strip():
+        normalized_payload["password"] = _resolve_required_config_value(
+            password,
+            env_values,
+            profile_name=profile_name,
+            field_name="maas_auth.password",
+        )
+    else:
+        secret_value = get_secret_store().get_secret(
+            config_dir,
+            namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+            owner_id=profile_name,
+            field_name=_MODEL_PROFILE_MAAS_PASSWORD_FIELD,
+        )
+        if secret_value is not None:
+            normalized_payload["password"] = secret_value
+    return MaaSAuthConfig.model_validate(normalized_payload)
 
 
 def _coerce_optional_ssl_verify(value: object, *, profile_name: str) -> bool | None:

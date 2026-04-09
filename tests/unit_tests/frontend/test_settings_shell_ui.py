@@ -100,7 +100,6 @@ const webTab = tabs.find(tab => tab.dataset.tab === "web");
 const githubTab = tabs.find(tab => tab.dataset.tab === "github");
 const proxyTab = tabs.find(tab => tab.dataset.tab === "proxy");
 const mcpTab = tabs.find(tab => tab.dataset.tab === "mcp");
-const skillsTab = tabs.find(tab => tab.dataset.tab === "skills");
 
 const modelTab = tabs.find(tab => tab.dataset.tab === "model");
 await modelTab.onclick();
@@ -119,8 +118,6 @@ await proxyTab.onclick();
 const proxySaveDisplay = document.getElementById("save-proxy-btn").style.display;
 await mcpTab.onclick();
 const mcpReloadDisplay = document.getElementById("reload-mcp-btn").style.display;
-await skillsTab.onclick();
-const skillsReloadDisplay = document.getElementById("reload-skills-btn").style.display;
 
 console.log(JSON.stringify({
     modelAddDisplay,
@@ -131,7 +128,6 @@ console.log(JSON.stringify({
     githubSaveDisplay,
     proxySaveDisplay,
     mcpReloadDisplay,
-    skillsReloadDisplay,
 }));
 """.strip(),
     )
@@ -144,7 +140,6 @@ console.log(JSON.stringify({
     assert payload["githubSaveDisplay"] == "inline-flex"
     assert payload["proxySaveDisplay"] == "inline-flex"
     assert payload["mcpReloadDisplay"] == "inline-flex"
-    assert payload["skillsReloadDisplay"] == "inline-flex"
 
 
 def test_settings_tab_order_and_labels_are_simplified() -> None:
@@ -160,17 +155,13 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     assert tabs_html.index('data-tab="appearance"') < tabs_html.index(
         'data-tab="model"'
     )
-    assert tabs_html.index('data-tab="model"') < tabs_html.index('data-tab="skills"')
-    assert tabs_html.index('data-tab="skills"') < tabs_html.index('data-tab="mcp"')
+    assert tabs_html.index('data-tab="model"') < tabs_html.index('data-tab="mcp"')
     assert tabs_html.index('data-tab="mcp"') < tabs_html.index('data-tab="agents"')
     assert tabs_html.index('data-tab="agents"') < tabs_html.index('data-tab="roles"')
     assert tabs_html.index('data-tab="roles"') < tabs_html.index(
         'data-tab="orchestration"'
     )
     assert tabs_html.index('data-tab="orchestration"') < tabs_html.index(
-        'data-tab="triggers"'
-    )
-    assert tabs_html.index('data-tab="triggers"') < tabs_html.index(
         'data-tab="notifications"'
     )
     assert tabs_html.index('data-tab="notifications"') < tabs_html.index(
@@ -182,13 +173,13 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
         'data-tab="environment"'
     )
     assert ">Model</span>" in tabs_html
-    assert ">Skills</span>" in tabs_html
     assert ">MCP</span>" in tabs_html
     assert ">Agents</span>" in tabs_html
     assert ">Web</span>" in tabs_html
     assert ">GitHub</span>" in tabs_html
     assert ">Environment</span>" in tabs_html
-    assert ">Gateway</span>" in tabs_html
+    assert ">Skills</span>" not in tabs_html
+    assert ">Gateway</span>" not in tabs_html
     assert ">Model Profiles</span>" not in tabs_html
     assert ">MCP Config</span>" not in tabs_html
 
@@ -288,6 +279,7 @@ console.log(JSON.stringify({
     assert 'value="openai_compatible"' in modal_html
     assert 'value="bigmodel"' in modal_html
     assert 'value="minimax"' in modal_html
+    assert 'value="maas"' in modal_html
     assert 'value="echo"' not in modal_html
     assert (
         '<input type="text" id="profile-model" autocomplete="off" spellcheck="false">'
@@ -299,6 +291,10 @@ console.log(JSON.stringify({
     assert 'id="fetch-profile-models-btn"' in modal_html
     assert 'title="Fetch Models"' in modal_html
     assert 'id="toggle-profile-api-key-btn"' in modal_html
+    assert 'id="profile-maas-auth-fields"' in modal_html
+    assert 'id="profile-maas-username"' in modal_html
+    assert 'id="profile-maas-password"' in modal_html
+    assert 'id="toggle-profile-maas-password-btn"' in modal_html
     assert 'id="toggle-web-api-key-btn"' in modal_html
     assert (
         'id="toggle-web-api-key-btn" type="button" title="Show API key" aria-label="Show API key"'

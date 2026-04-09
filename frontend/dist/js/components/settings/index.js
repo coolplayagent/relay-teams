@@ -16,9 +16,8 @@ import {
 } from './orchestrationSettings.js';
 import { bindProxySettingsHandlers, loadProxyStatusPanel } from './proxySettings.js';
 import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings.js';
-import { bindTriggerSettingsHandlers, loadTriggerSettingsPanel } from './triggerSettings.js';
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from './webSettings.js';
-import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
+import { bindSystemStatusHandlers, loadMcpStatusPanel } from './systemStatus.js';
 import { bindAppearanceHandlers, loadAppearancePanel, initAppearanceOnStartup } from './appearanceSettings.js';
 import { t, translateDocument } from '../../utils/i18n.js';
 
@@ -35,10 +34,6 @@ const TAB_METADATA = {
         titleKey: 'settings.panel.model.title',
         descriptionKey: 'settings.panel.model.description',
     },
-    skills: {
-        titleKey: 'settings.panel.skills.title',
-        descriptionKey: 'settings.panel.skills.description',
-    },
     mcp: {
         titleKey: 'settings.panel.mcp.title',
         descriptionKey: 'settings.panel.mcp.description',
@@ -54,10 +49,6 @@ const TAB_METADATA = {
     orchestration: {
         titleKey: 'settings.panel.orchestration.title',
         descriptionKey: 'settings.panel.orchestration.description',
-    },
-    triggers: {
-        titleKey: 'settings.panel.triggers.title',
-        descriptionKey: 'settings.panel.triggers.description',
     },
     notifications: {
         titleKey: 'settings.panel.notifications.title',
@@ -105,9 +96,6 @@ function createModal() {
                     <button class="settings-tab" data-tab="model">
                         <span class="settings-tab-label" data-i18n="settings.tab.model">Model</span>
                     </button>
-                    <button class="settings-tab" data-tab="skills">
-                        <span class="settings-tab-label" data-i18n="settings.tab.skills">Skills</span>
-                    </button>
                     <button class="settings-tab" data-tab="mcp">
                         <span class="settings-tab-label" data-i18n="settings.tab.mcp">MCP</span>
                     </button>
@@ -119,9 +107,6 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="orchestration">
                         <span class="settings-tab-label" data-i18n="settings.tab.orchestration">Orchestration</span>
-                    </button>
-                    <button class="settings-tab" data-tab="triggers">
-                        <span class="settings-tab-label" data-i18n="settings.tab.triggers">Gateway</span>
                     </button>
                     <button class="settings-tab" data-tab="notifications">
                         <span class="settings-tab-label" data-i18n="settings.tab.notifications">Notifications</span>
@@ -248,6 +233,7 @@ function createModal() {
                                                     <option value="openai_compatible">openai_compatible</option>
                                                     <option value="bigmodel">bigmodel</option>
                                                     <option value="minimax">minimax</option>
+                                                    <option value="maas">maas</option>
                                                 </select>
                                             </div>
                                             <div class="form-group form-group-span-2">
@@ -255,7 +241,7 @@ function createModal() {
                                                 <input type="text" id="profile-base-url" placeholder="e.g., https://api.openai.com/v1" data-i18n-placeholder="settings.model.base_url_placeholder" autocomplete="url">
                                             </div>
                                             <div class="profile-credentials-row form-group-span-2">
-                                                <div class="form-group">
+                                                <div class="form-group" id="profile-api-key-group">
                                                     <label for="profile-api-key" data-i18n="settings.model.api_key">API Key</label>
                                                     <div class="secure-input-row">
                                                         <input type="password" id="profile-api-key" placeholder="sk-..." autocomplete="current-password">
@@ -283,6 +269,24 @@ function createModal() {
                                                             </svg>
                                                         </button>
                                                         <div class="profile-model-menu" id="profile-model-menu" style="display:none;"></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="profile-credentials-row form-group-span-2" id="profile-maas-auth-fields" style="display:none;">
+                                                <div class="form-group">
+                                                    <label for="profile-maas-username">MAAS Username</label>
+                                                    <input type="text" id="profile-maas-username" placeholder="username" autocomplete="username">
+                                                </div>
+                                                <div class="form-group">
+                                                    <label for="profile-maas-password">MAAS Password</label>
+                                                    <div class="secure-input-row">
+                                                        <input type="password" id="profile-maas-password" placeholder="password" autocomplete="current-password">
+                                                        <button class="secure-input-btn" id="toggle-profile-maas-password-btn" type="button" title="Show password" aria-label="Show password" style="display:none;">
+                                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                                                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                                            </svg>
+                                                        </button>
                                                     </div>
                                                 </div>
                                             </div>
@@ -851,11 +855,6 @@ function createModal() {
                             </div>
                         </div>
                     </div>
-                    <div class="settings-panel" id="skills-panel" style="display:none;">
-                        <div class="settings-section">
-                            <div class="settings-content-stack status-stack" id="skills-status"></div>
-                        </div>
-                    </div>
                 </div>
                 <div class="settings-actions-bar" id="settings-actions-bar">
                     <div class="settings-panel-actions" id="settings-panel-actions">
@@ -874,14 +873,11 @@ function createModal() {
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-agent-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-role-btn" type="button" style="display:none;" data-i18n="settings.action.add_role">Add Role</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-orchestration-preset-btn" type="button" style="display:none;" data-i18n="settings.action.add_orchestration">Add Orchestration</button>
-                            <button class="secondary-btn section-action-btn settings-action" id="add-trigger-btn" type="button" style="display:none;" data-i18n="settings.action.add_trigger">Add Trigger</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-env-btn" type="button" style="display:none;" data-i18n="settings.action.add_variable">Add Variable</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-role-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-orchestration-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
-                            <button class="primary-btn section-action-btn settings-action" id="save-trigger-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-role-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-orchestration-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
-                            <button class="secondary-btn section-action-btn settings-action" id="cancel-trigger-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-env-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-env-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-notifications-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
@@ -889,7 +885,6 @@ function createModal() {
                             <button class="primary-btn section-action-btn settings-action" id="save-github-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-proxy-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reload-mcp-btn" type="button" style="display:none;" data-i18n="settings.action.reload">Reload</button>
-                            <button class="secondary-btn section-action-btn settings-action" id="reload-skills-btn" type="button" style="display:none;" data-i18n="settings.action.reload">Reload</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reset-appearance-btn" type="button" style="display:none;" data-i18n="settings.action.reset">Reset</button>
                         </div>
                     </div>
@@ -924,7 +919,6 @@ function setupEventListeners() {
     bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
-    bindTriggerSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
     bindNotificationSettingsHandlers();
     bindWebSettingsHandlers();
@@ -960,7 +954,6 @@ async function showPanel(tab) {
     bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
-    bindTriggerSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
     bindWebSettingsHandlers();
     bindGitHubSettingsHandlers();
@@ -975,8 +968,6 @@ async function showPanel(tab) {
         await loadRoleSettingsPanel();
     } else if (tab === 'orchestration') {
         await loadOrchestrationSettingsPanel();
-    } else if (tab === 'triggers') {
-        await loadTriggerSettingsPanel();
     } else if (tab === 'environment') {
         await loadEnvironmentVariablesPanel();
     } else if (tab === 'notifications') {
@@ -1028,9 +1019,6 @@ function renderPanelActions(tab) {
         document.getElementById('add-orchestration-preset-btn').style.display = 'inline-flex';
         return;
     }
-    if (tab === 'triggers') {
-        return;
-    }
     if (tab === 'environment') {
         document.getElementById('add-env-btn').style.display = 'inline-flex';
         return;
@@ -1053,10 +1041,6 @@ function renderPanelActions(tab) {
     }
     if (tab === 'mcp') {
         document.getElementById('reload-mcp-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'skills') {
-        document.getElementById('reload-skills-btn').style.display = 'inline-flex';
         return;
     }
     if (tab === 'appearance') {
