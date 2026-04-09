@@ -149,6 +149,8 @@ def _extract_shell_grant_metadata(
 class AutoRecoveryReason(StrEnum):
     INVALID_TOOL_ARGS_JSON = "auto_recovery_invalid_tool_args_json"
     NETWORK_STREAM_INTERRUPTED = "auto_recovery_network_stream_interrupted"
+    NETWORK_TIMEOUT = "auto_recovery_network_timeout"
+    NETWORK_ERROR = "auto_recovery_network_error"
 
 
 class AutoRecoveryPolicy(BaseModel):
@@ -187,6 +189,16 @@ AUTO_RECOVERY_POLICIES = (
         error_code="network_stream_interrupted",
         reason=AutoRecoveryReason.NETWORK_STREAM_INTERRUPTED,
         max_attempts=5,
+    ),
+    _auto_recovery_policy(
+        error_code="network_timeout",
+        reason=AutoRecoveryReason.NETWORK_TIMEOUT,
+        max_attempts=5,
+    ),
+    _auto_recovery_policy(
+        error_code="network_error",
+        reason=AutoRecoveryReason.NETWORK_ERROR,
+        max_attempts=1,
     ),
 )
 
@@ -738,7 +750,7 @@ class RunManager:
             try:
                 return await current_runner()
             except RecoverableRunPauseError as exc:
-                policy = self._auto_recovery_policy_for(exc.payload.error_code)
+                policy = self._auto_recovery_policy_for(exc.payload)
                 if policy is None:
                     raise
                 attempt = self._next_auto_recovery_attempt(
@@ -2380,11 +2392,68 @@ class RunManager:
             return True
         return current_intent.run_kind == RunKind.CONVERSATION
 
-    def _auto_recovery_policy_for(self, error_code: str) -> AutoRecoveryPolicy | None:
+    def _auto_recovery_policy_for(
+        self,
+        payload: "RecoverableRunPausePayload",
+    ) -> AutoRecoveryPolicy | None:
         for policy in AUTO_RECOVERY_POLICIES:
-            if policy.error_code == error_code:
-                return policy
+            if policy.error_code != payload.error_code:
+                continue
+            if not self._auto_recovery_policy_matches_payload(
+                policy=policy,
+                payload=payload,
+            ):
+                return None
+            return policy
         return None
+
+    def _auto_recovery_policy_matches_payload(
+        self,
+        *,
+        policy: AutoRecoveryPolicy,
+        payload: "RecoverableRunPausePayload",
+    ) -> bool:
+        if policy.error_code != "network_error":
+            return True
+        return self._is_transient_network_error_message(payload.error_message)
+
+    def _is_transient_network_error_message(self, error_message: str) -> bool:
+        normalized = error_message.strip().lower()
+        if not normalized:
+            return False
+        blocking_markers = (
+            "proxy",
+            "no_proxy",
+            "ssl",
+            "tls",
+            "certificate",
+            "cert",
+            "connection refused",
+            "actively refused",
+            "name or service not known",
+            "nodename nor servname",
+            "temporary failure in name resolution",
+            "getaddrinfo",
+            "dns",
+            "host not found",
+            "407",
+        )
+        if any(marker in normalized for marker in blocking_markers):
+            return False
+        transient_markers = (
+            "connection reset",
+            "connection aborted",
+            "connection closed",
+            "remote protocol error",
+            "incomplete chunked read",
+            "server disconnected",
+            "temporarily unavailable",
+            "temporary network",
+            "temporary failure",
+            "eof",
+            "broken pipe",
+        )
+        return any(marker in normalized for marker in transient_markers)
 
     def _next_auto_recovery_attempt(
         self,
@@ -2531,7 +2600,7 @@ class RunManager:
         self, payload: "RecoverableRunPausePayload"
     ) -> dict[str, JsonValue]:
         paused_payload: dict[str, JsonValue] = payload.model_dump(mode="json")
-        policy = self._auto_recovery_policy_for(payload.error_code)
+        policy = self._auto_recovery_policy_for(payload)
         if policy is None:
             return paused_payload
         attempts = self._count_auto_recovery_attempts(

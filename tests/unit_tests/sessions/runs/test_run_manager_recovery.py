@@ -1505,7 +1505,7 @@ async def test_worker_auto_recovers_network_stream_interruption(
 
     messages = MessageRepository(db_path).get_messages_by_session("session-1")
     assert any(
-        "The previous model stream was interrupted by a transient network or transport failure."
+        "The previous model request could not complete because of a transient network or transport failure."
         in json.dumps(message["message"], ensure_ascii=False)
         for message in messages
     )
@@ -1580,6 +1580,216 @@ async def test_worker_pauses_after_stream_auto_recovery_budget_exhausted(
         paused_payload["auto_recovery_reason"]
         == "auto_recovery_network_stream_interrupted"
     )
+
+
+@pytest.mark.asyncio
+async def test_worker_auto_recovers_network_timeout(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_worker_timeout_recovered.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+    _upsert_coordinator(AgentInstanceRepository(db_path))
+    _create_root_task(TaskRepository(db_path))
+
+    class _RecoveringMetaAgent:
+        async def handle_intent(self, intent, trace_id: str | None = None):
+            raise AssertionError("not expected")
+
+        async def resume_run(self, *, trace_id: str) -> RunResult:
+            assert trace_id == "run-existing"
+            return RunResult(
+                trace_id=trace_id,
+                root_task_id="task-root-1",
+                status="completed",
+                output=content_parts_from_text("recovered after timeout retry"),
+            )
+
+    manager._meta_agent = cast(MetaAgent, cast(object, _RecoveringMetaAgent()))
+
+    payload = RecoverableRunPausePayload(
+        run_id="run-existing",
+        trace_id="run-existing",
+        task_id="task-root-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        error_code="network_timeout",
+        error_message="timeout",
+        retries_used=1,
+        total_attempts=3,
+    )
+
+    async def runner() -> RunResult:
+        raise RecoverableRunPauseError(payload)
+
+    await manager._worker(
+        run_id="run-existing",
+        session_id="session-1",
+        runner=runner,
+    )
+
+    runtime = runtime_repo.get("run-existing")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.COMPLETED
+    assert runtime.phase == RunRuntimePhase.TERMINAL
+
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    resumed_payload = next(
+        json.loads(str(event["payload_json"]))
+        for event in events
+        if str(event["event_type"]) == RunEventType.RUN_RESUMED.value
+    )
+    assert resumed_payload["reason"] == "auto_recovery_network_timeout"
+    assert resumed_payload["attempt"] == 1
+    assert resumed_payload["max_attempts"] == 5
+
+    messages = MessageRepository(db_path).get_messages_by_session("session-1")
+    assert any(
+        "The previous model request could not complete because of a transient network or transport failure."
+        in json.dumps(message["message"], ensure_ascii=False)
+        for message in messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_auto_recovers_transient_network_error_once(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_worker_network_error_recovered.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+    _upsert_coordinator(AgentInstanceRepository(db_path))
+    _create_root_task(TaskRepository(db_path))
+
+    class _RecoveringMetaAgent:
+        async def handle_intent(self, intent, trace_id: str | None = None):
+            raise AssertionError("not expected")
+
+        async def resume_run(self, *, trace_id: str) -> RunResult:
+            assert trace_id == "run-existing"
+            return RunResult(
+                trace_id=trace_id,
+                root_task_id="task-root-1",
+                status="completed",
+                output=content_parts_from_text(
+                    "recovered after transient network error"
+                ),
+            )
+
+    manager._meta_agent = cast(MetaAgent, cast(object, _RecoveringMetaAgent()))
+
+    payload = RecoverableRunPausePayload(
+        run_id="run-existing",
+        trace_id="run-existing",
+        task_id="task-root-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        error_code="network_error",
+        error_message="Server disconnected without sending a response",
+        retries_used=1,
+        total_attempts=3,
+    )
+
+    async def runner() -> RunResult:
+        raise RecoverableRunPauseError(payload)
+
+    await manager._worker(
+        run_id="run-existing",
+        session_id="session-1",
+        runner=runner,
+    )
+
+    runtime = runtime_repo.get("run-existing")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.COMPLETED
+    assert runtime.phase == RunRuntimePhase.TERMINAL
+
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    resumed_payload = next(
+        json.loads(str(event["payload_json"]))
+        for event in events
+        if str(event["event_type"]) == RunEventType.RUN_RESUMED.value
+    )
+    assert resumed_payload["reason"] == "auto_recovery_network_error"
+    assert resumed_payload["attempt"] == 1
+    assert resumed_payload["max_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_does_not_auto_recover_non_transient_network_error(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_worker_network_error_paused.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+
+    payload = RecoverableRunPausePayload(
+        run_id="run-existing",
+        trace_id="run-existing",
+        task_id="task-root-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        error_code="network_error",
+        error_message="Proxy authentication failed (HTTP 407)",
+        retries_used=1,
+        total_attempts=3,
+    )
+
+    async def runner() -> RunResult:
+        raise RecoverableRunPauseError(payload)
+
+    await manager._worker(
+        run_id="run-existing",
+        session_id="session-1",
+        runner=runner,
+    )
+
+    runtime = runtime_repo.get("run-existing")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.PAUSED
+    assert runtime.phase == RunRuntimePhase.AWAITING_RECOVERY
+
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    assert events[-1]["event_type"] == RunEventType.RUN_PAUSED.value
+    paused_payload = json.loads(str(events[-1]["payload_json"]))
+    assert paused_payload["error_code"] == "network_error"
+    assert "auto_recovery_reason" not in paused_payload
 
 
 @pytest.mark.asyncio

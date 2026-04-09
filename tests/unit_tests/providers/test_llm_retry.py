@@ -186,6 +186,43 @@ def test_compute_retry_delay_ms_uses_exponential_backoff_without_jitter() -> Non
     assert delay_ms == 4000
 
 
+def test_compute_retry_delay_ms_respects_retry_after_floor() -> None:
+    config = LlmRetryConfig(
+        jitter=False,
+        initial_delay_ms=2000,
+    )
+
+    delay_ms = compute_retry_delay_ms(
+        config=config,
+        retry_number=1,
+        retry_after_ms=7000,
+    )
+
+    assert delay_ms == 7000
+
+
+def test_compute_retry_delay_ms_keeps_retry_after_floor_with_jitter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = LlmRetryConfig(
+        jitter=True,
+        initial_delay_ms=2000,
+    )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.llm_retry.random.randint",
+        lambda lower_bound, _upper_bound: lower_bound,
+    )
+
+    delay_ms = compute_retry_delay_ms(
+        config=config,
+        retry_number=1,
+        retry_after_ms=7000,
+    )
+
+    assert delay_ms == 7000
+
+
 @pytest.mark.asyncio
 async def test_run_with_llm_retry_retries_until_success() -> None:
     attempts = {"count": 0}
@@ -214,6 +251,39 @@ async def test_run_with_llm_retry_retries_until_success() -> None:
     assert result == "ok"
     assert attempts["count"] == 3
     assert recorded_delays == [2000, 4000]
+
+
+@pytest.mark.asyncio
+async def test_run_with_llm_retry_uses_retry_after_when_larger_than_backoff() -> None:
+    recorded_delays: list[int] = []
+    attempts = {"count": 0}
+
+    async def operation() -> str:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+            response = httpx.Response(
+                429,
+                headers={"Retry-After": "7"},
+                request=request,
+            )
+            raise APIStatusError(
+                "rate limited",
+                response=response,
+                body={"error": {"code": "rate_limited", "message": "slow down"}},
+            )
+        return "ok"
+
+    result = await run_with_llm_retry(
+        operation=operation,
+        config=LlmRetryConfig(jitter=False, max_retries=2, initial_delay_ms=2000),
+        is_retry_allowed=lambda: True,
+        on_retry_scheduled=lambda schedule: recorded_delays.append(schedule.delay_ms),
+        sleep=lambda _seconds: _async_noop(),
+    )
+
+    assert result == "ok"
+    assert recorded_delays == [7000]
 
 
 @pytest.mark.asyncio
