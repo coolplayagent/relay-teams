@@ -45,7 +45,7 @@ SEARXNG_SEARCH_TOOL_NAME = "search"
 SEARXNG_PUBLIC_INSTANCES_URL = "https://searx.space/data/instances.json"
 SEARXNG_INSTANCE_CACHE_TTL_SECONDS = 24 * 60 * 60
 SEARXNG_INSTANCE_COOLDOWN_SECONDS = 30 * 60
-SEARXNG_PUBLIC_INSTANCE_LIMIT = 10
+SEARXNG_PUBLIC_INSTANCE_LIMIT = 20
 DEFAULT_NUM_RESULTS = 8
 DEFAULT_EXA_SEARCH_TYPE = "auto"
 DEFAULT_TIMEOUT_SECONDS = 25.0
@@ -193,6 +193,20 @@ class ExaSearchPayload(BaseModel):
 
     results: tuple[ExaSearchHitPayload, ...] = ()
     searchTime: float | None = None
+
+
+class ExaRpcErrorPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    code: int | None = None
+    message: str | None = None
+
+
+class ExaRpcResponsePayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    jsonrpc: str | None = None
+    error: ExaRpcErrorPayload | None = None
 
 
 class ExtractedSearchResponse(BaseModel):
@@ -528,18 +542,17 @@ async def resolve_searxng_instance_candidates(
     client: httpx.AsyncClient,
     config: WebConfig,
 ) -> tuple[SearxngInstanceCandidate, ...]:
-    if (
-        config.searxng_instance_url
-        and config.searxng_instance_url != DEFAULT_SEARXNG_INSTANCE_URL
-    ):
-        return (
-            build_searxng_instance_candidate(
-                base_url=config.searxng_instance_url,
-                source="configured",
-            ),
-        )
     configured_candidates: tuple[SearxngInstanceCandidate, ...] = ()
     if config.searxng_instance_url:
+        if config.searxng_instance_url != DEFAULT_SEARXNG_INSTANCE_URL:
+            return deduplicate_searxng_candidates(
+                (
+                    build_searxng_instance_candidate(
+                        base_url=config.searxng_instance_url,
+                        source="configured",
+                    ),
+                )
+            )
         configured_candidates = (
             build_searxng_instance_candidate(
                 base_url=config.searxng_instance_url,
@@ -647,11 +660,9 @@ def set_cached_searxng_instance_candidates(
 def select_public_searxng_instances(
     payload: SearxngCatalogPayload,
 ) -> list[SearxngInstanceCandidate]:
-    ranked: list[tuple[float, SearxngInstanceCandidate]] = []
+    ranked: list[tuple[int, float, SearxngInstanceCandidate]] = []
     for base_url, raw_instance in payload.instances.items():
         if raw_instance.generator != "searxng":
-            continue
-        if not raw_instance.main:
             continue
         if raw_instance.analytics:
             continue
@@ -667,6 +678,7 @@ def select_public_searxng_instances(
         )
         ranked.append(
             (
+                0 if raw_instance.main else 1,
                 initial_latency,
                 build_searxng_instance_candidate(
                     base_url=base_url,
@@ -674,8 +686,8 @@ def select_public_searxng_instances(
                 ),
             )
         )
-    ranked.sort(key=lambda item: item[0])
-    return [candidate for _, candidate in ranked[:SEARXNG_PUBLIC_INSTANCE_LIMIT]]
+    ranked.sort(key=lambda item: (item[0], item[1]))
+    return [candidate for _, _, candidate in ranked[:SEARXNG_PUBLIC_INSTANCE_LIMIT]]
 
 
 def build_searxng_instance_candidate(
@@ -981,6 +993,9 @@ async def fetch_exa_search_response(
                 "status_code": response.status_code,
             },
         )
+    rpc_error = _parse_exa_rpc_error_response(response.text)
+    if rpc_error is not None:
+        raise rpc_error
     return response.text
 
 
@@ -994,6 +1009,28 @@ def _search_status_error_type(status_code: int) -> str:
     if status_code >= 500:
         return "upstream_unavailable"
     return "upstream_error"
+
+
+def _parse_exa_rpc_error_response(response_text: str) -> ToolExecutionError | None:
+    try:
+        payload = ExaRpcResponsePayload.model_validate_json(response_text)
+    except Exception:
+        return None
+    if payload.error is None:
+        return None
+    message = _normalize_optional_text(payload.error.message) or "Exa web search failed"
+    error_type = (
+        "rate_limited" if _contains_exa_quota_hint(message) else "upstream_error"
+    )
+    return ToolExecutionError(
+        error_type=error_type,
+        message=f"Exa web search returned JSON-RPC error: {message}",
+        retryable=error_type == "rate_limited",
+        details={
+            "provider": WebProvider.EXA.value,
+            "rpc_error_code": payload.error.code,
+        },
+    )
 
 
 def _search_status_error_message(
