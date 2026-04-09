@@ -114,19 +114,6 @@ import {
 } from "./projectView.mjs";
 import { els, flushTasks } from "./mockDom.mjs";
 
-globalThis.__showFormDialogResult = {
-    display_name: "Daily Briefing",
-    workspace_id: "alpha-project",
-    prompt: "Summarize the latest project changes.",
-    cron_expression: "0 9 * * *",
-    timezone: "UTC",
-    enabled: true,
-    delivery_binding_key: "trg_feishu::tenant-1::oc_123::session-im-1",
-    delivery_event_started: true,
-    delivery_event_completed: true,
-    delivery_event_failed: true,
-};
-
 initializeProjectView();
 await openAutomationProjectView({ automation_project_id: "aut_1", workspace_id: "alpha-project" });
 await flushTasks();
@@ -137,9 +124,34 @@ editButton?.onclick?.();
 await flushTasks();
 await flushTasks();
 
+document.getElementById("automation-editor-display-name-input").value = "Friday Briefing";
+document.getElementById("automation-editor-prompt-input").value = "Summarize the latest project changes.";
+document.getElementById("automation-editor-timezone-input").value = "Asia/Shanghai";
+document.getElementById("automation-editor-delivery-binding-input").value = "trg_feishu::tenant-1::oc_123::session-im-1";
+document.querySelector("[data-automation-editor-binding]")?.onchange?.({
+    target: document.getElementById("automation-editor-delivery-binding-input"),
+});
+await flushTasks();
+await flushTasks();
+document.getElementById("automation-editor-schedule-kind-input").value = "weekly";
+document.querySelector("[data-automation-editor-schedule-kind]")?.onchange?.({
+    target: document.getElementById("automation-editor-schedule-kind-input"),
+});
+await flushTasks();
+await flushTasks();
+document.getElementById("automation-editor-time-input").value = "18:30";
+document.getElementById("automation-editor-weekday-input").value = "5";
+document.getElementById("automation-editor-delivery-started-input").checked = true;
+document.getElementById("automation-editor-delivery-completed-input").checked = true;
+document.getElementById("automation-editor-delivery-failed-input").checked = true;
+const modalHtmlBeforeSave = globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n");
+document.querySelector("[data-automation-editor-save]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
 console.log(JSON.stringify({
     contentHtml: els.projectViewContent.innerHTML,
-    formOptions: globalThis.__showFormDialogCalls[0],
+    modalHtml: modalHtmlBeforeSave,
     updatePayload: globalThis.__updatedAutomationPayload,
 }));
 """.strip(),
@@ -150,6 +162,14 @@ export async function disableAutomationProject() {
 
 export async function enableAutomationProject() {
     return { status: "enabled" };
+}
+
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
 }
 
 export async function fetchAutomationProject() {
@@ -198,6 +218,10 @@ export async function fetchAutomationProjectSessions() {
     return [];
 }
 
+export async function fetchAutomationProjects() {
+    return [{ automation_project_id: "aut_1", display_name: "Daily Briefing", name: "daily-briefing", status: "enabled", workspace_id: "alpha-project" }];
+}
+
 export async function fetchWorkspaces() {
     return [
         {
@@ -227,6 +251,74 @@ export async function runAutomationProject() {
     return { status: "ok" };
 }
 
+export async function fetchConfigStatus() {
+    return { skills: { skills: [] } };
+}
+
+export async function fetchOrchestrationConfig() {
+    return { presets: [] };
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [] };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function reloadSkillsConfig() {
+    return { status: "ok" };
+}
+
+export async function createTrigger() {
+    return { status: "ok" };
+}
+
+export async function updateTrigger() {
+    return { status: "ok" };
+}
+
+export async function deleteTrigger() {
+    return { status: "ok" };
+}
+
+export async function enableTrigger() {
+    return { status: "ok" };
+}
+
+export async function disableTrigger() {
+    return { status: "ok" };
+}
+
+export async function startWeChatGatewayLogin() {
+    return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" };
+}
+
+export async function waitWeChatGatewayLogin() {
+    return { connected: true };
+}
+
+export async function updateWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function enableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function disableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function deleteWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
 export async function updateAutomationProject(_automationProjectId, payload) {
     globalThis.__updatedAutomationPayload = payload;
     return { status: "ok" };
@@ -237,16 +329,6 @@ export async function updateAutomationProject(_automationProjectId, payload) {
     update_payload = cast(dict[str, object], payload["updatePayload"])
     delivery_binding = cast(dict[str, object], update_payload["delivery_binding"])
     delivery_events = cast(list[object], update_payload["delivery_events"])
-    form_options = cast(dict[str, object], payload["formOptions"])
-    binding_options = cast(
-        list[dict[str, object]],
-        next(
-            cast(list[dict[str, object]], field["options"])
-            for field in cast(list[dict[str, object]], form_options["fields"])
-            if field["id"] == "delivery_binding_key"
-        ),
-    )
-
     assert delivery_binding["trigger_id"] == "trg_feishu"
     assert delivery_binding["chat_id"] == "oc_123"
     assert delivery_binding["session_id"] == "session-im-1"
@@ -255,9 +337,192 @@ export async function updateAutomationProject(_automationProjectId, payload) {
         "completed",
         "failed",
     ]
-    assert binding_options[1]["label"] == "feishu_main - Release Updates"
-    assert binding_options[1]["description"] == "Feishu Main - group"
+    assert update_payload["display_name"] == "Friday Briefing"
+    assert update_payload["cron_expression"] == "30 18 * * 5"
+    assert update_payload["timezone"] == "Asia/Shanghai"
+    assert "automation-editor-modal-title" in str(payload["modalHtml"])
     assert "feishu_main - Release Updates" in str(payload["contentHtml"])
+
+
+def test_project_view_preserves_disabled_one_shot_automation_on_edit(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationProjectView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openAutomationProjectView({ automation_project_id: "aut_1", workspace_id: "alpha-project" });
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-automation-edit]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+document.getElementById("automation-editor-prompt-input").value = "Run once and stay disabled.";
+document.querySelector("[data-automation-editor-save]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    updatePayload: globalThis.__updatedAutomationPayload,
+}));
+""".strip(),
+        mock_api_source="""
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        name: "one-shot-briefing",
+        display_name: "One-shot Briefing",
+        status: "disabled",
+        workspace_id: "alpha-project",
+        prompt: "Run once and stay disabled.",
+        schedule_mode: "one_shot",
+        cron_expression: null,
+        run_at: "2026-03-14T09:30:00.000Z",
+        timezone: "Asia/Shanghai",
+        delivery_events: [],
+    };
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [];
+}
+
+export async function fetchAutomationProjects() {
+    return [{ automation_project_id: "aut_1", display_name: "One-shot Briefing", name: "one-shot-briefing", status: "disabled", workspace_id: "alpha-project" }];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "alpha-project", root_path: "/work/alpha-project" }];
+}
+
+export async function fetchWorkspaceSnapshot() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceTree() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffs() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffFile() {
+    throw new Error("not used");
+}
+
+export async function runAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchConfigStatus() {
+    return { skills: { skills: [] } };
+}
+
+export async function fetchOrchestrationConfig() {
+    return { presets: [] };
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [] };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function reloadSkillsConfig() {
+    return { status: "ok" };
+}
+
+export async function createTrigger() {
+    return { status: "ok" };
+}
+
+export async function updateTrigger() {
+    return { status: "ok" };
+}
+
+export async function deleteTrigger() {
+    return { status: "ok" };
+}
+
+export async function enableTrigger() {
+    return { status: "ok" };
+}
+
+export async function disableTrigger() {
+    return { status: "ok" };
+}
+
+export async function startWeChatGatewayLogin() {
+    return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" };
+}
+
+export async function waitWeChatGatewayLogin() {
+    return { connected: true };
+}
+
+export async function updateWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function enableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function disableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function deleteWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function updateAutomationProject(_automationProjectId, payload) {
+    globalThis.__updatedAutomationPayload = payload;
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    update_payload = cast(dict[str, object], payload["updatePayload"])
+    assert update_payload["enabled"] is False
+    assert update_payload["schedule_mode"] == "one_shot"
+    assert update_payload["cron_expression"] is None
+    assert update_payload["run_at"] == "2026-03-14T09:30:00.000Z"
 
 
 def test_project_view_keeps_automation_view_for_reused_bound_session_run(
@@ -297,6 +562,14 @@ export async function enableAutomationProject() {
     return { status: "enabled" };
 }
 
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
 export async function fetchAutomationProject() {
     return {
         automation_project_id: "aut_1",
@@ -330,6 +603,10 @@ export async function fetchAutomationProjectSessions() {
     ];
 }
 
+export async function fetchAutomationProjects() {
+    return [{ automation_project_id: "aut_1", display_name: "Daily Briefing", name: "daily-briefing", status: "enabled", workspace_id: "alpha-project" }];
+}
+
 export async function fetchWorkspaces() {
     return [{ workspace_id: "alpha-project", root_path: "/work/alpha-project" }];
 }
@@ -360,17 +637,1191 @@ export async function runAutomationProject() {
     };
 }
 
+export async function fetchConfigStatus() {
+    return { skills: { skills: [] } };
+}
+
+export async function fetchOrchestrationConfig() {
+    return { presets: [] };
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [] };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function reloadSkillsConfig() {
+    return { status: "ok" };
+}
+
+export async function createTrigger() {
+    return { status: "ok" };
+}
+
+export async function updateTrigger() {
+    return { status: "ok" };
+}
+
+export async function deleteTrigger() {
+    return { status: "ok" };
+}
+
+export async function enableTrigger() {
+    return { status: "ok" };
+}
+
+export async function disableTrigger() {
+    return { status: "ok" };
+}
+
+export async function startWeChatGatewayLogin() {
+    return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" };
+}
+
+export async function waitWeChatGatewayLogin() {
+    return { connected: true };
+}
+
+export async function updateWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function enableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function disableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function deleteWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
 export async function updateAutomationProject() {
     return { status: "ok" };
 }
 """.strip(),
     )
 
-    assert payload["dispatchedEvents"] == []
+    assert payload["dispatchedEvents"] == [
+        {"type": "agent-teams-projects-changed", "detail": None}
+    ]
     assert payload["logs"] == [
         "Started automation run in bound IM session: session-im-1"
     ]
     assert "1 " in str(payload["projectViewSummary"])
+
+
+def test_project_view_keeps_feature_page_visible_after_manual_automation_run(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationHomeView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openAutomationHomeView("aut_1");
+await flushTasks();
+await flushTasks();
+
+const runButton = document.querySelector("[data-automation-run]");
+runButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    dispatchedEvents: globalThis.__dispatchedEvents,
+    logs: globalThis.__logs,
+    projectViewTitle: els.projectViewTitle.textContent,
+    contentHtml: els.projectViewContent.innerHTML,
+}));
+""".strip(),
+        mock_api_source="""
+let projectSessions = [
+    {
+        session_id: "session-old-1",
+        workspace_id: "alpha-project",
+        project_kind: "workspace",
+        project_id: "alpha-project",
+        metadata: { title: "Old run" },
+        updated_at: "2026-03-14T09:00:00Z",
+    },
+];
+
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        name: "daily-briefing",
+        display_name: "Daily Briefing",
+        status: "enabled",
+        workspace_id: "alpha-project",
+        prompt: "Summarize the latest project changes.",
+        schedule_mode: "cron",
+        cron_expression: "0 9 * * *",
+        timezone: "UTC",
+        next_run_at: "2026-03-14T09:00:00Z",
+    };
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return projectSessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [{ automation_project_id: "aut_1", display_name: "Daily Briefing", name: "daily-briefing", status: "enabled", workspace_id: "alpha-project" }];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "alpha-project", root_path: "/work/alpha-project" }];
+}
+
+export async function fetchWorkspaceSnapshot() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceTree() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffs() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffFile() {
+    throw new Error("not used");
+}
+
+export async function runAutomationProject() {
+    projectSessions = [
+        {
+            session_id: "session-new-1",
+            workspace_id: "alpha-project",
+            project_kind: "workspace",
+            project_id: "alpha-project",
+            metadata: { title: "Manual Run" },
+            updated_at: "2026-03-14T10:00:00Z",
+        },
+        ...projectSessions,
+    ];
+    return {
+        automation_project_id: "aut_1",
+        session_id: "session-new-1",
+        run_id: "run-2",
+        queued: false,
+        reused_bound_session: false,
+    };
+}
+
+export async function fetchConfigStatus() {
+    return { skills: { skills: [] } };
+}
+
+export async function fetchOrchestrationConfig() {
+    return { presets: [] };
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [] };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function reloadSkillsConfig() {
+    return { status: "ok" };
+}
+
+export async function createTrigger() {
+    return { status: "ok" };
+}
+
+export async function updateTrigger() {
+    return { status: "ok" };
+}
+
+export async function deleteTrigger() {
+    return { status: "ok" };
+}
+
+export async function enableTrigger() {
+    return { status: "ok" };
+}
+
+export async function disableTrigger() {
+    return { status: "ok" };
+}
+
+export async function startWeChatGatewayLogin() {
+    return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" };
+}
+
+export async function waitWeChatGatewayLogin() {
+    return { connected: true };
+}
+
+export async function updateWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function enableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function disableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function deleteWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function updateAutomationProject() {
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    dispatched_events = cast(list[dict[str, object]], payload["dispatchedEvents"])
+    logs = cast(list[object], payload["logs"])
+    dispatched_event_types = [str(entry["type"]) for entry in dispatched_events]
+
+    assert "agent-teams-projects-changed" in dispatched_event_types
+    assert "agent-teams-select-session" not in dispatched_event_types
+    assert payload["projectViewTitle"] == "Automation"
+    assert "Manual Run" in str(payload["contentHtml"])
+    assert "Started automation run: session-new-1" in [str(item) for item in logs]
+
+
+def test_project_view_renders_automation_details_without_helper_copy_and_prompt_card(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationHomeView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openAutomationHomeView("aut_1");
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    contentHtml: els.projectViewContent.innerHTML,
+}));
+""".strip(),
+        mock_api_source="""
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        name: "daily-briefing",
+        display_name: "Daily Briefing",
+        status: "enabled",
+        workspace_id: "alpha-project",
+        prompt: "Line one.\\nLine two.",
+        schedule_mode: "cron",
+        cron_expression: "0 9 * * *",
+        timezone: "Asia/Shanghai",
+        next_run_at: "2026-03-14T09:00:00Z",
+        last_run_started_at: "2026-03-14T08:00:00Z",
+        delivery_events: [],
+    };
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [];
+}
+
+export async function fetchAutomationProjects() {
+    return [{ automation_project_id: "aut_1", display_name: "Daily Briefing", name: "daily-briefing", status: "enabled", workspace_id: "alpha-project" }];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "alpha-project", root_path: "/work/alpha-project" }];
+}
+
+export async function fetchWorkspaceSnapshot() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceTree() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffs() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffFile() {
+    throw new Error("not used");
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function fetchConfigStatus() {
+    return { skills: { skills: [] } };
+}
+
+export async function fetchOrchestrationConfig() {
+    return { presets: [] };
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [] };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function reloadSkillsConfig() {
+    return { status: "ok" };
+}
+
+export async function createTrigger() {
+    return { status: "ok" };
+}
+
+export async function updateTrigger() {
+    return { status: "ok" };
+}
+
+export async function deleteTrigger() {
+    return { status: "ok" };
+}
+
+export async function enableTrigger() {
+    return { status: "ok" };
+}
+
+export async function disableTrigger() {
+    return { status: "ok" };
+}
+
+export async function startWeChatGatewayLogin() {
+    return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" };
+}
+
+export async function waitWeChatGatewayLogin() {
+    return { connected: true };
+}
+
+export async function updateWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function enableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function disableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function deleteWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function updateAutomationProject() {
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    content_html = str(payload["contentHtml"])
+    assert "Review schedule and recent runs." not in content_html
+    assert "Automation notifications are currently disabled." not in content_html
+    assert (
+        "Automation updates will be pushed to the selected Feishu chat."
+        not in content_html
+    )
+    assert "automation-prompt-card" not in content_html
+    assert "automation-prompt-inline" in content_html
+    assert "feature-card automation-runs-card" not in content_html
+    assert "automation-flat-section automation-runs-section" in content_html
+
+
+def test_project_view_automation_home_sidebar_uses_flat_list_without_duplicate_title(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationHomeView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openAutomationHomeView("aut_1");
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    contentHtml: els.projectViewContent.innerHTML,
+}));
+""".strip(),
+        mock_api_source="""
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        name: "daily-briefing",
+        display_name: "Daily Briefing",
+        status: "enabled",
+        workspace_id: "alpha-project",
+        prompt: "Line one.\\nLine two.",
+        schedule_mode: "cron",
+        cron_expression: "0 9 * * *",
+        timezone: "Asia/Shanghai",
+        next_run_at: "2026-03-14T09:00:00Z",
+        last_run_started_at: "2026-03-14T08:00:00Z",
+        delivery_events: [],
+    };
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [];
+}
+
+export async function fetchAutomationProjects() {
+    return [
+        { automation_project_id: "aut_1", display_name: "Daily Briefing", name: "daily-briefing", status: "enabled", workspace_id: "alpha-project", cron_expression: "0 9 * * *" },
+        { automation_project_id: "aut_2", display_name: "Nightly Sync", name: "nightly-sync", status: "disabled", workspace_id: "alpha-project", cron_expression: "0 21 * * *" },
+    ];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "alpha-project", root_path: "/work/alpha-project" }];
+}
+
+export async function fetchWorkspaceSnapshot() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceTree() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffs() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffFile() {
+    throw new Error("not used");
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function fetchConfigStatus() {
+    return { skills: { skills: [] } };
+}
+
+export async function fetchOrchestrationConfig() {
+    return { presets: [] };
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [] };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function reloadSkillsConfig() {
+    return { status: "ok" };
+}
+
+export async function createTrigger() {
+    return { status: "ok" };
+}
+
+export async function updateTrigger() {
+    return { status: "ok" };
+}
+
+export async function deleteTrigger() {
+    return { status: "ok" };
+}
+
+export async function enableTrigger() {
+    return { status: "ok" };
+}
+
+export async function disableTrigger() {
+    return { status: "ok" };
+}
+
+export async function startWeChatGatewayLogin() {
+    return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" };
+}
+
+export async function waitWeChatGatewayLogin() {
+    return { connected: true };
+}
+
+export async function updateWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function enableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function disableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function deleteWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function updateAutomationProject() {
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    content_html = str(payload["contentHtml"])
+    assert "workspace-view-panel-header" not in content_html
+    assert content_html.count(">Automation<") == 0
+
+    repo_root = Path(__file__).resolve().parents[3]
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+
+    assert ".automation-list-panel .feature-panel-body {" in components_css
+    assert "padding: 0.7rem 0.95rem 0.85rem;" in components_css
+    assert ".automation-record {" in components_css
+    assert "border-radius: 0;" in components_css
+    assert "border-bottom: 1px solid" in components_css
+
+
+def test_project_view_automation_header_keeps_action_row_out_of_prompt_flow() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+
+    assert ".automation-detail-head {" in components_css
+    assert "grid-template-columns: minmax(0, 1fr) auto;" in components_css
+    assert ".automation-detail-head .feature-action-row {" in components_css
+    assert "justify-content: flex-end;" in components_css
+
+
+def test_project_view_automation_editor_actions_keep_buttons_single_line() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        ".automation-editor-modal .automation-editor-modal-content {" in components_css
+    )
+    assert "width: min(84vw, 1160px) !important;" in components_css
+    assert ".automation-editor-actions {" in components_css
+    assert "flex-wrap: nowrap;" in components_css
+    assert ".automation-editor-actions .secondary-btn," in components_css
+    assert "white-space: nowrap;" in components_css
+
+
+def test_project_view_skills_feature_does_not_repeat_inner_title(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openSkillsFeatureView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openSkillsFeatureView();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    projectViewTitle: els.projectViewTitle.textContent,
+    contentHtml: els.projectViewContent.innerHTML,
+}));
+""".strip(),
+        mock_api_source="""
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [];
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchWorkspaces() {
+    return [];
+}
+
+export async function fetchWorkspaceSnapshot() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceTree() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffs() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffFile() {
+    throw new Error("not used");
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function fetchConfigStatus() {
+    return {
+        skills: {
+            skills: [
+                {
+                    name: "schedule-tasks",
+                    description: "Run scheduled checks.",
+                    ref: "schedule-tasks",
+                    path: "/skills/schedule-tasks",
+                    scope: "builtin",
+                },
+            ],
+        },
+    };
+}
+
+export async function fetchOrchestrationConfig() {
+    return { presets: [] };
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [] };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function reloadSkillsConfig() {
+    return { status: "ok" };
+}
+
+export async function createTrigger() {
+    return { status: "ok" };
+}
+
+export async function updateTrigger() {
+    return { status: "ok" };
+}
+
+export async function deleteTrigger() {
+    return { status: "ok" };
+}
+
+export async function enableTrigger() {
+    return { status: "ok" };
+}
+
+export async function disableTrigger() {
+    return { status: "ok" };
+}
+
+export async function startWeChatGatewayLogin() {
+    return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" };
+}
+
+export async function waitWeChatGatewayLogin() {
+    return { connected: true };
+}
+
+export async function updateWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function enableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function disableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function deleteWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function updateAutomationProject() {
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    assert payload["projectViewTitle"] == "Skills"
+    assert "<h3>Skills</h3>" not in str(payload["contentHtml"])
+
+
+def test_project_view_opens_robot_dialog_in_gateway_feature(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+const addButton = document.querySelector("[data-feature-gateway-add-feishu]");
+addButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    title: els.projectViewTitle.textContent,
+    contentHtml: els.projectViewContent.innerHTML,
+    modalHtml: globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n"),
+    showFormDialogCalls: globalThis.__showFormDialogCalls,
+}));
+""".strip(),
+        mock_api_source="""
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [];
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "default", root_path: "/work/default" }];
+}
+
+export async function fetchWorkspaceSnapshot() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceTree() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffs() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffFile() {
+    throw new Error("not used");
+}
+
+export async function runAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchConfigStatus() {
+    return { skills: { skills: [] } };
+}
+
+export async function fetchOrchestrationConfig() {
+    return { presets: [] };
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [] };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function reloadSkillsConfig() {
+    return { status: "ok" };
+}
+
+export async function createTrigger() {
+    return { status: "ok" };
+}
+
+export async function updateTrigger() {
+    return { status: "ok" };
+}
+
+export async function deleteTrigger() {
+    return { status: "ok" };
+}
+
+export async function enableTrigger() {
+    return { status: "ok" };
+}
+
+export async function disableTrigger() {
+    return { status: "ok" };
+}
+
+export async function startWeChatGatewayLogin() {
+    return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" };
+}
+
+export async function waitWeChatGatewayLogin() {
+    return { connected: true };
+}
+
+export async function updateWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function enableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function disableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function deleteWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function updateAutomationProject() {
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    assert payload["title"] == "IM Gateway"
+    assert payload["showFormDialogCalls"] == []
+    assert "data-feature-gateway-modal" in str(payload["modalHtml"])
+    assert 'id="feishu-trigger-name-input"' in str(payload["modalHtml"])
+    assert 'id="feishu-app-id-input"' in str(payload["modalHtml"])
+    assert 'id="feishu-app-secret-input"' in str(payload["modalHtml"])
+    assert 'id="feishu-trigger-name-input"' not in str(payload["contentHtml"])
+
+
+def test_project_view_opens_wechat_connect_modal_in_gateway_feature(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+const connectButton = document.querySelector("[data-feature-gateway-connect-wechat]");
+connectButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    title: els.projectViewTitle.textContent,
+    contentHtml: els.projectViewContent.innerHTML,
+    modalHtml: globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n"),
+}));
+""".strip(),
+        mock_api_source="""
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [];
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "default", root_path: "/work/default" }];
+}
+
+export async function fetchWorkspaceSnapshot() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceTree() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffs() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffFile() {
+    throw new Error("not used");
+}
+
+export async function runAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchConfigStatus() {
+    return { skills: { skills: [] } };
+}
+
+export async function fetchOrchestrationConfig() {
+    return { presets: [] };
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [] };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function reloadSkillsConfig() {
+    return { status: "ok" };
+}
+
+export async function createTrigger() {
+    return { status: "ok" };
+}
+
+export async function updateTrigger() {
+    return { status: "ok" };
+}
+
+export async function deleteTrigger() {
+    return { status: "ok" };
+}
+
+export async function enableTrigger() {
+    return { status: "ok" };
+}
+
+export async function disableTrigger() {
+    return { status: "ok" };
+}
+
+export async function startWeChatGatewayLogin() {
+    return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" };
+}
+
+export async function waitWeChatGatewayLogin() {
+    return { connected: false, message: "Login failed." };
+}
+
+export async function updateWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function enableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function disableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function deleteWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function updateAutomationProject() {
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    assert payload["title"] == "IM Gateway"
+    assert "data-feature-wechat-modal" in str(payload["modalHtml"])
+    assert "https://example.test/qr.png" in str(payload["modalHtml"])
+    assert "gateway-qr-card" not in str(payload["contentHtml"])
 
 
 def _run_project_view_script(
@@ -411,6 +1862,8 @@ function decodeHtmlAttribute(value) {
 function createBasicElement() {
     const attributeStore = new Map();
     return {
+        id: "",
+        className: "",
         style: {},
         textContent: "",
         innerHTML: "",
@@ -435,12 +1888,27 @@ function createTreeNode(attributes = {}) {
     return {
         onclick: null,
         onkeydown: null,
+        onchange: null,
+        value: "",
+        checked: false,
+        style: {},
+        classList: {
+            add() {
+                return undefined;
+            },
+            remove() {
+                return undefined;
+            },
+        },
         addEventListener(name, handler) {
             if (name === "click") {
                 this.onclick = handler;
             }
             if (name === "keydown") {
                 this.onkeydown = handler;
+            }
+            if (name === "change") {
+                this.onchange = handler;
             }
         },
         setAttribute(name, value) {
@@ -459,6 +1927,13 @@ function parseNodes(source, selector) {
         ".workspace-diff-card": /class="([^"]*workspace-diff-card[^"]*)"[\s\S]*?data-diff-path="([^"]*)"/g,
         "[data-automation-edit]": /data-automation-edit/g,
         "[data-automation-run]": /data-automation-run/g,
+        "[data-automation-editor-save]": /data-automation-editor-save/g,
+        "[data-automation-editor-cancel]": /data-automation-editor-cancel/g,
+        "[data-automation-editor-close]": /data-automation-editor-close/g,
+        "[data-automation-editor-schedule-kind]": /id="automation-editor-schedule-kind-input"[\s\S]*?data-automation-editor-schedule-kind/g,
+        "[data-automation-editor-binding]": /id="automation-editor-delivery-binding-input"[\s\S]*?data-automation-editor-binding/g,
+        "[data-feature-gateway-add-feishu]": /data-feature-gateway-add-feishu/g,
+        "[data-feature-gateway-connect-wechat]": /data-feature-gateway-connect-wechat/g,
     };
     const pattern = patterns[selector];
     const results = [];
@@ -488,16 +1963,65 @@ function parseNodes(source, selector) {
             results.push(createTreeNode({}));
         } else if (selector === "[data-automation-run]") {
             results.push(createTreeNode({}));
+        } else if (selector === "[data-automation-editor-save]") {
+            results.push(createTreeNode({}));
+        } else if (selector === "[data-automation-editor-cancel]") {
+            results.push(createTreeNode({}));
+        } else if (selector === "[data-automation-editor-close]") {
+            results.push(createTreeNode({}));
+        } else if (selector === "[data-automation-editor-schedule-kind]") {
+            const node = createTreeNode({});
+            node.value = "daily";
+            results.push(node);
+        } else if (selector === "[data-automation-editor-binding]") {
+            const node = createTreeNode({});
+            node.value = "";
+            results.push(node);
+        } else if (selector === "[data-feature-gateway-add-feishu]") {
+            results.push(createTreeNode({}));
+        } else if (selector === "[data-feature-gateway-connect-wechat]") {
+            results.push(createTreeNode({}));
         }
         match = pattern.exec(source);
     }
     return results;
 }
 
+function parseElementById(source, id) {
+    const safeId = String(id || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const inputMatch = new RegExp(`<input[^>]*id="${safeId}"[^>]*>`, "i").exec(source);
+    if (inputMatch) {
+        const node = createTreeNode({ id });
+        const markup = inputMatch[0];
+        const valueMatch = /value="([^"]*)"/i.exec(markup);
+        node.value = decodeHtmlAttribute(valueMatch ? valueMatch[1] : "");
+        node.checked = /\schecked(?:\s|>)/i.test(markup);
+        return node;
+    }
+    const textareaMatch = new RegExp(`<textarea[^>]*id="${safeId}"[^>]*>([\\s\\S]*?)<\\/textarea>`, "i").exec(source);
+    if (textareaMatch) {
+        const node = createTreeNode({ id });
+        node.value = decodeHtmlAttribute(textareaMatch[1] || "");
+        return node;
+    }
+    const selectMatch = new RegExp(`<select[^>]*id="${safeId}"[^>]*>([\\s\\S]*?)<\\/select>`, "i").exec(source);
+    if (selectMatch) {
+        const node = createTreeNode({ id });
+        const selectedMatch = /<option[^>]*value="([^"]*)"[^>]*selected/i.exec(selectMatch[1]);
+        const firstMatch = /<option[^>]*value="([^"]*)"/i.exec(selectMatch[1]);
+        node.value = decodeHtmlAttribute((selectedMatch || firstMatch || [null, ""])[1] || "");
+        return node;
+    }
+    return null;
+}
+
 function createHtmlElement() {
     let html = "";
     const cache = new Map();
+    const idCache = new Map();
     return {
+        id: "",
+        className: "",
         style: {},
         textContent: "",
         onclick: null,
@@ -508,15 +2032,28 @@ function createHtmlElement() {
         set innerHTML(value) {
             html = String(value);
             cache.clear();
+            idCache.clear();
         },
         querySelector(selector) {
             return this.querySelectorAll(selector)[0] || null;
         },
         querySelectorAll(selector) {
+            if (selector.includes(",")) {
+                return selector
+                    .split(",")
+                    .map(part => part.trim())
+                    .flatMap(part => this.querySelectorAll(part));
+            }
             if (!cache.has(selector)) {
                 cache.set(selector, parseNodes(html, selector));
             }
             return cache.get(selector);
+        },
+        getElementById(id) {
+            if (!idCache.has(id)) {
+                idCache.set(id, parseElementById(html, id));
+            }
+            return idCache.get(id);
         },
     };
 }
@@ -534,6 +2071,8 @@ export function createDomEnvironment() {
         ["observability-view", createBasicElement()],
         ["observability-btn", createBasicElement()],
     ]);
+    const appendedChildren = [];
+    globalThis.__bodyChildren = appendedChildren;
 
     return {
         body: {
@@ -541,6 +2080,13 @@ export function createDomEnvironment() {
                 remove() {
                     return undefined;
                 },
+            },
+            appendChild(node) {
+                appendedChildren.push(node);
+                if (node?.id) {
+                    elements.set(node.id, node);
+                }
+                return node;
             },
         },
         addEventListener() {
@@ -560,14 +2106,33 @@ export function createDomEnvironment() {
                 return toolbarMatch;
             }
             const content = elements.get("project-view-content");
-            return content?.querySelector(selector) || null;
+            const contentMatch = content?.querySelector(selector);
+            if (contentMatch) {
+                return contentMatch;
+            }
+            for (const child of appendedChildren) {
+                const match = child?.querySelector?.(selector);
+                if (match) {
+                    return match;
+                }
+            }
+            return null;
         },
         getElementById(id) {
             const element = elements.get(id);
-            if (!element) {
-                throw new Error(`Missing element: ${id}`);
+            if (element) {
+                return element;
             }
-            return element;
+            for (const child of appendedChildren) {
+                const match = child?.getElementById?.(id);
+                if (match) {
+                    return match;
+                }
+            }
+            throw new Error(`Missing element: ${id}`);
+        },
+        createElement() {
+            return createHtmlElement();
         },
     };
 }
@@ -602,8 +2167,20 @@ export async function enableAutomationProject() {
     return { status: "enabled" };
 }
 
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
 export async function fetchAutomationProject() {
     return null;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
 }
 
 export async function fetchAutomationFeishuBindings() {
@@ -615,6 +2192,26 @@ export async function fetchAutomationProjectSessions() {
 }
 
 export async function fetchWorkspaces() {
+    return [];
+}
+
+export async function fetchConfigStatus() {
+    return { skills: { skills: [] } };
+}
+
+export async function fetchOrchestrationConfig() {
+    return { presets: [] };
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [] };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
     return [];
 }
 
@@ -700,6 +2297,54 @@ export async function runAutomationProject() {
     return { status: "ok" };
 }
 
+export async function reloadSkillsConfig() {
+    return { status: "ok" };
+}
+
+export async function createTrigger() {
+    return { status: "ok" };
+}
+
+export async function updateTrigger() {
+    return { status: "ok" };
+}
+
+export async function deleteTrigger() {
+    return { status: "ok" };
+}
+
+export async function enableTrigger() {
+    return { status: "ok" };
+}
+
+export async function disableTrigger() {
+    return { status: "ok" };
+}
+
+export async function startWeChatGatewayLogin() {
+    return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" };
+}
+
+export async function waitWeChatGatewayLogin() {
+    return { connected: true };
+}
+
+export async function updateWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function enableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function disableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function deleteWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
 export async function updateAutomationProject() {
     return { status: "ok" };
 }
@@ -715,6 +2360,7 @@ export const state = {
     currentMainView: "session",
     currentProjectViewWorkspaceId: null,
     currentWorkspaceId: null,
+    currentFeatureViewId: null,
 };
 """.strip(),
         encoding="utf-8",
@@ -748,10 +2394,111 @@ export const state = {
         "workspace_view.feishu_chat": "Feishu chat",
         "workspace_view.chat_type": "Chat type",
         "workspace_view.delivery_help_feishu": "Automation updates will be pushed to the selected Feishu chat.",
+        "settings.action.delete": "Delete",
+        "settings.action.cancel": "Cancel",
+        "settings.system.skills_reloaded": "Skills Reloaded",
+        "settings.system.skills_reloaded_message": "Skills reloaded.",
+        "settings.system.reload_failed": "Reload Failed",
+        "settings.triggers.feishu_detail_copy": "Manage Feishu inbound accounts.",
+        "settings.triggers.none": "No Feishu triggers",
+        "settings.triggers.none_copy": "Add a Feishu trigger.",
+        "settings.triggers.trigger_name": "Trigger Name",
+        "settings.triggers.display_name": "Display Name",
+        "settings.triggers.workspace": "Workspace ID",
+        "settings.triggers.rule": "Trigger Rule",
+        "settings.triggers.saved": "Saved",
+        "settings.triggers.saved_message": "Feishu settings saved.",
+        "settings.triggers.save_failed": "Save failed",
+        "settings.triggers.bot_configuration": "Bot Configuration",
+        "settings.triggers.session_configuration": "Session Configuration",
+        "settings.triggers.feishu_app_name": "Feishu App Name",
+        "settings.triggers.feishu_app_name_placeholder": "Agent Teams Bot",
+        "settings.triggers.feishu_app_id": "Feishu App ID",
+        "settings.triggers.feishu_app_id_placeholder": "cli_xxx",
+        "settings.triggers.feishu_app_secret": "Feishu App Secret",
+        "settings.triggers.feishu_app_secret_placeholder": "App secret",
+        "settings.triggers.secret_keep_placeholder": "Configured. Leave blank to keep current value.",
+        "settings.triggers.no_workspaces": "No workspaces",
+        "settings.triggers.missing_name": "Trigger name is required.",
+        "settings.triggers.missing_workspace": "Workspace ID is required.",
+        "settings.triggers.missing_app_id": "App ID is required.",
+        "settings.triggers.missing_app_name": "App name is required.",
+        "settings.triggers.missing_app_secret": "App secret is required.",
+        "settings.triggers.missing_orchestration_preset_id": "Preset is required in orchestration mode.",
+        "settings.triggers.yolo": "YOLO",
+        "settings.triggers.thinking_enabled": "Thinking Enabled",
+        "settings.triggers.thinking_effort": "Thinking Effort",
+        "settings.roles.edit": "Edit",
+        "settings.triggers.delete_confirm_title": "Delete trigger",
+        "settings.triggers.delete_confirm_message": "Delete trigger {name}?",
+        "settings.triggers.deleted": "Deleted",
+        "settings.triggers.deleted_message": "Trigger deleted.",
+        "settings.gateway.connect_wechat": "Connect WeChat",
+        "settings.gateway.wechat_none": "No WeChat accounts",
+        "settings.gateway.wechat_none_copy": "Connect a WeChat account.",
+        "settings.gateway.qr_title": "Scan To Connect",
+        "settings.gateway.qr_copy": "Scan this QR code in WeChat.",
+        "settings.gateway.login_waiting": "Waiting for QR scan confirmation...",
+        "settings.gateway.login_failed": "WeChat login failed.",
+        "settings.gateway.login_success": "WeChat connected.",
+        "settings.gateway.status_running": "Running",
+        "settings.gateway.enable_account": "Enable account",
+        "settings.gateway.disable_account": "Disable account",
+        "settings.gateway.delete_confirm_title": "Delete account",
+        "settings.gateway.delete_confirm_message": "Delete account {name}?",
+        "settings.gateway.saved": "Saved",
+        "settings.gateway.saved_message": "WeChat account saved.",
+        "settings.gateway.save_failed": "Save failed",
+        "settings.gateway.deleted": "Deleted",
+        "settings.gateway.deleted_message": "WeChat account deleted.",
+        "feature.skills.title": "Skills",
+        "feature.skills.summary": "{count} skills available",
+        "feature.skills.empty": "No skills loaded",
+        "feature.skills.empty_copy": "Reload after updating the configured skill directories.",
+        "feature.skills.reload": "Reload Skills",
+        "feature.skills.scope_builtin": "Built-in",
+        "feature.skills.scope_app": "App",
+        "feature.skills.scope_unknown": "Skill",
+        "feature.automation.title": "Automation",
+        "feature.automation.summary": "{count} schedules",
+        "feature.automation.empty": "No automation projects",
+        "feature.automation.empty_copy": "Create a scheduled project.",
+        "feature.automation.create": "New Automation",
+        "feature.automation.select": "Select an automation project from the list.",
+        "feature.automation.create_first": "Create Automation",
+        "feature.gateway.title": "IM Gateway",
+        "feature.gateway.summary": "{feishu} Feishu · {wechat} WeChat",
+        "feature.gateway.add_feishu": "Add Robot",
+        "feature.gateway.feishu_section": "Feishu",
+        "feature.gateway.wechat_section": "WeChat",
+        "composer.no_roles": "No roles",
+        "composer.no_presets": "No presets",
+        "composer.mode_normal": "Normal Mode",
+        "composer.mode_orchestration": "Orchestration",
         "automation.field.workspace": "Workspace",
         "automation.workspace.directory": "Workspace directory",
+        "automation.workspace.missing": "Workspace missing",
         "automation.workspace.help": "Automation notifications are currently disabled.",
+        "automation.status.enabled": "Enabled",
+        "automation.status.disabled": "Disabled",
+        "automation.action.edit": "Edit",
+        "automation.action.run_now": "Run now",
+        "automation.action.disable": "Disable",
+        "automation.action.enable": "Enable",
+        "automation.detail.configuration": "Configuration",
+        "automation.detail.overview_copy": "Review schedule and recent runs.",
+        "automation.detail.schedule": "Schedule",
+        "automation.detail.timezone": "Timezone",
+        "automation.detail.next_run": "Next run",
+        "automation.detail.last_run": "Last run",
+        "automation.detail.updated_at": "Updated at",
+        "automation.detail.recent_runs": "Recent runs",
+        "automation.detail.no_runs": "No runs yet.",
+        "automation.detail.not_scheduled": "Not scheduled",
+        "automation.detail.never": "Never",
+        "automation.run_status.completed": "Completed",
         "sidebar.log.started_bound_session": "Started automation run in bound IM session: {session_id}",
+        "sidebar.log.started_automation_run": "Started automation run: {session_id}",
     };
 
 export function t(key) {
@@ -774,6 +2521,15 @@ export function sysLog() {
 export async function showFormDialog(options = {}) {
     globalThis.__showFormDialogCalls.push(options);
     return globalThis.__showFormDialogResult ?? null;
+}
+
+export async function showConfirmDialog() {
+    return true;
+}
+
+export function showToast(payload = {}) {
+    globalThis.__toastCalls = globalThis.__toastCalls || [];
+    globalThis.__toastCalls.push(payload);
 }
 """.strip(),
         encoding="utf-8",
@@ -829,6 +2585,7 @@ globalThis.__showFormDialogResult = null;
 globalThis.__showFormDialogCalls = [];
 globalThis.__dispatchedEvents = [];
 globalThis.__logs = [];
+globalThis.__toastCalls = [];
 globalThis.CustomEvent = class CustomEvent {{
     constructor(type, init = {{}}) {{
         this.type = type;

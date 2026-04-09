@@ -346,6 +346,267 @@ export async function runAutomationProject() {
     assert payload["iconCount"] == 1
 
 
+def test_projects_sidebar_marks_automation_sessions_with_icon_and_automation_class(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const firstSession = firstProject.querySelectorAll(".session-item")[0];
+const firstSessionLabel = firstProject.querySelectorAll(".session-id")[0].textContent;
+const iconCount = firstProject.querySelectorAll(".session-source-icon").length;
+
+console.log(JSON.stringify({
+    firstSessionClassName: firstSession.className,
+    firstSessionLabel,
+    iconCount,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-automation",
+        workspace_id: "alpha-project",
+        project_kind: "automation",
+        project_id: "aut_123",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        metadata: {
+            title: "Daily Briefing run 2026-03-14 18:30",
+        },
+    },
+    {
+        session_id: "session-plain",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:10:00Z",
+        pending_tool_approval_count: 0,
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    assert "session-item-automation" in str(payload["firstSessionClassName"])
+    assert payload["firstSessionLabel"] == "Daily Briefing run 2026-03-14 18:30"
+    assert payload["iconCount"] == 1
+
+
+def test_projects_sidebar_shows_both_automation_and_im_session_indicators(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const firstSession = firstProject.querySelectorAll(".session-item")[0];
+const iconCount = firstProject.querySelectorAll(".session-source-icon").length;
+
+console.log(JSON.stringify({
+    firstSessionClassName: firstSession.className,
+    iconCount,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-bound-im",
+        workspace_id: "alpha-project",
+        project_kind: "workspace",
+        project_id: "alpha-project",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        metadata: {
+            title: "Release Updates",
+            source_kind: "im",
+        },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [
+        {
+            automation_project_id: "aut_123",
+            display_name: "Daily Briefing",
+            name: "daily-briefing",
+            status: "enabled",
+            workspace_id: "alpha-project",
+            delivery_binding: {
+                provider: "feishu",
+                trigger_id: "trg_feishu",
+                tenant_key: "tenant-1",
+                chat_id: "oc_123",
+                session_id: "session-bound-im",
+                chat_type: "dm",
+            },
+        },
+    ];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    assert "session-item-im" in str(payload["firstSessionClassName"])
+    assert "session-item-automation" in str(payload["firstSessionClassName"])
+    assert payload["iconCount"] == 2
+
+
 def test_projects_sidebar_creates_automation_project_with_feishu_binding(
     tmp_path: Path,
 ) -> None:
@@ -359,17 +620,25 @@ import {
 
 installGlobals(createDomEnvironment());
 setSelectSessionHandler(async () => {});
-globalThis.__showFormDialogResult = {
+globalThis.__requestAutomationProjectInputResult = {
+    name: "daily-briefing",
     display_name: "Daily Briefing",
     workspace_id: "alpha-project",
     prompt: "Summarize the latest project changes.",
     cron_expression: "0 9 * * *",
-    timezone: "UTC",
+    schedule_mode: "cron",
+    timezone: "Asia/Shanghai",
     enabled: true,
-    delivery_binding_key: "trg_feishu::tenant-1::oc_123::session-im-1",
-    delivery_event_started: true,
-    delivery_event_completed: true,
-    delivery_event_failed: true,
+    delivery_binding: {
+        provider: "feishu",
+        trigger_id: "trg_feishu",
+        tenant_key: "tenant-1",
+        chat_id: "oc_123",
+        session_id: "session-im-1",
+        chat_type: "group",
+        source_label: "Release Updates",
+    },
+    delivery_events: ["started", "completed", "failed"],
 };
 
 await handleNewAutomationProjectClick();
@@ -378,7 +647,7 @@ await flushTasks();
 
 console.log(JSON.stringify({
     createPayload: globalThis.__createAutomationPayload,
-    formOptions: globalThis.__showFormDialogCalls[0],
+    requestAutomationCalls: globalThis.__requestAutomationProjectInputCalls,
     runCalls: globalThis.__runAutomationProjectCalls || null,
 }));
 """.strip(),
@@ -480,16 +749,6 @@ export async function runAutomationProject(projectId) {
     create_payload = cast(dict[str, object], payload["createPayload"])
     delivery_binding = cast(dict[str, object], create_payload["delivery_binding"])
     delivery_events = cast(list[object], create_payload["delivery_events"])
-    form_options = cast(dict[str, object], payload["formOptions"])
-    binding_options = cast(
-        list[dict[str, object]],
-        next(
-            cast(list[dict[str, object]], field["options"])
-            for field in cast(list[dict[str, object]], form_options["fields"])
-            if field["id"] == "delivery_binding_key"
-        ),
-    )
-
     assert delivery_binding["trigger_id"] == "trg_feishu"
     assert delivery_binding["chat_id"] == "oc_123"
     assert delivery_binding["session_id"] == "session-im-1"
@@ -498,12 +757,12 @@ export async function runAutomationProject(projectId) {
         "completed",
         "failed",
     ]
-    assert binding_options[1]["label"] == "feishu_main - Release Updates"
-    assert binding_options[1]["description"] == "Feishu Main - group"
+    assert create_payload["timezone"] == "Asia/Shanghai"
+    assert payload["requestAutomationCalls"] == [{}]
     assert payload["runCalls"] is None
 
 
-def test_projects_sidebar_aliases_reused_im_session_into_automation_group(
+def test_projects_sidebar_renders_feature_navigation_ahead_of_workspace_cards(
     tmp_path: Path,
 ) -> None:
     payload = _run_sidebar_script(
@@ -516,14 +775,16 @@ import {
 installGlobals(createDomEnvironment());
 
 await loadProjects();
-const projectCards = document.getElementById("projects-list").children.filter(child => String(child.className || "").includes("project-card"));
-const workspaceCard = projectCards.find(child => child.querySelector(".project-title")?.textContent === "Alpha Project");
-const automationCard = projectCards.find(child => child.querySelector(".project-title")?.textContent === "Daily Briefing");
+const children = document.getElementById("projects-list").children;
+const featureSection = children[0];
+const projectCards = children.filter(child => String(child.className || "").includes("project-card"));
+const featureItems = featureSection.querySelectorAll(".home-feature-item");
 
 console.log(JSON.stringify({
-    workspaceSessionCount: workspaceCard?.querySelectorAll(".session-item").length || 0,
-    automationSessionCount: automationCard?.querySelectorAll(".session-item").length || 0,
-    automationFirstSessionLabel: automationCard?.querySelectorAll(".session-id")[0]?.textContent || "",
+    firstChildClassName: featureSection?.className || "",
+    featureCount: featureItems.length,
+    featureIds: featureItems.map(item => item.getAttribute("data-feature-id")),
+    workspaceCardCount: projectCards.length,
 }));
 """.strip(),
         mock_api_source="""
@@ -563,21 +824,6 @@ export async function fetchSessions() {
     return sessions;
 }
 
-export async function fetchAutomationProjects() {
-    return [
-        {
-            automation_project_id: "aut_1",
-            display_name: "Daily Briefing",
-            name: "daily-briefing",
-            status: "enabled",
-            workspace_id: "alpha-project",
-            last_session_id: "session-im-1",
-            updated_at: "2026-03-14T10:12:00Z",
-            last_run_started_at: "2026-03-14T10:12:00Z",
-        },
-    ];
-}
-
 export async function fetchAutomationFeishuBindings() {
     return [];
 }
@@ -628,12 +874,24 @@ export async function runAutomationProject() {
 """.strip(),
     )
 
-    assert payload["workspaceSessionCount"] == 1
-    assert payload["automationSessionCount"] == 1
-    assert payload["automationFirstSessionLabel"] == "feishu_main - Release Updates"
+    assert payload["firstChildClassName"] == "home-feature-section"
+    assert payload["featureCount"] == 3
+    assert payload["featureIds"] == ["skills", "automation", "gateway"]
+    assert payload["workspaceCardCount"] == 1
 
 
-def test_projects_sidebar_keeps_automation_view_for_reused_bound_session_run(
+def test_projects_sidebar_uses_distinct_feature_icon_variants() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    sidebar_source = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
+    ).read_text(encoding="utf-8")
+
+    assert "home-feature-icon-svg-skills" in sidebar_source
+    assert "home-feature-icon-svg-automation" in sidebar_source
+    assert "home-feature-icon-svg-gateway" in sidebar_source
+
+
+def test_projects_sidebar_opens_home_feature_views_from_feature_navigation(
     tmp_path: Path,
 ) -> None:
     payload = _run_sidebar_script(
@@ -641,25 +899,23 @@ def test_projects_sidebar_keeps_automation_view_for_reused_bound_session_run(
         runner_source="""
 import {
     loadProjects,
-    setSelectSessionHandler,
 } from "./sidebar.mjs";
 
 installGlobals(createDomEnvironment());
-setSelectSessionHandler(async (sessionId) => {
-    globalThis.__selectedSessionIds.push(sessionId);
-});
 
 await loadProjects();
-const projectCards = document.getElementById("projects-list").children.filter(child => String(child.className || "").includes("project-card"));
-const automationCard = projectCards.find(child => child.querySelector(".project-title")?.textContent === "Daily Briefing");
-automationCard?.querySelector(".project-new-session-btn")?.onclick?.();
+const featureSection = document.getElementById("projects-list").children[0];
+const featureItems = featureSection.querySelectorAll(".home-feature-item");
+featureItems[0]?.onclick?.();
+featureItems[1]?.onclick?.();
+featureItems[2]?.onclick?.();
 await flushTasks();
 await flushTasks();
 
 console.log(JSON.stringify({
-    selectedSessionIds: globalThis.__selectedSessionIds,
+    openedSkillsFeatureCount: globalThis.__openedSkillsFeatureCount || 0,
     openedAutomationProjectIds: globalThis.__openedAutomationProjectIds,
-    logs: globalThis.__logs,
+    openedGatewayFeatureCount: globalThis.__openedGatewayFeatureCount || 0,
 }));
 """.strip(),
         mock_api_source="""
@@ -681,30 +937,7 @@ export async function fetchWorkspaces() {
 }
 
 export async function fetchSessions() {
-    return [
-        {
-            session_id: "session-im-1",
-            workspace_id: "alpha-project",
-            updated_at: "2026-03-14T10:11:00Z",
-            pending_tool_approval_count: 0,
-            metadata: { title: "feishu_main - Release Updates", source_kind: "im" },
-        },
-    ];
-}
-
-export async function fetchAutomationProjects() {
-    return [
-        {
-            automation_project_id: "aut_1",
-            display_name: "Daily Briefing",
-            name: "daily-briefing",
-            status: "enabled",
-            workspace_id: "alpha-project",
-            last_session_id: "session-im-1",
-            updated_at: "2026-03-14T10:12:00Z",
-            last_run_started_at: "2026-03-14T10:12:00Z",
-        },
-    ];
+    return [];
 }
 
 export async function fetchAutomationFeishuBindings() {
@@ -750,24 +983,50 @@ export async function disableAutomationProject() {
 export async function enableAutomationProject() {
     return { status: "ok" };
 }
-
-export async function runAutomationProject() {
-    return {
-        automation_project_id: "aut_1",
-        session_id: "session-im-1",
-        run_id: "run-1",
-        queued: true,
-        reused_bound_session: true,
-    };
-}
 """.strip(),
     )
 
-    assert payload["selectedSessionIds"] == []
-    assert payload["openedAutomationProjectIds"] == ["aut_1"]
-    assert payload["logs"] == [
-        "Queued automation run in bound IM session: session-im-1"
-    ]
+    assert payload["openedSkillsFeatureCount"] == 1
+    assert payload["openedAutomationProjectIds"] == [""]
+    assert payload["openedGatewayFeatureCount"] == 1
+
+
+def test_projects_sidebar_primary_new_session_opens_workspace_picker_for_multiple_workspaces(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+    setSelectSessionHandler,
+} from "./sidebar.mjs";
+import { state } from "./mockState.mjs";
+
+installGlobals(createDomEnvironment());
+setSelectSessionHandler(async (sessionId) => {
+    globalThis.__selectedSessionIds.push(sessionId);
+});
+state.currentWorkspaceId = null;
+globalThis.__showFormDialogResult = { workspace_id: "beta-project" };
+
+await loadProjects();
+const featureSection = document.getElementById("projects-list").children[0];
+featureSection.querySelector(".home-new-session-btn").onclick();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    createdSessionWorkspaceIds: globalThis.__createdSessionWorkspaceIds,
+    selectedSessionIds: globalThis.__selectedSessionIds,
+    showFormDialogTitles: globalThis.__showFormDialogCalls.map(item => item.title),
+}));
+""".strip(),
+    )
+
+    assert payload["createdSessionWorkspaceIds"] == ["beta-project"]
+    assert payload["selectedSessionIds"] == ["session-new-1"]
+    assert payload["showFormDialogTitles"] == ["New conversation"]
 
 
 def test_projects_sidebar_forks_project_and_can_keep_worktree_on_remove(
@@ -1072,8 +1331,10 @@ function decodeHtmlAttribute(value) {
 
 function parseElements(source, selector) {
     const results = [];
-    const patterns = {
-        ".project-toggle": /class="project-toggle"[^>]*aria-expanded="([^"]+)"[^>]*>/g,
+        const patterns = {
+            ".home-feature-item": /class="([^"]*home-feature-item[^"]*)"[^>]*data-feature-id="([^"]+)"[^>]*>/g,
+            ".home-new-session-btn": /class="([^"]*home-new-session-btn[^"]*)"[^>]*>/g,
+            ".project-toggle": /class="project-toggle"[^>]*aria-expanded="([^"]+)"[^>]*>/g,
         ".project-title-btn": /class="([^"]*project-title-btn[^"]*)"[^>]*aria-current="([^"]+)"[^>]*>/g,
         ".project-options-btn": /class="([^"]*project-options-btn[^"]*)"[^>]*>/g,
         ".project-new-session-btn": /class="([^"]*project-new-session-btn[^"]*)"[^>]*>/g,
@@ -1083,7 +1344,7 @@ function parseElements(source, selector) {
         ".session-rename-btn": /class="session-rename-btn"[^>]*data-session-id="([^"]+)"[^>]*data-session-metadata="([^"]*)"[^>]*>/g,
         ".session-delete-btn": /class="session-delete-btn"[^>]*data-session-id="([^"]+)"[^>]*>/g,
         ".session-item": /class="([^"]*session-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-workspace-id="([^"]+)"[^>]*>/g,
-        ".session-source-icon": /class="session-source-icon"[^>]*>/g,
+        ".session-source-icon": /class="[^"]*session-source-icon[^"]*"[^>]*>/g,
         ".project-title": /class="project-title"[^>]*>([\s\S]*?)<\/span>/g,
         ".session-id": /class="session-id"[^>]*>([\s\S]*?)<\/span>\s*<span class="session-meta"/g,
     };
@@ -1093,7 +1354,16 @@ function parseElements(source, selector) {
     }
     let match = pattern.exec(source);
     while (match) {
-        if (selector === ".project-toggle") {
+        if (selector === ".home-feature-item") {
+            results.push(createNode({
+                className: match[1],
+                attributes: {
+                    "data-feature-id": match[2],
+                },
+            }));
+        } else if (selector === ".home-new-session-btn") {
+            results.push(createNode({ className: match[1] }));
+        } else if (selector === ".project-toggle") {
             results.push(createNode({ attributes: { "aria-expanded": match[1] } }));
         } else if (selector === ".project-title-btn") {
             results.push(createNode({
@@ -1324,6 +1594,12 @@ const translations = {
     "sidebar.sort_name": "Sort by name",
     "sidebar.sort_recent": "Sort by recent",
     "sidebar.new_project": "New project",
+    "sidebar.new_session_primary": "New conversation",
+    "sidebar.feature_navigation": "Feature navigation",
+    "sidebar.feature_skills": "Skills",
+    "sidebar.feature_automation": "Automation",
+    "sidebar.feature_gateway": "IM Gateway",
+    "sidebar.select_workspace_for_session": "Choose a workspace for the new session.",
     "sidebar.new_automation": "New automation",
     "sidebar.fork": "Fork",
     "sidebar.remove": "Remove",
@@ -1517,8 +1793,19 @@ export async function runAutomationProject() {
     throw new Error("not used");
 }
 """.strip()
+    resolved_mock_api_source = mock_api_source or default_mock_api_source
+    if (
+        "export async function fetchAutomationProjects()"
+        not in resolved_mock_api_source
+    ):
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function fetchAutomationProjects() {\n"
+            "    return [];\n"
+            "}\n"
+        )
     mock_api_path.write_text(
-        (mock_api_source or default_mock_api_source),
+        resolved_mock_api_source,
         encoding="utf-8",
     )
 
@@ -1591,8 +1878,23 @@ export async function openWorkspaceProjectView(workspace) {
     state.currentWorkspaceId = workspace.workspace_id;
 }
 
-export async function openAutomationProjectView(project) {
-    globalThis.__openedAutomationProjectIds.push(project.automation_project_id);
+export async function openAutomationHomeView(projectId = "") {
+    globalThis.__openedAutomationProjectIds.push(projectId || "");
+    state.currentMainView = "project";
+}
+
+export async function requestAutomationProjectInput(project = {}) {
+    globalThis.__requestAutomationProjectInputCalls.push(project);
+    return globalThis.__requestAutomationProjectInputResult ?? null;
+}
+
+export async function openImFeatureView() {
+    globalThis.__openedGatewayFeatureCount = (globalThis.__openedGatewayFeatureCount || 0) + 1;
+    state.currentMainView = "project";
+}
+
+export async function openSkillsFeatureView() {
+    globalThis.__openedSkillsFeatureCount = (globalThis.__openedSkillsFeatureCount || 0) + 1;
     state.currentMainView = "project";
 }
 
@@ -1639,6 +1941,8 @@ globalThis.__openedAutomationProjectIds = [];
 globalThis.__hideProjectViewCalls = 0;
 globalThis.__showFormDialogResult = null;
 globalThis.__showFormDialogCalls = [];
+globalThis.__requestAutomationProjectInputResult = null;
+globalThis.__requestAutomationProjectInputCalls = [];
 installGlobals(createDomEnvironment());
 
 {runner_source}

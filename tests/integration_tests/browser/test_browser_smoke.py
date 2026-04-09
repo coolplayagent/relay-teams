@@ -204,7 +204,7 @@ def test_browser_shell_settings_and_session_management(
     _emit_gateway_observability_probe()
     _open_app(page, integration_env)
 
-    baseline_session_ids = set(_session_ids(page))
+    baseline_session_ids = _wait_for_session_ids_snapshot(page)
     session_id = _create_session_via_sidebar(page)
     renamed_title = "Browser Smoke Session"
 
@@ -279,12 +279,10 @@ def test_browser_shell_settings_and_session_management(
     for tab_name in (
         "appearance",
         "model",
-        "skills",
         "mcp",
         "agents",
         "roles",
         "orchestration",
-        "triggers",
         "notifications",
         "web",
         "github",
@@ -295,6 +293,8 @@ def test_browser_shell_settings_and_session_management(
         expect(page.locator(f"#{tab_name}-panel")).to_be_visible(
             timeout=_WAIT_TIMEOUT_MS
         )
+    expect(page.locator('.settings-tab[data-tab="skills"]')).to_have_count(0)
+    expect(page.locator('.settings-tab[data-tab="triggers"]')).to_have_count(0)
 
     page.locator('.settings-tab[data-tab="model"]').click()
     with page.expect_request(
@@ -310,16 +310,54 @@ def test_browser_shell_settings_and_session_management(
         timeout=_WAIT_TIMEOUT_MS,
     )
 
-    page.locator('.settings-tab[data-tab="skills"]').click()
+    page.locator("#settings-close").click()
+    expect(page.locator("#settings-modal")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
+
+    page.locator('.home-feature-item[data-feature-id="skills"]').click()
+    expect(page.locator("#project-view")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    expect(
+        page.locator(".project-view-toolbar-actions [data-project-view-reload]")
+    ).to_have_count(
+        0,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+
+    feishu_name = f"feishu-main-{uuid4().hex[:6]}"
     with page.expect_request(
         lambda request: (
             request.method == "POST"
             and request.url
-            == f"{integration_env.api_base_url}/api/system/configs/skills:reload"
+            == f"{integration_env.api_base_url}/api/gateway/feishu/accounts"
         )
-    ):
-        page.locator("#reload-skills-btn").click()
+    ) as create_feishu_request_info:
+        page.locator('.home-feature-item[data-feature-id="gateway"]').click()
+        expect(page.locator("#project-view-title")).to_contain_text(
+            re.compile(r"(IM Gateway|IM 接入)"),
+            timeout=_WAIT_TIMEOUT_MS,
+        )
+        page.locator("[data-feature-gateway-add-feishu]").click()
+        expect(page.locator("#feishu-trigger-name-input")).to_be_visible(
+            timeout=_WAIT_TIMEOUT_MS
+        )
+        page.locator("#feishu-trigger-name-input").fill(feishu_name)
+        page.locator("#feishu-display-name-input").fill("Feishu Main")
+        page.locator("#feishu-app-name-input").fill("Agent Teams Bot")
+        page.locator("#feishu-app-id-input").fill("cli_test")
+        page.locator("#feishu-app-secret-input").fill("secret_test")
+        page.locator("[data-feature-feishu-save]").click()
+    create_feishu_payload = json.loads(
+        create_feishu_request_info.value.post_data or "{}"
+    )
+    assert create_feishu_payload["name"] == feishu_name
+    assert create_feishu_payload["source_config"]["provider"] == "feishu"
+    assert create_feishu_payload["source_config"]["app_id"] == "cli_test"
+    expect(page.locator("#feishu-trigger-name-input")).to_have_count(
+        0,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
 
+    page.locator("#settings-btn").click()
+    expect(page.locator("#settings-modal")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
     page.locator('.settings-tab[data-tab="mcp"]').click()
     with page.expect_request(
         lambda request: (
@@ -332,6 +370,9 @@ def test_browser_shell_settings_and_session_management(
 
     page.locator("#settings-close").click()
     expect(page.locator("#settings-modal")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
+    page.locator("#project-view-close").click()
+    expect(page.locator("#project-view")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
+    page.locator(f'.session-item[data-session-id="{session_id}"]').click()
 
     with page.expect_request(
         lambda request: (
@@ -411,7 +452,7 @@ def test_browser_shell_settings_and_session_management(
     expect(
         page.locator(f'.session-item[data-session-id="{session_id}"]')
     ).to_have_count(0, timeout=_WAIT_TIMEOUT_MS)
-    assert set(_session_ids(page)) == baseline_session_ids
+    assert _wait_for_session_ids_snapshot(page) == baseline_session_ids
 
 
 def test_browser_environment_variables_and_session_topology(
@@ -1427,33 +1468,34 @@ def test_browser_workspace_and_automation_project_views(
             and request.url == f"{integration_env.api_base_url}/api/automation/projects"
         )
     ) as create_automation_request_info:
-        page.locator(".projects-toolbar-new-automation-btn").click()
-        expect(page.locator('[data-feedback-form-input="display_name"]')).to_be_visible(
+        page.locator('.home-feature-item[data-feature-id="automation"]').click()
+        expect(page.locator("#project-view")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+        page.locator(
+            ".project-view-toolbar-actions [data-feature-automation-create]"
+        ).click()
+        expect(page.locator("#automation-editor-display-name-input")).to_be_visible(
             timeout=_WAIT_TIMEOUT_MS
         )
-        expect(
-            page.locator(
-                '[data-feedback-form-input="workspace_id"] option[value="default"]'
-            )
-        ).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
-        page.locator('[data-feedback-form-input="display_name"]').fill(automation_name)
-        page.locator('[data-feedback-form-input="workspace_id"]').select_option(
-            "default"
-        )
-        page.locator('[data-feedback-form-input="prompt"]').fill(automation_prompt)
-        page.locator('[data-feedback-form-input="cron_expression"]').fill("0 9 * * *")
-        page.locator("[data-feedback-confirm]").click()
+        page.locator("#automation-editor-display-name-input").fill(automation_name)
+        page.locator("#automation-editor-workspace-id-input").select_option("default")
+        page.locator("#automation-editor-prompt-input").fill(automation_prompt)
+        page.locator("#automation-editor-schedule-kind-input").select_option("weekdays")
+        page.locator("#automation-editor-time-input").fill("09:00")
+        page.locator("[data-automation-editor-save]").click()
     create_automation_payload = json.loads(
         create_automation_request_info.value.post_data or "{}"
     )
     assert create_automation_payload["display_name"] == automation_name
     assert create_automation_payload["workspace_id"] == "default"
     assert create_automation_payload["prompt"] == automation_prompt
-    expect(_project_card(page, automation_name, automation=True)).to_be_visible(
-        timeout=_WAIT_TIMEOUT_MS
-    )
+    assert create_automation_payload["cron_expression"] == "0 9 * * 1-5"
+    assert create_automation_payload["timezone"] == "Asia/Shanghai"
+    expect(
+        page.locator("[data-automation-home-project-id]").filter(
+            has_text=automation_name
+        )
+    ).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
 
-    automation_card = _project_card(page, automation_name, automation=True)
     with page.expect_request(
         lambda request: (
             request.method == "GET"
@@ -1461,13 +1503,15 @@ def test_browser_workspace_and_automation_project_views(
             and not request.url.endswith("/sessions")
         )
     ):
-        automation_card.locator(".project-title-btn").click()
+        page.locator("[data-automation-home-project-id]").filter(
+            has_text=automation_name
+        ).click()
     expect(page.locator("#project-view")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
     expect(page.locator("#project-view-title")).to_contain_text(
-        automation_name,
+        re.compile(r"(Automation|自动化)"),
         timeout=_WAIT_TIMEOUT_MS,
     )
-    expect(page.locator(".automation-prompt-card")).to_contain_text(
+    expect(page.locator(".automation-prompt-inline")).to_contain_text(
         automation_prompt,
         timeout=_WAIT_TIMEOUT_MS,
     )
@@ -1476,16 +1520,28 @@ def test_browser_workspace_and_automation_project_views(
         timeout=_WAIT_TIMEOUT_MS,
     )
 
+    toggle_label = page.locator("[data-automation-toggle]").text_content() or ""
+    expected_first_suffix = (
+        ":disable" if re.search(r"(Disable|停用)", toggle_label) else ":enable"
+    )
+    expected_second_pattern = (
+        re.compile(r"(Enable|启用)")
+        if expected_first_suffix == ":disable"
+        else re.compile(r"(Disable|停用)")
+    )
+    expected_second_suffix = (
+        ":enable" if expected_first_suffix == ":disable" else ":disable"
+    )
     with page.expect_request(
         lambda request: (
             request.method == "POST"
             and "/api/automation/projects/" in request.url
-            and request.url.endswith(":disable")
+            and request.url.endswith(expected_first_suffix)
         )
     ):
-        page.locator("[data-automation-toggle]").evaluate("(button) => button.click()")
+        page.locator("[data-automation-toggle]").click()
     expect(page.locator("[data-automation-toggle]")).to_contain_text(
-        re.compile(r"(Enable|启用)"),
+        expected_second_pattern,
         timeout=_WAIT_TIMEOUT_MS,
     )
 
@@ -1493,10 +1549,10 @@ def test_browser_workspace_and_automation_project_views(
         lambda request: (
             request.method == "POST"
             and "/api/automation/projects/" in request.url
-            and request.url.endswith(":enable")
+            and request.url.endswith(expected_second_suffix)
         )
     ):
-        page.locator("[data-automation-toggle]").evaluate("(button) => button.click()")
+        page.locator("[data-automation-toggle]").click()
 
     session_ids_before_run = set(_session_ids(page))
     with page.expect_request(
@@ -1508,28 +1564,35 @@ def test_browser_workspace_and_automation_project_views(
     ):
         page.locator("[data-automation-run]").click()
     new_session_id = _wait_for_new_session_id(page, session_ids_before_run)
-    expect(page.locator(".session-item.active")).to_have_attribute(
-        "data-session-id",
-        new_session_id,
+    expect(
+        page.locator(f'.session-item[data-session-id="{new_session_id}"]')
+    ).to_have_count(
+        1,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(page.locator("#project-view-title")).to_contain_text(
+        re.compile(r"(Automation|自动化)"),
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(page.locator("[data-automation-delete]")).to_be_visible(
         timeout=_WAIT_TIMEOUT_MS,
     )
 
-    automation_card = _project_card(page, automation_name, automation=True)
     with page.expect_request(
         lambda request: (
             request.method == "DELETE" and "/api/automation/projects/" in request.url
         )
     ):
-        automation_card.locator(".project-options-btn").click(force=True)
-        expect(automation_card.locator(".project-remove-automation-btn")).to_be_visible(
-            timeout=_WAIT_TIMEOUT_MS
-        )
-        automation_card.locator(".project-remove-automation-btn").click()
+        page.locator("[data-automation-delete]").click(force=True)
         expect(page.locator('[role="alertdialog"]')).to_be_visible(
             timeout=_WAIT_TIMEOUT_MS
         )
         page.locator("[data-feedback-confirm]").click()
-    expect(_project_card(page, automation_name, automation=True)).to_have_count(
+    expect(
+        page.locator("[data-automation-home-project-id]").filter(
+            has_text=automation_name
+        )
+    ).to_have_count(
         0,
         timeout=_WAIT_TIMEOUT_MS,
     )
@@ -1611,6 +1674,25 @@ def _wait_for_new_session_id(page: Page, existing_session_ids: set[str]) -> str:
             return new_session_ids[0]
         page.wait_for_timeout(200)
     raise AssertionError("Timed out waiting for a new session to appear in the UI.")
+
+
+def _wait_for_session_ids_snapshot(
+    page: Page, *, timeout_seconds: float = 15.0
+) -> set[str]:
+    deadline = time.monotonic() + timeout_seconds
+    previous_snapshot: set[str] | None = None
+    stable_count = 0
+    while time.monotonic() < deadline:
+        current_snapshot = set(_session_ids(page))
+        if current_snapshot == previous_snapshot:
+            stable_count += 1
+            if stable_count >= 2:
+                return current_snapshot
+        else:
+            previous_snapshot = current_snapshot
+            stable_count = 0
+        page.wait_for_timeout(200)
+    raise AssertionError("Timed out waiting for the session list to stabilize.")
 
 
 def _wait_for_open_tool_approvals(

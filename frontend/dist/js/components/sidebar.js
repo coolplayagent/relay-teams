@@ -1,6 +1,6 @@
 /**
  * components/sidebar.js
- * Renders the left rail as a project tree grouped by workspace and automation projects.
+ * Renders the left rail as a home-first navigation shell with feature entries and workspace sessions.
  */
 import { els } from '../utils/dom.js';
 import { showConfirmDialog, showFormDialog, showTextInputDialog } from '../utils/feedback.js';
@@ -12,13 +12,11 @@ import {
     deleteWorkspace,
     disableAutomationProject,
     enableAutomationProject,
-    fetchAutomationFeishuBindings,
     fetchAutomationProjects,
     fetchSessions,
     fetchWorkspaces,
     forkWorkspace,
     pickWorkspace,
-    runAutomationProject,
     startNewSession,
     updateSession,
 } from '../core/api.js';
@@ -29,10 +27,22 @@ import { clearAllStreamState } from './messageRenderer.js';
 import { clearAllPanels } from './agentPanel.js';
 import { clearContextIndicators } from './contextIndicators.js';
 import { formatMessage, t } from '../utils/i18n.js';
-import { hideProjectView, openAutomationProjectView, openWorkspaceProjectView } from './projectView.js';
+import {
+    hideProjectView,
+    openAutomationHomeView,
+    openImFeatureView,
+    openSkillsFeatureView,
+    openWorkspaceProjectView,
+    requestAutomationProjectInput as requestAutomationProjectEditorInput,
+} from './projectView.js';
 
 const DEFAULT_VISIBLE_SESSION_COUNT = 10;
 const AUTOMATION_INTERNAL_WORKSPACE_ID = 'automation-system';
+const FEATURE_IDS = Object.freeze({
+    skills: 'skills',
+    automation: 'automation',
+    gateway: 'gateway',
+});
 
 let selectSessionHandler = null;
 let refreshTimer = null;
@@ -40,6 +50,7 @@ const expandedProjectIds = new Set();
 const expandedProjectSessionIds = new Set();
 const initializedProjectIds = new Set();
 const sessionWorkspaceMap = new Map();
+const automationBoundSessionIds = new Set();
 let projectSortMode = 'recent';
 let openProjectMenuId = null;
 let projectMenuDismissBound = false;
@@ -114,22 +125,65 @@ function formatSessionLabel(session) {
     return String(session?.session_id || 'Session');
 }
 
+function isAutomationSession(session) {
+    const sessionId = String(session?.session_id || '').trim();
+    return (
+        String(session?.project_kind || '').trim() === 'automation'
+        || (sessionId && automationBoundSessionIds.has(sessionId))
+    );
+}
+
 function isImSession(session) {
     return String(getSessionMetadata(session).source_kind || '').trim() === 'im';
 }
 
+function getSessionSourceKinds(session) {
+    const sourceKinds = [];
+    if (isAutomationSession(session)) {
+        sourceKinds.push('automation');
+    }
+    if (isImSession(session)) {
+        sourceKinds.push('im');
+    }
+    return sourceKinds;
+}
+
+function renderSingleSessionSourceIcon(sourceKind) {
+    if (sourceKind === 'im') {
+        return `
+            <span class="session-source-icon session-source-icon-im" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none" class="icon-sm">
+                    <path d="M3.25 4.5a2.25 2.25 0 0 1 2.25-2.25h5a2.25 2.25 0 0 1 2.25 2.25v3a2.25 2.25 0 0 1-2.25 2.25H7.4L4.8 11.9a.45.45 0 0 1-.75-.33V9.75h-.55A2.25 2.25 0 0 1 1.25 7.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+                    <path d="M5.1 5.95h5.8M5.1 7.85h3.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                </svg>
+            </span>
+        `;
+    }
+    if (sourceKind === 'automation') {
+        return `
+            <span class="session-source-icon session-source-icon-automation" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none" class="icon-sm">
+                    <rect x="2.15" y="2.15" width="11.7" height="11.7" rx="2.35" stroke="currentColor" stroke-width="1.3"/>
+                    <path d="M5 8h2l1-2.2L9.45 10 10.6 8H12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </span>
+        `;
+    }
+    return '';
+}
+
 function renderSessionSourceIcon(session) {
-    if (!isImSession(session)) {
+    return getSessionSourceKinds(session)
+        .map(sourceKind => renderSingleSessionSourceIcon(sourceKind))
+        .join('');
+}
+
+function getSessionSourceClassName(session) {
+    const sourceKinds = getSessionSourceKinds(session);
+    if (sourceKinds.length === 0) {
         return '';
     }
-    return `
-        <span class="session-source-icon" aria-hidden="true">
-            <svg viewBox="0 0 16 16" fill="none" class="icon-sm">
-                <path d="M3.25 4.5a2.25 2.25 0 0 1 2.25-2.25h5a2.25 2.25 0 0 1 2.25 2.25v3a2.25 2.25 0 0 1-2.25 2.25H7.4L4.8 11.9a.45.45 0 0 1-.75-.33V9.75h-.55A2.25 2.25 0 0 1 1.25 7.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
-                <path d="M5.1 5.95h5.8M5.1 7.85h3.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-            </svg>
-        </span>
-    `;
+    return ` ${sourceKinds.map(sourceKind => `session-item-${sourceKind}`).join(' ')}`;
 }
 
 function timestampValue(value) {
@@ -230,51 +284,22 @@ function groupKey(kind, id) {
 }
 
 function sessionGroupKey(session) {
-    const projectKind = String(session?.project_kind || '').trim().toLowerCase();
-    const projectId = String(session?.project_id || '').trim();
-    if (projectKind === 'automation' && projectId) {
-        return groupKey('automation', projectId);
-    }
     const workspaceId = String(session?.workspace_id || '').trim();
     return workspaceId ? groupKey('workspace', workspaceId) : '';
 }
 
-function mergeAutomationProjectSessions(project, groupedSessions, sessionsById) {
-    const automationProjectId = String(project?.automation_project_id || '').trim();
-    const mergedSessions = Array.isArray(groupedSessions) ? [...groupedSessions] : [];
-    const seenSessionIds = new Set(
-        mergedSessions.map(session => String(session?.session_id || '').trim()).filter(Boolean),
-    );
-    const lastSessionId = String(project?.last_session_id || '').trim();
-    if (!automationProjectId || !lastSessionId || seenSessionIds.has(lastSessionId)) {
-        return mergedSessions;
-    }
-    const aliasedSession = sessionsById.get(lastSessionId);
-    if (!aliasedSession) {
-        return mergedSessions;
-    }
-    mergedSessions.push({
-        ...aliasedSession,
-        project_kind: 'automation',
-        project_id: automationProjectId,
-    });
-    return mergedSessions;
-}
-
-function buildProjectGroups(workspaces, automationProjects, sessions) {
+function buildProjectGroups(workspaces, sessions) {
     const sessionsByGroup = new Map();
-    const sessionsById = new Map();
     sessionWorkspaceMap.clear();
 
     sessions.forEach(session => {
         const sessionId = String(session?.session_id || '').trim();
-        if (sessionId) {
-            sessionsById.set(sessionId, session);
-        }
         const key = sessionGroupKey(session);
         if (!key) return;
         const workspaceId = String(session?.workspace_id || '').trim();
-        if (workspaceId) sessionWorkspaceMap.set(session.session_id, workspaceId);
+        if (workspaceId && sessionId) {
+            sessionWorkspaceMap.set(sessionId, workspaceId);
+        }
         if (!sessionsByGroup.has(key)) sessionsByGroup.set(key, []);
         sessionsByGroup.get(key).push(session);
     });
@@ -296,28 +321,6 @@ function buildProjectGroups(workspaces, automationProjects, sessions) {
             workspace,
             sessions: projectSessions,
             latestUpdatedAt: Math.max(timestampValue(workspace.updated_at), timestampValue(projectSessions[0]?.updated_at)),
-        });
-    });
-    automationProjects.forEach(project => {
-        const id = String(project?.automation_project_id || '').trim();
-        if (!id) return;
-        const key = groupKey('automation', id);
-        const projectSessions = mergeAutomationProjectSessions(
-            project,
-            Array.from(sessionsByGroup.get(key) || []),
-            sessionsById,
-        ).sort((a, b) => timestampValue(b.updated_at) - timestampValue(a.updated_at));
-        if (!initializedProjectIds.has(key)) {
-            initializedProjectIds.add(key);
-            expandedProjectIds.add(key);
-        }
-        groups.push({
-            kind: 'automation',
-            id,
-            key,
-            project,
-            sessions: projectSessions,
-            latestUpdatedAt: Math.max(timestampValue(project.updated_at), timestampValue(project.last_run_started_at), timestampValue(projectSessions[0]?.updated_at)),
         });
     });
 
@@ -367,12 +370,6 @@ function renderProjectsToolbar() {
     toolbar.innerHTML = `
         <div class="projects-toolbar-title">${escapeHtml(t('sidebar.workspace'))}</div>
         <div class="projects-toolbar-actions">
-            <button class="sidebar-header-btn projects-toolbar-new-automation-btn" type="button" title="${escapeHtml(t('sidebar.new_automation'))}" aria-label="${escapeHtml(t('sidebar.new_automation'))}">
-                <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
-                    <path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.8 6.8l2.1 2.1M15.1 15.1l2.1 2.1M6.8 17.2l2.1-2.1M15.1 8.9l2.1-2.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                    <circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.8"/>
-                </svg>
-            </button>
             <button class="sidebar-header-btn projects-toolbar-new-btn" type="button" title="${escapeHtml(t('sidebar.new_project'))}" aria-label="${escapeHtml(t('sidebar.new_project'))}">
                 <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
                     <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
@@ -387,9 +384,137 @@ function renderProjectsToolbar() {
         </div>
     `;
     toolbar.querySelector('.projects-toolbar-new-btn')?.addEventListener('click', () => void handleNewProjectClick());
-    toolbar.querySelector('.projects-toolbar-new-automation-btn')?.addEventListener('click', () => void handleNewAutomationProjectClick());
     toolbar.querySelector('.projects-toolbar-sort-btn')?.addEventListener('click', () => toggleProjectSortMode());
     return toolbar;
+}
+
+function getActiveFeatureId() {
+    return String(state.currentFeatureViewId || '').trim();
+}
+
+function renderFeatureNav() {
+    const activeFeatureId = getActiveFeatureId();
+    const section = document.createElement('section');
+    section.className = 'home-feature-section';
+    section.innerHTML = `
+        <button class="primary-btn home-new-session-btn" type="button">
+            <span class="home-new-session-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" class="icon">
+                    <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+                </svg>
+            </span>
+            <span>${escapeHtml(t('sidebar.new_session_primary'))}</span>
+        </button>
+        <div class="home-feature-list" role="navigation" aria-label="${escapeHtml(t('sidebar.feature_navigation'))}">
+            <button class="home-feature-item${activeFeatureId === FEATURE_IDS.skills ? ' is-active' : ''}" type="button" data-feature-id="${FEATURE_IDS.skills}">
+                <span class="home-feature-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon home-feature-icon-svg home-feature-icon-svg-skills">
+                        <path d="M10.35 3.95h3.3l.34 1.74c.53.15 1.04.36 1.5.62l1.55-.89 2.33 2.33-.89 1.55c.26.46.47.97.62 1.5l1.74.34v3.3l-1.74.34a6.7 6.7 0 0 1-.62 1.5l.89 1.55-2.33 2.33-1.55-.89a6.7 6.7 0 0 1-1.5.62l-.34 1.74h-3.3l-.34-1.74a6.7 6.7 0 0 1-1.5-.62l-1.55.89-2.33-2.33.89-1.55a6.7 6.7 0 0 1-.62-1.5l-1.74-.34v-3.3l1.74-.34c.15-.53.36-1.04.62-1.5l-.89-1.55 2.33-2.33 1.55.89c.46-.26.97-.47 1.5-.62z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                        <circle cx="12" cy="12" r="2.45" stroke="currentColor" stroke-width="1.5"/>
+                    </svg>
+                </span>
+                <span class="home-feature-label">${escapeHtml(t('sidebar.feature_skills'))}</span>
+            </button>
+            <button class="home-feature-item${activeFeatureId === FEATURE_IDS.automation ? ' is-active' : ''}" type="button" data-feature-id="${FEATURE_IDS.automation}">
+                <span class="home-feature-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon home-feature-icon-svg home-feature-icon-svg-automation">
+                        <path d="M6.25 6.75h11.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                        <path d="M8.5 4.75v4M15.5 4.75v4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                        <rect x="4.25" y="7.25" width="15.5" height="12.5" rx="2.4" stroke="currentColor" stroke-width="1.7"/>
+                        <path d="M8 12.35h3.1l1.35-1.9 1.55 3.2 1.15-1.3H16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                        <circle cx="8" cy="16.3" r=".85" fill="currentColor"/>
+                        <circle cx="12" cy="16.3" r=".85" fill="currentColor"/>
+                        <circle cx="16" cy="16.3" r=".85" fill="currentColor"/>
+                    </svg>
+                </span>
+                <span class="home-feature-label">${escapeHtml(t('sidebar.feature_automation'))}</span>
+            </button>
+            <button class="home-feature-item${activeFeatureId === FEATURE_IDS.gateway ? ' is-active' : ''}" type="button" data-feature-id="${FEATURE_IDS.gateway}">
+                <span class="home-feature-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon home-feature-icon-svg home-feature-icon-svg-gateway">
+                        <path d="M5.2 6.4h13.6a1.8 1.8 0 0 1 1.8 1.8v7a1.8 1.8 0 0 1-1.8 1.8H12.3l-3.2 2.35a.5.5 0 0 1-.8-.4V17H5.2a1.8 1.8 0 0 1-1.8-1.8v-7a1.8 1.8 0 0 1 1.8-1.8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                        <path d="M8 10.05h8M8 13h5.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                    </svg>
+                </span>
+                <span class="home-feature-label">${escapeHtml(t('sidebar.feature_gateway'))}</span>
+            </button>
+        </div>
+    `;
+    section.querySelector('.home-new-session-btn')?.addEventListener('click', () => void handlePrimaryNewSessionClick());
+    section.querySelectorAll('.home-feature-item').forEach(button => {
+        button.addEventListener('click', () => {
+            const featureId = String(button.getAttribute('data-feature-id') || '').trim();
+            void openFeatureView(featureId);
+        });
+    });
+    return section;
+}
+
+async function requestWorkspaceSelection(workspaces) {
+    const workspaceOptions = (Array.isArray(workspaces) ? workspaces : []).map(workspace => ({
+        value: String(workspace?.workspace_id || '').trim(),
+        label: formatWorkspaceOptionLabel(workspace),
+        description: formatWorkspaceOptionDescription(workspace),
+    })).filter(option => option.value);
+    if (workspaceOptions.length === 0) {
+        return '';
+    }
+    const values = await showFormDialog({
+        title: t('sidebar.new_session_primary'),
+        message: t('sidebar.select_workspace_for_session'),
+        tone: 'info',
+        confirmLabel: t('sidebar.new_session'),
+        cancelLabel: t('settings.action.cancel'),
+        fields: [
+            {
+                id: 'workspace_id',
+                label: t('sidebar.workspace_directory'),
+                type: 'select',
+                value: workspaceOptions[0]?.value || '',
+                options: workspaceOptions,
+            },
+        ],
+    });
+    return String(values?.workspace_id || '').trim();
+}
+
+async function handlePrimaryNewSessionClick() {
+    try {
+        const fetchedWorkspaces = await fetchWorkspaces();
+        const workspaces = Array.isArray(fetchedWorkspaces) ? fetchedWorkspaces : [];
+        if (workspaces.length === 0) {
+            await handleNewProjectClick();
+            return;
+        }
+        const currentWorkspaceId = String(state.currentWorkspaceId || '').trim();
+        const matchingWorkspace = workspaces.find(workspace => String(workspace?.workspace_id || '').trim() === currentWorkspaceId) || null;
+        if (matchingWorkspace) {
+            await handleNewSessionClick(currentWorkspaceId, true);
+            return;
+        }
+        if (workspaces.length === 1) {
+            await handleNewSessionClick(String(workspaces[0]?.workspace_id || '').trim(), true);
+            return;
+        }
+        const selectedWorkspaceId = await requestWorkspaceSelection(workspaces);
+        if (!selectedWorkspaceId) {
+            return;
+        }
+        await handleNewSessionClick(selectedWorkspaceId, true);
+    } catch (error) {
+        sysLog(formatMessage('sidebar.error.creating_session', { error: error.message }), 'log-error');
+    }
+}
+
+async function openFeatureView(featureId) {
+    if (featureId === FEATURE_IDS.skills) {
+        await openSkillsFeatureView();
+    } else if (featureId === FEATURE_IDS.automation) {
+        await openAutomationHomeView();
+    } else if (featureId === FEATURE_IDS.gateway) {
+        await openImFeatureView();
+    }
+    await loadProjects();
 }
 
 function isNativeDirectoryPickerUnavailable(error) {
@@ -410,145 +535,7 @@ async function requestWorkspaceRootPath() {
 }
 
 async function requestAutomationProjectInput() {
-    const [workspaces, feishuBindings] = await Promise.all([
-        fetchWorkspaces(),
-        fetchAutomationFeishuBindings(),
-    ]);
-    const workspaceOptions = (Array.isArray(workspaces) ? workspaces : []).map(workspace => ({
-        value: String(workspace?.workspace_id || '').trim(),
-        label: formatWorkspaceOptionLabel(workspace),
-        description: formatWorkspaceOptionDescription(workspace),
-    })).filter(option => option.value);
-    const bindingOptions = buildFeishuBindingOptions(feishuBindings);
-    if (workspaceOptions.length === 0) return null;
-    const values = await showFormDialog({
-        title: t('sidebar.new_automation_title'),
-        message: t('sidebar.new_automation_message'),
-        tone: 'info',
-        confirmLabel: t('sidebar.new_automation_create'),
-        cancelLabel: t('settings.action.cancel'),
-        fields: [
-            {
-                id: 'display_name',
-                label: t('sidebar.automation_project_name'),
-                placeholder: 'Daily Briefing',
-                value: '',
-            },
-            {
-                id: 'workspace_id',
-                label: t('sidebar.workspace_directory'),
-                type: 'select',
-                value: workspaceOptions[0]?.value || '',
-                options: workspaceOptions,
-            },
-            {
-                id: 'prompt',
-                label: t('sidebar.prompt'),
-                placeholder: t('sidebar.prompt_placeholder'),
-                value: '',
-                multiline: true,
-            },
-            {
-                id: 'cron_expression',
-                label: t('sidebar.cron_schedule'),
-                placeholder: '0 9 * * *',
-                value: '0 9 * * *',
-            },
-            {
-                id: 'timezone',
-                label: t('sidebar.timezone'),
-                type: 'select',
-                value: 'UTC',
-                options: [
-                    { value: 'UTC', label: 'UTC' },
-                    { value: 'Asia/Shanghai', label: 'Asia/Shanghai' },
-                    { value: 'America/Los_Angeles', label: 'America/Los_Angeles' },
-                    { value: 'America/New_York', label: 'America/New_York' },
-                    { value: 'Europe/London', label: 'Europe/London' },
-                ],
-            },
-            {
-                id: 'enabled',
-                label: t('sidebar.enable_automation'),
-                type: 'checkbox',
-                value: true,
-                description: t('sidebar.enable_automation_copy'),
-            },
-            {
-                id: 'delivery_binding_key',
-                label: t('sidebar.feishu_chat'),
-                type: 'select',
-                value: '',
-                options: bindingOptions,
-            },
-            {
-                id: 'delivery_event_started',
-                label: t('sidebar.notify_on_start'),
-                type: 'checkbox',
-                value: true,
-                description: t('sidebar.notify_on_start_copy'),
-            },
-            {
-                id: 'delivery_event_completed',
-                label: t('sidebar.notify_on_completion'),
-                type: 'checkbox',
-                value: true,
-                description: t('sidebar.notify_on_completion_copy'),
-            },
-            {
-                id: 'delivery_event_failed',
-                label: t('sidebar.notify_on_failure'),
-                type: 'checkbox',
-                value: true,
-                description: t('sidebar.notify_on_failure_copy'),
-            },
-        ],
-    });
-    if (!values || typeof values !== 'object') return null;
-
-    const displayName = String(values.display_name || '').trim();
-    const workspaceId = String(values.workspace_id || '').trim();
-    const prompt = String(values.prompt || '').trim();
-    const cronExpression = String(values.cron_expression || '').trim();
-    const timezone = String(values.timezone || 'UTC').trim() || 'UTC';
-    const enabled = values.enabled !== false;
-    const selectedBindingKey = String(values.delivery_binding_key || '').trim();
-    const selectedBinding = (Array.isArray(feishuBindings) ? feishuBindings : []).find(binding => buildFeishuBindingKey(binding) === selectedBindingKey) || null;
-    const deliveryEvents = [
-        values.delivery_event_started === false ? null : 'started',
-        values.delivery_event_completed === false ? null : 'completed',
-        values.delivery_event_failed === false ? null : 'failed',
-    ].filter(Boolean);
-    if (!workspaceId || !displayName || !prompt || !cronExpression) return null;
-
-    const slug = displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'automation-project';
-    return {
-        name: slug,
-        display_name: displayName,
-        workspace_id: workspaceId,
-        prompt,
-        schedule_mode: 'cron',
-        cron_expression: cronExpression,
-        timezone,
-        enabled,
-        run_config: {
-            session_mode: 'normal',
-            orchestration_preset_id: null,
-            execution_mode: 'ai',
-            yolo: true,
-            thinking: { enabled: false, effort: 'medium' },
-        },
-        delivery_binding: selectedBinding ? {
-            provider: 'feishu',
-            trigger_id: String(selectedBinding.trigger_id || '').trim(),
-            tenant_key: String(selectedBinding.tenant_key || '').trim(),
-            chat_id: String(selectedBinding.chat_id || '').trim(),
-            session_id: String(selectedBinding.session_id || '').trim(),
-            chat_type: String(selectedBinding.chat_type || '').trim(),
-            source_label: String(selectedBinding.source_label || '').trim(),
-        } : null,
-        delivery_events: selectedBinding ? deliveryEvents : [],
-    };
+    return requestAutomationProjectEditorInput({});
 }
 
 async function selectSessionById(sessionId) {
@@ -615,12 +602,6 @@ function playPendingSessionAnimation() {
     animateSessionItem(item, pending.animation);
 }
 
-function renderAutomationHint(project) {
-    const status = String(project?.status || '').trim() || 'unknown';
-    const nextRunAt = String(project?.next_run_at || '').trim();
-    return nextRunAt ? `Automation - ${status} - next ${nextRunAt}` : `Automation - ${status}`;
-}
-
 function bindProjectCard(card, group) {
     const projectId = group.id;
     const groupKeyValue = group.key;
@@ -631,18 +612,12 @@ function bindProjectCard(card, group) {
     });
     card.querySelector('.project-title-btn')?.addEventListener('click', async event => {
         event?.stopPropagation?.();
-        if (group.kind === 'workspace') {
-            await openWorkspaceProjectView(group.workspace);
-            await loadProjects();
-            return;
-        }
-        await openAutomationProjectView(group.project);
+        await openWorkspaceProjectView(group.workspace);
         await loadProjects();
     });
     card.querySelector('.project-new-session-btn')?.addEventListener('click', event => {
         event?.stopPropagation?.();
-        if (group.kind === 'workspace') void handleNewSessionClick(projectId, true);
-        else void handleRunAutomationProject(group.project, true);
+        void handleNewSessionClick(projectId, true);
     });
     card.querySelector('.project-options-btn')?.addEventListener('click', event => {
         event?.stopPropagation?.();
@@ -661,16 +636,7 @@ function bindProjectCard(card, group) {
     });
     card.querySelector('.project-remove-btn')?.addEventListener('click', event => {
         event?.stopPropagation?.();
-        if (group.kind === 'workspace') void handleRemoveWorkspaceClick(group.workspace);
-        else void handleRemoveAutomationProjectClick(group.project);
-    });
-    card.querySelector('.project-run-automation-btn')?.addEventListener('click', event => {
-        event?.stopPropagation?.();
-        void handleRunAutomationProject(group.project, true);
-    });
-    card.querySelector('.project-toggle-automation-btn')?.addEventListener('click', event => {
-        event?.stopPropagation?.();
-        void handleToggleAutomationProject(group.project);
+        void handleRemoveWorkspaceClick(group.workspace);
     });
 
     card.querySelectorAll('.session-item').forEach(button => {
@@ -678,7 +644,7 @@ function bindProjectCard(card, group) {
             const sessionId = String(button.getAttribute('data-session-id') || '').trim();
             const targetWorkspaceId = String(button.getAttribute('data-workspace-id') || '').trim();
             if (!sessionId) return;
-            state.currentWorkspaceId = targetWorkspaceId || AUTOMATION_INTERNAL_WORKSPACE_ID;
+            state.currentWorkspaceId = targetWorkspaceId || projectId;
             void selectSessionById(sessionId).then(() => {
                 animateSessionItem(button, 'activating');
             });
@@ -753,19 +719,11 @@ function renderProjectCard(group) {
     const sessionsExpanded = expandedProjectSessionIds.has(projectKey);
     const visibleSessions = sessionsExpanded ? group.sessions : group.sessions.slice(0, DEFAULT_VISIBLE_SESSION_COUNT);
     const hasHiddenSessions = group.sessions.length > DEFAULT_VISIBLE_SESSION_COUNT;
-    const projectViewActive = state.currentMainView === 'project' && (
-        (group.kind === 'workspace' && state.currentProjectViewWorkspaceId === projectId) ||
-        (group.kind === 'automation' && state.currentProjectViewWorkspaceId === `automation:${projectId}`)
-    );
-    const pathHint = group.kind === 'workspace' ? String(group.workspace?.root_path || '') : renderAutomationHint(group.project);
-    const automationToggleLabel = String(group.project?.status || '').trim().toLowerCase() === 'enabled'
-        ? t('sidebar.automation_disable')
-        : t('sidebar.automation_enable');
-    const projectIcon = group.kind === 'automation'
-        ? '<svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M12 4v3M12 17v3M4 12h3M17 12h3M6.8 6.8l2.1 2.1M15.1 15.1l2.1 2.1M6.8 17.2l2.1-2.1M15.1 8.9l2.1-2.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.7"/></svg>'
-        : '<svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
+    const projectViewActive = state.currentMainView === 'project' && state.currentProjectViewWorkspaceId === projectId;
+    const pathHint = String(group.workspace?.root_path || '').trim();
+    const projectIcon = '<svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
     const card = document.createElement('section');
-    card.className = `project-card${group.kind === 'automation' ? ' automation-project-card' : ''}`;
+    card.className = 'project-card';
     card.innerHTML = `
         <div class="project-row">
             <div class="project-title-group">
@@ -774,28 +732,25 @@ function renderProjectCard(group) {
             </div>
             <div class="project-actions">
                 <button class="project-options-btn project-action-btn" type="button" title="${escapeHtml(t('sidebar.project_options'))}" aria-label="${escapeHtml(t('sidebar.project_options'))}"><svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true"><path d="M6 12a1.25 1.25 0 1 0 0 .01M12 12a1.25 1.25 0 1 0 0 .01M18 12a1.25 1.25 0 1 0 0 .01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
-                <button class="project-new-session-btn project-action-btn" type="button" title="${escapeHtml(group.kind === 'workspace' ? t('sidebar.new_session') : t('sidebar.automation_run_now'))}" aria-label="${escapeHtml(group.kind === 'workspace' ? t('sidebar.new_session') : t('sidebar.automation_run_now'))}">${group.kind === 'workspace' ? '<svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>' : '<svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true"><path d="M8 6.5v11l9-5.5-9-5.5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>'}</button>
+                <button class="project-new-session-btn project-action-btn" type="button" title="${escapeHtml(t('sidebar.new_session'))}" aria-label="${escapeHtml(t('sidebar.new_session'))}"><svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg></button>
             </div>
         </div>
         <div class="project-path-hint">${escapeHtml(pathHint)}</div>
-        ${menuOpen ? (group.kind === 'workspace'
-            ? `<div class="project-menu project-menu-workspace" role="menu"><button class="project-fork-btn project-workspace-menu-btn" type="button" role="menuitem"><span class="project-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M9 5H6.75A1.75 1.75 0 0 0 5 6.75v10.5C5 18.22 5.78 19 6.75 19h10.5A1.75 1.75 0 0 0 19 17.25V15M15 5h4m0 0v4m0-4-7.5 7.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>${escapeHtml(t('sidebar.fork'))}</span></button><button class="project-remove-btn project-workspace-menu-btn project-remove-workspace-btn" type="button" role="menuitem"><span class="project-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M6 7h12M9 7V5.8c0-.44 0-.66.09-.83a1 1 0 0 1 .42-.42C9.74 4.5 9.96 4.5 10.4 4.5h3.2c.44 0 .66 0 .83.08a1 1 0 0 1 .42.42c.09.17.09.39.09.83V7m-7 0 .55 9.18c.03.55.05.82.17 1.03a1 1 0 0 0 .43.4c.22.1.49.1 1.03.1h4.64c.54 0 .81 0 1.03-.1a1 1 0 0 0 .43-.4c.12-.21.14-.48.17-1.03L18 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>${escapeHtml(t('sidebar.remove'))}</span></button></div>`
-            : `<div class="project-menu project-menu-automation" role="menu"><button class="project-run-automation-btn" type="button" role="menuitem"><span class="project-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M8 6.5v11l9-5.5-9-5.5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></span><span>${escapeHtml(t('sidebar.automation_run_now'))}</span></button><button class="project-toggle-automation-btn" type="button" role="menuitem"><span class="project-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M12 4v3M12 17v3M4 12h3M17 12h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.7"/></svg></span><span>${escapeHtml(automationToggleLabel)}</span></button><button class="project-remove-btn project-remove-automation-btn" type="button" role="menuitem"><span class="project-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M6 7h12M9 7V5.8c0-.44 0-.66.09-.83a1 1 0 0 1 .42-.42C9.74 4.5 9.96 4.5 10.4 4.5h3.2c.44 0 .66 0 .83.08a1 1 0 0 1 .42.42c.09.17.09.39.09.83V7m-7 0 .55 9.18c.03.55.05.82.17 1.03a1 1 0 0 0 .43.4c.22.1.49.1 1.03.1h4.64c.54 0 .81 0 1.03-.1a1 1 0 0 0 .43-.4c.12-.21.14-.48.17-1.03L18 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>${escapeHtml(t('sidebar.automation_delete'))}</span></button></div>`)
-            : ''}
+        ${menuOpen ? `<div class="project-menu project-menu-workspace" role="menu"><button class="project-fork-btn project-workspace-menu-btn" type="button" role="menuitem"><span class="project-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M9 5H6.75A1.75 1.75 0 0 0 5 6.75v10.5C5 18.22 5.78 19 6.75 19h10.5A1.75 1.75 0 0 0 19 17.25V15M15 5h4m0 0v4m0-4-7.5 7.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>${escapeHtml(t('sidebar.fork'))}</span></button><button class="project-remove-btn project-workspace-menu-btn project-remove-workspace-btn" type="button" role="menuitem"><span class="project-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M6 7h12M9 7V5.8c0-.44 0-.66.09-.83a1 1 0 0 1 .42-.42C9.74 4.5 9.96 4.5 10.4 4.5h3.2c.44 0 .66 0 .83.08a1 1 0 0 1 .42.42c.09.17.09.39.09.83V7m-7 0 .55 9.18c.03.55.05.82.17 1.03a1 1 0 0 0 .43.4c.22.1.49.1 1.03.1h4.64c.54 0 .81 0 1.03-.1a1 1 0 0 0 .43-.4c.12-.21.14-.48.17-1.03L18 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>${escapeHtml(t('sidebar.remove'))}</span></button></div>` : ''}
         <div class="project-body${expanded ? '' : ' is-collapsed'}">
             <div class="project-session-list">
                 ${
                     visibleSessions.length > 0
                         ? visibleSessions.map(session => {
                             const sessionMetadata = getSessionMetadata(session);
-                            const isIm = isImSession(session);
+                            const sourceClassName = getSessionSourceClassName(session);
                             return `
                                 <div
-                                    class="session-item${isIm ? ' session-item-im' : ''}${session.session_id === state.currentSessionId ? ' active' : ''}"
+                                    class="session-item${sourceClassName}${session.session_id === state.currentSessionId ? ' active' : ''}"
                                     tabindex="0"
                                     role="button"
                                     data-session-id="${escapeHtml(session.session_id)}"
-                                    data-workspace-id="${escapeHtml(session.workspace_id || AUTOMATION_INTERNAL_WORKSPACE_ID)}"
+                                    data-workspace-id="${escapeHtml(session.workspace_id || group.workspace?.workspace_id || '')}"
                                 >
                                     <span class="session-id">${renderSessionSourceIcon(session)}<span class="session-label-text">${escapeHtml(formatSessionLabel(session))}</span></span>
                                     <span class="session-meta">
@@ -841,18 +796,28 @@ export async function loadProjects() {
     }
     try {
         ensureProjectMenuDismissBinding();
-        const [workspaces, automationProjects, sessions] = await Promise.all([
+        const [workspaces, sessions, automationProjects] = await Promise.all([
             fetchWorkspaces(),
-            fetchAutomationProjects(),
             fetchSessions(),
+            fetchAutomationProjects(),
         ]);
+        automationBoundSessionIds.clear();
+        (Array.isArray(automationProjects) ? automationProjects : []).forEach(project => {
+            const binding = project?.delivery_binding && typeof project.delivery_binding === 'object'
+                ? project.delivery_binding
+                : null;
+            const sessionId = String(binding?.session_id || '').trim();
+            if (sessionId) {
+                automationBoundSessionIds.add(sessionId);
+            }
+        });
         void maybeSyncBackgroundStreams(sessions);
         els.projectsList.innerHTML = '';
+        els.projectsList.appendChild(renderFeatureNav());
         els.projectsList.appendChild(renderProjectsToolbar());
         syncProjectSortButton();
         const groups = buildProjectGroups(
             Array.isArray(workspaces) ? workspaces : [],
-            Array.isArray(automationProjects) ? automationProjects : [],
             Array.isArray(sessions) ? sessions : [],
         );
         if (groups.length === 0) {
@@ -924,11 +889,10 @@ export async function handleNewAutomationProjectClick() {
         const payload = await requestAutomationProjectInput();
         if (!payload) return;
         const project = await createAutomationProject(payload);
-        expandedProjectIds.add(groupKey('automation', project.automation_project_id));
-        expandedProjectSessionIds.add(groupKey('automation', project.automation_project_id));
         state.currentWorkspaceId = String(project?.workspace_id || '').trim() || AUTOMATION_INTERNAL_WORKSPACE_ID;
         sysLog(formatMessage('sidebar.log.created_automation_project', { project_id: project.automation_project_id }));
         await loadProjects();
+        await openAutomationHomeView(String(project?.automation_project_id || '').trim());
     } catch (error) {
         sysLog(formatMessage('sidebar.error.creating_automation_project', { error: error.message }), 'log-error');
     }
@@ -1055,7 +1019,7 @@ async function handleRunAutomationProject(project, manualClick = true) {
             ? formatMessage('sidebar.log.queued_bound_session', { session_id: data.session_id })
             : formatMessage('sidebar.log.started_bound_session', { session_id: data.session_id });
         sysLog(logMessage);
-        await openAutomationProjectView(project);
+        await openAutomationHomeView(projectId);
         return;
     }
     sysLog(formatMessage('sidebar.log.started_automation_run', { session_id: data.session_id }));
