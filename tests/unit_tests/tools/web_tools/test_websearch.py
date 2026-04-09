@@ -233,6 +233,17 @@ def test_select_public_searxng_instances_filters_and_sorts_candidates() -> None:
                     )
                 ),
             ),
+            "https://backup.example/": websearch.SearxngCatalogInstancePayload(
+                generator="searxng",
+                main=False,
+                analytics=False,
+                http=websearch.SearxngCatalogHttpPayload(status_code=200),
+                timing=websearch.SearxngCatalogTimingPayload(
+                    initial=websearch.SearxngCatalogTimingEntry(
+                        all=websearch.SearxngCatalogTimedValue(value=0.1)
+                    )
+                ),
+            ),
             "https://analytics.example/": websearch.SearxngCatalogInstancePayload(
                 generator="searxng",
                 main=True,
@@ -253,6 +264,11 @@ def test_select_public_searxng_instances_filters_and_sorts_candidates() -> None:
         websearch.SearxngInstanceCandidate(
             base_url="https://slow.example/",
             endpoint_host="slow.example",
+            source="public_pool",
+        ),
+        websearch.SearxngInstanceCandidate(
+            base_url="https://backup.example/",
+            endpoint_host="backup.example",
             source="public_pool",
         ),
     ]
@@ -308,6 +324,47 @@ async def test_resolve_searxng_instance_candidates_prefers_default_then_public_p
     assert [candidate.base_url for candidate in candidates].count(
         DEFAULT_SEARXNG_INSTANCE_URL
     ) == 1
+
+
+@pytest.mark.asyncio
+async def test_resolve_searxng_instance_candidates_locks_to_explicit_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_fetch_public_candidates(
+        *,
+        client: httpx.AsyncClient,
+    ) -> tuple[websearch.SearxngInstanceCandidate, ...]:
+        _ = client
+        return (
+            websearch.SearxngInstanceCandidate(
+                base_url="https://fallback.example/",
+                endpoint_host="fallback.example",
+                source="public_pool",
+            ),
+        )
+
+    monkeypatch.setattr(
+        websearch,
+        "fetch_public_searxng_instance_candidates",
+        _fake_fetch_public_candidates,
+    )
+
+    client = httpx.AsyncClient(trust_env=False)
+    try:
+        candidates = await websearch.resolve_searxng_instance_candidates(
+            client=client,
+            config=WebConfig(searxng_instance_url="https://search.example.test/"),
+        )
+    finally:
+        await client.aclose()
+
+    assert candidates == (
+        websearch.SearxngInstanceCandidate(
+            base_url="https://search.example.test/",
+            endpoint_host="search.example.test",
+            source="configured",
+        ),
+    )
 
 
 @pytest.mark.asyncio
@@ -417,6 +474,60 @@ async def test_execute_search_defaults_to_searxng_fallback_after_exa_rate_limit(
             client=client,
             config=WebConfig(
                 provider=WebProvider.EXA,
+                searxng_instance_url="https://search.example.test/",
+            ),
+            request=websearch.WebSearchRequest(query="python"),
+        )
+    finally:
+        await client.aclose()
+
+    assert result.provider == WebProvider.SEARXNG
+    assert result.endpoint_host == "search.example.test"
+    assert result.internal_data == {
+        "searxng_instance_url": "https://search.example.test/",
+        "instance_source": "configured",
+        "fallback_from": "exa",
+        "primary_error_type": "rate_limited",
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_search_falls_back_after_exa_json_rpc_rate_limit_error() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        if "mcp.exa.ai" in str(request.url):
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -32000,
+                        "message": "You've hit Exa's free MCP rate limit. To continue using without limits, create your own Exa API key.",
+                    },
+                    "id": None,
+                },
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "results": [
+                    {
+                        "title": "Python Docs",
+                        "url": "https://docs.python.org/3/",
+                        "content": "Reference",
+                    }
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        result = await websearch.execute_search(
+            client=client,
+            config=WebConfig(
+                provider=WebProvider.EXA,
+                fallback_provider=WebFallbackProvider.SEARXNG,
                 searxng_instance_url="https://search.example.test/",
             ),
             request=websearch.WebSearchRequest(query="python"),
