@@ -1844,6 +1844,7 @@ def _run_project_view_script(
     mock_agent_panel_path = tmp_path / "mockAgentPanel.mjs"
     mock_navigator_path = tmp_path / "mockNavigator.mjs"
     mock_subagent_rail_path = tmp_path / "mockSubagentRail.mjs"
+    mock_clawhub_settings_path = tmp_path / "settings" / "clawhubSettings.js"
     runner_path = tmp_path / "runner.mjs"
 
     mock_dom_path.write_text(
@@ -2452,6 +2453,7 @@ export const state = {
         "settings.gateway.deleted": "Deleted",
         "settings.gateway.deleted_message": "WeChat account deleted.",
         "feature.skills.title": "Skills",
+        "feature.skills.directory_title": "Installed Skills",
         "feature.skills.summary": "{count} skills available",
         "feature.skills.empty": "No skills loaded",
         "feature.skills.empty_copy": "Reload after updating the configured skill directories.",
@@ -2554,6 +2556,21 @@ export function hideRoundNavigator() {
         """
 export function setSubagentRailExpanded() {
     return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_clawhub_settings_path.parent.mkdir(parents=True, exist_ok=True)
+    mock_clawhub_settings_path.write_text(
+        """
+export function bindClawHubSettingsHandlers() {
+    globalThis.__clawhubSettingsBindCalls =
+        (globalThis.__clawhubSettingsBindCalls || 0) + 1;
+}
+
+export async function loadClawHubSettingsPanel() {
+    globalThis.__clawhubSettingsLoadCalls =
+        (globalThis.__clawhubSettingsLoadCalls || 0) + 1;
 }
 """.strip(),
         encoding="utf-8",

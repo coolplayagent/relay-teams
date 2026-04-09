@@ -2302,7 +2302,7 @@ function renderSkillsFeatureView() {
             </section>
             <section class="workspace-view-panel skills-directory-panel">
                 <div class="workspace-view-panel-header">
-                    <h3>${escapeHtml(t('feature.skills.title'))}</h3>
+                    <h3>${escapeHtml(t('feature.skills.directory_title'))}</h3>
                     <span class="workspace-view-panel-meta">${escapeHtml(String(skills.length))}</span>
                 </div>
                 ${skills.length > 0 ? `

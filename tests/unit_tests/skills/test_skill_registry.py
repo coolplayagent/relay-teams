@@ -272,8 +272,11 @@ def test_registry_loads_builtin_skill_installer_definition(tmp_path: Path) -> No
     assert skill.scope == SkillScope.BUILTIN
     assert tuple(sorted(skill.metadata.scripts.keys())) == (
         "bind-skill-to-role",
+        "install-clawhub-skill",
         "install-skill-from-github",
         "list-skills",
+        "search-and-install-clawhub-skill",
+        "search-clawhub-skills",
     )
 
 
