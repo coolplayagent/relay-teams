@@ -22,7 +22,7 @@ from relay_teams.computer import ComputerRuntime
 from relay_teams.media import ContentPart, MediaAssetService, MediaModality
 from relay_teams.metrics import MetricRecorder
 from relay_teams.net.llm_client import build_llm_http_client
-from relay_teams.providers.model_config import LlmRetryConfig
+from relay_teams.providers.model_config import LlmRetryConfig, ProviderType
 from relay_teams.providers.openai_support import build_model_request_headers
 from relay_teams.providers.provider_contracts import (
     LLMProvider,
@@ -170,6 +170,8 @@ class OpenAICompatibleProvider(LLMProvider):
 
     @override
     def capabilities(self) -> ProviderCapabilities:
+        if self._config.provider == ProviderType.MAAS:
+            return ProviderCapabilities()
         return ProviderCapabilities(
             input_modalities=(
                 MediaModality.IMAGE,

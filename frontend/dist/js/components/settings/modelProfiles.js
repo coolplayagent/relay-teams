@@ -20,12 +20,17 @@ let profileProbeStates = {};
 let draftProbeState = null;
 let draftDiscoveredModels = [];
 let draftModelDiscoveryState = null;
-let draftApiKeyState = createDraftApiKeyState();
+let draftApiKeyState = createDraftSecretState();
+let draftMaasPasswordState = createDraftSecretState();
 let isModelMenuOpen = false;
+
+const DEFAULT_MAAS_BASE_URL = 'http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/';
+const MAAS_DISCOVERY_UNSUPPORTED_MESSAGE = 'MAAS model discovery is not supported. Enter the model name manually.';
 
 const PROVIDER_DEFAULT_BASE_URLS = {
     bigmodel: 'https://open.bigmodel.cn/api/coding/paas/v4',
     minimax: 'https://api.minimaxi.com/v1',
+    maas: DEFAULT_MAAS_BASE_URL,
 };
 
 function formatMessage(key, values = {}) {
@@ -82,9 +87,24 @@ export function bindModelProfileHandlers() {
         apiKeyInput.oninput = handleDraftApiKeyInput;
     }
 
+    const maasUsernameInput = document.getElementById('profile-maas-username');
+    if (maasUsernameInput) {
+        maasUsernameInput.oninput = handleDraftEndpointChanged;
+    }
+
+    const maasPasswordInput = document.getElementById('profile-maas-password');
+    if (maasPasswordInput) {
+        maasPasswordInput.oninput = handleDraftMaasPasswordInput;
+    }
+
     const toggleApiKeyBtn = document.getElementById('toggle-profile-api-key-btn');
     if (toggleApiKeyBtn) {
         toggleApiKeyBtn.onclick = toggleDraftApiKeyVisibility;
+    }
+
+    const toggleMaasPasswordBtn = document.getElementById('toggle-profile-maas-password-btn');
+    if (toggleMaasPasswordBtn) {
+        toggleMaasPasswordBtn.onclick = toggleDraftMaasPasswordVisibility;
     }
 
     const sslVerifyInput = document.getElementById('profile-ssl-verify');
@@ -167,7 +187,11 @@ function handleAddProfile() {
     document.getElementById('profile-provider').value = 'openai_compatible';
     setDraftModelValue('');
     document.getElementById('profile-base-url').value = '';
-    draftApiKeyState = createDraftApiKeyState();
+    delete document.getElementById('profile-base-url').dataset.previousProvider;
+    draftApiKeyState = createDraftSecretState();
+    draftMaasPasswordState = createDraftSecretState();
+    document.getElementById('profile-maas-username').value = '';
+    document.getElementById('profile-maas-password').value = '';
     document.getElementById('profile-is-default').checked = Object.keys(profiles).length === 0;
     document.getElementById('profile-temperature').value = '0.7';
     document.getElementById('profile-top-p').value = '1.0';
@@ -179,6 +203,7 @@ function handleAddProfile() {
 
     showProfileEditor();
     renderDraftApiKeyField();
+    renderDraftProviderFields();
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
@@ -197,6 +222,7 @@ function handleEditProfile(name) {
     document.getElementById('profile-provider').value = profile.provider || 'openai_compatible';
     setDraftModelValue(profile.model || '');
     document.getElementById('profile-base-url').value = profile.base_url || '';
+    document.getElementById('profile-base-url').dataset.previousProvider = profile.provider || 'openai_compatible';
     draftApiKeyState = {
         persistedValue: typeof profile.api_key === 'string' ? profile.api_key : '',
         draftValue: '',
@@ -204,6 +230,15 @@ function handleEditProfile(name) {
         isDirty: false,
         revealed: false,
     };
+    draftMaasPasswordState = {
+        persistedValue: typeof profile.maas_auth?.password === 'string' ? profile.maas_auth.password : '',
+        draftValue: '',
+        hasPersistedValue: Boolean(profile.maas_auth?.has_password),
+        isDirty: false,
+        revealed: false,
+    };
+    document.getElementById('profile-maas-username').value = profile.maas_auth?.username || '';
+    document.getElementById('profile-maas-password').value = '';
     document.getElementById('profile-is-default').checked = profile.is_default === true;
     document.getElementById('profile-temperature').value = profile.temperature || 0.7;
     document.getElementById('profile-top-p').value = profile.top_p || 1.0;
@@ -215,6 +250,7 @@ function handleEditProfile(name) {
 
     showProfileEditor();
     renderDraftApiKeyField();
+    renderDraftProviderFields();
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
@@ -233,10 +269,11 @@ function handleCancelProfile() {
 
 async function handleSaveProfile() {
     const name = document.getElementById('profile-name').value.trim();
-    const provider = document.getElementById('profile-provider').value.trim() || 'openai_compatible';
+    const provider = getDraftProvider();
     const model = document.getElementById('profile-model').value.trim();
     const baseUrl = document.getElementById('profile-base-url').value.trim();
     const apiKey = readDraftApiKeyValue();
+    const maasAuth = readDraftMaasAuth();
     const isDefault = document.getElementById('profile-is-default').checked;
     const temperature = parseFloat(document.getElementById('profile-temperature').value) || 0.7;
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
@@ -264,7 +301,16 @@ async function handleSaveProfile() {
         return;
     }
 
-    if (!editingProfile && !apiKey) {
+    if (isMaaSProvider(provider)) {
+        if (!maasAuth.username || !hasDraftMaasPassword(maasAuth)) {
+            showToast({
+                title: t('settings.model.save_failed_title'),
+                message: 'MAAS profiles require username and password.',
+                tone: 'warning',
+            });
+            return;
+        }
+    } else if (!editingProfile && !apiKey) {
         showToast({ title: t('settings.model.api_key_required_title'), message: t('settings.model.api_key_required_message'), tone: 'warning' });
         return;
     }
@@ -286,7 +332,14 @@ async function handleSaveProfile() {
         profile.ssl_verify = sslVerify;
     }
 
-    if (apiKey) {
+    if (isMaaSProvider(provider)) {
+        profile.maas_auth = {
+            username: maasAuth.username,
+        };
+        if (maasAuth.password) {
+            profile.maas_auth.password = maasAuth.password;
+        }
+    } else if (apiKey) {
         profile.api_key = apiKey;
     }
     if (editingProfile) {
@@ -427,10 +480,11 @@ async function handleDiscoverDraftModels() {
 }
 
 function buildDraftProbePayload() {
-    const provider = document.getElementById('profile-provider').value.trim() || 'openai_compatible';
+    const provider = getDraftProvider();
     const model = document.getElementById('profile-model').value.trim();
     const baseUrl = document.getElementById('profile-base-url').value.trim();
     const apiKey = readDraftApiKeyValue();
+    const maasAuth = readDraftMaasAuth();
     const temperature = parseFloat(document.getElementById('profile-temperature').value) || 0.7;
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
     const maxTokensValue = String(document.getElementById('profile-max-tokens').value || '').trim();
@@ -438,7 +492,25 @@ function buildDraftProbePayload() {
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
 
-    if (!model || !baseUrl || (!apiKey && !editingProfile)) {
+    if (!model || !baseUrl) {
+        draftProbeState = {
+            status: 'failed',
+            message: t('settings.model.validation_test_new'),
+        };
+        renderDraftProbeState();
+        return null;
+    }
+
+    if (isMaaSProvider(provider)) {
+        if (!maasAuth.username || !hasDraftMaasPassword(maasAuth)) {
+            draftProbeState = {
+                status: 'failed',
+                message: 'Model, base URL, username, and password are required before testing a MAAS profile.',
+            };
+            renderDraftProbeState();
+            return null;
+        }
+    } else if (!apiKey && !editingProfile) {
         draftProbeState = {
             status: 'failed',
             message: t('settings.model.validation_test_new'),
@@ -461,7 +533,14 @@ function buildDraftProbePayload() {
         override.ssl_verify = sslVerify;
     }
 
-    if (apiKey) {
+    if (isMaaSProvider(provider)) {
+        override.maas_auth = {
+            username: maasAuth.username,
+        };
+        if (maasAuth.password) {
+            override.maas_auth.password = maasAuth.password;
+        }
+    } else if (apiKey) {
         override.api_key = apiKey;
     }
 
@@ -476,11 +555,22 @@ function buildDraftProbePayload() {
 }
 
 function buildDraftModelDiscoveryPayload() {
-    const provider = document.getElementById('profile-provider').value.trim() || 'openai_compatible';
+    const provider = getDraftProvider();
     const baseUrl = document.getElementById('profile-base-url').value.trim();
     const apiKey = readDraftApiKeyValue();
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
+
+    if (isMaaSProvider(provider)) {
+        draftDiscoveredModels = [];
+        draftModelDiscoveryState = {
+            status: 'failed',
+            message: MAAS_DISCOVERY_UNSUPPORTED_MESSAGE,
+        };
+        renderDiscoveredModels();
+        renderDraftModelDiscoveryState();
+        return null;
+    }
 
     if (!baseUrl || (!apiKey && !editingProfile)) {
         draftDiscoveredModels = [];
@@ -565,17 +655,22 @@ function renderDraftModelDiscoveryState() {
         return;
     }
 
+    const maasProvider = isMaaSProvider(getDraftProvider());
+    const defaultTitle = maasProvider
+        ? MAAS_DISCOVERY_UNSUPPORTED_MESSAGE
+        : t('settings.model.fetch_models');
+
     if (!draftModelDiscoveryState) {
         statusEl.style.display = 'none';
         statusEl.textContent = '';
         statusEl.className = 'profile-model-discovery-status';
-        fetchBtn.disabled = false;
+        fetchBtn.disabled = maasProvider;
         fetchBtn.className = 'secure-input-btn profile-discovery-btn';
-        fetchBtn.title = t('settings.model.fetch_models');
+        fetchBtn.title = defaultTitle;
         if (typeof fetchBtn.setAttribute === 'function') {
-            fetchBtn.setAttribute('aria-label', t('settings.model.fetch_models'));
+            fetchBtn.setAttribute('aria-label', defaultTitle);
         } else {
-            fetchBtn.ariaLabel = t('settings.model.fetch_models');
+            fetchBtn.ariaLabel = defaultTitle;
         }
         return;
     }
@@ -583,13 +678,15 @@ function renderDraftModelDiscoveryState() {
     statusEl.style.display = 'block';
     statusEl.textContent = draftModelDiscoveryState.message;
     statusEl.className = `profile-model-discovery-status probe-status probe-status-${draftModelDiscoveryState.status}`;
-    fetchBtn.disabled = draftModelDiscoveryState.status === 'probing';
+    fetchBtn.disabled = maasProvider || draftModelDiscoveryState.status === 'probing';
     fetchBtn.className = draftModelDiscoveryState.status === 'probing'
         ? 'secure-input-btn profile-discovery-btn is-loading'
         : 'secure-input-btn profile-discovery-btn';
-    fetchBtn.title = draftModelDiscoveryState.status === 'probing'
-        ? t('settings.model.fetching_models')
-        : t('settings.model.fetch_models');
+    fetchBtn.title = maasProvider
+        ? defaultTitle
+        : draftModelDiscoveryState.status === 'probing'
+            ? t('settings.model.fetching_models')
+            : t('settings.model.fetch_models');
     if (typeof fetchBtn.setAttribute === 'function') {
         fetchBtn.setAttribute('aria-label', fetchBtn.title);
     } else {
@@ -649,6 +746,7 @@ function renderDiscoveredModels() {
 
 function handleDraftEndpointChanged() {
     applyProviderDefaultBaseUrl();
+    renderDraftProviderFields();
     draftDiscoveredModels = [];
     draftModelDiscoveryState = null;
     renderDiscoveredModels();
@@ -657,15 +755,27 @@ function handleDraftEndpointChanged() {
 }
 
 function applyProviderDefaultBaseUrl() {
-    if (editingProfile) {
-        return;
-    }
     const providerInput = document.getElementById('profile-provider');
     const baseUrlInput = document.getElementById('profile-base-url');
     if (!providerInput || !baseUrlInput) {
         return;
     }
     const provider = String(providerInput.value || '').trim();
+    const previousProvider = String(baseUrlInput.dataset.previousProvider || '').trim();
+    if (isMaaSProvider(provider)) {
+        baseUrlInput.value = DEFAULT_MAAS_BASE_URL;
+        baseUrlInput.dataset.previousProvider = provider;
+        return;
+    }
+    if (isMaaSProvider(previousProvider)) {
+        baseUrlInput.value = '';
+        baseUrlInput.dataset.previousProvider = provider;
+        return;
+    }
+    baseUrlInput.dataset.previousProvider = provider;
+    if (editingProfile) {
+        return;
+    }
     const defaultBaseUrl = PROVIDER_DEFAULT_BASE_URLS[provider];
     const currentBaseUrl = String(baseUrlInput.value || '').trim();
     if (!defaultBaseUrl || currentBaseUrl) {
@@ -686,12 +796,32 @@ function handleDraftApiKeyInput() {
     renderDraftApiKeyToggle();
 }
 
+function handleDraftMaasPasswordInput() {
+    const maasPasswordInput = document.getElementById('profile-maas-password');
+    if (!maasPasswordInput) {
+        return;
+    }
+
+    draftMaasPasswordState.draftValue = maasPasswordInput.value;
+    draftMaasPasswordState.isDirty = draftMaasPasswordState.draftValue !== draftMaasPasswordState.persistedValue;
+    handleDraftEndpointChanged();
+    renderDraftMaaSPasswordToggle();
+}
+
 function toggleDraftApiKeyVisibility() {
     if (!draftApiKeyState.hasPersistedValue && !draftApiKeyState.draftValue.trim()) {
         return;
     }
     draftApiKeyState.revealed = !draftApiKeyState.revealed;
     renderDraftApiKeyField();
+}
+
+function toggleDraftMaasPasswordVisibility() {
+    if (!draftMaasPasswordState.hasPersistedValue && !draftMaasPasswordState.draftValue.trim()) {
+        return;
+    }
+    draftMaasPasswordState.revealed = !draftMaasPasswordState.revealed;
+    renderDraftMaaSPasswordField();
 }
 
 function applyDiscoveredModelSelection() {
@@ -833,7 +963,8 @@ function resetDraftEditorState() {
     draftProbeState = null;
     draftDiscoveredModels = [];
     draftModelDiscoveryState = null;
-    draftApiKeyState = createDraftApiKeyState();
+    draftApiKeyState = createDraftSecretState();
+    draftMaasPasswordState = createDraftSecretState();
     isModelMenuOpen = false;
 }
 
@@ -845,7 +976,111 @@ function renderProfileEditorTitle() {
     titleEl.textContent = editingProfile ? t('settings.model.edit_profile') : t('settings.model.add_profile');
 }
 
-function createDraftApiKeyState() {
+function isMaaSProvider(provider) {
+    return String(provider || '').trim() === 'maas';
+}
+
+function getDraftProvider() {
+    const providerInput = document.getElementById('profile-provider');
+    return providerInput ? String(providerInput.value || '').trim() || 'openai_compatible' : 'openai_compatible';
+}
+
+function readDraftMaasAuth() {
+    return {
+        username: document.getElementById('profile-maas-username').value.trim(),
+        password: readDraftMaasPasswordValue(),
+    };
+}
+
+function hasDraftMaasPassword(maasAuth) {
+    return Boolean(maasAuth.password) || draftMaasPasswordState.hasPersistedValue;
+}
+
+function renderDraftProviderFields() {
+    const maasProvider = isMaaSProvider(getDraftProvider());
+    const apiKeyGroup = document.getElementById('profile-api-key-group');
+    const maasFields = document.getElementById('profile-maas-auth-fields');
+    const passwordInput = document.getElementById('profile-maas-password');
+    const baseUrlInput = document.getElementById('profile-base-url');
+    if (apiKeyGroup) {
+        apiKeyGroup.style.display = maasProvider ? 'none' : 'block';
+    }
+    if (maasFields) {
+        maasFields.style.display = maasProvider ? 'grid' : 'none';
+    }
+    if (passwordInput) {
+        renderDraftMaaSPasswordField();
+    }
+    if (baseUrlInput) {
+        baseUrlInput.disabled = maasProvider;
+        if (maasProvider) {
+            baseUrlInput.value = DEFAULT_MAAS_BASE_URL;
+            baseUrlInput.title = DEFAULT_MAAS_BASE_URL;
+        } else {
+            baseUrlInput.title = '';
+        }
+    }
+}
+
+function readDraftMaasPasswordValue() {
+    const maasPasswordInput = document.getElementById('profile-maas-password');
+    const inputValue = maasPasswordInput ? maasPasswordInput.value.trim() : '';
+    if (!draftMaasPasswordState.hasPersistedValue) {
+        return inputValue || draftMaasPasswordState.draftValue.trim();
+    }
+    if (draftMaasPasswordState.isDirty || inputValue) {
+        return inputValue || draftMaasPasswordState.draftValue.trim();
+    }
+    return '';
+}
+
+function renderDraftMaaSPasswordField() {
+    const maasPasswordInput = document.getElementById('profile-maas-password');
+    if (!maasPasswordInput) {
+        return;
+    }
+
+    if (draftMaasPasswordState.revealed) {
+        maasPasswordInput.type = 'text';
+        maasPasswordInput.value = draftMaasPasswordState.isDirty
+            ? draftMaasPasswordState.draftValue
+            : draftMaasPasswordState.persistedValue;
+        maasPasswordInput.placeholder = '';
+    } else if (draftMaasPasswordState.hasPersistedValue && !draftMaasPasswordState.isDirty) {
+        maasPasswordInput.type = 'password';
+        maasPasswordInput.value = '';
+        maasPasswordInput.placeholder = '************';
+    } else {
+        maasPasswordInput.type = 'password';
+        maasPasswordInput.value = draftMaasPasswordState.draftValue;
+        maasPasswordInput.placeholder = 'password';
+    }
+
+    renderDraftMaaSPasswordToggle();
+}
+
+function renderDraftMaaSPasswordToggle() {
+    const toggleMaasPasswordBtn = document.getElementById('toggle-profile-maas-password-btn');
+    const maasPasswordInput = document.getElementById('profile-maas-password');
+    if (!toggleMaasPasswordBtn) {
+        return;
+    }
+
+    const inputValue = maasPasswordInput ? maasPasswordInput.value.trim() : '';
+    const hasValue = draftMaasPasswordState.hasPersistedValue || Boolean(draftMaasPasswordState.draftValue.trim()) || Boolean(inputValue);
+    toggleMaasPasswordBtn.style.display = hasValue ? 'inline-flex' : 'none';
+    toggleMaasPasswordBtn.className = draftMaasPasswordState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
+    toggleMaasPasswordBtn.title = draftMaasPasswordState.revealed
+        ? t('settings.model.hide_password')
+        : t('settings.model.show_password');
+    if (typeof toggleMaasPasswordBtn.setAttribute === 'function') {
+        toggleMaasPasswordBtn.setAttribute('aria-label', toggleMaasPasswordBtn.title);
+    } else {
+        toggleMaasPasswordBtn.ariaLabel = toggleMaasPasswordBtn.title;
+    }
+}
+
+function createDraftSecretState() {
     return {
         persistedValue: '',
         draftValue: '',
@@ -1033,6 +1268,9 @@ function findProfileCard(name) {
 function formatProviderLabel(provider) {
     if (provider === 'openai_compatible') {
         return 'OpenAI Compatible';
+    }
+    if (provider === 'maas') {
+        return 'MAAS';
     }
     if (provider === 'echo') {
         return 'Echo';

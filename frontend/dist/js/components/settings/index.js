@@ -233,6 +233,7 @@ function createModal() {
                                                     <option value="openai_compatible">openai_compatible</option>
                                                     <option value="bigmodel">bigmodel</option>
                                                     <option value="minimax">minimax</option>
+                                                    <option value="maas">maas</option>
                                                 </select>
                                             </div>
                                             <div class="form-group form-group-span-2">
@@ -240,7 +241,7 @@ function createModal() {
                                                 <input type="text" id="profile-base-url" placeholder="e.g., https://api.openai.com/v1" data-i18n-placeholder="settings.model.base_url_placeholder" autocomplete="url">
                                             </div>
                                             <div class="profile-credentials-row form-group-span-2">
-                                                <div class="form-group">
+                                                <div class="form-group" id="profile-api-key-group">
                                                     <label for="profile-api-key" data-i18n="settings.model.api_key">API Key</label>
                                                     <div class="secure-input-row">
                                                         <input type="password" id="profile-api-key" placeholder="sk-..." autocomplete="current-password">
@@ -268,6 +269,24 @@ function createModal() {
                                                             </svg>
                                                         </button>
                                                         <div class="profile-model-menu" id="profile-model-menu" style="display:none;"></div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="profile-credentials-row form-group-span-2" id="profile-maas-auth-fields" style="display:none;">
+                                                <div class="form-group">
+                                                    <label for="profile-maas-username">MAAS Username</label>
+                                                    <input type="text" id="profile-maas-username" placeholder="username" autocomplete="username">
+                                                </div>
+                                                <div class="form-group">
+                                                    <label for="profile-maas-password">MAAS Password</label>
+                                                    <div class="secure-input-row">
+                                                        <input type="password" id="profile-maas-password" placeholder="password" autocomplete="current-password">
+                                                        <button class="secure-input-btn" id="toggle-profile-maas-password-btn" type="button" title="Show password" aria-label="Show password" style="display:none;">
+                                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                                                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                                            </svg>
+                                                        </button>
                                                     </div>
                                                 </div>
                                             </div>

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+import json
 from time import perf_counter
 from typing import cast
 
@@ -10,11 +11,14 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.net.clients import create_sync_http_client
+from relay_teams.providers.maas_auth import MaaSLoginError, get_maas_token_service
 from relay_teams.providers.known_model_context_windows import (
     infer_known_context_window,
 )
 from relay_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_MAAS_APP_ID,
+    MaaSAuthConfig,
     ModelEndpointConfig,
     ModelRequestHeader,
     ProviderType,
@@ -44,6 +48,7 @@ class ModelConnectivityProbeOverride(BaseModel):
     base_url: str | None = Field(default=None, min_length=1)
     api_key: str | None = Field(default=None, min_length=1)
     headers: tuple[ModelRequestHeader, ...] = ()
+    maas_auth: MaaSAuthConfig | None = None
     ssl_verify: bool | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -127,6 +132,7 @@ class ModelDiscoveryResolvedConfig(BaseModel):
     base_url: str = Field(min_length=1)
     api_key: str | None = Field(default=None, min_length=1)
     headers: tuple[ModelRequestHeader, ...] = ()
+    maas_auth: MaaSAuthConfig | None = None
     ssl_verify: bool | None = None
     connect_timeout_seconds: float = Field(gt=0.0, le=300.0)
 
@@ -147,6 +153,11 @@ class ModelConnectivityProbeService:
         timeout_ms = self._resolve_timeout_ms(request=request, config=resolved_config)
         if resolved_config.provider == ProviderType.ECHO:
             return self._build_echo_result(resolved_config)
+        if resolved_config.provider == ProviderType.MAAS:
+            return self._probe_maas(
+                config=resolved_config,
+                timeout_ms=timeout_ms,
+            )
         if _uses_openai_compatible_transport(resolved_config.provider):
             return self._probe_openai_compatible(
                 config=resolved_config,
@@ -178,6 +189,22 @@ class ModelConnectivityProbeService:
                     rate_limited=False,
                 ),
                 models=("echo",),
+            )
+        if resolved_config.provider == ProviderType.MAAS:
+            return ModelDiscoveryResult(
+                ok=False,
+                provider=resolved_config.provider,
+                base_url=resolved_config.base_url,
+                latency_ms=0,
+                checked_at=datetime.now(timezone.utc),
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="unsupported_provider",
+                error_message="MAAS model discovery is not supported. Enter the model name manually.",
+                retryable=False,
             )
         if _uses_openai_compatible_transport(resolved_config.provider):
             return self._discover_openai_compatible_models(
@@ -223,7 +250,12 @@ class ModelConnectivityProbeService:
                 missing_fields.append("model")
             if override.base_url is None:
                 missing_fields.append("base_url")
-            if override.api_key is None and not override.headers:
+            if (
+                override.provider or ProviderType.OPENAI_COMPATIBLE
+            ) == ProviderType.MAAS:
+                if override.maas_auth is None:
+                    missing_fields.append("maas_auth")
+            elif override.api_key is None and not override.headers:
                 missing_fields.append("api_key or headers")
             if missing_fields:
                 joined_fields = ", ".join(missing_fields)
@@ -238,6 +270,7 @@ class ModelConnectivityProbeService:
                 base_url=override_base_url,
                 api_key=override.api_key,
                 headers=override.headers,
+                maas_auth=override.maas_auth,
                 ssl_verify=override.ssl_verify,
                 sampling=SamplingConfig(
                     temperature=(
@@ -285,7 +318,12 @@ class ModelConnectivityProbeService:
             missing_fields: list[str] = []
             if override.base_url is None:
                 missing_fields.append("base_url")
-            if override.api_key is None and not override.headers:
+            if (
+                override.provider or ProviderType.OPENAI_COMPATIBLE
+            ) == ProviderType.MAAS:
+                if override.maas_auth is None:
+                    missing_fields.append("maas_auth")
+            elif override.api_key is None and not override.headers:
                 missing_fields.append("api_key or headers")
             if missing_fields:
                 joined_fields = ", ".join(missing_fields)
@@ -297,6 +335,7 @@ class ModelConnectivityProbeService:
                 base_url=cast(str, override.base_url),
                 api_key=override.api_key,
                 headers=override.headers,
+                maas_auth=override.maas_auth,
                 ssl_verify=override.ssl_verify,
                 connect_timeout_seconds=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
             )
@@ -307,6 +346,10 @@ class ModelConnectivityProbeService:
             base_url=resolved_override.base_url or base_config.base_url,
             api_key=resolved_override.api_key or base_config.api_key,
             headers=resolved_override.headers or base_config.headers,
+            maas_auth=self._merge_maas_auth(
+                base_maas_auth=base_config.maas_auth,
+                override_maas_auth=resolved_override.maas_auth,
+            ),
             ssl_verify=(
                 resolved_override.ssl_verify
                 if resolved_override.ssl_verify is not None
@@ -329,6 +372,10 @@ class ModelConnectivityProbeService:
             base_url=override.base_url or base_config.base_url,
             api_key=override.api_key or base_config.api_key,
             headers=override.headers or base_config.headers,
+            maas_auth=self._merge_maas_auth(
+                base_maas_auth=base_config.maas_auth,
+                override_maas_auth=override.maas_auth,
+            ),
             ssl_verify=(
                 override.ssl_verify
                 if override.ssl_verify is not None
@@ -351,6 +398,25 @@ class ModelConnectivityProbeService:
                     else base_config.sampling.max_tokens
                 ),
                 top_k=base_config.sampling.top_k,
+            ),
+        )
+
+    def _merge_maas_auth(
+        self,
+        *,
+        base_maas_auth: MaaSAuthConfig | None,
+        override_maas_auth: MaaSAuthConfig | None,
+    ) -> MaaSAuthConfig | None:
+        if override_maas_auth is None:
+            return base_maas_auth
+        if base_maas_auth is None:
+            return override_maas_auth
+        return MaaSAuthConfig(
+            username=override_maas_auth.username or base_maas_auth.username,
+            password=(
+                override_maas_auth.password
+                if override_maas_auth.password is not None
+                else base_maas_auth.password
             ),
         )
 
@@ -394,6 +460,124 @@ class ModelConnectivityProbeService:
                 completion_tokens=0,
                 total_tokens=0,
             ),
+        )
+
+    def _probe_maas(
+        self,
+        *,
+        config: ModelEndpointConfig,
+        timeout_ms: int,
+    ) -> ModelConnectivityProbeResult:
+        if config.maas_auth is None:
+            raise ValueError("MAAS probe requires maas_auth configuration.")
+        endpoint = f"{config.base_url.rstrip('/')}/chat/completions"
+        headers = build_model_request_headers(
+            config,
+            extra_headers={"Content-Type": "application/json"},
+        )
+        payload = {
+            "model": config.model,
+            "messages": [{"role": "user", "content": "reply with pong"}],
+            "temperature": config.sampling.temperature,
+            "top_p": config.sampling.top_p,
+            "max_tokens": 1,
+        }
+        started = perf_counter()
+        checked_at = datetime.now(timezone.utc)
+        try:
+            token = get_maas_token_service().get_token_sync(
+                auth_config=config.maas_auth,
+                ssl_verify=config.ssl_verify,
+                connect_timeout_seconds=timeout_ms / 1000,
+            )
+        except httpx.TimeoutException as exc:
+            return self._build_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_timeout",
+                error_message=str(exc) or "Connection timed out.",
+            )
+        except httpx.RequestError as exc:
+            return self._build_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_error",
+                error_message=str(exc) or "Failed to reach model endpoint.",
+            )
+        except MaaSLoginError as exc:
+            return self._build_maas_login_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error=exc,
+            )
+
+        headers["X-Auth-Token"] = token
+        headers["app-id"] = DEFAULT_MAAS_APP_ID
+        response = self._post_probe_request(
+            config=config,
+            endpoint=endpoint,
+            headers=headers,
+            payload=payload,
+            checked_at=checked_at,
+            started=started,
+            timeout_ms=timeout_ms,
+        )
+        if isinstance(response, ModelConnectivityProbeResult):
+            return response
+
+        if response.status_code in {401, 403}:
+            try:
+                refreshed_token = get_maas_token_service().get_token_sync(
+                    auth_config=config.maas_auth,
+                    ssl_verify=config.ssl_verify,
+                    connect_timeout_seconds=timeout_ms / 1000,
+                    force_refresh=True,
+                )
+            except httpx.TimeoutException as exc:
+                return self._build_transport_error_result(
+                    config=config,
+                    checked_at=checked_at,
+                    started=started,
+                    error_code="network_timeout",
+                    error_message=str(exc) or "Connection timed out.",
+                )
+            except httpx.RequestError as exc:
+                return self._build_transport_error_result(
+                    config=config,
+                    checked_at=checked_at,
+                    started=started,
+                    error_code="network_error",
+                    error_message=str(exc) or "Failed to reach model endpoint.",
+                )
+            except MaaSLoginError as exc:
+                return self._build_maas_login_error_result(
+                    config=config,
+                    checked_at=checked_at,
+                    started=started,
+                    error=exc,
+                )
+            retry_headers = dict(headers)
+            retry_headers["X-Auth-Token"] = refreshed_token
+            response = self._post_probe_request(
+                config=config,
+                endpoint=endpoint,
+                headers=retry_headers,
+                payload=payload,
+                checked_at=checked_at,
+                started=started,
+                timeout_ms=timeout_ms,
+            )
+            if isinstance(response, ModelConnectivityProbeResult):
+                return response
+
+        return self._build_probe_result_from_response(
+            config=config,
+            response=response,
+            checked_at=checked_at,
+            started=started,
         )
 
     def _probe_openai_compatible(
@@ -444,68 +628,11 @@ class ModelConnectivityProbeService:
                 error_message=str(exc) or "Failed to reach model endpoint.",
             )
 
-        latency_ms = self._latency_ms(started)
-        response_payload = self._response_payload(response)
-        if response.status_code >= 400:
-            error_message = (
-                self._extract_error_message(response_payload) or response.text
-            )
-            return self._build_http_error_result(
-                config=config,
-                checked_at=checked_at,
-                latency_ms=latency_ms,
-                status_code=response.status_code,
-                error_message=error_message or "Model connectivity check failed.",
-            )
-
-        if response_payload is _INVALID_RESPONSE_PAYLOAD:
-            return ModelConnectivityProbeResult(
-                ok=False,
-                provider=config.provider,
-                model=config.model,
-                latency_ms=latency_ms,
-                checked_at=checked_at,
-                diagnostics=ModelConnectivityDiagnostics(
-                    endpoint_reachable=True,
-                    auth_valid=True,
-                    rate_limited=False,
-                ),
-                error_code="invalid_response",
-                error_message="Provider returned invalid JSON.",
-                retryable=False,
-            )
-
-        if not isinstance(response_payload, dict):
-            return ModelConnectivityProbeResult(
-                ok=False,
-                provider=config.provider,
-                model=config.model,
-                latency_ms=latency_ms,
-                checked_at=checked_at,
-                diagnostics=ModelConnectivityDiagnostics(
-                    endpoint_reachable=True,
-                    auth_valid=True,
-                    rate_limited=False,
-                ),
-                error_code="invalid_response",
-                error_message="Provider returned a non-object JSON payload.",
-                retryable=False,
-            )
-
-        usage_payload = response_payload.get("usage")
-        token_usage = self._extract_token_usage(usage_payload)
-        return ModelConnectivityProbeResult(
-            ok=True,
-            provider=config.provider,
-            model=config.model,
-            latency_ms=latency_ms,
+        return self._build_probe_result_from_response(
+            config=config,
+            response=response,
             checked_at=checked_at,
-            diagnostics=ModelConnectivityDiagnostics(
-                endpoint_reachable=True,
-                auth_valid=True,
-                rate_limited=False,
-            ),
-            token_usage=token_usage,
+            started=started,
         )
 
     def _discover_openai_compatible_models(
@@ -637,6 +764,162 @@ class ModelConnectivityProbeService:
             ),
             models=tuple(entry.model for entry in model_entries),
             model_entries=model_entries,
+        )
+
+    def _post_probe_request(
+        self,
+        *,
+        config: ModelEndpointConfig,
+        endpoint: str,
+        headers: dict[str, str],
+        payload: dict[str, object],
+        checked_at: datetime,
+        started: float,
+        timeout_ms: int,
+    ) -> httpx.Response | ModelConnectivityProbeResult:
+        try:
+            with create_sync_http_client(
+                timeout_seconds=timeout_ms / 1000,
+                connect_timeout_seconds=timeout_ms / 1000,
+                ssl_verify=config.ssl_verify,
+            ) as client:
+                return client.post(
+                    endpoint,
+                    headers=headers,
+                    json=payload,
+                )
+        except httpx.TimeoutException as exc:
+            return self._build_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_timeout",
+                error_message=str(exc) or "Connection timed out.",
+            )
+        except httpx.RequestError as exc:
+            return self._build_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_error",
+                error_message=str(exc) or "Failed to reach model endpoint.",
+            )
+
+    def _build_maas_login_error_result(
+        self,
+        *,
+        config: ModelEndpointConfig,
+        checked_at: datetime,
+        started: float,
+        error: MaaSLoginError,
+    ) -> ModelConnectivityProbeResult:
+        status_code = error.status_code
+        error_message = str(error) or "MAAS login failed."
+        if status_code is None or status_code < 400:
+            return ModelConnectivityProbeResult(
+                ok=False,
+                provider=config.provider,
+                model=config.model,
+                latency_ms=self._latency_ms(started),
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="invalid_response",
+                error_message=error_message,
+                retryable=False,
+            )
+        auth_valid = status_code not in {400, 401, 403}
+        rate_limited = status_code == 429
+        retryable = rate_limited or status_code >= 500
+        error_code = (
+            "auth_invalid" if not auth_valid else self._http_error_code(status_code)
+        )
+        return ModelConnectivityProbeResult(
+            ok=False,
+            provider=config.provider,
+            model=config.model,
+            latency_ms=self._latency_ms(started),
+            checked_at=checked_at,
+            diagnostics=ModelConnectivityDiagnostics(
+                endpoint_reachable=True,
+                auth_valid=auth_valid,
+                rate_limited=rate_limited,
+            ),
+            error_code=error_code,
+            error_message=error_message,
+            retryable=retryable,
+        )
+
+    def _build_probe_result_from_response(
+        self,
+        *,
+        config: ModelEndpointConfig,
+        response: httpx.Response,
+        checked_at: datetime,
+        started: float,
+    ) -> ModelConnectivityProbeResult:
+        latency_ms = self._latency_ms(started)
+        response_payload = self._response_payload(response)
+        if response.status_code >= 400:
+            error_message = (
+                self._extract_error_message(response_payload) or response.text
+            )
+            return self._build_http_error_result(
+                config=config,
+                checked_at=checked_at,
+                latency_ms=latency_ms,
+                status_code=response.status_code,
+                error_message=error_message or "Model connectivity check failed.",
+            )
+        if response_payload is _INVALID_RESPONSE_PAYLOAD:
+            return ModelConnectivityProbeResult(
+                ok=False,
+                provider=config.provider,
+                model=config.model,
+                latency_ms=latency_ms,
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="invalid_response",
+                error_message="Provider returned invalid JSON.",
+                retryable=False,
+            )
+        if not isinstance(response_payload, dict):
+            return ModelConnectivityProbeResult(
+                ok=False,
+                provider=config.provider,
+                model=config.model,
+                latency_ms=latency_ms,
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="invalid_response",
+                error_message="Provider returned a non-object JSON payload.",
+                retryable=False,
+            )
+        usage_payload = response_payload.get("usage")
+        token_usage = self._extract_token_usage(usage_payload)
+        return ModelConnectivityProbeResult(
+            ok=True,
+            provider=config.provider,
+            model=config.model,
+            latency_ms=latency_ms,
+            checked_at=checked_at,
+            diagnostics=ModelConnectivityDiagnostics(
+                endpoint_reachable=True,
+                auth_valid=True,
+                rate_limited=False,
+            ),
+            token_usage=token_usage,
         )
 
     def _build_transport_error_result(
@@ -848,7 +1131,29 @@ class ModelConnectivityProbeService:
         try:
             return cast(object, response.json())
         except ValueError:
+            return self._event_stream_payload(response.text)
+
+    def _event_stream_payload(self, raw_text: str) -> object:
+        normalized = str(raw_text or "").strip()
+        if not normalized:
             return _INVALID_RESPONSE_PAYLOAD
+        data_chunks: list[str] = []
+        for raw_line in normalized.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+            chunk = line[5:].strip()
+            if not chunk or chunk == "[DONE]":
+                continue
+            data_chunks.append(chunk)
+        if not data_chunks:
+            return _INVALID_RESPONSE_PAYLOAD
+        for chunk in reversed(data_chunks):
+            try:
+                return cast(object, json.loads(chunk))
+            except ValueError:
+                continue
+        return _INVALID_RESPONSE_PAYLOAD
 
     def _http_error_code(self, status_code: int) -> str:
         if status_code in {401, 403}:

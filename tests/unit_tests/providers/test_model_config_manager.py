@@ -7,7 +7,11 @@ import json
 from pathlib import Path
 from typing import cast
 
-from relay_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
+from relay_teams.providers.model_config import (
+    DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_MAAS_BASE_URL,
+)
+from relay_teams.providers.maas_auth import maas_password_secret_field_name
 from relay_teams.providers.model_config_manager import ModelConfigManager
 from relay_teams.secrets import AppSecretStore
 
@@ -453,3 +457,127 @@ def test_get_model_profiles_migrates_legacy_api_key_out_of_model_json(
             "value": "legacy-secret",
         }
     ]
+
+
+def test_save_model_profile_stores_maas_password_in_secret_store(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    manager.save_model_profile(
+        "maas-profile",
+        {
+            "provider": "maas",
+            "model": "maas-chat",
+            "base_url": "https://maas.example/api/v2",
+            "maas_auth": {
+                "username": "relay-user",
+                "password": "relay-password",
+            },
+        },
+    )
+
+    profiles = manager.get_model_profiles()
+    model_payload = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
+    secrets_payload = json.loads(
+        (tmp_path / "secrets.json").read_text(encoding="utf-8")
+    )
+    maas_auth = cast(dict[str, JsonValue], profiles["maas-profile"]["maas_auth"])
+
+    assert cast(str, profiles["maas-profile"]["base_url"]) == DEFAULT_MAAS_BASE_URL
+    assert maas_auth["username"] == "relay-user"
+    assert maas_auth["password"] == "relay-password"
+    assert maas_auth["has_password"] is True
+    assert model_payload["maas-profile"]["base_url"] == DEFAULT_MAAS_BASE_URL
+    assert model_payload["maas-profile"]["maas_auth"] == {
+        "username": "relay-user",
+    }
+    assert {
+        "namespace": "model_profile",
+        "owner_id": "maas-profile",
+        "field_name": maas_password_secret_field_name(),
+        "storage": "file",
+        "value": "relay-password",
+    } in secrets_payload["entries"]
+
+
+def test_save_model_profile_preserves_existing_maas_password_when_blank(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager.save_model_profile(
+        "maas-profile",
+        {
+            "provider": "maas",
+            "model": "maas-chat",
+            "base_url": "https://maas.example/api/v2",
+            "maas_auth": {
+                "username": "relay-user",
+                "password": "relay-password",
+            },
+        },
+    )
+
+    manager.save_model_profile(
+        "maas-profile",
+        {
+            "provider": "maas",
+            "model": "maas-chat-v2",
+            "base_url": "https://maas.example/api/v2",
+            "maas_auth": {
+                "username": "relay-user-2",
+            },
+        },
+    )
+
+    config = manager.get_model_config()
+    saved_profile = cast(dict[str, JsonValue], config["maas-profile"])
+    saved_maas_auth = cast(dict[str, JsonValue], saved_profile["maas_auth"])
+
+    assert saved_profile["model"] == "maas-chat-v2"
+    assert saved_profile["base_url"] == DEFAULT_MAAS_BASE_URL
+    assert saved_maas_auth["password"] == "relay-password"
+    assert saved_maas_auth["username"] == "relay-user-2"
+
+
+def test_switching_profile_to_maas_removes_stale_api_key_secret(tmp_path: Path) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager.save_model_profile(
+        "default",
+        {
+            "provider": "openai_compatible",
+            "model": "gpt-4o-mini",
+            "base_url": "https://example.test/v1",
+            "api_key": "secret-key",
+        },
+    )
+
+    manager.save_model_profile(
+        "default",
+        {
+            "provider": "maas",
+            "model": "maas-chat",
+            "base_url": "https://maas.example/api/v2",
+            "maas_auth": {
+                "username": "relay-user",
+                "password": "relay-password",
+            },
+        },
+    )
+
+    secrets_payload = json.loads(
+        (tmp_path / "secrets.json").read_text(encoding="utf-8")
+    )
+    field_names = {entry["field_name"] for entry in secrets_payload["entries"]}
+
+    assert "api_key" not in field_names
+    assert maas_password_secret_field_name() in field_names
