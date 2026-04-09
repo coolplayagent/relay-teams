@@ -9,6 +9,7 @@ export const state = {
     currentSessionCanSwitchMode: false,
     currentMainView: 'session',
     currentProjectViewWorkspaceId: null,
+    currentFeatureViewId: null,
     isGenerating: false,
     activeEventSource: null,
     agentViews: {},
@@ -164,6 +165,7 @@ export function applyCurrentSessionRecord(record) {
     state.currentSessionCanSwitchMode = record?.can_switch_mode === true;
     state.currentMainView = 'session';
     state.currentProjectViewWorkspaceId = null;
+    state.currentFeatureViewId = null;
 }
 
 export function resetCurrentSessionTopology() {

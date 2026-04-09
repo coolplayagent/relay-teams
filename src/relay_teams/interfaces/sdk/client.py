@@ -89,8 +89,9 @@ class AgentTeamsClient:
 
     def list_clawhub_skills(self) -> list[dict[str, JsonValue]]:
         data = self._request_json("GET", "/api/system/configs/clawhub/skills")
-        if isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
+        raw = data.get("data")
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
         return []
 
     def get_clawhub_skill(self, skill_id: str) -> dict[str, JsonValue]:

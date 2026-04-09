@@ -2131,6 +2131,8 @@ class AgentLlmSession:
                 base_url=self._config.base_url,
                 api_key=self._config.api_key,
                 headers=self._config.headers,
+                provider_type=self._config.provider,
+                maas_auth=self._config.maas_auth,
                 system_prompt=prepared_system_prompt,
                 allowed_tools=allowed_tools,
                 model_settings=model_settings,

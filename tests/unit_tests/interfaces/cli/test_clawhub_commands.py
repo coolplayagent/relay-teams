@@ -103,3 +103,32 @@ def test_clawhub_skill_commands_call_expected_endpoints(monkeypatch) -> None:
         ),
         ("DELETE", "/api/system/configs/clawhub/skills/skill-creator-2", None),
     ]
+
+
+def test_clawhub_config_save_requires_token_or_clear(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_autostart(base_url: str, autostart: bool) -> None:
+        _ = (base_url, autostart)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object] | list[object]:
+        _ = (base_url, timeout_seconds)
+        calls.append((method, path, payload))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
+    monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+
+    save_result = runner.invoke(
+        cli_app.app,
+        ["clawhub", "config", "save"],
+    )
+
+    assert save_result.exit_code == 2
+    assert calls == []

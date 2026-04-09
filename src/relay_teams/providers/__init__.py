@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from relay_teams.providers.provider_contracts import EchoProvider, LLMProvider
     from relay_teams.providers.model_config import (
         LlmRetryConfig,
+        MaaSAuthConfig,
         ModelEndpointConfig,
         ModelRequestHeader,
         ProviderModelInfo,
@@ -55,6 +56,7 @@ __all__ = [
     "EchoProvider",
     "LLMProvider",
     "LlmRetryConfig",
+    "MaaSAuthConfig",
     "LlmRetryErrorInfo",
     "LlmRetrySchedule",
     "ModelEndpointConfig",
@@ -94,6 +96,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "EchoProvider": ("relay_teams.providers.provider_contracts", "EchoProvider"),
     "LLMProvider": ("relay_teams.providers.provider_contracts", "LLMProvider"),
     "LlmRetryConfig": ("relay_teams.providers.model_config", "LlmRetryConfig"),
+    "MaaSAuthConfig": ("relay_teams.providers.model_config", "MaaSAuthConfig"),
     "LlmRetryErrorInfo": (
         "relay_teams.providers.llm_retry",
         "LlmRetryErrorInfo",

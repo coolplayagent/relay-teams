@@ -70,6 +70,8 @@ from relay_teams.notifications.notification_settings_service import (
 )
 from relay_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_MAAS_BASE_URL,
+    MaaSAuthConfig,
     ModelRequestHeader,
     ProviderType,
 )
@@ -155,6 +157,7 @@ class ModelProfileRequest(BaseModel):
     base_url: str
     api_key: str | None = None
     headers: tuple[ModelRequestHeader, ...] | None = None
+    maas_auth: MaaSAuthConfig | None = None
     ssl_verify: bool | None = None
     temperature: float = 0.7
     top_p: float = 1.0
@@ -173,7 +176,11 @@ def save_model_profile(
         profile: dict[str, JsonValue] = {
             "model": req.model,
             "provider": req.provider.value,
-            "base_url": req.base_url,
+            "base_url": (
+                DEFAULT_MAAS_BASE_URL
+                if req.provider == ProviderType.MAAS
+                else req.base_url
+            ),
             "temperature": req.temperature,
             "top_p": req.top_p,
             "context_window": req.context_window,
@@ -191,6 +198,8 @@ def save_model_profile(
             profile["headers"] = [
                 header.model_dump(mode="json") for header in req.headers
             ]
+        if req.maas_auth is not None:
+            profile["maas_auth"] = req.maas_auth.model_dump(mode="json")
         service.save_model_profile(name, profile, source_name=req.source_name)
         return {"status": "ok"}
     except Exception as exc:

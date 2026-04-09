@@ -168,7 +168,7 @@ def test_clawhub_sdk_calls_expected_endpoints(monkeypatch) -> None:
     ) -> dict[str, object] | list[object]:
         calls.append((method, path, payload))
         if method == "GET" and path == "/api/system/configs/clawhub/skills":
-            return [{"skill_id": "skill-creator-2"}]
+            return {"data": [{"skill_id": "skill-creator-2"}]}
         return {"status": "ok"}
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
@@ -202,6 +202,22 @@ def test_clawhub_sdk_calls_expected_endpoints(monkeypatch) -> None:
         ),
         ("DELETE", "/api/system/configs/clawhub/skills/skill-creator-2", None),
     ]
+
+
+def test_clawhub_sdk_returns_empty_list_for_non_list_skill_payload(monkeypatch) -> None:
+    client = AgentTeamsClient()
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        _ = (method, path, payload)
+        return {"data": {"skill_id": "skill-creator-2"}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.list_clawhub_skills() == []
 
 
 def test_save_proxy_config_passes_proxy_payload(monkeypatch) -> None:

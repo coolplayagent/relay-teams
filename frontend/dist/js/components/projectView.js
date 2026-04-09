@@ -3,18 +3,38 @@
  * Renders the main workspace snapshot for a selected project.
  */
 import {
+    createAutomationProject,
+    createTrigger,
+    deleteAutomationProject,
+    deleteTrigger,
+    deleteWeChatGatewayAccount,
     disableAutomationProject,
+    disableTrigger,
+    disableWeChatGatewayAccount,
+    enableTrigger,
+    enableWeChatGatewayAccount,
     enableAutomationProject,
     fetchAutomationFeishuBindings,
+    fetchAutomationProjects,
     fetchAutomationProject,
     fetchAutomationProjectSessions,
+    fetchConfigStatus,
+    fetchOrchestrationConfig,
+    fetchRoleConfigOptions,
+    fetchTriggers,
+    fetchWeChatGatewayAccounts,
     fetchWorkspaceDiffFile,
     fetchWorkspaces,
     fetchWorkspaceDiffs,
     fetchWorkspaceSnapshot,
     fetchWorkspaceTree,
+    reloadSkillsConfig,
     runAutomationProject,
+    startWeChatGatewayLogin,
     updateAutomationProject,
+    updateTrigger,
+    updateWeChatGatewayAccount,
+    waitWeChatGatewayLogin,
 } from '../core/api.js';
 import { clearAllPanels } from './agentPanel.js';
 import { hideRoundNavigator } from './rounds/navigator.js';
@@ -22,28 +42,506 @@ import { setSubagentRailExpanded } from './subagentRail.js';
 import { state } from '../core/state.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
-import { showFormDialog } from '../utils/feedback.js';
+import { showConfirmDialog, showFormDialog, showToast } from '../utils/feedback.js';
 import { sysLog } from '../utils/logger.js';
 
 let currentWorkspace = null;
 let currentAutomationProject = null;
 let currentProjectViewMode = 'workspace';
+let currentFeatureViewId = '';
+let currentAutomationProjects = [];
+let selectedAutomationHomeProjectId = '';
+let currentAutomationHomeDetail = createInitialAutomationHomeDetail();
+let currentSkillsStatus = null;
+let currentGatewayFeatureState = createInitialGatewayFeatureState();
+let currentAutomationEditorState = createInitialAutomationEditorState();
 let currentSnapshot = null;
 let currentSnapshotWorkspaceId = null;
 let currentLoadToken = 0;
 let languageBound = false;
+let gatewayModalRoot = null;
+let automationEditorModalRoot = null;
 let selectedTreePath = null;
 let currentDiffState = createInitialDiffState();
 const expandedTreePaths = new Set();
 const loadingTreePaths = new Set();
 const treeLoadErrors = new Map();
 const workspaceViewCache = new Map();
+const FEATURE_VIEW_IDS = Object.freeze({
+    skills: 'skills',
+    automation: 'automation',
+    gateway: 'gateway',
+});
+const FEISHU_PLATFORM = 'feishu';
+const WECHAT_PLATFORM = 'wechat';
+const DEFAULT_TRIGGER_RULE = 'mention_only';
+const DEFAULT_SESSION_MODE = 'normal';
+const DEFAULT_THINKING_EFFORT = 'medium';
+const DEFAULT_AUTOMATION_TIMEZONE = 'Asia/Shanghai';
+const THINKING_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high'];
+const AUTOMATION_SCHEDULE_KINDS = Object.freeze({
+    daily: 'daily',
+    weekdays: 'weekdays',
+    weekly: 'weekly',
+    monthly: 'monthly',
+    oneShot: 'one_shot',
+    unsupported: 'unsupported',
+});
+
+function createInitialAutomationHomeDetail() {
+    return {
+        project: null,
+        sessions: [],
+        workspace: null,
+        feishuBindings: [],
+    };
+}
+
+function createInitialAutomationEditorState() {
+    return {
+        open: false,
+        mode: 'create',
+        projectId: '',
+        project: null,
+        title: '',
+        message: '',
+        confirmLabel: '',
+        workspaces: [],
+        feishuBindings: [],
+        draft: null,
+        resolve: null,
+        errorMessage: '',
+    };
+}
+
+function createInitialGatewayFeatureState() {
+    return {
+        feishuTriggers: [],
+        feishuEditingTriggerId: '',
+        feishuDraft: null,
+        wechatAccounts: [],
+        workspaces: [],
+        normalRoles: [],
+        orchestrationPresets: [],
+        wechatLoginRequestId: 0,
+        wechatModalOpen: false,
+        wechatLoginSession: null,
+        wechatStatusMessage: '',
+        wechatStatusTone: '',
+        wechatConnecting: false,
+    };
+}
 
 function formatMessage(key, values = {}) {
     return Object.entries(values).reduce(
         (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
         t(key),
     );
+}
+
+function createFeishuTriggerDraft(trigger = null) {
+    const sourceConfig = trigger?.source_config && typeof trigger.source_config === 'object' ? trigger.source_config : {};
+    const targetConfig = trigger?.target_config && typeof trigger.target_config === 'object' ? trigger.target_config : {};
+    const secretStatus = trigger?.secret_status && typeof trigger.secret_status === 'object' ? trigger.secret_status : {};
+    const firstWorkspaceId = String(currentGatewayFeatureState.workspaces[0]?.workspace_id || '').trim();
+    const firstRoleId = String(currentGatewayFeatureState.normalRoles[0]?.role_id || '').trim();
+    return {
+        trigger_id: String(trigger?.trigger_id || '').trim(),
+        name: String(trigger?.name || 'feishu-main').trim(),
+        display_name: String(trigger?.display_name || '').trim(),
+        status: String(trigger?.status || 'enabled').trim() || 'enabled',
+        source_config: {
+            provider: FEISHU_PLATFORM,
+            trigger_rule: String(sourceConfig?.trigger_rule || DEFAULT_TRIGGER_RULE).trim() || DEFAULT_TRIGGER_RULE,
+            app_id: String(sourceConfig?.app_id || '').trim(),
+            app_name: String(sourceConfig?.app_name || '').trim(),
+        },
+        target_config: {
+            workspace_id: String(targetConfig?.workspace_id || firstWorkspaceId).trim(),
+            session_mode: String(targetConfig?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE,
+            normal_root_role_id: String(targetConfig?.normal_root_role_id || firstRoleId).trim(),
+            orchestration_preset_id: String(targetConfig?.orchestration_preset_id || '').trim(),
+            yolo: targetConfig?.yolo !== false,
+            thinking: {
+                enabled: targetConfig?.thinking?.enabled === true,
+                effort: String(targetConfig?.thinking?.effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT,
+            },
+        },
+        secret_config: {},
+        secret_status: { ...secretStatus },
+        pending_app_secret: '',
+    };
+}
+
+function resolveSessionMode(targetConfig) {
+    return String(targetConfig?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+}
+
+function resolveNormalRootRoleId(targetConfig) {
+    return String(targetConfig?.normal_root_role_id || '').trim();
+}
+
+function resolveOrchestrationPresetId(targetConfig) {
+    return String(targetConfig?.orchestration_preset_id || '').trim();
+}
+
+function resolveThinkingEnabled(targetConfig) {
+    return targetConfig?.thinking?.enabled === true;
+}
+
+function resolveThinkingEffort(targetConfig) {
+    return String(targetConfig?.thinking?.effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT;
+}
+
+function resolveYolo(targetConfig) {
+    return targetConfig?.yolo !== false;
+}
+
+function resolveRule(sourceConfig) {
+    return String(sourceConfig?.trigger_rule || DEFAULT_TRIGGER_RULE).trim() || DEFAULT_TRIGGER_RULE;
+}
+
+function renderGatewayWorkspaceOptions(selectedWorkspaceId) {
+    if (currentGatewayFeatureState.workspaces.length === 0) {
+        return `<option value="">${escapeHtml(t('settings.triggers.no_workspaces'))}</option>`;
+    }
+    return currentGatewayFeatureState.workspaces.map(workspace => {
+        const workspaceId = String(workspace?.workspace_id || '').trim();
+        const selected = workspaceId === selectedWorkspaceId ? ' selected' : '';
+        return `<option value="${escapeHtml(workspaceId)}"${selected}>${escapeHtml(formatWorkspaceOptionLabel(workspace))}</option>`;
+    }).join('');
+}
+
+function renderGatewayRoleOptions(selectedRoleId) {
+    if (currentGatewayFeatureState.normalRoles.length === 0) {
+        return `<option value="">${escapeHtml(t('composer.no_roles'))}</option>`;
+    }
+    return currentGatewayFeatureState.normalRoles.map(role => {
+        const roleId = String(role?.role_id || '').trim();
+        const selected = roleId === selectedRoleId ? ' selected' : '';
+        return `<option value="${escapeHtml(roleId)}"${selected}>${escapeHtml(String(role?.name || roleId))}</option>`;
+    }).join('');
+}
+
+function renderGatewayPresetOptions(selectedPresetId) {
+    if (currentGatewayFeatureState.orchestrationPresets.length === 0) {
+        return `<option value="">${escapeHtml(t('composer.no_presets'))}</option>`;
+    }
+    return currentGatewayFeatureState.orchestrationPresets.map(preset => {
+        const presetId = String(preset?.preset_id || '').trim();
+        const selected = presetId === selectedPresetId ? ' selected' : '';
+        return `<option value="${escapeHtml(presetId)}"${selected}>${escapeHtml(String(preset?.name || presetId))}</option>`;
+    }).join('');
+}
+
+function lookupDocumentElement(id) {
+    if (!document?.getElementById) {
+        return null;
+    }
+    try {
+        return document.getElementById(id);
+    } catch {
+        return null;
+    }
+}
+
+function readEditorValue(id) {
+    return String(lookupDocumentElement(id)?.value || '').trim();
+}
+
+function readEditorChecked(id, fallback = false) {
+    const element = lookupDocumentElement(id);
+    return typeof element?.checked === 'boolean' ? element.checked : fallback;
+}
+
+function syncFeishuDraftFromEditor() {
+    const draft = currentGatewayFeatureState.feishuDraft;
+    if (!draft) {
+        return null;
+    }
+    const sessionMode = readEditorValue('feishu-session-mode-input') || resolveSessionMode(draft.target_config);
+    const thinkingEnabled = readEditorChecked('feishu-trigger-thinking-enabled-input', resolveThinkingEnabled(draft.target_config));
+    const nextDraft = {
+        ...draft,
+        name: readEditorValue('feishu-trigger-name-input') || draft.name,
+        display_name: readEditorValue('feishu-display-name-input'),
+        status: String(draft.status || '').trim() || 'enabled',
+        source_config: {
+            ...draft.source_config,
+            trigger_rule: readEditorValue('feishu-trigger-rule-input') || resolveRule(draft.source_config),
+            app_name: readEditorValue('feishu-app-name-input'),
+            app_id: readEditorValue('feishu-app-id-input'),
+        },
+        target_config: {
+            ...draft.target_config,
+            workspace_id: readEditorValue('feishu-trigger-workspace-id-input') || String(draft.target_config?.workspace_id || '').trim(),
+            session_mode: sessionMode,
+            normal_root_role_id: sessionMode === 'normal' ? readEditorValue('feishu-normal-root-role-id-input') : '',
+            orchestration_preset_id: sessionMode === 'orchestration' ? readEditorValue('feishu-orchestration-preset-id-input') : '',
+            yolo: readEditorChecked('feishu-trigger-yolo-input', resolveYolo(draft.target_config)),
+            thinking: {
+                enabled: thinkingEnabled,
+                effort: thinkingEnabled
+                    ? (readEditorValue('feishu-thinking-effort-input') || resolveThinkingEffort(draft.target_config))
+                    : DEFAULT_THINKING_EFFORT,
+            },
+        },
+        pending_app_secret: readEditorValue('feishu-app-secret-input'),
+    };
+    currentGatewayFeatureState = {
+        ...currentGatewayFeatureState,
+        feishuDraft: nextDraft,
+    };
+    return nextDraft;
+}
+
+function buildFeishuTriggerPayload(draft, { requireSecret = false } = {}) {
+    const name = String(draft?.name || '').trim();
+    const workspaceId = String(draft?.target_config?.workspace_id || '').trim();
+    const appId = String(draft?.source_config?.app_id || '').trim();
+    const appName = String(draft?.source_config?.app_name || '').trim();
+    const appSecret = String(draft?.pending_app_secret || '').trim();
+    const nextSessionMode = resolveSessionMode(draft?.target_config);
+    const orchestrationPresetId = resolveOrchestrationPresetId(draft?.target_config);
+    if (!name) {
+        throw new Error(t('settings.triggers.missing_name'));
+    }
+    if (!workspaceId) {
+        throw new Error(t('settings.triggers.missing_workspace'));
+    }
+    if (!appId) {
+        throw new Error(t('settings.triggers.missing_app_id'));
+    }
+    if (!appName) {
+        throw new Error(t('settings.triggers.missing_app_name'));
+    }
+    if (requireSecret && !appSecret) {
+        throw new Error(t('settings.triggers.missing_app_secret'));
+    }
+    if (nextSessionMode === 'orchestration' && !orchestrationPresetId) {
+        throw new Error(t('settings.triggers.missing_orchestration_preset_id'));
+    }
+    const payload = {
+        name,
+        display_name: String(draft?.display_name || '').trim() || null,
+        source_config: {
+            provider: FEISHU_PLATFORM,
+            trigger_rule: resolveRule(draft?.source_config),
+            app_id: appId,
+            app_name: appName,
+        },
+        target_config: {
+            workspace_id: workspaceId,
+            session_mode: nextSessionMode,
+            yolo: resolveYolo(draft?.target_config),
+            thinking: {
+                enabled: resolveThinkingEnabled(draft?.target_config),
+                effort: resolveThinkingEnabled(draft?.target_config) ? resolveThinkingEffort(draft?.target_config) : null,
+            },
+        },
+        enabled: String(draft?.status || '').trim() === 'enabled',
+    };
+    const normalRootRoleId = resolveNormalRootRoleId(draft?.target_config);
+    if (nextSessionMode === 'normal' && normalRootRoleId) {
+        payload.target_config.normal_root_role_id = normalRootRoleId;
+    }
+    if (nextSessionMode === 'orchestration' && orchestrationPresetId) {
+        payload.target_config.orchestration_preset_id = orchestrationPresetId;
+    }
+    if (appSecret) {
+        payload.secret_config = { app_secret: appSecret };
+    }
+    return payload;
+}
+
+function renderFeishuEditor() {
+    const draft = currentGatewayFeatureState.feishuDraft;
+    if (!draft) {
+        return '';
+    }
+    const secretStatus = draft.secret_status && typeof draft.secret_status === 'object' ? draft.secret_status : {};
+    const sessionMode = resolveSessionMode(draft.target_config);
+    const thinkingEnabled = resolveThinkingEnabled(draft.target_config);
+    return `
+        <div class="gateway-feishu-editor">
+            <div class="role-editor-panel">
+                <div class="role-editor-form">
+                    <div class="role-editor-sections">
+                        <section class="role-editor-section">
+                            <h5>${escapeHtml(t('settings.triggers.bot_configuration'))}</h5>
+                            <div class="gateway-field-grid gateway-field-grid-2">
+                                <div class="form-group">
+                                    <label for="feishu-trigger-name-input">${escapeHtml(t('settings.triggers.trigger_name'))}</label>
+                                    <input id="feishu-trigger-name-input" value="${escapeHtml(String(draft.name || ''))}">
+                                </div>
+                                <div class="form-group">
+                                    <label for="feishu-display-name-input">${escapeHtml(t('settings.triggers.display_name'))}</label>
+                                    <input id="feishu-display-name-input" value="${escapeHtml(String(draft.display_name || ''))}">
+                                </div>
+                            </div>
+                            <div class="gateway-field-grid gateway-field-grid-3 gateway-field-grid-compact">
+                                <div class="form-group">
+                                    <label for="feishu-app-name-input">${escapeHtml(t('settings.triggers.feishu_app_name'))}</label>
+                                    <input id="feishu-app-name-input" placeholder="${escapeHtml(t('settings.triggers.feishu_app_name_placeholder'))}" value="${escapeHtml(String(draft.source_config?.app_name || ''))}">
+                                </div>
+                                <div class="form-group">
+                                    <label for="feishu-app-id-input">${escapeHtml(t('settings.triggers.feishu_app_id'))}</label>
+                                    <input id="feishu-app-id-input" placeholder="${escapeHtml(t('settings.triggers.feishu_app_id_placeholder'))}" value="${escapeHtml(String(draft.source_config?.app_id || ''))}">
+                                </div>
+                                <div class="form-group">
+                                    <label for="feishu-app-secret-input">${escapeHtml(t('settings.triggers.feishu_app_secret'))}</label>
+                                    <input id="feishu-app-secret-input" type="password" placeholder="${escapeHtml(secretStatus?.app_secret_configured ? t('settings.triggers.secret_keep_placeholder') : t('settings.triggers.feishu_app_secret_placeholder'))}" value="">
+                                </div>
+                            </div>
+                        </section>
+                        <section class="role-editor-section">
+                            <h5>${escapeHtml(t('settings.triggers.session_configuration'))}</h5>
+                            <div class="gateway-session-core-grid">
+                                <div class="form-group">
+                                    <label for="feishu-trigger-workspace-id-input">${escapeHtml(t('settings.triggers.workspace'))}</label>
+                                    <select id="feishu-trigger-workspace-id-input">
+                                        ${renderGatewayWorkspaceOptions(String(draft.target_config?.workspace_id || '').trim())}
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="feishu-trigger-rule-input">${escapeHtml(t('settings.triggers.rule'))}</label>
+                                    <select id="feishu-trigger-rule-input">
+                                        <option value="mention_only"${resolveRule(draft.source_config) === 'mention_only' ? ' selected' : ''}>mention_only</option>
+                                        <option value="all_messages"${resolveRule(draft.source_config) === 'all_messages' ? ' selected' : ''}>all_messages</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="gateway-session-mode-row">
+                                <div class="form-group gateway-session-mode-field">
+                                    <label for="feishu-session-mode-input">${escapeHtml(t('settings.triggers.mode'))}</label>
+                                    <select id="feishu-session-mode-input">
+                                        <option value="normal"${sessionMode === 'normal' ? ' selected' : ''}>${escapeHtml(t('composer.mode_normal'))}</option>
+                                        <option value="orchestration"${sessionMode === 'orchestration' ? ' selected' : ''}>${escapeHtml(t('composer.mode_orchestration'))}</option>
+                                    </select>
+                                </div>
+                                <div class="form-group gateway-session-mode-detail" id="feishu-normal-role-field"${sessionMode === 'normal' ? '' : ' style="display:none;"'}>
+                                    <label for="feishu-normal-root-role-id-input">${escapeHtml(t('settings.triggers.normal_root_role_id'))}</label>
+                                    <select id="feishu-normal-root-role-id-input">
+                                        ${renderGatewayRoleOptions(resolveNormalRootRoleId(draft.target_config))}
+                                    </select>
+                                </div>
+                                <div class="form-group gateway-session-mode-detail" id="feishu-preset-field"${sessionMode === 'orchestration' ? '' : ' style="display:none;"'}>
+                                    <label for="feishu-orchestration-preset-id-input">${escapeHtml(t('settings.triggers.orchestration_preset_id'))}</label>
+                                    <select id="feishu-orchestration-preset-id-input">
+                                        ${renderGatewayPresetOptions(resolveOrchestrationPresetId(draft.target_config))}
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="gateway-toggle-grid">
+                                <div class="gateway-setting-panel">
+                                    <label class="gateway-setting-toggle-row" for="feishu-trigger-yolo-input">
+                                            <span class="gateway-setting-toggle-copy">${escapeHtml(t('settings.triggers.yolo'))}</span>
+                                            <input id="feishu-trigger-yolo-input" type="checkbox"${resolveYolo(draft.target_config) ? ' checked' : ''}>
+                                            <span class="gateway-editor-toggle-switch" aria-hidden="true">
+                                                <span class="gateway-editor-toggle-thumb"></span>
+                                            </span>
+                                    </label>
+                                </div>
+                                <div class="gateway-setting-panel gateway-thinking-panel${thinkingEnabled ? ' is-expanded' : ''}" id="feishu-thinking-panel">
+                                    <label class="gateway-setting-toggle-row" for="feishu-trigger-thinking-enabled-input">
+                                            <span class="gateway-setting-toggle-copy">${escapeHtml(t('settings.triggers.thinking_enabled'))}</span>
+                                            <input id="feishu-trigger-thinking-enabled-input" type="checkbox"${thinkingEnabled ? ' checked' : ''}>
+                                            <span class="gateway-editor-toggle-switch" aria-hidden="true">
+                                                <span class="gateway-editor-toggle-thumb"></span>
+                                            </span>
+                                    </label>
+                                        <div class="gateway-thinking-panel-body" id="feishu-thinking-effort-field"${thinkingEnabled ? '' : ' style="display:none;"'}>
+                                            <label class="gateway-thinking-panel-label" for="feishu-thinking-effort-input">${escapeHtml(t('settings.triggers.thinking_effort'))}</label>
+                                            <select id="feishu-thinking-effort-input">
+                                                ${THINKING_EFFORT_OPTIONS.map(effort => `<option value="${effort}"${resolveThinkingEffort(draft.target_config) === effort ? ' selected' : ''}>${effort}</option>`).join('')}
+                                            </select>
+                                        </div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                    <div class="gateway-editor-actions">
+                        <button class="secondary-btn gateway-editor-action-btn gateway-editor-cancel-btn" type="button" data-feature-feishu-cancel>${escapeHtml(t('settings.action.cancel'))}</button>
+                        <button class="primary-btn gateway-editor-action-btn gateway-editor-save-btn" type="button" data-feature-feishu-save>${escapeHtml(t('settings.action.save'))}</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function bindFeishuEditorInputs() {
+    if (!currentGatewayFeatureState.feishuDraft) {
+        return;
+    }
+    [
+        'feishu-trigger-name-input',
+        'feishu-display-name-input',
+        'feishu-app-name-input',
+        'feishu-app-id-input',
+        'feishu-app-secret-input',
+        'feishu-trigger-workspace-id-input',
+        'feishu-trigger-rule-input',
+        'feishu-normal-root-role-id-input',
+        'feishu-orchestration-preset-id-input',
+        'feishu-thinking-effort-input',
+        'feishu-trigger-yolo-input',
+    ].forEach(id => {
+        const element = lookupDocumentElement(id);
+        if (!element) {
+            return;
+        }
+        element.oninput = () => {
+            syncFeishuDraftFromEditor();
+        };
+        element.onchange = () => {
+            syncFeishuDraftFromEditor();
+        };
+    });
+    const sessionModeInput = lookupDocumentElement('feishu-session-mode-input');
+    if (sessionModeInput) {
+        sessionModeInput.onchange = () => {
+            syncFeishuDraftFromEditor();
+            syncFeishuSessionFieldVisibility();
+        };
+    }
+    const thinkingEnabledInput = lookupDocumentElement('feishu-trigger-thinking-enabled-input');
+    if (thinkingEnabledInput) {
+        thinkingEnabledInput.onchange = () => {
+            syncFeishuDraftFromEditor();
+            syncFeishuThinkingEffortVisibility();
+        };
+    }
+    syncFeishuSessionFieldVisibility();
+    syncFeishuThinkingEffortVisibility();
+}
+
+function syncFeishuSessionFieldVisibility() {
+    const mode = readEditorValue('feishu-session-mode-input') || resolveSessionMode(currentGatewayFeatureState.feishuDraft?.target_config);
+    const normalField = lookupDocumentElement('feishu-normal-role-field');
+    const presetField = lookupDocumentElement('feishu-preset-field');
+    if (normalField?.style) {
+        normalField.style.display = mode === 'normal' ? '' : 'none';
+    }
+    if (presetField?.style) {
+        presetField.style.display = mode === 'orchestration' ? '' : 'none';
+    }
+}
+
+function syncFeishuThinkingEffortVisibility() {
+    const enabled = readEditorChecked('feishu-trigger-thinking-enabled-input', resolveThinkingEnabled(currentGatewayFeatureState.feishuDraft?.target_config));
+    const effortField = lookupDocumentElement('feishu-thinking-effort-field');
+    const thinkingPanel = lookupDocumentElement('feishu-thinking-panel');
+    if (effortField?.style) {
+        effortField.style.display = enabled ? '' : 'none';
+    }
+    if (thinkingPanel?.classList) {
+        if (enabled) {
+            thinkingPanel.classList.add('is-expanded');
+        } else {
+            thinkingPanel.classList.remove('is-expanded');
+        }
+    }
 }
 
 
@@ -130,135 +628,370 @@ function resolveFeishuBindingDisplayName(binding, bindings) {
 
 function formatAutomationRunLogMessage(result) {
     const sessionId = String(result?.session_id || '').trim();
-    const suffix = sessionId ? `: ${sessionId}` : '';
     if (result?.queued === true) {
         return formatMessage('sidebar.log.queued_bound_session', { session_id: sessionId });
     }
-    return formatMessage('sidebar.log.started_bound_session', { session_id: sessionId });
+    if (result?.reused_bound_session === true) {
+        return formatMessage('sidebar.log.started_bound_session', { session_id: sessionId });
+    }
+    return formatMessage('sidebar.log.started_automation_run', { session_id: sessionId });
 }
 
-async function requestAutomationProjectEditInput(project) {
+export async function requestAutomationProjectInput(project = {}, dialogOptions = {}) {
     const [workspaces, feishuBindings] = await Promise.all([
         fetchWorkspaces(),
         fetchAutomationFeishuBindings(),
     ]);
-    const workspaceOptions = (Array.isArray(workspaces) ? workspaces : []).map(workspace => ({
-        value: String(workspace?.workspace_id || '').trim(),
-        label: formatWorkspaceOptionLabel(workspace),
-        description: formatWorkspaceOptionDescription(workspace),
-    })).filter(option => option.value);
-    const bindingOptions = buildFeishuBindingOptions(feishuBindings);
-    if (workspaceOptions.length === 0) {
+    const workspaceList = Array.isArray(workspaces) ? workspaces : [];
+    if (workspaceList.length === 0) {
         return null;
     }
-    const currentBindingKey = buildFeishuBindingKey(project?.delivery_binding);
-    const deliveryEvents = Array.isArray(project?.delivery_events) ? project.delivery_events : [];
-    const values = await showFormDialog({
-        title: t('automation.edit.title'),
-        message: t('automation.edit.message'),
-        tone: 'info',
-        confirmLabel: t('automation.edit.save'),
-        cancelLabel: t('settings.action.cancel'),
-        fields: [
-            {
-                id: 'display_name',
-                label: t('automation.field.project_name'),
-                placeholder: 'Daily Briefing',
-                value: String(project?.display_name || project?.name || '').trim(),
-            },
-            {
-                id: 'workspace_id',
-                label: t('sidebar.workspace_directory'),
-                type: 'select',
-                value: String(project?.workspace_id || '').trim(),
-                options: workspaceOptions,
-            },
-            {
-                id: 'prompt',
-                label: t('automation.detail.prompt'),
-                placeholder: t('sidebar.prompt_placeholder'),
-                value: String(project?.prompt || '').trim(),
-                multiline: true,
-            },
-            {
-                id: 'cron_expression',
-                label: t('automation.detail.schedule'),
-                placeholder: '0 9 * * *',
-                value: String(project?.cron_expression || '').trim(),
-            },
-            {
-                id: 'timezone',
-                label: t('automation.detail.timezone'),
-                type: 'select',
-                value: String(project?.timezone || 'UTC').trim() || 'UTC',
-                options: AUTOMATION_TIMEZONE_OPTIONS,
-            },
-            {
-                id: 'enabled',
-                label: t('automation.field.enabled'),
-                type: 'checkbox',
-                value: String(project?.status || '').trim().toLowerCase() === 'enabled',
-                description: t('automation.field.enabled_help'),
-            },
-            {
-                id: 'delivery_binding_key',
-                label: t('sidebar.feishu_chat'),
-                type: 'select',
-                value: currentBindingKey,
-                options: bindingOptions,
-            },
-            {
-                id: 'delivery_event_started',
-                label: t('sidebar.notify_on_start'),
-                type: 'checkbox',
-                value: deliveryEvents.includes('started'),
-                description: t('sidebar.notify_on_start_copy'),
-            },
-            {
-                id: 'delivery_event_completed',
-                label: t('sidebar.notify_on_completion'),
-                type: 'checkbox',
-                value: deliveryEvents.includes('completed'),
-                description: t('sidebar.notify_on_completion_copy'),
-            },
-            {
-                id: 'delivery_event_failed',
-                label: t('sidebar.notify_on_failure'),
-                type: 'checkbox',
-                value: deliveryEvents.includes('failed'),
-                description: t('sidebar.notify_on_failure_copy'),
-            },
-        ],
+    const isEditing = String(project?.automation_project_id || '').trim().length > 0;
+    const draft = createAutomationEditorDraft(project, workspaceList);
+    const defaultTitle = isEditing ? t('automation.edit.title') : t('sidebar.new_automation_title');
+    const defaultMessage = isEditing ? t('automation.edit.message') : t('sidebar.new_automation_message');
+    const defaultConfirmLabel = isEditing ? t('automation.edit.save') : t('sidebar.new_automation_create');
+    return await new Promise(resolve => {
+        currentAutomationEditorState = {
+            open: true,
+            mode: isEditing ? 'edit' : 'create',
+            projectId: String(project?.name || '').trim(),
+            project,
+            title: String(dialogOptions?.title || defaultTitle).trim() || defaultTitle,
+            message: String(dialogOptions?.message || defaultMessage).trim() || defaultMessage,
+            confirmLabel: String(dialogOptions?.confirmLabel || defaultConfirmLabel).trim() || defaultConfirmLabel,
+            workspaces: workspaceList,
+            feishuBindings,
+            draft,
+            resolve,
+            errorMessage: '',
+        };
+        renderAutomationEditorModal();
     });
-    if (!values || typeof values !== 'object') {
+}
+
+function buildAutomationDeliveryEvents(project) {
+    const deliveryEvents = Array.isArray(project?.delivery_events) ? project.delivery_events : [];
+    return {
+        started: deliveryEvents.includes('started'),
+        completed: deliveryEvents.includes('completed'),
+        failed: deliveryEvents.includes('failed'),
+    };
+}
+
+function splitTimeValue(value) {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || '').trim());
+    if (!match) {
         return null;
     }
-    const displayName = String(values.display_name || '').trim();
-    const workspaceId = String(values.workspace_id || '').trim();
-    const prompt = String(values.prompt || '').trim();
-    const cronExpression = String(values.cron_expression || '').trim();
-    const timezone = String(values.timezone || 'UTC').trim() || 'UTC';
-    const enabled = values.enabled !== false;
-    const selectedBindingKey = String(values.delivery_binding_key || '').trim();
-    const selectedBinding = (Array.isArray(feishuBindings) ? feishuBindings : []).find(binding => buildFeishuBindingKey(binding) === selectedBindingKey) || null;
-    const nextDeliveryEvents = [
-        values.delivery_event_started === true ? 'started' : null,
-        values.delivery_event_completed === true ? 'completed' : null,
-        values.delivery_event_failed === true ? 'failed' : null,
-    ].filter(Boolean);
-    if (!workspaceId || !displayName || !prompt || !cronExpression) {
+    const hour = Number.parseInt(match[1], 10);
+    const minute = Number.parseInt(match[2], 10);
+    if (Number.isNaN(hour) || Number.isNaN(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
         return null;
     }
+    return {
+        hour,
+        minute,
+        normalized: `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`,
+    };
+}
+
+function getFormatterParts(date, timezone) {
+    try {
+        return new Intl.DateTimeFormat('en-CA', {
+            timeZone: timezone || DEFAULT_AUTOMATION_TIMEZONE,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hourCycle: 'h23',
+        }).formatToParts(date).reduce((result, part) => {
+            if (part.type !== 'literal') {
+                result[part.type] = part.value;
+            }
+            return result;
+        }, {});
+    } catch {
+        return {};
+    }
+}
+
+function formatIsoToLocalDate(isoValue, timezone) {
+    const date = new Date(String(isoValue || '').trim());
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+    const parts = getFormatterParts(date, timezone);
+    if (!parts.year || !parts.month || !parts.day) {
+        return '';
+    }
+    return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function formatIsoToLocalTime(isoValue, timezone) {
+    const date = new Date(String(isoValue || '').trim());
+    if (Number.isNaN(date.getTime())) {
+        return '09:00';
+    }
+    const parts = getFormatterParts(date, timezone);
+    if (!parts.hour || !parts.minute) {
+        return '09:00';
+    }
+    return `${parts.hour}:${parts.minute}`;
+}
+
+function createDefaultOneShotDate(timezone) {
+    const now = new Date();
+    const parts = getFormatterParts(now, timezone);
+    const year = Number.parseInt(parts.year || '', 10);
+    const month = Number.parseInt(parts.month || '', 10);
+    const day = Number.parseInt(parts.day || '', 10);
+    if (!year || !month || !day) {
+        const fallback = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        return fallback.toISOString().slice(0, 10);
+    }
+    const nextDay = new Date(Date.UTC(year, month - 1, day + 1));
+    const nextParts = getFormatterParts(nextDay, timezone);
+    if (!nextParts.year || !nextParts.month || !nextParts.day) {
+        return nextDay.toISOString().slice(0, 10);
+    }
+    return `${nextParts.year}-${nextParts.month}-${nextParts.day}`;
+}
+
+function zonedDateTimeToIso(dateValue, timeValue, timezone) {
+    const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateValue || '').trim());
+    const timeParts = splitTimeValue(timeValue);
+    if (!dateMatch || !timeParts) {
+        return '';
+    }
+    const year = Number.parseInt(dateMatch[1], 10);
+    const month = Number.parseInt(dateMatch[2], 10);
+    const day = Number.parseInt(dateMatch[3], 10);
+    let guessUtc = Date.UTC(year, month - 1, day, timeParts.hour, timeParts.minute);
+    for (let index = 0; index < 3; index += 1) {
+        const parts = getFormatterParts(new Date(guessUtc), timezone);
+        const actualYear = Number.parseInt(parts.year || '', 10);
+        const actualMonth = Number.parseInt(parts.month || '', 10);
+        const actualDay = Number.parseInt(parts.day || '', 10);
+        const actualHour = Number.parseInt(parts.hour || '', 10);
+        const actualMinute = Number.parseInt(parts.minute || '', 10);
+        if ([actualYear, actualMonth, actualDay, actualHour, actualMinute].some(Number.isNaN)) {
+            break;
+        }
+        const targetMillis = Date.UTC(year, month - 1, day, timeParts.hour, timeParts.minute);
+        const actualMillis = Date.UTC(actualYear, actualMonth - 1, actualDay, actualHour, actualMinute);
+        const diff = targetMillis - actualMillis;
+        if (diff === 0) {
+            break;
+        }
+        guessUtc += diff;
+    }
+    return new Date(guessUtc).toISOString();
+}
+
+function parseAutomationScheduleDraft(project, timezone) {
+    const scheduleMode = String(project?.schedule_mode || 'cron').trim() || 'cron';
+    const selectedTimezone = String(timezone || DEFAULT_AUTOMATION_TIMEZONE).trim() || DEFAULT_AUTOMATION_TIMEZONE;
+    const fallback = {
+        kind: AUTOMATION_SCHEDULE_KINDS.daily,
+        time: '09:00',
+        weekday: '1',
+        dayOfMonth: '1',
+        runDate: createDefaultOneShotDate(selectedTimezone),
+        unsupportedExpression: '',
+        requiresReset: false,
+    };
+    if (scheduleMode === 'one_shot' || scheduleMode === 'one-shot') {
+        return {
+            ...fallback,
+            kind: AUTOMATION_SCHEDULE_KINDS.oneShot,
+            time: formatIsoToLocalTime(project?.run_at, selectedTimezone),
+            runDate: formatIsoToLocalDate(project?.run_at, selectedTimezone) || createDefaultOneShotDate(selectedTimezone),
+        };
+    }
+    const cron = String(project?.cron_expression || '').trim();
+    if (!cron) {
+        return fallback;
+    }
+    const parts = cron.split(/\s+/);
+    if (parts.length !== 5) {
+        return {
+            ...fallback,
+            kind: AUTOMATION_SCHEDULE_KINDS.unsupported,
+            unsupportedExpression: cron,
+            requiresReset: true,
+        };
+    }
+    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+    const time = splitTimeValue(`${hour}:${minute}`)?.normalized || '09:00';
+    if (month === '*' && dayOfMonth === '*' && dayOfWeek === '*') {
+        return { ...fallback, kind: AUTOMATION_SCHEDULE_KINDS.daily, time };
+    }
+    if (month === '*' && dayOfMonth === '*' && dayOfWeek === '1-5') {
+        return { ...fallback, kind: AUTOMATION_SCHEDULE_KINDS.weekdays, time };
+    }
+    if (month === '*' && dayOfMonth === '*' && /^(0|1|2|3|4|5|6|7)$/.test(dayOfWeek)) {
+        return { ...fallback, kind: AUTOMATION_SCHEDULE_KINDS.weekly, time, weekday: dayOfWeek };
+    }
+    if (month === '*' && /^\d+$/.test(dayOfMonth) && dayOfWeek === '*') {
+        return { ...fallback, kind: AUTOMATION_SCHEDULE_KINDS.monthly, time, dayOfMonth };
+    }
+    return {
+        ...fallback,
+        kind: AUTOMATION_SCHEDULE_KINDS.unsupported,
+        unsupportedExpression: cron,
+        requiresReset: true,
+    };
+}
+
+function createAutomationEditorDraft(project, workspaces) {
+    const workspaceList = Array.isArray(workspaces) ? workspaces : [];
+    const firstWorkspaceId = String(workspaceList[0]?.workspace_id || '').trim();
+    const timezone = String(project?.timezone || DEFAULT_AUTOMATION_TIMEZONE).trim() || DEFAULT_AUTOMATION_TIMEZONE;
+    const schedule = parseAutomationScheduleDraft(project, timezone);
+    const deliveryEvents = buildAutomationDeliveryEvents(project);
+    return {
+        display_name: String(project?.display_name || project?.name || '').trim(),
+        workspace_id: String(project?.workspace_id || firstWorkspaceId).trim(),
+        prompt: String(project?.prompt || '').trim(),
+        timezone,
+        delivery_binding_key: buildFeishuBindingKey(project?.delivery_binding),
+        delivery_event_started: deliveryEvents.started || !project?.automation_project_id,
+        delivery_event_completed: deliveryEvents.completed || !project?.automation_project_id,
+        delivery_event_failed: deliveryEvents.failed || !project?.automation_project_id,
+        schedule_kind: schedule.kind,
+        time_of_day: schedule.time,
+        weekly_day: schedule.weekday,
+        monthly_day: schedule.dayOfMonth,
+        run_date: schedule.runDate,
+        unsupported_expression: schedule.unsupportedExpression,
+        requires_schedule_reset: schedule.requiresReset,
+    };
+}
+
+function resolveAutomationScheduleSummary(draft) {
+    const time = splitTimeValue(draft?.time_of_day)?.normalized || '09:00';
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.weekdays) {
+        return formatMessage('automation.schedule.summary.weekdays', { time });
+    }
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.weekly) {
+        return formatMessage('automation.schedule.summary.weekly', {
+            weekday: formatCronWeekday(draft?.weekly_day || '1'),
+            time,
+        });
+    }
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.monthly) {
+        return formatMessage('automation.schedule.summary.monthly', {
+            day: String(draft?.monthly_day || '1'),
+            time,
+        });
+    }
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.oneShot) {
+        return formatMessage('automation.schedule.summary.one_shot', {
+            date: String(draft?.run_date || ''),
+            time,
+        });
+    }
+    return formatMessage('automation.schedule.summary.daily', { time });
+}
+
+function buildAutomationSchedulePayload(draft) {
+    const time = splitTimeValue(draft?.time_of_day);
+    if (!time) {
+        throw new Error(t('automation.schedule.validation.time'));
+    }
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.unsupported) {
+        throw new Error(t('automation.schedule.validation.reset_required'));
+    }
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.oneShot) {
+        const runDate = String(draft?.run_date || '').trim();
+        if (!runDate) {
+            throw new Error(t('automation.schedule.validation.date'));
+        }
+        const runAt = zonedDateTimeToIso(runDate, time.normalized, draft?.timezone || DEFAULT_AUTOMATION_TIMEZONE);
+        if (!runAt) {
+            throw new Error(t('automation.schedule.validation.date'));
+        }
+        return {
+            schedule_mode: 'one_shot',
+            cron_expression: null,
+            run_at: runAt,
+        };
+    }
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.weekly) {
+        const weekday = String(draft?.weekly_day || '').trim();
+        if (!/^(0|1|2|3|4|5|6|7)$/.test(weekday)) {
+            throw new Error(t('automation.schedule.validation.weekday'));
+        }
+        return {
+            schedule_mode: 'cron',
+            cron_expression: `${time.minute} ${time.hour} * * ${weekday}`,
+            run_at: null,
+        };
+    }
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.monthly) {
+        const monthlyDay = Number.parseInt(String(draft?.monthly_day || '').trim(), 10);
+        if (Number.isNaN(monthlyDay) || monthlyDay < 1 || monthlyDay > 31) {
+            throw new Error(t('automation.schedule.validation.monthly_day'));
+        }
+        return {
+            schedule_mode: 'cron',
+            cron_expression: `${time.minute} ${time.hour} ${monthlyDay} * *`,
+            run_at: null,
+        };
+    }
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.weekdays) {
+        return {
+            schedule_mode: 'cron',
+            cron_expression: `${time.minute} ${time.hour} * * 1-5`,
+            run_at: null,
+        };
+    }
+    return {
+        schedule_mode: 'cron',
+        cron_expression: `${time.minute} ${time.hour} * * *`,
+        run_at: null,
+    };
+}
+
+function buildAutomationProjectPayload(draft, feishuBindings, project) {
+    const displayName = String(draft?.display_name || '').trim();
+    const workspaceId = String(draft?.workspace_id || '').trim();
+    const prompt = String(draft?.prompt || '').trim();
+    const timezone = String(draft?.timezone || DEFAULT_AUTOMATION_TIMEZONE).trim() || DEFAULT_AUTOMATION_TIMEZONE;
+    if (!displayName) {
+        throw new Error(t('automation.schedule.validation.name'));
+    }
+    if (!workspaceId) {
+        throw new Error(t('automation.schedule.validation.workspace'));
+    }
+    if (!prompt) {
+        throw new Error(t('automation.schedule.validation.prompt'));
+    }
+    const schedulePayload = buildAutomationSchedulePayload({ ...draft, timezone });
+    const selectedBindingKey = String(draft?.delivery_binding_key || '').trim();
+    const selectedBinding = (Array.isArray(feishuBindings) ? feishuBindings : []).find(
+        binding => buildFeishuBindingKey(binding) === selectedBindingKey,
+    ) || null;
+    const nextDeliveryEvents = selectedBinding ? [
+        draft?.delivery_event_started === true ? 'started' : null,
+        draft?.delivery_event_completed === true ? 'completed' : null,
+        draft?.delivery_event_failed === true ? 'failed' : null,
+    ].filter(Boolean) : [];
     const slug = displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || String(project?.name || 'automation-project');
+    const hasExistingProject = String(project?.automation_project_id || '').trim().length > 0;
+    const preservedEnabled = typeof project?.enabled === 'boolean'
+        ? project.enabled
+        : String(project?.status || 'enabled').trim() !== 'disabled';
     return {
         name: slug,
         display_name: displayName,
         workspace_id: workspaceId,
         prompt,
-        schedule_mode: 'cron',
-        cron_expression: cronExpression,
         timezone,
-        enabled,
+        enabled: hasExistingProject ? preservedEnabled : true,
+        ...schedulePayload,
         delivery_binding: selectedBinding ? {
             provider: 'feishu',
             trigger_id: String(selectedBinding.trigger_id || '').trim(),
@@ -268,7 +1001,847 @@ async function requestAutomationProjectEditInput(project) {
             chat_type: String(selectedBinding.chat_type || '').trim(),
             source_label: String(selectedBinding.source_label || '').trim(),
         } : null,
-        delivery_events: selectedBinding ? nextDeliveryEvents : [],
+        delivery_events: nextDeliveryEvents,
+    };
+}
+
+function lookupAutomationEditorElement(id) {
+    if (!document?.getElementById) {
+        return null;
+    }
+    try {
+        return document.getElementById(id);
+    } catch {
+        return null;
+    }
+}
+
+function readAutomationEditorValue(id, fallback = '') {
+    const element = lookupAutomationEditorElement(id);
+    return element?.value != null ? String(element.value).trim() : fallback;
+}
+
+function readAutomationEditorChecked(id, fallback = false) {
+    const element = lookupAutomationEditorElement(id);
+    return typeof element?.checked === 'boolean' ? element.checked : fallback;
+}
+
+function syncAutomationEditorDraftFromDom() {
+    if (!currentAutomationEditorState.draft) {
+        return null;
+    }
+    const nextDraft = {
+        ...currentAutomationEditorState.draft,
+        display_name: readAutomationEditorValue('automation-editor-display-name-input', currentAutomationEditorState.draft.display_name),
+        workspace_id: readAutomationEditorValue('automation-editor-workspace-id-input', currentAutomationEditorState.draft.workspace_id),
+        prompt: readAutomationEditorValue('automation-editor-prompt-input', currentAutomationEditorState.draft.prompt),
+        timezone: readAutomationEditorValue('automation-editor-timezone-input', currentAutomationEditorState.draft.timezone),
+        delivery_binding_key: readAutomationEditorValue('automation-editor-delivery-binding-input', currentAutomationEditorState.draft.delivery_binding_key),
+        delivery_event_started: readAutomationEditorChecked('automation-editor-delivery-started-input', currentAutomationEditorState.draft.delivery_event_started),
+        delivery_event_completed: readAutomationEditorChecked('automation-editor-delivery-completed-input', currentAutomationEditorState.draft.delivery_event_completed),
+        delivery_event_failed: readAutomationEditorChecked('automation-editor-delivery-failed-input', currentAutomationEditorState.draft.delivery_event_failed),
+        schedule_kind: readAutomationEditorValue('automation-editor-schedule-kind-input', currentAutomationEditorState.draft.schedule_kind),
+        time_of_day: readAutomationEditorValue('automation-editor-time-input', currentAutomationEditorState.draft.time_of_day),
+        weekly_day: readAutomationEditorValue('automation-editor-weekday-input', currentAutomationEditorState.draft.weekly_day),
+        monthly_day: readAutomationEditorValue('automation-editor-monthly-day-input', currentAutomationEditorState.draft.monthly_day),
+        run_date: readAutomationEditorValue('automation-editor-run-date-input', currentAutomationEditorState.draft.run_date),
+    };
+    currentAutomationEditorState = {
+        ...currentAutomationEditorState,
+        draft: nextDraft,
+    };
+    return nextDraft;
+}
+
+function renderAutomationEditorFieldOptions(options, selectedValue) {
+    return (Array.isArray(options) ? options : []).map(option => {
+        const value = String(option?.value || '').trim();
+        const selected = value === String(selectedValue || '').trim() ? ' selected' : '';
+        return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(String(option?.label || value))}</option>`;
+    }).join('');
+}
+
+function renderAutomationEditorWeekdayOptions(selectedValue) {
+    return renderAutomationEditorFieldOptions([
+        { value: '1', label: t('automation.cron.weekday.mon') },
+        { value: '2', label: t('automation.cron.weekday.tue') },
+        { value: '3', label: t('automation.cron.weekday.wed') },
+        { value: '4', label: t('automation.cron.weekday.thu') },
+        { value: '5', label: t('automation.cron.weekday.fri') },
+        { value: '6', label: t('automation.cron.weekday.sat') },
+        { value: '0', label: t('automation.cron.weekday.sun') },
+    ], selectedValue);
+}
+
+function renderAutomationEditorScheduleDetail(draft) {
+    const scheduleKind = String(draft?.schedule_kind || AUTOMATION_SCHEDULE_KINDS.daily).trim();
+    if (scheduleKind === AUTOMATION_SCHEDULE_KINDS.weekly) {
+        return `
+            <label class="automation-editor-field">
+                <span>${escapeHtml(t('automation.schedule.weekday'))}</span>
+                <select id="automation-editor-weekday-input" data-automation-editor-weekday>
+                    ${renderAutomationEditorWeekdayOptions(draft?.weekly_day || '1')}
+                </select>
+            </label>
+        `;
+    }
+    if (scheduleKind === AUTOMATION_SCHEDULE_KINDS.monthly) {
+        return `
+            <label class="automation-editor-field">
+                <span>${escapeHtml(t('automation.schedule.monthly_day'))}</span>
+                <input id="automation-editor-monthly-day-input" data-automation-editor-monthly-day type="number" min="1" max="31" value="${escapeHtml(String(draft?.monthly_day || '1'))}">
+            </label>
+        `;
+    }
+    if (scheduleKind === AUTOMATION_SCHEDULE_KINDS.oneShot) {
+        return `
+            <label class="automation-editor-field">
+                <span>${escapeHtml(t('automation.schedule.run_date'))}</span>
+                <input id="automation-editor-run-date-input" data-automation-editor-run-date type="date" value="${escapeHtml(String(draft?.run_date || ''))}">
+            </label>
+        `;
+    }
+    return '';
+}
+
+function ensureAutomationEditorModalRoot() {
+    if (!document?.body) {
+        return null;
+    }
+    if (!automationEditorModalRoot) {
+        try {
+            automationEditorModalRoot = document.getElementById('automation-editor-modal-root');
+        } catch {
+            automationEditorModalRoot = null;
+        }
+    }
+    if (!automationEditorModalRoot && typeof document.createElement === 'function') {
+        automationEditorModalRoot = document.createElement('div');
+        automationEditorModalRoot.id = 'automation-editor-modal-root';
+        automationEditorModalRoot.className = 'gateway-feature-modal-root automation-editor-modal-root';
+        if (typeof document.body.appendChild === 'function') {
+            document.body.appendChild(automationEditorModalRoot);
+        }
+    }
+    return automationEditorModalRoot;
+}
+
+function renderAutomationEditorModal() {
+    const root = ensureAutomationEditorModalRoot();
+    if (!root) {
+        return;
+    }
+    if (currentAutomationEditorState.open !== true || !currentAutomationEditorState.draft) {
+        root.innerHTML = '';
+        return;
+    }
+    const draft = currentAutomationEditorState.draft;
+    const bindingOptions = buildFeishuBindingOptions(currentAutomationEditorState.feishuBindings);
+    const workspaceOptions = (Array.isArray(currentAutomationEditorState.workspaces) ? currentAutomationEditorState.workspaces : []).map(workspace => ({
+        value: String(workspace?.workspace_id || '').trim(),
+        label: formatWorkspaceOptionLabel(workspace),
+    })).filter(option => option.value);
+    const bindingSelected = String(draft.delivery_binding_key || '').trim().length > 0;
+    const scheduleLocked = draft.requires_schedule_reset === true && draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.unsupported;
+    root.innerHTML = `
+        <div class="modal gateway-feature-modal automation-editor-modal" data-automation-editor-modal>
+            <div class="modal-content gateway-feature-modal-content automation-editor-modal-content" role="dialog" aria-modal="true" aria-labelledby="automation-editor-modal-title">
+                <div class="modal-header gateway-feature-modal-header automation-editor-modal-header">
+                    <div class="gateway-feature-modal-heading automation-editor-modal-heading">
+                        <h3 id="automation-editor-modal-title">${escapeHtml(currentAutomationEditorState.title)}</h3>
+                        <p>${escapeHtml(currentAutomationEditorState.message)}</p>
+                    </div>
+                    <button class="icon-btn" type="button" aria-label="${escapeHtml(t('settings.action.cancel'))}" data-automation-editor-close>
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="gateway-feature-modal-body automation-editor-modal-body">
+                    ${currentAutomationEditorState.errorMessage
+                        ? `<div class="feature-inline-status is-danger">${escapeHtml(currentAutomationEditorState.errorMessage)}</div>`
+                        : ''
+                    }
+                    ${scheduleLocked
+                        ? `<div class="feature-inline-status is-warning">${escapeHtml(formatMessage('automation.schedule.unsupported_copy', { expression: draft.unsupported_expression || t('automation.detail.not_scheduled') }))}</div>`
+                        : ''
+                    }
+                    <div class="automation-editor-panel">
+                        <section class="automation-editor-block">
+                            <div class="automation-editor-section-head">
+                                <h4>${escapeHtml(t('automation.edit.section.basic'))}</h4>
+                            </div>
+                            <div class="automation-editor-grid automation-editor-grid-2">
+                                <label class="automation-editor-field">
+                                    <span>${escapeHtml(t('automation.field.project_name'))}</span>
+                                    <input id="automation-editor-display-name-input" data-automation-editor-display-name type="text" placeholder="Daily Briefing" value="${escapeHtml(draft.display_name)}">
+                                </label>
+                                <label class="automation-editor-field">
+                                    <span>${escapeHtml(t('automation.field.workspace'))}</span>
+                                    <select id="automation-editor-workspace-id-input" data-automation-editor-workspace>
+                                        ${renderAutomationEditorFieldOptions(workspaceOptions, draft.workspace_id)}
+                                    </select>
+                                </label>
+                            </div>
+                            <label class="automation-editor-field automation-editor-field-prompt">
+                                <span>${escapeHtml(t('automation.detail.prompt'))}</span>
+                                <textarea id="automation-editor-prompt-input" data-automation-editor-prompt>${escapeHtml(draft.prompt)}</textarea>
+                            </label>
+                        </section>
+                        <section class="automation-editor-block">
+                            <div class="automation-editor-section-head">
+                                <h4>${escapeHtml(t('automation.detail.schedule'))}</h4>
+                            </div>
+                            <div class="automation-editor-grid automation-editor-grid-3">
+                                <label class="automation-editor-field">
+                                    <span>${escapeHtml(t('automation.schedule.kind'))}</span>
+                                    <select id="automation-editor-schedule-kind-input" data-automation-editor-schedule-kind>
+                                        <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.unsupported)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.unsupported ? ' selected' : ''}>${escapeHtml(t('automation.schedule.choose'))}</option>
+                                        <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.daily)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.daily ? ' selected' : ''}>${escapeHtml(t('automation.schedule.daily'))}</option>
+                                        <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.weekdays)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.weekdays ? ' selected' : ''}>${escapeHtml(t('automation.schedule.weekdays'))}</option>
+                                        <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.weekly)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.weekly ? ' selected' : ''}>${escapeHtml(t('automation.schedule.weekly'))}</option>
+                                        <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.monthly)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.monthly ? ' selected' : ''}>${escapeHtml(t('automation.schedule.monthly'))}</option>
+                                        <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.oneShot)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.oneShot ? ' selected' : ''}>${escapeHtml(t('automation.schedule.one_shot'))}</option>
+                                    </select>
+                                </label>
+                                <label class="automation-editor-field">
+                                    <span>${escapeHtml(t('automation.schedule.time'))}</span>
+                                    <input id="automation-editor-time-input" data-automation-editor-time type="time" value="${escapeHtml(String(draft.time_of_day || '09:00'))}">
+                                </label>
+                                <label class="automation-editor-field">
+                                    <span>${escapeHtml(t('automation.detail.timezone'))}</span>
+                                    <select id="automation-editor-timezone-input" data-automation-editor-timezone>
+                                        ${renderAutomationEditorFieldOptions(AUTOMATION_TIMEZONE_OPTIONS, draft.timezone)}
+                                    </select>
+                                </label>
+                            </div>
+                            ${renderAutomationEditorScheduleDetail(draft)
+                                ? `<div class="automation-editor-grid automation-editor-grid-2">${renderAutomationEditorScheduleDetail(draft)}</div>`
+                                : ''
+                            }
+                        </section>
+                        <section class="automation-editor-block">
+                            <div class="automation-editor-section-head">
+                                <h4>${escapeHtml(t('automation.edit.section.delivery'))}</h4>
+                            </div>
+                            <div class="automation-editor-grid automation-editor-grid-1">
+                                <label class="automation-editor-field">
+                                    <span>${escapeHtml(t('sidebar.feishu_chat'))}</span>
+                                    <select id="automation-editor-delivery-binding-input" data-automation-editor-binding>
+                                        ${renderAutomationEditorFieldOptions(bindingOptions, draft.delivery_binding_key)}
+                                    </select>
+                                </label>
+                            </div>
+                            ${bindingSelected ? `
+                                <div class="automation-editor-toggle-grid">
+                                    <label class="automation-editor-compact-toggle">
+                                        <input id="automation-editor-delivery-started-input" data-automation-editor-delivery-started type="checkbox" ${draft.delivery_event_started ? 'checked' : ''}>
+                                        <span>${escapeHtml(t('sidebar.notify_on_start'))}</span>
+                                    </label>
+                                    <label class="automation-editor-compact-toggle">
+                                        <input id="automation-editor-delivery-completed-input" data-automation-editor-delivery-completed type="checkbox" ${draft.delivery_event_completed ? 'checked' : ''}>
+                                        <span>${escapeHtml(t('sidebar.notify_on_completion'))}</span>
+                                    </label>
+                                    <label class="automation-editor-compact-toggle">
+                                        <input id="automation-editor-delivery-failed-input" data-automation-editor-delivery-failed type="checkbox" ${draft.delivery_event_failed ? 'checked' : ''}>
+                                        <span>${escapeHtml(t('sidebar.notify_on_failure'))}</span>
+                                    </label>
+                                </div>
+                            ` : ''}
+                        </section>
+                    </div>
+                </div>
+                <div class="gateway-connect-modal-actions automation-editor-actions">
+                    <button class="secondary-btn" type="button" data-automation-editor-cancel>${escapeHtml(t('settings.action.cancel'))}</button>
+                    <button class="primary-btn" type="button" data-automation-editor-save>${escapeHtml(currentAutomationEditorState.confirmLabel)}</button>
+                </div>
+            </div>
+        </div>
+    `;
+    bindAutomationEditorModal();
+}
+
+function settleAutomationEditor(result) {
+    const resolve = currentAutomationEditorState.resolve;
+    currentAutomationEditorState = createInitialAutomationEditorState();
+    renderAutomationEditorModal();
+    if (typeof resolve === 'function') {
+        resolve(result);
+    }
+}
+
+function bindAutomationEditorModal() {
+    const root = ensureAutomationEditorModalRoot();
+    if (!root) {
+        return;
+    }
+    root.querySelectorAll('[data-automation-editor-close],[data-automation-editor-cancel]').forEach(button => {
+        button.addEventListener('click', () => {
+            settleAutomationEditor(null);
+        });
+    });
+    root.querySelector('[data-automation-editor-save]')?.addEventListener('click', () => {
+        try {
+            const draft = syncAutomationEditorDraftFromDom();
+            const payload = buildAutomationProjectPayload(
+                draft,
+                currentAutomationEditorState.feishuBindings,
+                currentAutomationEditorState.project || { name: currentAutomationEditorState.projectId },
+            );
+            settleAutomationEditor(payload);
+        } catch (error) {
+            currentAutomationEditorState = {
+                ...currentAutomationEditorState,
+                errorMessage: String(error?.message || error || ''),
+            };
+            renderAutomationEditorModal();
+        }
+    });
+    root.querySelector('[data-automation-editor-schedule-kind]')?.addEventListener('change', event => {
+        const draft = syncAutomationEditorDraftFromDom();
+        currentAutomationEditorState = {
+            ...currentAutomationEditorState,
+            errorMessage: '',
+            draft: {
+                ...draft,
+                schedule_kind: String(event?.target?.value || AUTOMATION_SCHEDULE_KINDS.daily).trim() || AUTOMATION_SCHEDULE_KINDS.daily,
+                requires_schedule_reset: false,
+            },
+        };
+        renderAutomationEditorModal();
+    });
+    root.querySelector('[data-automation-editor-binding]')?.addEventListener('change', event => {
+        const draft = syncAutomationEditorDraftFromDom();
+        const bindingSelected = String(event?.target?.value || '').trim().length > 0;
+        currentAutomationEditorState = {
+            ...currentAutomationEditorState,
+            errorMessage: '',
+            draft: {
+                ...draft,
+                delivery_binding_key: String(event?.target?.value || '').trim(),
+                delivery_event_started: bindingSelected ? draft.delivery_event_started : false,
+                delivery_event_completed: bindingSelected ? draft.delivery_event_completed : false,
+                delivery_event_failed: bindingSelected ? draft.delivery_event_failed : false,
+            },
+        };
+        renderAutomationEditorModal();
+    });
+}
+
+function normalizeFeishuTriggers(payload) {
+    const rows = Array.isArray(payload) ? payload : [];
+    return rows
+        .filter(trigger => String(trigger?.source_config?.provider || '').trim().toLowerCase() === FEISHU_PLATFORM)
+        .map(trigger => ({
+            trigger_id: String(trigger?.trigger_id || '').trim(),
+            name: String(trigger?.name || '').trim(),
+            display_name: String(trigger?.display_name || trigger?.name || '').trim(),
+            status: String(trigger?.status || 'disabled').trim() || 'disabled',
+            source_config: trigger?.source_config && typeof trigger.source_config === 'object' ? { ...trigger.source_config } : {},
+            target_config: trigger?.target_config && typeof trigger.target_config === 'object' ? { ...trigger.target_config } : {},
+            secret_config: trigger?.secret_config && typeof trigger.secret_config === 'object' ? { ...trigger.secret_config } : {},
+            secret_status: trigger?.secret_status && typeof trigger.secret_status === 'object' ? { ...trigger.secret_status } : {},
+        }))
+        .filter(trigger => trigger.trigger_id);
+}
+
+function normalizeWeChatAccounts(payload) {
+    const rows = Array.isArray(payload) ? payload : [];
+    return rows
+        .map(account => ({
+            account_id: String(account?.account_id || '').trim(),
+            display_name: String(account?.display_name || account?.account_id || '').trim(),
+            base_url: String(account?.base_url || '').trim(),
+            cdn_base_url: String(account?.cdn_base_url || '').trim(),
+            route_tag: account?.route_tag == null ? '' : String(account.route_tag).trim(),
+            status: String(account?.status || 'disabled').trim() || 'disabled',
+            workspace_id: String(account?.workspace_id || '').trim(),
+            session_mode: String(account?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE,
+            normal_root_role_id: String(account?.normal_root_role_id || '').trim(),
+            orchestration_preset_id: String(account?.orchestration_preset_id || '').trim(),
+            yolo: account?.yolo !== false,
+            thinking: account?.thinking && typeof account.thinking === 'object'
+                ? { ...account.thinking }
+                : { enabled: false, effort: null },
+            running: account?.running === true,
+            last_error: String(account?.last_error || '').trim(),
+        }))
+        .filter(account => account.account_id);
+}
+
+function normalizeGatewayWorkspaces(payload) {
+    return (Array.isArray(payload) ? payload : [])
+        .map(workspace => ({
+            workspace_id: String(workspace?.workspace_id || '').trim(),
+            root_path: String(workspace?.root_path || '').trim(),
+        }))
+        .filter(workspace => workspace.workspace_id);
+}
+
+function normalizeRoleOptions(payload) {
+    return (Array.isArray(payload?.normal_mode_roles) ? payload.normal_mode_roles : [])
+        .map(role => ({
+            role_id: String(role?.role_id || '').trim(),
+            name: String(role?.name || role?.role_id || '').trim(),
+        }))
+        .filter(role => role.role_id);
+}
+
+function normalizeOrchestrationPresets(payload) {
+    return (Array.isArray(payload?.presets) ? payload.presets : [])
+        .map(preset => ({
+            preset_id: String(preset?.preset_id || '').trim(),
+            name: String(preset?.name || preset?.preset_id || '').trim(),
+        }))
+        .filter(preset => preset.preset_id);
+}
+
+function resolveGatewayFeatureSummary(featureState) {
+    const feishuCount = Array.isArray(featureState?.feishuTriggers) ? featureState.feishuTriggers.length : 0;
+    const wechatCount = Array.isArray(featureState?.wechatAccounts) ? featureState.wechatAccounts.length : 0;
+    return formatMessage('feature.gateway.summary', {
+        feishu: feishuCount,
+        wechat: wechatCount,
+    });
+}
+
+function resolveSkillsSummary(status) {
+    const count = Array.isArray(status?.skills?.skills) ? status.skills.skills.length : 0;
+    return formatMessage('feature.skills.summary', { count });
+}
+
+function resolveAutomationSummary(projects) {
+    return formatMessage('feature.automation.summary', {
+        count: Array.isArray(projects) ? projects.length : 0,
+    });
+}
+
+function resolveSkillScopeLabel(scope) {
+    const normalizedScope = String(scope || '').trim().toLowerCase();
+    if (normalizedScope === 'builtin') {
+        return t('feature.skills.scope_builtin');
+    }
+    if (normalizedScope === 'app') {
+        return t('feature.skills.scope_app');
+    }
+    return t('feature.skills.scope_unknown');
+}
+
+function resolveWorkspaceOptionValues(workspaces) {
+    return (Array.isArray(workspaces) ? workspaces : []).map(workspace => ({
+        value: String(workspace?.workspace_id || '').trim(),
+        label: formatWorkspaceOptionLabel(workspace),
+        description: formatWorkspaceOptionDescription(workspace),
+    })).filter(option => option.value);
+}
+
+function resolveRoleOptionsForForms(roles) {
+    return [
+        {
+            value: '',
+            label: t('composer.no_roles'),
+            description: '',
+        },
+        ...(Array.isArray(roles) ? roles : []).map(role => ({
+            value: String(role?.role_id || '').trim(),
+            label: String(role?.name || role?.role_id || '').trim(),
+            description: String(role?.role_id || '').trim(),
+        })).filter(option => option.value),
+    ];
+}
+
+function resolvePresetOptionsForForms(presets) {
+    return [
+        {
+            value: '',
+            label: t('composer.no_presets'),
+            description: '',
+        },
+        ...(Array.isArray(presets) ? presets : []).map(preset => ({
+            value: String(preset?.preset_id || '').trim(),
+            label: String(preset?.name || preset?.preset_id || '').trim(),
+            description: String(preset?.preset_id || '').trim(),
+        })).filter(option => option.value),
+    ];
+}
+
+function renderFeatureStatusPill(label, tone = 'neutral') {
+    return `<span class="feature-status-pill is-${escapeHtml(tone)}">${escapeHtml(label)}</span>`;
+}
+
+function renderFeatureEmptyState(title, copy, action = '') {
+    return `
+        <div class="feature-empty-state">
+            <h4>${escapeHtml(title)}</h4>
+            <p>${escapeHtml(copy)}</p>
+            ${action}
+        </div>
+    `;
+}
+
+function openFeatureShell(featureId) {
+    cacheProjectViewState();
+    currentProjectViewMode = 'feature';
+    currentFeatureViewId = featureId;
+    state.currentFeatureViewId = featureId;
+    currentWorkspace = null;
+    currentAutomationProject = null;
+    currentSnapshot = null;
+    currentSnapshotWorkspaceId = null;
+    selectedTreePath = null;
+    currentDiffState = createInitialDiffState();
+    state.currentMainView = 'project';
+    state.currentProjectViewWorkspaceId = `feature:${featureId}`;
+    state.currentWorkspaceId = null;
+    state.currentSessionId = null;
+    clearAllPanels();
+    hideRoundNavigator();
+    setSubagentRailExpanded(false);
+    setProjectViewVisible(true);
+}
+
+function renderFeatureLoadingState(title, summary) {
+    renderToolbar(null, {
+        title,
+        mode: 'feature',
+        summary,
+    });
+    if (els.projectViewContent) {
+        els.projectViewContent.innerHTML = renderInlineState(summary || t('workspace_view.loading'));
+    }
+}
+
+async function loadAutomationHomeDetail(projectId) {
+    const normalizedProjectId = String(projectId || '').trim();
+    if (!normalizedProjectId) {
+        currentAutomationHomeDetail = createInitialAutomationHomeDetail();
+        currentAutomationProject = null;
+        return;
+    }
+    const [project, sessions, workspaces, feishuBindings] = await Promise.all([
+        fetchAutomationProject(normalizedProjectId),
+        fetchAutomationProjectSessions(normalizedProjectId),
+        fetchWorkspaces(),
+        fetchAutomationFeishuBindings(),
+    ]);
+    currentAutomationHomeDetail = {
+        project,
+        sessions: Array.isArray(sessions) ? sessions : [],
+        workspace: findWorkspaceById(workspaces, project?.workspace_id),
+        feishuBindings: Array.isArray(feishuBindings) ? feishuBindings : [],
+    };
+    currentAutomationProject = project;
+}
+
+async function requestFeishuTriggerInput(trigger = null) {
+    const [workspaces, roleOptions, orchestrationConfig] = await Promise.all([
+        fetchWorkspaces(),
+        fetchRoleConfigOptions(),
+        fetchOrchestrationConfig(),
+    ]);
+    const workspaceOptions = resolveWorkspaceOptionValues(workspaces);
+    if (workspaceOptions.length === 0) {
+        throw new Error(t('settings.triggers.no_workspaces'));
+    }
+    const roles = resolveRoleOptionsForForms(normalizeRoleOptions(roleOptions));
+    const presets = resolvePresetOptionsForForms(normalizeOrchestrationPresets(orchestrationConfig));
+    const sourceConfig = trigger?.source_config && typeof trigger.source_config === 'object' ? trigger.source_config : {};
+    const targetConfig = trigger?.target_config && typeof trigger.target_config === 'object' ? trigger.target_config : {};
+    const sessionMode = String(targetConfig?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+    const thinkingEnabled = targetConfig?.thinking?.enabled === true;
+    const values = await showFormDialog({
+        title: trigger ? t('settings.roles.edit') : t('feature.gateway.add_feishu'),
+        message: t('settings.triggers.feishu_detail_copy'),
+        tone: 'info',
+        confirmLabel: t('settings.action.save'),
+        cancelLabel: t('settings.action.cancel'),
+        fields: [
+            {
+                id: 'name',
+                label: t('settings.triggers.trigger_name'),
+                value: String(trigger?.name || '').trim(),
+                placeholder: 'feishu-main',
+            },
+            {
+                id: 'display_name',
+                label: t('settings.triggers.display_name'),
+                value: String(trigger?.display_name || '').trim(),
+                placeholder: 'Feishu Main',
+            },
+            {
+                id: 'workspace_id',
+                label: t('settings.triggers.workspace'),
+                type: 'select',
+                value: String(targetConfig?.workspace_id || workspaceOptions[0]?.value || '').trim(),
+                options: workspaceOptions,
+            },
+            {
+                id: 'trigger_rule',
+                label: t('settings.triggers.rule'),
+                type: 'select',
+                value: String(sourceConfig?.trigger_rule || DEFAULT_TRIGGER_RULE).trim() || DEFAULT_TRIGGER_RULE,
+                options: [
+                    { value: 'mention_only', label: 'mention_only', description: '' },
+                    { value: 'all_messages', label: 'all_messages', description: '' },
+                ],
+            },
+            {
+                id: 'session_mode',
+                label: t('settings.triggers.mode'),
+                type: 'select',
+                value: sessionMode,
+                options: [
+                    { value: 'normal', label: t('composer.mode_normal'), description: '' },
+                    { value: 'orchestration', label: t('composer.mode_orchestration'), description: '' },
+                ],
+            },
+            {
+                id: 'normal_root_role_id',
+                label: t('settings.triggers.normal_root_role_id'),
+                type: 'select',
+                value: String(targetConfig?.normal_root_role_id || '').trim(),
+                options: roles,
+            },
+            {
+                id: 'orchestration_preset_id',
+                label: t('settings.triggers.orchestration_preset_id'),
+                type: 'select',
+                value: String(targetConfig?.orchestration_preset_id || '').trim(),
+                options: presets,
+            },
+            {
+                id: 'app_name',
+                label: t('settings.triggers.feishu_app_name'),
+                value: String(sourceConfig?.app_name || '').trim(),
+                placeholder: t('settings.triggers.feishu_app_name_placeholder'),
+            },
+            {
+                id: 'app_id',
+                label: t('settings.triggers.feishu_app_id'),
+                value: String(sourceConfig?.app_id || '').trim(),
+                placeholder: t('settings.triggers.feishu_app_id_placeholder'),
+            },
+            {
+                id: 'app_secret',
+                label: t('settings.triggers.feishu_app_secret'),
+                value: '',
+                placeholder: t('settings.triggers.secret_keep_placeholder'),
+            },
+            {
+                id: 'enabled',
+                label: t('settings.field.enabled'),
+                type: 'checkbox',
+                value: String(trigger?.status || 'enabled').trim().toLowerCase() === 'enabled',
+                description: '',
+            },
+            {
+                id: 'yolo',
+                label: t('settings.triggers.yolo'),
+                type: 'checkbox',
+                value: targetConfig?.yolo !== false,
+                description: '',
+            },
+            {
+                id: 'thinking_enabled',
+                label: t('settings.triggers.thinking_enabled'),
+                type: 'checkbox',
+                value: thinkingEnabled,
+                description: '',
+            },
+            {
+                id: 'thinking_effort',
+                label: t('settings.triggers.thinking_effort'),
+                type: 'select',
+                value: String(targetConfig?.thinking?.effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT,
+                options: THINKING_EFFORT_OPTIONS.map(option => ({ value: option, label: option, description: '' })),
+            },
+        ],
+    });
+    if (!values || typeof values !== 'object') {
+        return null;
+    }
+    const name = String(values.name || '').trim();
+    const workspaceId = String(values.workspace_id || '').trim();
+    const appId = String(values.app_id || '').trim();
+    const appName = String(values.app_name || '').trim();
+    const appSecret = String(values.app_secret || '').trim();
+    const nextSessionMode = String(values.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+    const orchestrationPresetId = String(values.orchestration_preset_id || '').trim();
+    if (!name) {
+        throw new Error(t('settings.triggers.missing_name'));
+    }
+    if (!workspaceId) {
+        throw new Error(t('settings.triggers.missing_workspace'));
+    }
+    if (!appId) {
+        throw new Error(t('settings.triggers.missing_app_id'));
+    }
+    if (!appName) {
+        throw new Error(t('settings.triggers.missing_app_name'));
+    }
+    if (!trigger && !appSecret) {
+        throw new Error(t('settings.triggers.missing_app_secret'));
+    }
+    if (nextSessionMode === 'orchestration' && !orchestrationPresetId) {
+        throw new Error(t('settings.triggers.missing_orchestration_preset_id'));
+    }
+    const payload = {
+        name,
+        display_name: String(values.display_name || '').trim() || null,
+        source_config: {
+            provider: FEISHU_PLATFORM,
+            trigger_rule: String(values.trigger_rule || DEFAULT_TRIGGER_RULE).trim() || DEFAULT_TRIGGER_RULE,
+            app_id: appId,
+            app_name: appName,
+        },
+        target_config: {
+            workspace_id: workspaceId,
+            session_mode: nextSessionMode,
+            yolo: values.yolo !== false,
+            thinking: {
+                enabled: values.thinking_enabled === true,
+                effort: values.thinking_enabled === true
+                    ? (String(values.thinking_effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT)
+                    : null,
+            },
+        },
+        enabled: values.enabled !== false,
+    };
+    const normalRootRoleId = String(values.normal_root_role_id || '').trim();
+    if (nextSessionMode === 'normal' && normalRootRoleId) {
+        payload.target_config.normal_root_role_id = normalRootRoleId;
+    }
+    if (nextSessionMode === 'orchestration' && orchestrationPresetId) {
+        payload.target_config.orchestration_preset_id = orchestrationPresetId;
+    }
+    if (appSecret) {
+        payload.secret_config = { app_secret: appSecret };
+    }
+    return payload;
+}
+
+async function requestWeChatAccountInput(account) {
+    const workspaces = resolveWorkspaceOptionValues(currentGatewayFeatureState.workspaces);
+    if (workspaces.length === 0) {
+        throw new Error(t('settings.gateway.missing_workspace'));
+    }
+    const roles = resolveRoleOptionsForForms(currentGatewayFeatureState.normalRoles);
+    const presets = resolvePresetOptionsForForms(currentGatewayFeatureState.orchestrationPresets);
+    const sessionMode = String(account?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+    const thinkingEnabled = account?.thinking?.enabled === true;
+    const values = await showFormDialog({
+        title: t('settings.gateway.account_editor'),
+        message: String(account?.account_id || '').trim(),
+        tone: 'info',
+        confirmLabel: t('settings.action.save'),
+        cancelLabel: t('settings.action.cancel'),
+        fields: [
+            {
+                id: 'display_name',
+                label: t('settings.gateway.display_name'),
+                value: String(account?.display_name || '').trim(),
+            },
+            {
+                id: 'workspace_id',
+                label: t('settings.triggers.workspace'),
+                type: 'select',
+                value: String(account?.workspace_id || workspaces[0]?.value || '').trim(),
+                options: workspaces,
+            },
+            {
+                id: 'session_mode',
+                label: t('settings.triggers.mode'),
+                type: 'select',
+                value: sessionMode,
+                options: [
+                    { value: 'normal', label: t('composer.mode_normal'), description: '' },
+                    { value: 'orchestration', label: t('composer.mode_orchestration'), description: '' },
+                ],
+            },
+            {
+                id: 'normal_root_role_id',
+                label: t('settings.triggers.normal_root_role_id'),
+                type: 'select',
+                value: String(account?.normal_root_role_id || '').trim(),
+                options: roles,
+            },
+            {
+                id: 'orchestration_preset_id',
+                label: t('settings.triggers.orchestration_preset_id'),
+                type: 'select',
+                value: String(account?.orchestration_preset_id || '').trim(),
+                options: presets,
+            },
+            {
+                id: 'base_url',
+                label: t('settings.gateway.base_url'),
+                value: String(account?.base_url || '').trim(),
+            },
+            {
+                id: 'cdn_base_url',
+                label: t('settings.gateway.cdn_base_url'),
+                value: String(account?.cdn_base_url || '').trim(),
+            },
+            {
+                id: 'route_tag',
+                label: t('settings.gateway.route_tag'),
+                value: String(account?.route_tag || '').trim(),
+            },
+            {
+                id: 'yolo',
+                label: t('settings.triggers.yolo'),
+                type: 'checkbox',
+                value: account?.yolo !== false,
+                description: '',
+            },
+            {
+                id: 'thinking_enabled',
+                label: t('settings.triggers.thinking_enabled'),
+                type: 'checkbox',
+                value: thinkingEnabled,
+                description: '',
+            },
+            {
+                id: 'thinking_effort',
+                label: t('settings.triggers.thinking_effort'),
+                type: 'select',
+                value: String(account?.thinking?.effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT,
+                options: THINKING_EFFORT_OPTIONS.map(option => ({ value: option, label: option, description: '' })),
+            },
+        ],
+    });
+    if (!values || typeof values !== 'object') {
+        return null;
+    }
+    const displayName = String(values.display_name || '').trim();
+    const workspaceId = String(values.workspace_id || '').trim();
+    const nextSessionMode = String(values.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+    const orchestrationPresetId = String(values.orchestration_preset_id || '').trim();
+    if (!displayName) {
+        throw new Error(t('settings.gateway.missing_display_name'));
+    }
+    if (!workspaceId) {
+        throw new Error(t('settings.gateway.missing_workspace'));
+    }
+    if (nextSessionMode === 'orchestration' && !orchestrationPresetId) {
+        throw new Error(t('settings.gateway.missing_orchestration_preset_id'));
+    }
+    return {
+        display_name: displayName,
+        workspace_id: workspaceId,
+        session_mode: nextSessionMode,
+        base_url: String(values.base_url || '').trim(),
+        cdn_base_url: String(values.cdn_base_url || '').trim(),
+        route_tag: String(values.route_tag || '').trim(),
+        yolo: values.yolo !== false,
+        thinking: {
+            enabled: values.thinking_enabled === true,
+            effort: values.thinking_enabled === true
+                ? (String(values.thinking_effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT)
+                : null,
+        },
+        normal_root_role_id: nextSessionMode === 'normal'
+            ? (String(values.normal_root_role_id || '').trim() || null)
+            : null,
+        orchestration_preset_id: nextSessionMode === 'orchestration' ? orchestrationPresetId : null,
     };
 }
 
@@ -289,7 +1862,20 @@ export function initializeProjectView() {
     if (!languageBound && typeof document?.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => {
             syncActionLabels();
+            if (currentAutomationEditorState.open === true) {
+                renderAutomationEditorModal();
+            }
             if (state.currentMainView !== 'project') {
+                return;
+            }
+            if (currentProjectViewMode === 'feature') {
+                if (currentFeatureViewId === FEATURE_VIEW_IDS.skills) {
+                    void openSkillsFeatureView();
+                } else if (currentFeatureViewId === FEATURE_VIEW_IDS.automation) {
+                    void openAutomationHomeView(selectedAutomationHomeProjectId);
+                } else if (currentFeatureViewId === FEATURE_VIEW_IDS.gateway) {
+                    void openImFeatureView();
+                }
                 return;
             }
             if (currentProjectViewMode === 'automation') {
@@ -327,6 +1913,8 @@ export async function openWorkspaceProjectView(workspace) {
     cacheProjectViewState();
     currentProjectViewMode = 'workspace';
     currentAutomationProject = null;
+    currentFeatureViewId = '';
+    state.currentFeatureViewId = null;
     currentWorkspace = workspace;
     currentSnapshotWorkspaceId = workspaceId;
     state.currentMainView = 'project';
@@ -363,45 +1951,89 @@ export async function openAutomationProjectView(project) {
     if (!automationProjectId) {
         return;
     }
+    await openAutomationHomeView(automationProjectId);
+}
 
-    currentProjectViewMode = 'automation';
-    currentWorkspace = null;
-    currentAutomationProject = project;
-    currentSnapshot = null;
-    currentSnapshotWorkspaceId = null;
-    selectedTreePath = null;
-    currentDiffState = createInitialDiffState();
-    state.currentMainView = 'project';
-    state.currentProjectViewWorkspaceId = `automation:${automationProjectId}`;
-    state.currentWorkspaceId = String(project?.workspace_id || '').trim() || 'automation-system';
-    state.currentSessionId = null;
-    clearAllPanels();
-    hideRoundNavigator();
-    setSubagentRailExpanded(false);
-    setProjectViewVisible(true);
-    renderAutomationLoadingState(project);
-
+export async function openSkillsFeatureView() {
+    openFeatureShell(FEATURE_VIEW_IDS.skills);
+    renderFeatureLoadingState(t('feature.skills.title'), t('workspace_view.loading'));
     try {
-        const [freshProject, sessions, workspaces, feishuBindings] = await Promise.all([
-            fetchAutomationProject(automationProjectId),
-            fetchAutomationProjectSessions(automationProjectId),
-            fetchWorkspaces(),
-            fetchAutomationFeishuBindings(),
-        ]);
-        currentAutomationProject = freshProject;
-        renderAutomationProjectView(
-            freshProject,
-            Array.isArray(sessions) ? sessions : [],
-            findWorkspaceById(workspaces, freshProject.workspace_id),
-            Array.isArray(feishuBindings) ? feishuBindings : [],
-        );
+        currentSkillsStatus = await fetchConfigStatus();
+        renderSkillsFeatureView();
     } catch (error) {
-        renderAutomationErrorState(project, error);
-        sysLog(`Failed to load automation project: ${error?.message || error}`, 'log-error');
+        renderFeatureErrorState(t('feature.skills.title'), error);
+        sysLog(`Failed to load skills feature: ${error?.message || error}`, 'log-error');
+    }
+}
+
+export async function openAutomationHomeView(projectId = '') {
+    openFeatureShell(FEATURE_VIEW_IDS.automation);
+    selectedAutomationHomeProjectId = String(projectId || '').trim();
+    renderFeatureLoadingState(t('feature.automation.title'), t('workspace_view.loading'));
+    try {
+        const projects = await fetchAutomationProjects();
+        currentAutomationProjects = Array.isArray(projects) ? projects : [];
+        if (!selectedAutomationHomeProjectId && currentAutomationProjects.length > 0) {
+            selectedAutomationHomeProjectId = String(
+                currentAutomationProjects[0]?.automation_project_id || '',
+            ).trim();
+        }
+        if (selectedAutomationHomeProjectId) {
+            await loadAutomationHomeDetail(selectedAutomationHomeProjectId);
+        } else {
+            currentAutomationHomeDetail = createInitialAutomationHomeDetail();
+            currentAutomationProject = null;
+        }
+        renderAutomationHomeView();
+    } catch (error) {
+        renderFeatureErrorState(t('feature.automation.title'), error);
+        sysLog(`Failed to load automation feature: ${error?.message || error}`, 'log-error');
+    }
+}
+
+export async function openImFeatureView() {
+    openFeatureShell(FEATURE_VIEW_IDS.gateway);
+    renderFeatureLoadingState(t('feature.gateway.title'), t('workspace_view.loading'));
+    try {
+        const [triggers, wechatAccounts, workspaces, roleOptions, orchestrationConfig] = await Promise.all([
+            fetchTriggers(),
+            fetchWeChatGatewayAccounts(),
+            fetchWorkspaces(),
+            fetchRoleConfigOptions(),
+            fetchOrchestrationConfig(),
+        ]);
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            feishuTriggers: normalizeFeishuTriggers(triggers),
+            feishuEditingTriggerId: '',
+            feishuDraft: null,
+            wechatAccounts: normalizeWeChatAccounts(wechatAccounts),
+            workspaces: normalizeGatewayWorkspaces(workspaces),
+            normalRoles: normalizeRoleOptions(roleOptions),
+            orchestrationPresets: normalizeOrchestrationPresets(orchestrationConfig),
+        };
+        renderGatewayFeatureView();
+    } catch (error) {
+        renderFeatureErrorState(t('feature.gateway.title'), error);
+        sysLog(`Failed to load IM feature: ${error?.message || error}`, 'log-error');
     }
 }
 
 export async function refreshProjectView() {
+    if (currentProjectViewMode === 'feature') {
+        if (currentFeatureViewId === FEATURE_VIEW_IDS.skills) {
+            await openSkillsFeatureView();
+            return;
+        }
+        if (currentFeatureViewId === FEATURE_VIEW_IDS.automation) {
+            await openAutomationHomeView(selectedAutomationHomeProjectId);
+            return;
+        }
+        if (currentFeatureViewId === FEATURE_VIEW_IDS.gateway) {
+            await openImFeatureView();
+            return;
+        }
+    }
     if (currentProjectViewMode === 'automation') {
         if (!currentAutomationProject) {
             return;
@@ -420,6 +2052,14 @@ export function hideProjectView() {
     currentWorkspace = null;
     currentAutomationProject = null;
     currentProjectViewMode = 'workspace';
+    currentFeatureViewId = '';
+    state.currentFeatureViewId = null;
+    currentAutomationProjects = [];
+    selectedAutomationHomeProjectId = '';
+    currentAutomationHomeDetail = createInitialAutomationHomeDetail();
+    currentSkillsStatus = null;
+    currentGatewayFeatureState = createInitialGatewayFeatureState();
+    renderGatewayFeatureModal();
     resetProjectViewState(null);
     state.currentMainView = 'session';
     state.currentProjectViewWorkspaceId = null;
@@ -586,6 +2226,972 @@ function setProjectViewVisible(visible) {
     }
 }
 
+function renderFeatureErrorState(title, error) {
+    renderToolbar(null, {
+        title,
+        mode: 'feature',
+        summary: t('workspace_view.load_failed'),
+    });
+    if (els.projectViewContent) {
+        els.projectViewContent.innerHTML = `
+            <div class="workspace-view-empty-state is-error">
+                <p>${escapeHtml(t('workspace_view.load_failed'))}</p>
+                <p>${escapeHtml(String(error?.message || error || ''))}</p>
+            </div>
+        `;
+    }
+}
+
+function renderSkillsFeatureView() {
+    const skills = Array.isArray(currentSkillsStatus?.skills?.skills)
+        ? currentSkillsStatus.skills.skills
+        : [];
+    renderToolbar(null, {
+        title: t('feature.skills.title'),
+        mode: 'feature',
+        summary: resolveSkillsSummary(currentSkillsStatus),
+    });
+    if (!els.projectViewContent) {
+        return;
+    }
+    els.projectViewContent.innerHTML = `
+        <div class="feature-page feature-page-neutral feature-skills-page">
+            <section class="workspace-view-panel skills-directory-panel">
+                ${skills.length > 0 ? `
+                    <div class="skills-directory-list">
+                        ${skills.map(skill => `
+                            <article class="skills-directory-row">
+                                <div class="skills-directory-main">
+                                    <div class="skills-directory-title-row">
+                                        <strong>${escapeHtml(String(skill?.name || skill?.ref || ''))}</strong>
+                                        ${renderFeatureStatusPill(resolveSkillScopeLabel(skill?.scope), 'neutral')}
+                                    </div>
+                                    <p>${escapeHtml(String(skill?.description || ''))}</p>
+                                </div>
+                                <div class="skills-directory-meta">
+                                    <code>${escapeHtml(String(skill?.ref || ''))}</code>
+                                    <span>${escapeHtml(String(skill?.path || skill?.instruction_path || ''))}</span>
+                                </div>
+                            </article>
+                        `).join('')}
+                    </div>
+                ` : `
+                    <div class="feature-panel-body">
+                        ${renderFeatureEmptyState(
+                            t('feature.skills.empty'),
+                            t('feature.skills.empty_copy'),
+                        )}
+                    </div>
+                `}
+            </section>
+        </div>
+    `;
+}
+
+function renderAutomationHomeView() {
+    const projects = Array.isArray(currentAutomationProjects) ? currentAutomationProjects : [];
+    const detail = currentAutomationHomeDetail?.project ? currentAutomationHomeDetail : createInitialAutomationHomeDetail();
+    const selectedProjectId = String(detail?.project?.automation_project_id || selectedAutomationHomeProjectId || '').trim();
+    renderToolbar(null, {
+        title: t('feature.automation.title'),
+        mode: 'feature',
+        summary: resolveAutomationSummary(projects),
+        actions: `
+            <button class="secondary-btn project-view-toolbar-btn" type="button" data-feature-automation-create>${escapeHtml(t('feature.automation.create'))}</button>
+        `,
+    });
+    if (!els.projectViewContent) {
+        return;
+    }
+    els.projectViewContent.innerHTML = `
+        <div class="feature-page feature-page-neutral automation-home-page">
+            <div class="automation-home-shell">
+                <section class="workspace-view-panel feature-list-panel automation-list-panel">
+                    <div class="feature-panel-body">
+                    ${projects.length > 0 ? `
+                        <div class="automation-record-list">
+                            ${projects.map(project => {
+                                const projectId = String(project?.automation_project_id || '').trim();
+                                const status = String(project?.status || 'disabled').trim() || 'disabled';
+                                return `
+                                    <button class="automation-record${projectId === selectedProjectId ? ' is-active' : ''}" type="button" data-automation-home-project-id="${escapeHtml(projectId)}">
+                                        <div class="automation-record-copy">
+                                            <strong>${escapeHtml(String(project?.display_name || project?.name || projectId))}</strong>
+                                            <span>${escapeHtml(String(project?.cron_expression || t('automation.detail.not_scheduled')))}</span>
+                                        </div>
+                                        ${renderFeatureStatusPill(t(`automation.status.${status}`), status)}
+                                    </button>
+                                `;
+                            }).join('')}
+                        </div>
+                    ` : renderFeatureEmptyState(
+                        t('feature.automation.empty'),
+                        t('feature.automation.empty_copy'),
+                    )}
+                    </div>
+                </section>
+                <section class="workspace-view-panel feature-detail-panel automation-detail-panel-surface">
+                    <div class="feature-panel-body feature-panel-body-tight">
+                    ${detail?.project ? renderAutomationHomeDetail(detail) : renderFeatureEmptyState(
+                        t('feature.automation.empty'),
+                        t('feature.automation.select'),
+                    )}
+                    </div>
+                </section>
+            </div>
+        </div>
+    `;
+    els.projectViewToolbarActions?.querySelector('[data-feature-automation-create]')?.addEventListener('click', () => {
+        void handleAutomationCreateFeature();
+    });
+    els.projectViewContent.querySelectorAll('[data-automation-home-project-id]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleAutomationSelectFeatureProject(button.getAttribute('data-automation-home-project-id'));
+        });
+    });
+    els.projectViewContent.querySelector('[data-automation-edit]')?.addEventListener('click', () => {
+        void handleAutomationEditFeatureProject();
+    });
+    els.projectViewContent.querySelector('[data-automation-run]')?.addEventListener('click', () => {
+        void handleAutomationRunFeatureProject();
+    });
+    els.projectViewContent.querySelector('[data-automation-toggle]')?.addEventListener('click', () => {
+        void handleAutomationToggleFeatureProject();
+    });
+    els.projectViewContent.querySelector('[data-automation-delete]')?.addEventListener('click', () => {
+        void handleAutomationDeleteFeatureProject();
+    });
+    els.projectViewContent.querySelectorAll('[data-automation-session-id]').forEach(node => {
+        node.addEventListener('click', () => {
+            const sessionId = String(node.getAttribute('data-automation-session-id') || '').trim();
+            if (!sessionId) {
+                return;
+            }
+            document.dispatchEvent(new CustomEvent('agent-teams-select-session', { detail: { sessionId } }));
+        });
+    });
+}
+
+function renderAutomationHomeDetail(detail) {
+    const project = detail?.project || null;
+    if (!project) {
+        return '';
+    }
+    const sessions = Array.isArray(detail?.sessions) ? detail.sessions : [];
+    const workspaceRecord = detail?.workspace;
+    const feishuBindings = Array.isArray(detail?.feishuBindings) ? detail.feishuBindings : [];
+    const status = String(project?.status || '').trim() || 'disabled';
+    const statusLabel = t(`automation.status.${status}`);
+    const deliveryBinding = project?.delivery_binding && typeof project.delivery_binding === 'object'
+        ? project.delivery_binding
+        : null;
+    const deliveryBindingName = deliveryBinding
+        ? resolveFeishuBindingDisplayName(deliveryBinding, feishuBindings)
+        : '';
+    const deliveryEvents = Array.isArray(project?.delivery_events) ? project.delivery_events : [];
+    const workspaceId = String(project?.workspace_id || '').trim() || 'automation-system';
+    const workspaceRootPath = String(workspaceRecord?.root_path || t('automation.workspace.missing'));
+    return `
+        <div class="automation-home-detail">
+            <div class="feature-detail-head automation-detail-head">
+                <div class="automation-detail-copy">
+                    <div class="feature-detail-title-row">
+                        <h3>${escapeHtml(String(project?.display_name || project?.name || ''))}</h3>
+                        ${renderFeatureStatusPill(statusLabel, status)}
+                    </div>
+                    <div class="automation-prompt-inline">${escapeHtml(String(project?.prompt || ''))}</div>
+                </div>
+                <div class="feature-action-row">
+                    <button class="secondary-btn" type="button" data-automation-edit>${escapeHtml(t('automation.action.edit'))}</button>
+                    <button class="secondary-btn" type="button" data-automation-run>${escapeHtml(t('automation.action.run_now'))}</button>
+                    <button class="secondary-btn" type="button" data-automation-toggle>${escapeHtml(status === 'enabled' ? t('automation.action.disable') : t('automation.action.enable'))}</button>
+                    <button class="secondary-btn danger-btn" type="button" data-automation-delete>${escapeHtml(t('settings.action.delete'))}</button>
+                </div>
+            </div>
+            <div class="automation-detail-grid automation-section-shell">
+                <section class="automation-flat-section automation-meta-section">
+                    <div class="automation-section-header">
+                        <div>
+                            <h4>${escapeHtml(t('automation.detail.configuration'))}</h4>
+                        </div>
+                    </div>
+                    <div class="feature-meta-list automation-meta-list">
+                        <div><span>${escapeHtml(t('automation.detail.schedule'))}</span><strong>${escapeHtml(String(project?.cron_expression || t('automation.detail.not_scheduled')))}</strong></div>
+                        <div><span>${escapeHtml(t('automation.detail.timezone'))}</span><strong>${escapeHtml(String(project?.timezone || 'UTC'))}</strong></div>
+                        <div><span>${escapeHtml(t('automation.detail.next_run'))}</span><strong>${escapeHtml(String(project?.next_run_at || t('automation.detail.not_scheduled')))}</strong></div>
+                        <div><span>${escapeHtml(t('automation.detail.last_run'))}</span><strong>${escapeHtml(String(project?.last_run_started_at || t('automation.detail.never')))}</strong></div>
+                    </div>
+                </section>
+                <section class="automation-flat-section automation-meta-section">
+                    <div class="automation-section-header">
+                        <div>
+                            <h4>${escapeHtml(t('workspace_view.bindings'))}</h4>
+                        </div>
+                    </div>
+                    <div class="feature-meta-list automation-meta-list">
+                        <div><span>${escapeHtml(t('automation.field.workspace'))}</span><strong>${escapeHtml(workspaceId)}</strong></div>
+                        <div><span>${escapeHtml(t('automation.workspace.directory'))}</span><code>${escapeHtml(workspaceRootPath)}</code></div>
+                        <div><span>${escapeHtml(t('workspace_view.delivery_events'))}</span><strong>${escapeHtml(deliveryEvents.length > 0 ? deliveryEvents.join(', ') : t('workspace_view.delivery_disabled'))}</strong></div>
+                        ${deliveryBinding ? `
+                            <div><span>${escapeHtml(t('workspace_view.feishu_trigger'))}</span><strong>${escapeHtml(String(deliveryBinding?.trigger_id || ''))}</strong></div>
+                            <div><span>${escapeHtml(t('workspace_view.feishu_chat'))}</span><strong>${escapeHtml(deliveryBindingName)}</strong></div>
+                        ` : ''}
+                    </div>
+                </section>
+            </div>
+            <section class="automation-flat-section automation-runs-section">
+                <div class="automation-section-header automation-runs-header">
+                    <h3>${escapeHtml(t('automation.detail.recent_runs'))}</h3>
+                    <span class="workspace-view-panel-meta">${escapeHtml(String(sessions.length))} ${escapeHtml(t('automation.detail.session_count'))}</span>
+                </div>
+                ${sessions.length > 0 ? `
+                    <div class="automation-run-list">
+                        ${sessions.map(session => {
+                            const sessionStatus = String(session?.active_run_status || 'completed').trim() || 'completed';
+                            return `
+                                <article class="automation-run-card" data-automation-session-id="${escapeHtml(String(session?.session_id || ''))}">
+                                    <div class="automation-run-card-header">
+                                        ${renderFeatureStatusPill(t(`automation.run_status.${sessionStatus}`), sessionStatus)}
+                                        <code class="workspace-diff-path">${escapeHtml(String(session?.metadata?.title || session?.session_id || ''))}</code>
+                                    </div>
+                                    <div class="automation-run-card-meta">
+                                        <span>${escapeHtml(t('automation.detail.updated_at'))}</span>
+                                        <strong>${escapeHtml(String(session?.updated_at || ''))}</strong>
+                                    </div>
+                                </article>
+                            `;
+                        }).join('')}
+                    </div>
+                ` : renderInlineState(t('automation.detail.no_runs'))}
+            </section>
+        </div>
+    `;
+}
+
+function resolveFeishuTriggerAppName(trigger) {
+    const sourceConfig = trigger?.source_config && typeof trigger.source_config === 'object' ? trigger.source_config : {};
+    return String(sourceConfig?.app_name || sourceConfig?.app_id || '').trim();
+}
+
+function renderGatewaySummaryChips(labels) {
+    return `
+        <div class="profile-card-chips gateway-summary-chips">
+            ${labels
+                .filter(label => String(label || '').trim())
+                .map(label => `<span class="profile-card-chip">${escapeHtml(String(label))}</span>`)
+                .join('')}
+        </div>
+    `;
+}
+
+function renderGatewayFeishuRecords(triggers) {
+    if (!Array.isArray(triggers) || triggers.length === 0) {
+        return `
+            <div class="feature-panel-body">
+                ${renderFeatureEmptyState(
+                    t('settings.triggers.none'),
+                    t('settings.triggers.none_copy'),
+                )}
+            </div>
+        `;
+    }
+    return `
+        <div class="role-records trigger-records gateway-records">
+            ${triggers.map(trigger => {
+                const triggerId = String(trigger?.trigger_id || '').trim();
+                const status = String(trigger?.status || 'disabled').trim() || 'disabled';
+                const workspaceId = String(trigger?.target_config?.workspace_id || '').trim();
+                const appName = resolveFeishuTriggerAppName(trigger);
+                const credentialsReady = trigger?.secret_status?.app_secret_configured === true;
+                return `
+                    <div class="role-record gateway-feature-record" data-feature-feishu-record="${escapeHtml(triggerId)}">
+                        <div class="role-record-main">
+                            <div class="role-record-title-row trigger-record-title-row">
+                                <div class="role-record-title">${escapeHtml(String(trigger?.display_name || trigger?.name || triggerId))}</div>
+                                <div class="profile-card-chips role-record-chips">
+                                    <span class="profile-card-chip">${escapeHtml(t(`automation.status.${status}`))}</span>
+                                    <span class="profile-card-chip">${escapeHtml(credentialsReady ? t('settings.triggers.credentials_ready') : t('settings.triggers.credentials_missing'))}</span>
+                                </div>
+                            </div>
+                            <div class="role-record-meta trigger-record-meta">
+                                ${workspaceId ? `<span>${escapeHtml(workspaceId)}</span>` : ''}
+                                ${appName ? `<span>${escapeHtml(appName)}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="role-record-actions trigger-record-actions">
+                            <button class="settings-inline-action settings-list-action" type="button" data-feature-feishu-toggle="${escapeHtml(triggerId)}">${escapeHtml(status === 'enabled' ? t('settings.gateway.disable_account') : t('settings.gateway.enable_account'))}</button>
+                            <button class="settings-inline-action settings-list-action" type="button" data-feature-feishu-edit="${escapeHtml(triggerId)}">${escapeHtml(t('settings.action.edit'))}</button>
+                            <button class="settings-inline-action settings-list-action" type="button" data-feature-feishu-delete="${escapeHtml(triggerId)}">${escapeHtml(t('settings.action.delete'))}</button>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+function renderGatewayWeChatRecords(accounts) {
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+        return `
+            <div class="feature-panel-body">
+                ${renderFeatureEmptyState(
+                    t('settings.gateway.wechat_none'),
+                    t('settings.gateway.wechat_none_copy'),
+                )}
+            </div>
+        `;
+    }
+    return `
+        <div class="role-records trigger-records gateway-records">
+            ${accounts.map(account => {
+                const accountId = String(account?.account_id || '').trim();
+                const status = String(account?.status || 'disabled').trim() || 'disabled';
+                const statusLabel = account?.running === true
+                    ? t('settings.gateway.status_running')
+                    : t(`automation.status.${status}`);
+                return `
+                    <div class="role-record gateway-feature-record" data-feature-wechat-record="${escapeHtml(accountId)}">
+                        <div class="role-record-main">
+                            <div class="role-record-title-row trigger-record-title-row">
+                                <div class="role-record-title">${escapeHtml(String(account?.display_name || accountId))}</div>
+                                <div class="profile-card-chips role-record-chips">
+                                    <span class="profile-card-chip">${escapeHtml(statusLabel)}</span>
+                                    <span class="profile-card-chip">${escapeHtml(accountId)}</span>
+                                </div>
+                            </div>
+                            <div class="role-record-meta trigger-record-meta">
+                                ${account?.workspace_id ? `<span>${escapeHtml(String(account.workspace_id))}</span>` : ''}
+                                ${account?.last_error ? `<span>${escapeHtml(`${t('settings.gateway.last_error')}: ${String(account.last_error)}`)}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="role-record-actions trigger-record-actions">
+                            <button class="settings-inline-action settings-list-action" type="button" data-feature-wechat-toggle="${escapeHtml(accountId)}">${escapeHtml(status === 'enabled' ? t('settings.gateway.disable_account') : t('settings.gateway.enable_account'))}</button>
+                            <button class="settings-inline-action settings-list-action" type="button" data-feature-wechat-edit="${escapeHtml(accountId)}">${escapeHtml(t('settings.action.edit'))}</button>
+                            <button class="settings-inline-action settings-list-action" type="button" data-feature-wechat-delete="${escapeHtml(accountId)}">${escapeHtml(t('settings.action.delete'))}</button>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+function ensureGatewayModalRoot() {
+    if (!document?.body) {
+        return null;
+    }
+    if (!gatewayModalRoot) {
+        try {
+            gatewayModalRoot = document.getElementById('gateway-feature-modal-root');
+        } catch {
+            gatewayModalRoot = null;
+        }
+    }
+    if (!gatewayModalRoot && typeof document.createElement === 'function') {
+        gatewayModalRoot = document.createElement('div');
+        gatewayModalRoot.id = 'gateway-feature-modal-root';
+        gatewayModalRoot.className = 'gateway-feature-modal-root';
+        if (typeof document.body.appendChild === 'function') {
+            document.body.appendChild(gatewayModalRoot);
+        }
+    }
+    return gatewayModalRoot;
+}
+
+function renderGatewayFeishuModal() {
+    const draft = currentGatewayFeatureState.feishuDraft;
+    if (!draft) {
+        return '';
+    }
+    return `
+        <div class="modal gateway-feature-modal" data-feature-gateway-modal>
+            <div class="modal-content gateway-feature-modal-content gateway-feishu-modal-content" role="dialog" aria-modal="true" aria-labelledby="gateway-feature-modal-title">
+                <div class="modal-header gateway-feature-modal-header">
+                    <div class="gateway-feature-modal-heading">
+                        <h3 id="gateway-feature-modal-title">${escapeHtml(String(draft.trigger_id || '').trim() ? t('settings.roles.edit') : t('feature.gateway.add_feishu'))}</h3>
+                        <p>${escapeHtml(t('settings.triggers.feishu_detail_copy'))}</p>
+                    </div>
+                    <button class="icon-btn" type="button" aria-label="${escapeHtml(t('settings.action.cancel'))}" data-feature-gateway-modal-close>
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="gateway-feature-modal-body">
+                    ${renderFeishuEditor()}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderGatewayWeChatConnectModal() {
+    if (currentGatewayFeatureState.wechatModalOpen !== true) {
+        return '';
+    }
+    const session = currentGatewayFeatureState.wechatLoginSession;
+    const statusTone = String(currentGatewayFeatureState.wechatStatusTone || '').trim() || 'neutral';
+    const statusMessage = String(currentGatewayFeatureState.wechatStatusMessage || '').trim();
+    const canRetry = currentGatewayFeatureState.wechatConnecting !== true;
+    return `
+        <div class="modal gateway-feature-modal gateway-connect-modal" data-feature-wechat-modal>
+            <div class="modal-content gateway-feature-modal-content gateway-connect-modal-content" role="dialog" aria-modal="true" aria-labelledby="gateway-connect-modal-title">
+                <div class="modal-header gateway-feature-modal-header gateway-connect-modal-header">
+                    <div class="gateway-feature-modal-heading gateway-connect-modal-heading">
+                        <h3 id="gateway-connect-modal-title">${escapeHtml(t('settings.gateway.connect_wechat'))}</h3>
+                        <p>${escapeHtml(t('settings.gateway.qr_copy'))}</p>
+                    </div>
+                    <button class="icon-btn" type="button" aria-label="${escapeHtml(t('settings.action.cancel'))}" data-feature-wechat-modal-close>
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="gateway-connect-modal-body">
+                    ${statusMessage
+                        ? `<div class="feature-inline-status is-${escapeHtml(statusTone)}">${escapeHtml(statusMessage)}</div>`
+                        : ''
+                    }
+                    ${session?.qr_code_url
+                        ? `
+                            <div class="gateway-connect-modal-qr">
+                                <img class="gateway-qr-image" src="${escapeHtml(session.qr_code_url)}" alt="${escapeHtml(t('settings.gateway.qr_title'))}">
+                            </div>
+                        `
+                        : `
+                            <div class="gateway-connect-modal-placeholder">
+                                <h4>${escapeHtml(t('settings.gateway.qr_title'))}</h4>
+                                <p>${escapeHtml(t('settings.gateway.login_waiting'))}</p>
+                            </div>
+                        `
+                    }
+                </div>
+                <div class="gateway-connect-modal-actions">
+                    <button class="secondary-btn" type="button" data-feature-wechat-modal-close>${escapeHtml(t('settings.action.cancel'))}</button>
+                    ${canRetry
+                        ? `<button class="primary-btn" type="button" data-feature-wechat-modal-retry>${escapeHtml(t('settings.gateway.connect_wechat'))}</button>`
+                        : ''
+                    }
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderGatewayFeatureModal() {
+    const root = ensureGatewayModalRoot();
+    if (!root) {
+        return;
+    }
+    const content = currentGatewayFeatureState.feishuDraft
+        ? renderGatewayFeishuModal()
+        : renderGatewayWeChatConnectModal();
+    root.innerHTML = content;
+    if (!content) {
+        return;
+    }
+    root.querySelectorAll('[data-feature-gateway-modal-close]').forEach(button => {
+        button.addEventListener('click', () => {
+            handleCancelFeishuFeatureTrigger();
+        });
+    });
+    root.querySelectorAll('[data-feature-feishu-save]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleSaveFeishuFeatureTrigger();
+        });
+    });
+    root.querySelectorAll('[data-feature-feishu-cancel]').forEach(button => {
+        button.addEventListener('click', () => {
+            handleCancelFeishuFeatureTrigger();
+        });
+    });
+    root.querySelectorAll('[data-feature-wechat-modal-close]').forEach(button => {
+        button.addEventListener('click', () => {
+            handleCloseWeChatFeatureModal();
+        });
+    });
+    root.querySelectorAll('[data-feature-wechat-modal-retry]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleStartWeChatFeatureLogin();
+        });
+    });
+    bindFeishuEditorInputs();
+}
+
+function renderGatewayFeatureView() {
+    renderToolbar(null, {
+        title: t('feature.gateway.title'),
+        mode: 'feature',
+        summary: resolveGatewayFeatureSummary(currentGatewayFeatureState),
+    });
+    if (!els.projectViewContent) {
+        return;
+    }
+    const feishuTriggers = Array.isArray(currentGatewayFeatureState.feishuTriggers) ? currentGatewayFeatureState.feishuTriggers : [];
+    const wechatAccounts = Array.isArray(currentGatewayFeatureState.wechatAccounts) ? currentGatewayFeatureState.wechatAccounts : [];
+    els.projectViewContent.innerHTML = `
+        <div class="feature-page feature-page-neutral gateway-feature-page">
+            <section class="workspace-view-panel gateway-section">
+                <div class="workspace-view-panel-header gateway-section-header">
+                    <div class="gateway-section-headline">
+                        <h3>${escapeHtml(t('feature.gateway.feishu_section'))}</h3>
+                        <p>${escapeHtml(t('settings.triggers.feishu_detail_copy'))}</p>
+                    </div>
+                    <button class="secondary-btn gateway-section-btn" type="button" data-feature-gateway-add-feishu>${escapeHtml(t('feature.gateway.add_feishu'))}</button>
+                </div>
+                <div class="gateway-section-body">
+                    ${renderGatewaySummaryChips([
+                        t('settings.triggers.trigger_count').replace('{count}', String(feishuTriggers.length)),
+                        t('settings.triggers.enabled_count').replace('{count}', String(feishuTriggers.filter(trigger => String(trigger?.status || '').trim() === 'enabled').length)),
+                    ])}
+                    ${renderGatewayFeishuRecords(feishuTriggers)}
+                </div>
+            </section>
+            <section class="workspace-view-panel gateway-section">
+                <div class="workspace-view-panel-header gateway-section-header">
+                    <div class="gateway-section-headline">
+                        <h3>${escapeHtml(t('feature.gateway.wechat_section'))}</h3>
+                        <p>${escapeHtml(t('settings.gateway.wechat_none_copy'))}</p>
+                    </div>
+                    <button class="secondary-btn gateway-section-btn" type="button" data-feature-gateway-connect-wechat>${escapeHtml(t('settings.gateway.connect_wechat'))}</button>
+                </div>
+                <div class="gateway-section-body">
+                    ${renderGatewaySummaryChips([
+                        t('settings.gateway.gateway_count').replace('{count}', String(wechatAccounts.length)),
+                        t('settings.triggers.enabled_count').replace('{count}', String(wechatAccounts.filter(account => String(account?.status || '').trim() === 'enabled').length)),
+                        t('settings.gateway.running_count').replace('{count}', String(wechatAccounts.filter(account => account?.running === true).length)),
+                    ])}
+                    ${currentGatewayFeatureState.wechatStatusMessage ? `
+                        <div class="feature-inline-status is-${escapeHtml(currentGatewayFeatureState.wechatStatusTone || 'neutral')}">${escapeHtml(currentGatewayFeatureState.wechatStatusMessage)}</div>
+                    ` : ''}
+                    ${renderGatewayWeChatRecords(wechatAccounts)}
+                </div>
+            </section>
+        </div>
+    `;
+    els.projectViewContent.querySelectorAll('[data-feature-gateway-add-feishu]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleCreateFeishuFeatureTrigger();
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-feature-gateway-connect-wechat]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleStartWeChatFeatureLogin();
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-feature-feishu-edit]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleEditFeishuFeatureTrigger(button.getAttribute('data-feature-feishu-edit'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-feature-feishu-toggle]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleToggleFeishuFeatureTrigger(button.getAttribute('data-feature-feishu-toggle'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-feature-feishu-delete]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleDeleteFeishuFeatureTrigger(button.getAttribute('data-feature-feishu-delete'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-feature-wechat-edit]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleEditWeChatFeatureAccount(button.getAttribute('data-feature-wechat-edit'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-feature-wechat-toggle]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleToggleWeChatFeatureAccount(button.getAttribute('data-feature-wechat-toggle'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-feature-wechat-delete]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleDeleteWeChatFeatureAccount(button.getAttribute('data-feature-wechat-delete'));
+        });
+    });
+    renderGatewayFeatureModal();
+}
+
+async function handleSkillsReloadFeature() {
+    try {
+        await reloadSkillsConfig();
+        showToast({
+            title: t('settings.system.skills_reloaded'),
+            message: t('settings.system.skills_reloaded_message'),
+            tone: 'success',
+        });
+        await openSkillsFeatureView();
+    } catch (error) {
+        showToast({
+            title: t('settings.system.reload_failed'),
+            message: String(error?.message || error || ''),
+            tone: 'danger',
+        });
+    }
+}
+
+async function handleAutomationCreateFeature() {
+    const payload = await requestAutomationProjectInput({});
+    if (!payload) {
+        return;
+    }
+    await createAutomationProject(payload);
+    document.dispatchEvent(new CustomEvent('agent-teams-projects-changed'));
+    await openAutomationHomeView();
+}
+
+async function handleAutomationSelectFeatureProject(projectId) {
+    selectedAutomationHomeProjectId = String(projectId || '').trim();
+    await openAutomationHomeView(selectedAutomationHomeProjectId);
+}
+
+async function handleAutomationEditFeatureProject() {
+    const project = currentAutomationHomeDetail?.project;
+    if (!project) {
+        return;
+    }
+    const payload = await requestAutomationProjectInput(project);
+    if (!payload) {
+        return;
+    }
+    await updateAutomationProject(String(project?.automation_project_id || ''), payload);
+    document.dispatchEvent(new CustomEvent('agent-teams-projects-changed'));
+    await openAutomationHomeView(String(project?.automation_project_id || ''));
+}
+
+async function handleAutomationRunFeatureProject() {
+    const project = currentAutomationHomeDetail?.project;
+    if (!project) {
+        return;
+    }
+    const projectId = String(project?.automation_project_id || '').trim();
+    const result = await runAutomationProject(String(project?.automation_project_id || ''));
+    sysLog(formatAutomationRunLogMessage(result));
+    document.dispatchEvent(new CustomEvent('agent-teams-projects-changed'));
+    await openAutomationHomeView(projectId);
+}
+
+async function handleAutomationToggleFeatureProject() {
+    const project = currentAutomationHomeDetail?.project;
+    if (!project) {
+        return;
+    }
+    const projectId = String(project?.automation_project_id || '').trim();
+    if (String(project?.status || '').trim() === 'enabled') {
+        await disableAutomationProject(projectId);
+    } else {
+        await enableAutomationProject(projectId);
+    }
+    await openAutomationHomeView(projectId);
+}
+
+async function handleAutomationDeleteFeatureProject() {
+    const project = currentAutomationHomeDetail?.project;
+    if (!project) {
+        return;
+    }
+    const confirmed = await showConfirmDialog({
+        title: t('settings.action.delete'),
+        message: String(project?.display_name || project?.name || ''),
+        tone: 'danger',
+        confirmLabel: t('settings.action.delete'),
+        cancelLabel: t('settings.action.cancel'),
+    });
+    if (!confirmed) {
+        return;
+    }
+    await deleteAutomationProject(String(project?.automation_project_id || '').trim());
+    document.dispatchEvent(new CustomEvent('agent-teams-projects-changed'));
+    await openAutomationHomeView();
+}
+
+async function handleCreateFeishuFeatureTrigger() {
+    try {
+        if (currentGatewayFeatureState.workspaces.length === 0) {
+            throw new Error(t('settings.triggers.no_workspaces'));
+        }
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            wechatModalOpen: false,
+            wechatLoginSession: null,
+            wechatConnecting: false,
+            feishuEditingTriggerId: '',
+            feishuDraft: createFeishuTriggerDraft(),
+        };
+        renderGatewayFeatureModal();
+    } catch (error) {
+        showToast({
+            title: t('settings.triggers.save_failed'),
+            message: String(error?.message || error || ''),
+            tone: 'danger',
+        });
+    }
+}
+
+async function handleEditFeishuFeatureTrigger(triggerId) {
+    const trigger = currentGatewayFeatureState.feishuTriggers.find(item => item.trigger_id === String(triggerId || '').trim());
+    if (!trigger) {
+        return;
+    }
+    currentGatewayFeatureState = {
+        ...currentGatewayFeatureState,
+        wechatModalOpen: false,
+        wechatLoginSession: null,
+        wechatConnecting: false,
+        feishuEditingTriggerId: trigger.trigger_id,
+        feishuDraft: createFeishuTriggerDraft(trigger),
+    };
+    renderGatewayFeatureModal();
+}
+
+function handleCancelFeishuFeatureTrigger() {
+    currentGatewayFeatureState = {
+        ...currentGatewayFeatureState,
+        feishuEditingTriggerId: '',
+        feishuDraft: null,
+    };
+    renderGatewayFeatureView();
+}
+
+async function handleSaveFeishuFeatureTrigger() {
+    try {
+        const draft = syncFeishuDraftFromEditor();
+        if (!draft) {
+            return;
+        }
+        const isEditing = String(currentGatewayFeatureState.feishuEditingTriggerId || '').trim().length > 0;
+        const payload = buildFeishuTriggerPayload(draft, { requireSecret: !isEditing });
+        if (isEditing) {
+            await updateTrigger(String(currentGatewayFeatureState.feishuEditingTriggerId || '').trim(), payload);
+        } else {
+            await createTrigger(payload);
+        }
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            feishuEditingTriggerId: '',
+            feishuDraft: null,
+        };
+        showToast({
+            title: t('settings.triggers.saved'),
+            message: t('settings.triggers.saved_message'),
+            tone: 'success',
+        });
+        await openImFeatureView();
+    } catch (error) {
+        showToast({
+            title: t('settings.triggers.save_failed'),
+            message: String(error?.message || error || ''),
+            tone: 'danger',
+        });
+    }
+}
+
+async function handleToggleFeishuFeatureTrigger(triggerId) {
+    const trigger = currentGatewayFeatureState.feishuTriggers.find(item => item.trigger_id === String(triggerId || '').trim());
+    if (!trigger) {
+        return;
+    }
+    if (String(trigger?.status || '').trim() === 'enabled') {
+        await disableTrigger(trigger.trigger_id);
+    } else {
+        await enableTrigger(trigger.trigger_id);
+    }
+    await openImFeatureView();
+}
+
+async function handleDeleteFeishuFeatureTrigger(triggerId) {
+    const trigger = currentGatewayFeatureState.feishuTriggers.find(item => item.trigger_id === String(triggerId || '').trim());
+    if (!trigger) {
+        return;
+    }
+    const confirmed = await showConfirmDialog({
+        title: t('settings.triggers.delete_confirm_title'),
+        message: formatMessage('settings.triggers.delete_confirm_message', {
+            name: String(trigger?.display_name || trigger?.name || trigger?.trigger_id || ''),
+        }),
+        tone: 'danger',
+        confirmLabel: t('settings.action.delete'),
+        cancelLabel: t('settings.action.cancel'),
+    });
+    if (!confirmed) {
+        return;
+    }
+    await deleteTrigger(trigger.trigger_id);
+    showToast({
+        title: t('settings.triggers.deleted'),
+        message: t('settings.triggers.deleted_message'),
+        tone: 'success',
+    });
+    await openImFeatureView();
+}
+
+async function handleStartWeChatFeatureLogin() {
+    const requestId = Date.now();
+    currentGatewayFeatureState = {
+        ...currentGatewayFeatureState,
+        feishuEditingTriggerId: '',
+        feishuDraft: null,
+        wechatLoginRequestId: requestId,
+        wechatModalOpen: true,
+        wechatLoginSession: null,
+        wechatStatusMessage: t('settings.gateway.login_waiting'),
+        wechatStatusTone: '',
+        wechatConnecting: true,
+    };
+    renderGatewayFeatureModal();
+    try {
+        const result = await startWeChatGatewayLogin({});
+        if (currentGatewayFeatureState.wechatLoginRequestId !== requestId || currentGatewayFeatureState.wechatModalOpen !== true) {
+            return;
+        }
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            wechatModalOpen: true,
+            wechatLoginSession: {
+                session_key: String(result?.session_key || '').trim(),
+                qr_code_url: String(result?.qr_code_url || '').trim(),
+            },
+        };
+        renderGatewayFeatureModal();
+        void finalizeWeChatFeatureLogin(String(result?.session_key || '').trim());
+    } catch (error) {
+        if (currentGatewayFeatureState.wechatLoginRequestId !== requestId || currentGatewayFeatureState.wechatModalOpen !== true) {
+            return;
+        }
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            wechatModalOpen: true,
+            wechatLoginSession: null,
+            wechatConnecting: false,
+            wechatStatusMessage: String(error?.message || t('settings.gateway.login_failed')),
+            wechatStatusTone: 'danger',
+        };
+        renderGatewayFeatureModal();
+    }
+}
+
+function handleCloseWeChatFeatureModal() {
+    currentGatewayFeatureState = {
+        ...currentGatewayFeatureState,
+        wechatLoginRequestId: 0,
+        wechatModalOpen: false,
+        wechatLoginSession: null,
+        wechatConnecting: false,
+    };
+    renderGatewayFeatureModal();
+}
+
+async function finalizeWeChatFeatureLogin(sessionKey) {
+    try {
+        const result = await waitWeChatGatewayLogin({
+            session_key: sessionKey,
+            timeout_ms: 480000,
+        });
+        if (String(currentGatewayFeatureState?.wechatLoginSession?.session_key || '') !== String(sessionKey || '')) {
+            return;
+        }
+        if (result?.connected === true) {
+            showToast({
+                title: t('settings.gateway.login_success'),
+                message: String(result?.message || t('settings.gateway.login_success')),
+                tone: 'success',
+            });
+            currentGatewayFeatureState = {
+                ...currentGatewayFeatureState,
+                wechatLoginRequestId: 0,
+                wechatModalOpen: false,
+                wechatConnecting: false,
+                wechatLoginSession: null,
+                wechatStatusMessage: String(result?.message || t('settings.gateway.login_success')),
+                wechatStatusTone: 'success',
+            };
+            await openImFeatureView();
+            return;
+        }
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            wechatLoginRequestId: 0,
+            wechatModalOpen: true,
+            wechatConnecting: false,
+            wechatStatusMessage: String(result?.message || t('settings.gateway.login_failed')),
+            wechatStatusTone: 'danger',
+        };
+        renderGatewayFeatureModal();
+    } catch (error) {
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            wechatLoginRequestId: 0,
+            wechatModalOpen: true,
+            wechatLoginSession: null,
+            wechatConnecting: false,
+            wechatStatusMessage: String(error?.message || t('settings.gateway.login_failed')),
+            wechatStatusTone: 'danger',
+        };
+        renderGatewayFeatureModal();
+    }
+}
+
+async function handleEditWeChatFeatureAccount(accountId) {
+    const account = currentGatewayFeatureState.wechatAccounts.find(item => item.account_id === String(accountId || '').trim());
+    if (!account) {
+        return;
+    }
+    try {
+        const payload = await requestWeChatAccountInput(account);
+        if (!payload) {
+            return;
+        }
+        await updateWeChatGatewayAccount(account.account_id, payload);
+        showToast({
+            title: t('settings.gateway.saved'),
+            message: t('settings.gateway.saved_message'),
+            tone: 'success',
+        });
+        await openImFeatureView();
+    } catch (error) {
+        showToast({
+            title: t('settings.gateway.save_failed'),
+            message: String(error?.message || error || ''),
+            tone: 'danger',
+        });
+    }
+}
+
+async function handleToggleWeChatFeatureAccount(accountId) {
+    const account = currentGatewayFeatureState.wechatAccounts.find(item => item.account_id === String(accountId || '').trim());
+    if (!account) {
+        return;
+    }
+    if (String(account?.status || '').trim() === 'enabled') {
+        await disableWeChatGatewayAccount(account.account_id);
+    } else {
+        await enableWeChatGatewayAccount(account.account_id);
+    }
+    await openImFeatureView();
+}
+
+async function handleDeleteWeChatFeatureAccount(accountId) {
+    const account = currentGatewayFeatureState.wechatAccounts.find(item => item.account_id === String(accountId || '').trim());
+    if (!account) {
+        return;
+    }
+    const confirmed = await showConfirmDialog({
+        title: t('settings.gateway.delete_confirm_title'),
+        message: formatMessage('settings.gateway.delete_confirm_message', {
+            name: String(account?.display_name || account?.account_id || ''),
+        }),
+        tone: 'danger',
+        confirmLabel: t('settings.action.delete'),
+        cancelLabel: t('settings.action.cancel'),
+    });
+    if (!confirmed) {
+        return;
+    }
+    await deleteWeChatGatewayAccount(account.account_id);
+    showToast({
+        title: t('settings.gateway.deleted'),
+        message: t('settings.gateway.deleted_message'),
+        tone: 'success',
+    });
+    await openImFeatureView();
+}
+
 function renderAutomationLoadingState(project) {
     renderToolbar(project, {
         summary: t('workspace_view.loading_automation_project'),
@@ -678,14 +3284,12 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null, 
                     <div class="automation-hero-copy">
                         <span class="automation-status-pill is-${escapeHtml(status.toLowerCase())}">${escapeHtml(statusLabel)}</span>
                         <h3>${escapeHtml(t('automation.detail.overview'))}</h3>
-                        <p>${escapeHtml(t('automation.detail.overview_copy'))}</p>
                     </div>
                     <div class="automation-stat-grid">
                         <article class="automation-stat-card automation-stat-card-wide">
                             <span>${escapeHtml(t('automation.detail.schedule'))}</span>
                             <strong>${escapeHtml(scheduleText)}</strong>
                             <p class="automation-stat-note">${escapeHtml(cronDescription)}</p>
-                            <p class="automation-stat-hint">${escapeHtml(t('automation.cron.hint'))}</p>
                         </article>
                         <article class="automation-stat-card">
                             <span>${escapeHtml(t('automation.field.workspace'))}</span>
@@ -706,6 +3310,12 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null, 
                     </div>
                 </div>
             </section>
+            <section class="workspace-view-panel automation-prompt-panel">
+                <div class="workspace-view-panel-header">
+                    <h3>${escapeHtml(t('automation.detail.prompt'))}</h3>
+                </div>
+                <div class="automation-prompt-content">${escapeHtml(String(project?.prompt || ''))}</div>
+            </section>
             <div class="automation-detail-grid">
                 <section class="workspace-view-panel automation-detail-panel">
                     <div class="workspace-view-panel-header">
@@ -713,9 +3323,23 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null, 
                         <span class="workspace-view-panel-meta">${escapeHtml(scheduleMode)}</span>
                     </div>
                     <div class="automation-detail-section">
-                        <div class="automation-detail-row automation-detail-row-block">
-                            <span class="automation-detail-label">${escapeHtml(t('automation.detail.prompt'))}</span>
-                            <div class="automation-prompt-card">${escapeHtml(String(project?.prompt || ''))}</div>
+                        <div class="automation-detail-grid-compact">
+                            <div class="automation-detail-row">
+                                <span class="automation-detail-label">${escapeHtml(t('automation.detail.schedule'))}</span>
+                                <span class="automation-detail-value">${escapeHtml(scheduleText)}</span>
+                            </div>
+                            <div class="automation-detail-row">
+                                <span class="automation-detail-label">${escapeHtml(t('automation.detail.timezone'))}</span>
+                                <span class="automation-detail-value">${escapeHtml(timezone)}</span>
+                            </div>
+                            <div class="automation-detail-row">
+                                <span class="automation-detail-label">${escapeHtml(t('automation.detail.next_run'))}</span>
+                                <span class="automation-detail-value">${escapeHtml(nextRunAt)}</span>
+                            </div>
+                            <div class="automation-detail-row">
+                                <span class="automation-detail-label">${escapeHtml(t('automation.detail.last_run'))}</span>
+                                <span class="automation-detail-value">${escapeHtml(lastRunAt)}</span>
+                            </div>
                         </div>
                         <div class="automation-detail-row">
                             <span class="automation-detail-label">${escapeHtml(t('automation.detail.last_error'))}</span>
@@ -755,7 +3379,6 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null, 
                                 <strong>${escapeHtml(String(deliveryBinding.chat_type || ''))}</strong>
                             </div>
                         ` : ''}
-                        <p class="automation-binding-help">${escapeHtml(deliveryBinding ? t('workspace_view.delivery_help_feishu') : t('automation.workspace.help'))}</p>
                     </div>
                 </section>
             </div>
@@ -790,7 +3413,7 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null, 
     `;
 
     const editAction = async () => {
-        const nextPayload = await requestAutomationProjectEditInput(project);
+        const nextPayload = await requestAutomationProjectInput(project);
         if (!nextPayload) {
             return;
         }
@@ -903,19 +3526,26 @@ function renderWorkspaceSnapshot(workspace, snapshot) {
     bindDiffInteractions();
 }
 
-function renderToolbar(projectOrWorkspace, { summary = '', mode = 'workspace', actions = '' } = {}) {
+function renderToolbar(projectOrWorkspace, { title = '', summary = '', mode = 'workspace', actions = '' } = {}) {
     if (els.projectViewTitle) {
-        els.projectViewTitle.textContent = mode === 'automation'
-            ? formatAutomationTitle(projectOrWorkspace)
-            : formatWorkspaceTitle(projectOrWorkspace);
+        if (title) {
+            els.projectViewTitle.textContent = title;
+        } else {
+            els.projectViewTitle.textContent = mode === 'automation'
+                ? formatAutomationTitle(projectOrWorkspace)
+                : formatWorkspaceTitle(projectOrWorkspace);
+        }
     }
     if (els.projectViewSummary) {
         els.projectViewSummary.textContent = summary;
     }
     if (els.projectViewToolbarActions) {
+        const reloadAction = mode === 'feature'
+            ? ''
+            : `<button id="project-view-reload" class="secondary-btn" type="button" data-project-view-reload>${escapeHtml(t('workspace_view.reload'))}</button>`;
         els.projectViewToolbarActions.innerHTML = `
             ${actions || ''}
-            <button id="project-view-reload" class="secondary-btn" type="button" data-project-view-reload>${escapeHtml(t('workspace_view.reload'))}</button>
+            ${reloadAction}
             <button id="project-view-close" class="icon-btn" type="button" title="${escapeHtml(t('workspace_view.back'))}" aria-label="${escapeHtml(t('workspace_view.back'))}" data-project-view-close>
                 <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
                     <path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>

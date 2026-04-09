@@ -17,7 +17,32 @@ class ProviderType(StrEnum):
     OPENAI_COMPATIBLE = "openai_compatible"
     BIGMODEL = "bigmodel"
     MINIMAX = "minimax"
+    MAAS = "maas"
     ECHO = "echo"
+
+
+DEFAULT_MAAS_LOGIN_URL = (
+    "http://rnd-idea-api.huawei.com/ideaclientservice/login/v4/secureLogin"
+)
+DEFAULT_MAAS_BASE_URL = (
+    "http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/"
+)
+DEFAULT_MAAS_APP_ID = "RelayTeams"
+
+
+class MaaSAuthConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1)
+    password: str | None = Field(default=None, min_length=1)
+
+    @field_validator("username", "password", mode="before")
+    @classmethod
+    def _normalize_string_fields(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
 
 
 class SamplingConfig(BaseModel):
@@ -67,6 +92,7 @@ class ModelEndpointConfig(BaseModel):
     base_url: str = Field(min_length=1)
     api_key: str | None = Field(default=None, min_length=1)
     headers: tuple[ModelRequestHeader, ...] = ()
+    maas_auth: MaaSAuthConfig | None = None
     ssl_verify: bool | None = None
     context_window: int | None = Field(default=None, ge=1)
     connect_timeout_seconds: float = Field(
@@ -100,6 +126,17 @@ class ModelEndpointConfig(BaseModel):
 
     @model_validator(mode="after")
     def _require_auth_source(self) -> "ModelEndpointConfig":
+        if self.provider == ProviderType.MAAS:
+            self.base_url = DEFAULT_MAAS_BASE_URL
+            if self.maas_auth is None:
+                raise ValueError(
+                    "MAAS model endpoint config requires maas_auth configuration."
+                )
+            if self.maas_auth.password is None:
+                raise ValueError(
+                    "MAAS model endpoint config requires maas_auth.password."
+                )
+            return self
         if self.api_key is not None:
             return self
         if any(

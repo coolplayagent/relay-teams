@@ -56,7 +56,11 @@ from relay_teams.providers.model_connectivity import (
     ModelConnectivityProbeResult,
     ModelDiscoveryResult,
 )
-from relay_teams.providers.model_config import ProviderModelInfo, ProviderType
+from relay_teams.providers.model_config import (
+    DEFAULT_MAAS_BASE_URL,
+    ProviderModelInfo,
+    ProviderType,
+)
 from relay_teams.skills.clawhub_models import (
     ClawHubSkillDetail,
     ClawHubSkillSummary,
@@ -778,6 +782,37 @@ def test_get_model_profiles_returns_api_key() -> None:
     assert payload["default"]["context_window"] == 128000
 
 
+def test_get_model_profiles_returns_maas_password() -> None:
+    class _FakeMaaSSystemService(_FakeSystemService):
+        def get_model_profiles(self) -> dict[str, object]:
+            return {
+                "maas": {
+                    "provider": ProviderType.MAAS.value,
+                    "model": "maas-chat",
+                    "base_url": DEFAULT_MAAS_BASE_URL,
+                    "api_key": "",
+                    "has_api_key": False,
+                    "headers": [],
+                    "maas_auth": {
+                        "username": "relay-user",
+                        "password": "relay-password",
+                        "has_password": True,
+                    },
+                    "is_default": True,
+                }
+            }
+
+    client = _create_test_client(_FakeMaaSSystemService())
+
+    response = client.get("/api/system/configs/model/profiles")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["maas"]["maas_auth"]["username"] == "relay-user"
+    assert payload["maas"]["maas_auth"]["password"] == "relay-password"
+    assert payload["maas"]["maas_auth"]["has_password"] is True
+
+
 def test_get_provider_models_with_filter() -> None:
     client = _create_test_client(_FakeSystemService())
 
@@ -1218,6 +1253,37 @@ def test_save_model_profile_accepts_minimax_provider() -> None:
     assert service.saved_model_profile is not None
     _, saved_profile, _ = service.saved_model_profile
     assert saved_profile["provider"] == ProviderType.MINIMAX.value
+
+
+def test_save_model_profile_accepts_maas_provider() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/maas",
+        json={
+            "provider": ProviderType.MAAS.value,
+            "model": "maas-chat",
+            "base_url": "https://maas.example/api/v2",
+            "maas_auth": {
+                "username": "relay-user",
+                "password": "relay-password",
+            },
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "max_tokens": 4096,
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    assert saved_profile["provider"] == ProviderType.MAAS.value
+    assert saved_profile["base_url"] == DEFAULT_MAAS_BASE_URL
+    assert saved_profile["maas_auth"] == {
+        "username": "relay-user",
+        "password": "relay-password",
+    }
 
 
 def test_save_model_profile_accepts_source_name_for_rename() -> None:

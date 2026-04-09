@@ -68,6 +68,8 @@ def build_clawhub_app(
             raise typer.BadParameter(
                 "--token and --clear-token cannot be used together"
             )
+        if token is None and not clear_token:
+            raise typer.BadParameter("Pass --token to save or --clear-token to remove")
         auto_start_if_needed(base_url, autostart)
         payload: dict[str, object] = {"token": None if clear_token else token}
         result = request_json(
