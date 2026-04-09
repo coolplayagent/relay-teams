@@ -6,6 +6,13 @@ from relay_teams.skills.discovery import (
     get_project_skills_dir,
     get_user_skills_dir,
 )
+from relay_teams.skills.clawhub_models import (
+    ClawHubSkillDetail,
+    ClawHubSkillFile,
+    ClawHubSkillSummary,
+    ClawHubSkillWriteRequest,
+)
+from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
 from relay_teams.skills.skill_models import (
     Skill,
@@ -60,6 +67,11 @@ __all__ = [
     "SkillRegistry",
     "build_skill_routing_query_text",
     "build_skill_ref",
+    "ClawHubSkillDetail",
+    "ClawHubSkillFile",
+    "ClawHubSkillService",
+    "ClawHubSkillSummary",
+    "ClawHubSkillWriteRequest",
     "get_project_skills_dir",
     "get_user_skills_dir",
     "parse_skill_ref",

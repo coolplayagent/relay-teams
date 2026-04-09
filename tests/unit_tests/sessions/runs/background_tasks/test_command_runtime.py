@@ -134,6 +134,16 @@ async def test_build_command_env_does_not_download_gh_when_missing(
         },
     )
     monkeypatch.setattr(
+        runtime_module,
+        "_load_clawhub_cli_env",
+        lambda: {"CLAWHUB_TOKEN": "ch_secret"},
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_existing_clawhub_path",
+        lambda: None,
+    )
+    monkeypatch.setattr(
         runtime_module.os,
         "environ",
         {"PATH": "/usr/bin"},
@@ -148,6 +158,7 @@ async def test_build_command_env_does_not_download_gh_when_missing(
     assert env["GH_TOKEN"] == "ghp_secret"
     assert env["GITHUB_TOKEN"] == "ghp_secret"
     assert env["GH_PROMPT_DISABLED"] == "1"
+    assert env["CLAWHUB_TOKEN"] == "ch_secret"
     assert env["EXTRA_VAR"] == "1"
     assert env["PATH"] == "/usr/bin"
 
@@ -172,6 +183,7 @@ async def test_build_command_env_prepends_existing_gh_path(
         lambda: gh,
     )
     monkeypatch.setattr(runtime_module, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(runtime_module, "_load_clawhub_cli_env", lambda: {})
     monkeypatch.setattr(
         runtime_module.os,
         "environ",
@@ -184,6 +196,50 @@ async def test_build_command_env_prepends_existing_gh_path(
     )
 
     assert env["PATH"].split(os.pathsep)[0] == str(gh.parent)
+
+
+@pytest.mark.asyncio
+async def test_build_command_env_prepends_existing_clawhub_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    bash_runtime = ResolvedCommandRuntime(
+        kind=CommandRuntimeKind.BASH,
+        executable="/bin/bash",
+        display_name="Bash",
+    )
+    clawhub = tmp_path / "bin" / "clawhub"
+    clawhub.parent.mkdir()
+    clawhub.write_text("fake", encoding="utf-8")
+
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_existing_gh_path",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_existing_clawhub_path",
+        lambda: clawhub,
+    )
+    monkeypatch.setattr(runtime_module, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(
+        runtime_module,
+        "_load_clawhub_cli_env",
+        lambda: {"CLAWHUB_SITE": "https://mirror-cn.clawhub.com"},
+    )
+    monkeypatch.setattr(
+        runtime_module.os,
+        "environ",
+        {"PATH": "/usr/bin"},
+    )
+
+    env = await build_command_env(
+        runtime=bash_runtime,
+        command="clawhub --version",
+    )
+
+    assert env["PATH"].split(os.pathsep)[0] == str(clawhub.parent)
 
 
 @pytest.mark.asyncio
@@ -202,6 +258,7 @@ async def test_build_command_env_ignores_gh_lookup_errors(
         lambda: (_ for _ in ()).throw(OSError("read-only")),
     )
     monkeypatch.setattr(runtime_module, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(runtime_module, "_load_clawhub_cli_env", lambda: {})
     monkeypatch.setattr(
         runtime_module.os,
         "environ",

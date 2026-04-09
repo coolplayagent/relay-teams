@@ -104,6 +104,54 @@ export async function fetchGitHubConfig() {
     return requestJson('/api/system/configs/github', undefined, 'Failed to fetch GitHub config');
 }
 
+export async function fetchClawHubConfig() {
+    return requestJson('/api/system/configs/clawhub', undefined, 'Failed to fetch ClawHub config');
+}
+
+export async function saveClawHubConfig(config) {
+    return requestJson(
+        '/api/system/configs/clawhub',
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        },
+        'Failed to save ClawHub config',
+    );
+}
+
+export async function fetchClawHubSkills() {
+    return requestJson('/api/system/configs/clawhub/skills', undefined, 'Failed to fetch ClawHub skills');
+}
+
+export async function fetchClawHubSkill(skillId) {
+    return requestJson(
+        `/api/system/configs/clawhub/skills/${encodeURIComponent(skillId)}`,
+        undefined,
+        'Failed to fetch ClawHub skill',
+    );
+}
+
+export async function saveClawHubSkill(skillId, payload) {
+    return requestJson(
+        `/api/system/configs/clawhub/skills/${encodeURIComponent(skillId)}`,
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to save ClawHub skill',
+    );
+}
+
+export async function deleteClawHubSkill(skillId) {
+    return requestJson(
+        `/api/system/configs/clawhub/skills/${encodeURIComponent(skillId)}`,
+        { method: 'DELETE' },
+        'Failed to delete ClawHub skill',
+    );
+}
+
 export async function fetchSystemHealth() {
     return requestJson('/api/system/health', undefined, 'Failed to fetch system health');
 }
@@ -307,5 +355,17 @@ export async function probeGitHubConnectivity(payload) {
             body: JSON.stringify(payload),
         },
         'Failed to probe GitHub connectivity',
+    );
+}
+
+export async function probeClawHubConnectivity(payload) {
+    return requestJson(
+        '/api/system/configs/clawhub:probe',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to probe ClawHub connectivity',
     );
 }

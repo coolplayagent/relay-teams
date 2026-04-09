@@ -157,6 +157,53 @@ def test_get_github_config_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
+def test_clawhub_sdk_calls_expected_endpoints(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    calls: list[tuple[str, str, object | None]] = []
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object] | list[object]:
+        calls.append((method, path, payload))
+        if method == "GET" and path == "/api/system/configs/clawhub/skills":
+            return [{"skill_id": "skill-creator-2"}]
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.get_clawhub_config() == {"status": "ok"}
+    assert client.save_clawhub_config(token="ch_secret") == {"status": "ok"}
+    assert client.probe_clawhub_connectivity(token="ch_secret", timeout_ms=2500) == {
+        "status": "ok"
+    }
+    assert client.list_clawhub_skills() == [{"skill_id": "skill-creator-2"}]
+    assert client.get_clawhub_skill("skill-creator-2") == {"status": "ok"}
+    assert client.save_clawhub_skill(
+        "skill-creator-2",
+        {"runtime_name": "skill-creator"},
+    ) == {"status": "ok"}
+    assert client.delete_clawhub_skill("skill-creator-2") == {"status": "ok"}
+    assert calls == [
+        ("GET", "/api/system/configs/clawhub", None),
+        ("PUT", "/api/system/configs/clawhub", {"token": "ch_secret"}),
+        (
+            "POST",
+            "/api/system/configs/clawhub:probe",
+            {"token": "ch_secret", "timeout_ms": 2500},
+        ),
+        ("GET", "/api/system/configs/clawhub/skills", None),
+        ("GET", "/api/system/configs/clawhub/skills/skill-creator-2", None),
+        (
+            "PUT",
+            "/api/system/configs/clawhub/skills/skill-creator-2",
+            {"runtime_name": "skill-creator"},
+        ),
+        ("DELETE", "/api/system/configs/clawhub/skills/skill-creator-2", None),
+    ]
+
+
 def test_save_proxy_config_passes_proxy_payload(monkeypatch) -> None:
     client = AgentTeamsClient()
     captured: dict[str, object] = {}

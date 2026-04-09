@@ -16,7 +16,14 @@ import sys
 
 from pydantic import BaseModel, ConfigDict
 
-from relay_teams.env import build_github_cli_env, build_subprocess_env, get_env_var
+from relay_teams.env import (
+    build_clawhub_cli_env,
+    build_github_cli_env,
+    build_subprocess_env,
+    get_env_var,
+)
+from relay_teams.env.clawhub_cli import resolve_existing_clawhub_path
+from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.env.runtime_env import get_app_config_dir
 from relay_teams.tools.workspace_tools.github_cli import resolve_existing_gh_path
@@ -539,6 +546,11 @@ def _load_github_cli_env() -> dict[str, str]:
     return build_github_cli_env(config.token)
 
 
+def _load_clawhub_cli_env() -> dict[str, str]:
+    config = ClawHubConfigService(config_dir=get_app_config_dir()).get_clawhub_config()
+    return build_clawhub_cli_env(config.token)
+
+
 async def _resolve_gh_path() -> Path | None:
     try:
         return resolve_existing_gh_path()
@@ -549,6 +561,20 @@ async def _resolve_gh_path() -> Path | None:
 def _resolve_gh_path_sync() -> Path | None:
     try:
         return resolve_existing_gh_path()
+    except Exception:
+        return None
+
+
+async def _resolve_clawhub_path() -> Path | None:
+    try:
+        return resolve_existing_clawhub_path()
+    except Exception:
+        return None
+
+
+def _resolve_clawhub_path_sync() -> Path | None:
+    try:
+        return resolve_existing_clawhub_path()
     except Exception:
         return None
 
@@ -568,6 +594,17 @@ async def build_shell_env(
     resolved_shell = shell or resolve_exec_shell()
     shell_env = build_subprocess_env(base_env=os.environ, extra_env=env)
     shell_env.update(_load_github_cli_env())
+    clawhub_env = _load_clawhub_cli_env()
+    shell_env.update(clawhub_env)
+    if clawhub_env:
+        clawhub_path = await _resolve_clawhub_path()
+    else:
+        clawhub_path = None
+    if clawhub_path is not None:
+        shell_env["PATH"] = _prepend_to_path(
+            shell_env.get("PATH"),
+            clawhub_path.parent,
+        )
     gh_path = await _resolve_gh_path()
     if gh_path is not None:
         shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
@@ -582,6 +619,17 @@ def build_shell_env_sync(
     resolved_shell = shell or resolve_exec_shell()
     shell_env = build_subprocess_env(base_env=os.environ, extra_env=env)
     shell_env.update(_load_github_cli_env())
+    clawhub_env = _load_clawhub_cli_env()
+    shell_env.update(clawhub_env)
+    if clawhub_env:
+        clawhub_path = _resolve_clawhub_path_sync()
+    else:
+        clawhub_path = None
+    if clawhub_path is not None:
+        shell_env["PATH"] = _prepend_to_path(
+            shell_env.get("PATH"),
+            clawhub_path.parent,
+        )
     gh_path = _resolve_gh_path_sync()
     if gh_path is not None:
         shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)

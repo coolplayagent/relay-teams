@@ -19,6 +19,7 @@ from typing import IO, Callable, Protocol, cast
 from pydantic import BaseModel, ConfigDict
 
 from relay_teams.env import build_github_cli_env, build_subprocess_env, get_env_var
+from relay_teams.env.clawhub_cli import resolve_existing_clawhub_path
 from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.env.runtime_env import get_app_config_dir
 from relay_teams.sessions.runs.background_tasks.github_cli import (
@@ -634,9 +635,24 @@ def _load_github_cli_env() -> dict[str, str]:
     return build_github_cli_env(config.token)
 
 
+def _load_clawhub_cli_env() -> dict[str, str]:
+    from relay_teams.env import build_clawhub_cli_env
+    from relay_teams.env.clawhub_config_service import ClawHubConfigService
+
+    config = ClawHubConfigService(config_dir=get_app_config_dir()).get_clawhub_config()
+    return build_clawhub_cli_env(config.token)
+
+
 async def _resolve_gh_path() -> Path | None:
     try:
         return resolve_existing_gh_path()
+    except Exception:
+        return None
+
+
+async def _resolve_clawhub_path() -> Path | None:
+    try:
+        return resolve_existing_clawhub_path()
     except Exception:
         return None
 
@@ -657,6 +673,17 @@ async def build_command_env(
     resolved_runtime = runtime or resolve_command_runtime(command=command)
     command_env = build_subprocess_env(base_env=os.environ, extra_env=env)
     command_env.update(_load_github_cli_env())
+    clawhub_env = _load_clawhub_cli_env()
+    command_env.update(clawhub_env)
+    if clawhub_env:
+        clawhub_path = await _resolve_clawhub_path()
+    else:
+        clawhub_path = None
+    if clawhub_path is not None:
+        command_env["PATH"] = _prepend_to_path(
+            command_env.get("PATH"),
+            clawhub_path.parent,
+        )
     gh_path = await _resolve_gh_path()
     if gh_path is not None:
         command_env["PATH"] = _prepend_to_path(command_env.get("PATH"), gh_path.parent)
