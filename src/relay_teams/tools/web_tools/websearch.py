@@ -544,15 +544,19 @@ async def resolve_searxng_instance_candidates(
 ) -> tuple[SearxngInstanceCandidate, ...]:
     configured_candidates: tuple[SearxngInstanceCandidate, ...] = ()
     if config.searxng_instance_url:
-        configured_source = (
-            "configured"
-            if config.searxng_instance_url != DEFAULT_SEARXNG_INSTANCE_URL
-            else "default"
-        )
+        if config.searxng_instance_url != DEFAULT_SEARXNG_INSTANCE_URL:
+            return deduplicate_searxng_candidates(
+                (
+                    build_searxng_instance_candidate(
+                        base_url=config.searxng_instance_url,
+                        source="configured",
+                    ),
+                )
+            )
         configured_candidates = (
             build_searxng_instance_candidate(
                 base_url=config.searxng_instance_url,
-                source=configured_source,
+                source="default",
             ),
         )
     public_candidates = await fetch_public_searxng_instance_candidates(client=client)
@@ -560,8 +564,6 @@ async def resolve_searxng_instance_candidates(
         build_searxng_instance_candidate(base_url=base_url, source="seed")
         for base_url in DEFAULT_SEARXNG_INSTANCE_SEEDS
     )
-    if configured_candidates and configured_candidates[0].source == "configured":
-        return deduplicate_searxng_candidates(configured_candidates)
     return deduplicate_searxng_candidates(
         configured_candidates + public_candidates + seed_candidates
     )
