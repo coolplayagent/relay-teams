@@ -2422,8 +2422,9 @@ class RunManager:
         if not normalized:
             return False
         blocking_markers = (
-            "proxy",
             "no_proxy",
+            "proxy authentication",
+            "proxy auth",
             "ssl",
             "tls",
             "certificate",
@@ -2444,8 +2445,6 @@ class RunManager:
             "connection reset",
             "connection aborted",
             "connection closed",
-            "remote protocol error",
-            "incomplete chunked read",
             "server disconnected",
             "temporarily unavailable",
             "temporary network",
