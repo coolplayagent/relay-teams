@@ -124,6 +124,30 @@ export async function fetchClawHubSkills() {
     return requestJson('/api/system/configs/clawhub/skills', undefined, 'Failed to fetch ClawHub skills');
 }
 
+export async function searchClawHubSkills(payload) {
+    return requestJson(
+        '/api/system/configs/clawhub/skills:search',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to search ClawHub skills',
+    );
+}
+
+export async function installClawHubSkill(payload) {
+    return requestJson(
+        '/api/system/configs/clawhub/skills:install',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to install ClawHub skill',
+    );
+}
+
 export async function fetchClawHubSkill(skillId) {
     return requestJson(
         `/api/system/configs/clawhub/skills/${encodeURIComponent(skillId)}`,

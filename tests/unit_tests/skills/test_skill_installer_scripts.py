@@ -159,6 +159,164 @@ def test_list_skills_script_reports_installed_annotations(tmp_path: Path) -> Non
     ]
 
 
+def test_search_clawhub_skills_script_reports_search_results(tmp_path: Path) -> None:
+    clawhub_bin_dir = tmp_path / "bin"
+    clawhub_bin_dir.mkdir(parents=True)
+    clawhub_path = clawhub_bin_dir / "clawhub"
+    clawhub_path.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "search" ]; then\n'
+        "  echo 'skill-creator  Skill Creator  (3.389)'\n"
+        "  echo 'skill-creator-agent v0.1.0  Skill Creator Agent  (3.200)'\n"
+        "  exit 0\n"
+        "fi\n"
+        "echo 'unexpected clawhub command' >&2\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    clawhub_path.chmod(0o755)
+
+    result = _run_script(
+        script_name="search-clawhub-skills.py",
+        args=(
+            "--format",
+            "json",
+            "--limit",
+            "2",
+            "skill",
+            "creator",
+        ),
+        repo_root=Path(__file__).resolve().parents[3],
+        home_dir=tmp_path,
+        extra_env={
+            "PATH": f"{clawhub_bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["query"] == "skill creator"
+    assert payload["items"] == [
+        {
+            "slug": "skill-creator",
+            "title": "Skill Creator",
+            "version": None,
+            "score": 3.389,
+        },
+        {
+            "slug": "skill-creator-agent",
+            "title": "Skill Creator Agent",
+            "version": "v0.1.0",
+            "score": 3.2,
+        },
+    ]
+
+
+def test_install_clawhub_skill_script_reports_runtime_identity(
+    tmp_path: Path,
+) -> None:
+    clawhub_bin_dir = tmp_path / "bin"
+    clawhub_bin_dir.mkdir(parents=True)
+    clawhub_path = clawhub_bin_dir / "clawhub"
+    clawhub_path.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "--workdir" ] && [ "$3" = "--no-input" ] && [ "$4" = "install" ]; then\n'
+        '  mkdir -p "$2/skills/$5"\n'
+        "  cat > \"$2/skills/$5/SKILL.md\" <<'EOF'\n"
+        "---\n"
+        "name: skill-creator\n"
+        "description: Skill creator runtime.\n"
+        "---\n"
+        "Use skill creator.\n"
+        "EOF\n"
+        "  exit 0\n"
+        "fi\n"
+        "echo 'unexpected clawhub command' >&2\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    clawhub_path.chmod(0o755)
+
+    result = _run_script(
+        script_name="install-clawhub-skill.py",
+        args=(
+            "--format",
+            "json",
+            "skill-creator-2",
+        ),
+        repo_root=Path(__file__).resolve().parents[3],
+        home_dir=tmp_path,
+        extra_env={
+            "PATH": f"{clawhub_bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["slug"] == "skill-creator-2"
+    assert payload["installed_skill"]["skill_id"] == "skill-creator-2"
+    assert payload["installed_skill"]["runtime_name"] == "skill-creator"
+    assert payload["installed_skill"]["ref"] == "app:skill-creator"
+
+
+def test_search_and_install_clawhub_skill_script_runs_both_steps(
+    tmp_path: Path,
+) -> None:
+    clawhub_bin_dir = tmp_path / "bin"
+    clawhub_bin_dir.mkdir(parents=True)
+    clawhub_path = clawhub_bin_dir / "clawhub"
+    clawhub_path.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "search" ]; then\n'
+        "  echo 'best-practice-skill-creator  Best Practice Skill Creator  (56.406)'\n"
+        "  exit 0\n"
+        "fi\n"
+        'if [ "$1" = "--workdir" ] && [ "$3" = "--no-input" ] && [ "$4" = "install" ]; then\n'
+        '  mkdir -p "$2/skills/$5"\n'
+        "  cat > \"$2/skills/$5/SKILL.md\" <<'EOF'\n"
+        "---\n"
+        "name: best-practice-skill-creator\n"
+        "description: Best practice installer.\n"
+        "---\n"
+        "Use this skill.\n"
+        "EOF\n"
+        "  exit 0\n"
+        "fi\n"
+        "echo 'unexpected clawhub command' >&2\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    clawhub_path.chmod(0o755)
+
+    result = _run_script(
+        script_name="search-and-install-clawhub-skill.py",
+        args=(
+            "--format",
+            "json",
+            "--query",
+            "skill creator",
+            "--slug",
+            "best-practice-skill-creator",
+        ),
+        repo_root=Path(__file__).resolve().parents[3],
+        home_dir=tmp_path,
+        extra_env={
+            "PATH": f"{clawhub_bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["search"]["ok"] is True
+    assert payload["search"]["items"][0]["slug"] == "best-practice-skill-creator"
+    assert payload["install"]["ok"] is True
+    assert payload["install"]["installed_skill"]["ref"] == (
+        "app:best-practice-skill-creator"
+    )
+
+
 def test_install_skill_script_downloads_and_installs_skill(tmp_path: Path) -> None:
     archive_bytes = _build_repo_archive(
         {

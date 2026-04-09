@@ -70,6 +70,8 @@ export {
     fetchClawHubConfig,
     fetchClawHubSkill,
     fetchClawHubSkills,
+    installClawHubSkill,
+    searchClawHubSkills,
     reloadMcpConfig,
     reloadModelConfig,
     reloadProxyConfig,

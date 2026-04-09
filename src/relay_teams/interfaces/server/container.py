@@ -129,6 +129,8 @@ from relay_teams.sessions import (
     SessionService,
 )
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
+from relay_teams.skills.clawhub_install_service import ClawHubSkillInstallService
+from relay_teams.skills.clawhub_search_service import ClawHubSkillSearchService
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
@@ -226,6 +228,18 @@ class ServerContainer:
         )
         self.clawhub_config_service: ClawHubConfigService = ClawHubConfigService(
             config_dir=config_dir
+        )
+        self.clawhub_search_service: ClawHubSkillSearchService = (
+            ClawHubSkillSearchService(
+                get_clawhub_config=self.clawhub_config_service.get_clawhub_config
+            )
+        )
+        self.clawhub_install_service: ClawHubSkillInstallService = (
+            ClawHubSkillInstallService(
+                config_dir=config_dir,
+                get_clawhub_config=self.clawhub_config_service.get_clawhub_config,
+                on_skill_installed=self._reload_skills_config,
+            )
         )
         self.ui_language_settings_service = UiLanguageSettingsService(
             config_dir=config_dir
@@ -967,6 +981,11 @@ class ServerContainer:
             config_dir=self.config_dir,
             role_registry=self.role_registry,
             on_skill_reloaded=self._on_skill_reloaded,
+        )
+        self.clawhub_install_service = ClawHubSkillInstallService(
+            config_dir=self.config_dir,
+            get_clawhub_config=self.clawhub_config_service.get_clawhub_config,
+            on_skill_installed=self._reload_skills_config,
         )
         self.clawhub_skill_service = ClawHubSkillService(
             config_dir=self.config_dir,
