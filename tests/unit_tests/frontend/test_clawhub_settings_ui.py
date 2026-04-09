@@ -26,7 +26,9 @@ document.getElementById("clawhub-token").value = "ch_secret";
 document.getElementById("clawhub-token").oninput();
 
 await document.getElementById("test-clawhub-btn").onclick();
+await new Promise(resolve => setTimeout(resolve, 0));
 await document.getElementById("save-clawhub-token-btn").onclick();
+await new Promise(resolve => setTimeout(resolve, 0));
 
 console.log(JSON.stringify({
     notifications,
@@ -85,7 +87,9 @@ const toggleTitle = document.getElementById("toggle-clawhub-token-btn").title;
 document.getElementById("toggle-clawhub-token-btn").onclick();
 
 await document.getElementById("test-clawhub-btn").onclick();
+await new Promise(resolve => setTimeout(resolve, 0));
 await document.getElementById("save-clawhub-token-btn").onclick();
+await new Promise(resolve => setTimeout(resolve, 0));
 
 console.log(JSON.stringify({
     revealedValue,
@@ -137,6 +141,7 @@ document.getElementById("clawhub-token").value = "ch_secret";
 document.getElementById("clawhub-token").oninput();
 
 await document.getElementById("test-clawhub-btn").onclick();
+await new Promise(resolve => setTimeout(resolve, 0));
 
 console.log(JSON.stringify({
     probeStatusText: document.getElementById("clawhub-probe-status").textContent,
@@ -169,7 +174,9 @@ document.getElementById("clawhub-token").value = "";
 document.getElementById("clawhub-token").oninput();
 
 await document.getElementById("test-clawhub-btn").onclick();
+await new Promise(resolve => setTimeout(resolve, 0));
 await document.getElementById("save-clawhub-token-btn").onclick();
+await new Promise(resolve => setTimeout(resolve, 0));
 
 console.log(JSON.stringify({
     notifications,
@@ -202,17 +209,23 @@ console.log(JSON.stringify({
     ]
 
 
-def test_clawhub_settings_markup_keeps_actions_inline() -> None:
+def test_clawhub_settings_markup_lives_in_skills_feature_and_keeps_actions_inline() -> (
+    None
+):
     repo_root = Path(__file__).resolve().parents[3]
-    source_path = (
+    project_view_source = (
         repo_root / "frontend" / "dist" / "js" / "components" / "settings" / "index.js"
+    ).read_text(encoding="utf-8")
+    skills_feature_source = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "projectView.js"
     )
-    source = source_path.read_text(encoding="utf-8")
+    source = skills_feature_source.read_text(encoding="utf-8")
 
-    assert 'id="test-clawhub-btn"' in source
-    assert 'id="save-clawhub-token-btn"' in source
+    assert 'id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.probeButtonId)}"' in source
+    assert 'id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.saveButtonId)}"' in source
     assert 'class="settings-inline-action-row"' in source
-    assert 'id="clawhub-probe-status"' in source
+    assert 'id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.statusId)}"' in source
+    assert 'id="clawhub-token"' not in project_view_source
 
 
 def _run_clawhub_settings_script(

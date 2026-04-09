@@ -99,7 +99,7 @@ def test_install_clawhub_skill_installs_missing_binary(
     )
     monkeypatch.setattr(
         "relay_teams.skills.clawhub_install_service.install_clawhub_via_npm",
-        lambda *, timeout_seconds: ClawHubCliInstallResult(
+        lambda *, timeout_seconds, base_env=None: ClawHubCliInstallResult(
             ok=True,
             attempted=True,
             clawhub_path=str(installed_path),
@@ -182,6 +182,18 @@ def test_install_clawhub_skill_reports_runtime_discovery_failure(
 
     assert result.ok is False
     assert result.error_code == "runtime_skill_unavailable"
+
+
+def test_install_clawhub_skill_rejects_unsupported_slug(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".relay-teams"
+
+    result = install_clawhub_skill(
+        slug="org/skill-creator",
+        config_dir=config_dir,
+    )
+
+    assert result.ok is False
+    assert result.error_code == "unsupported_slug"
 
 
 def test_clawhub_install_service_reads_token_from_saved_config(

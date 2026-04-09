@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import os
+from pathlib import Path
+
+from relay_teams.env.proxy_env import build_subprocess_env, load_proxy_env_config
 
 CLAWHUB_TOKEN_ENV_KEY = "CLAWHUB_TOKEN"
 CLAWHUB_SITE_ENV_KEY = "CLAWHUB_SITE"
@@ -128,6 +131,31 @@ def build_clawhub_cli_env(
     return output
 
 
+def build_clawhub_subprocess_env(
+    token: str | None,
+    *,
+    config_dir: Path | None = None,
+    base_env: Mapping[str, str] | None = None,
+    site: str | None = None,
+    registry: str | None = None,
+) -> dict[str, str]:
+    resolved_base_env = os.environ if base_env is None else base_env
+    proxy_config = load_proxy_env_config(
+        extra_env_files=_clawhub_proxy_env_files(config_dir),
+        include_process_env=True,
+    )
+    extra_env = proxy_config.normalized_env()
+    extra_env.update(
+        build_clawhub_cli_env(
+            token,
+            site=site,
+            registry=registry,
+            env_values=resolved_base_env,
+        )
+    )
+    return build_subprocess_env(base_env=resolved_base_env, extra_env=extra_env)
+
+
 def _is_china_environment(env_values: Mapping[str, str]) -> bool:
     for key in _CHINA_LOCALE_ENV_KEYS:
         raw_value = env_values.get(key)
@@ -150,3 +178,10 @@ def _is_china_environment(env_values: Mapping[str, str]) -> bool:
         if raw_value.strip().lower() in {"cn", "china"}:
             return True
     return False
+
+
+def _clawhub_proxy_env_files(config_dir: Path | None) -> tuple[Path, ...]:
+    if config_dir is None:
+        return ()
+    resolved_config_dir = config_dir.expanduser().resolve()
+    return (resolved_config_dir / ".env",)

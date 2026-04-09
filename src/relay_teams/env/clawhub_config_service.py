@@ -34,6 +34,7 @@ class ClawHubConfigService:
             get_clawhub_secret_store() if secret_store is None else secret_store
         )
         self._probe_service = ClawHubConnectivityProbeService(
+            config_dir=self._config_dir,
             get_clawhub_config=self.get_clawhub_config,
         )
 

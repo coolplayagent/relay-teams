@@ -9,7 +9,6 @@ import {
     loadNotificationSettingsPanel,
 } from './notifications.js';
 import { bindEnvironmentVariableSettingsHandlers, loadEnvironmentVariablesPanel } from './environmentVariables.js';
-import { bindClawHubSettingsHandlers, loadClawHubSettingsPanel } from './clawhubSettings.js';
 import { bindGitHubSettingsHandlers, loadGitHubSettingsPanel } from './githubSettings.js';
 import {
     bindOrchestrationSettingsHandlers,
@@ -18,7 +17,7 @@ import {
 import { bindProxySettingsHandlers, loadProxyStatusPanel } from './proxySettings.js';
 import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings.js';
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from './webSettings.js';
-import { bindSystemStatusHandlers, loadMcpStatusPanel } from './systemStatus.js';
+import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
 import { bindAppearanceHandlers, loadAppearancePanel, initAppearanceOnStartup } from './appearanceSettings.js';
 import { t, translateDocument } from '../../utils/i18n.js';
 
@@ -859,33 +858,6 @@ function createModal() {
                     <div class="settings-panel" id="skills-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack">
-                                <section class="proxy-form-section">
-                                    <div class="proxy-form-section-header">
-                                        <h5 data-i18n="settings.clawhub.section">ClawHub</h5>
-                                    </div>
-                                    <div class="proxy-form-grid">
-                                        <div class="form-group proxy-inline-field">
-                                            <label for="clawhub-token" data-i18n="settings.clawhub.token">ClawHub Token</label>
-                                            <div class="secure-input-row">
-                                                <input type="password" id="clawhub-token" placeholder="ch_..." data-i18n-placeholder="settings.clawhub.token_placeholder" autocomplete="current-password">
-                                                <button class="secure-input-btn" id="toggle-clawhub-token-btn" type="button" title="Show ClawHub token" aria-label="Show ClawHub token" style="display:none;">
-                                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                                        <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
-                                                        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
-                                                    </svg>
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div class="form-group proxy-inline-field proxy-inline-field-actions">
-                                            <label for="save-clawhub-token-btn" data-i18n="settings.clawhub.token_action">Saved token</label>
-                                            <div class="settings-inline-action-row">
-                                                <button class="secondary-btn section-action-btn proxy-inline-test-btn" id="test-clawhub-btn" type="button" data-i18n="settings.clawhub.test_connection">Test Connection</button>
-                                                <button class="primary-btn section-action-btn proxy-inline-test-btn" id="save-clawhub-token-btn" type="button" data-i18n="settings.action.save">Save</button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="proxy-probe-status" id="clawhub-probe-status" style="display:none;"></div>
-                                </section>
                                 <div class="status-stack" id="skills-status"></div>
                             </div>
                         </div>
@@ -957,7 +929,6 @@ function setupEventListeners() {
     bindEnvironmentVariableSettingsHandlers();
     bindNotificationSettingsHandlers();
     bindWebSettingsHandlers();
-    bindClawHubSettingsHandlers();
     bindGitHubSettingsHandlers();
     bindProxySettingsHandlers();
     bindSystemStatusHandlers();
@@ -992,7 +963,6 @@ async function showPanel(tab) {
     bindRoleSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
     bindWebSettingsHandlers();
-    bindClawHubSettingsHandlers();
     bindGitHubSettingsHandlers();
     bindProxySettingsHandlers();
     bindSystemStatusHandlers();
@@ -1018,7 +988,6 @@ async function showPanel(tab) {
     } else if (tab === 'mcp') {
         await loadMcpStatusPanel();
     } else if (tab === 'skills') {
-        await loadClawHubSettingsPanel();
         await loadSkillsStatusPanel();
     } else if (tab === 'appearance') {
         loadAppearancePanel();

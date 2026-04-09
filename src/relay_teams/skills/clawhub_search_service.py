@@ -15,7 +15,7 @@ from relay_teams.env.clawhub_cli import (
 )
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_env import (
-    build_clawhub_cli_env,
+    build_clawhub_subprocess_env,
     normalize_clawhub_token,
     resolve_clawhub_registry_from_env,
 )
@@ -38,8 +38,10 @@ class ClawHubSkillSearchService:
     def __init__(
         self,
         *,
+        config_dir: Path,
         get_clawhub_config: Callable[[], ClawHubConfig],
     ) -> None:
+        self._config_dir = config_dir
         self._get_clawhub_config = get_clawhub_config
 
     def search(
@@ -53,6 +55,7 @@ class ClawHubSkillSearchService:
             query=request.query,
             limit=request.limit,
             token=token,
+            config_dir=self._config_dir,
         )
 
 
@@ -61,6 +64,7 @@ def search_clawhub_skills(
     query: str,
     limit: int = 10,
     token: str | None = None,
+    config_dir: Path | None = None,
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
 ) -> ClawHubSkillSearchResult:
     checked_at = datetime.now(timezone.utc)
@@ -73,7 +77,12 @@ def search_clawhub_skills(
 
     if clawhub_path is None:
         install_result = install_clawhub_via_npm(
-            timeout_seconds=max(timeout_seconds, _DEFAULT_INSTALL_TIMEOUT_SECONDS)
+            timeout_seconds=max(timeout_seconds, _DEFAULT_INSTALL_TIMEOUT_SECONDS),
+            base_env=build_clawhub_subprocess_env(
+                None,
+                config_dir=config_dir,
+                base_env=os.environ,
+            ),
         )
         installation_attempted = install_result.attempted
         if install_result.ok and install_result.clawhub_path is not None:
@@ -94,8 +103,11 @@ def search_clawhub_skills(
                 or "ClawHub CLI is not available on PATH.",
             )
 
-    env = dict(os.environ)
-    env.update(build_clawhub_cli_env(normalized_token))
+    env = build_clawhub_subprocess_env(
+        normalized_token,
+        config_dir=config_dir,
+        base_env=os.environ,
+    )
     env["PATH"] = _prepend_to_path(env.get("PATH"), clawhub_path.parent)
     registry = resolve_clawhub_registry_from_env(env)
 

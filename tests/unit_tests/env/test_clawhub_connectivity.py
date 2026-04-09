@@ -19,6 +19,7 @@ def test_clawhub_probe_requires_token(monkeypatch) -> None:
         lambda: Path("/usr/bin/clawhub"),
     )
     service = ClawHubConnectivityProbeService(
+        config_dir=Path("/tmp/.relay-teams"),
         get_clawhub_config=lambda: ClawHubConfig(token=None),
     )
 
@@ -39,7 +40,7 @@ def test_clawhub_probe_reports_missing_binary(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "relay_teams.env.clawhub_connectivity.install_clawhub_via_npm",
-        lambda *, timeout_seconds: ClawHubCliInstallResult(
+        lambda *, timeout_seconds, base_env=None: ClawHubCliInstallResult(
             ok=False,
             attempted=False,
             error_code="npm_unavailable",
@@ -47,6 +48,7 @@ def test_clawhub_probe_reports_missing_binary(monkeypatch) -> None:
         ),
     )
     service = ClawHubConnectivityProbeService(
+        config_dir=Path("/tmp/.relay-teams"),
         get_clawhub_config=lambda: ClawHubConfig(token="ch_saved"),
     )
 
@@ -79,6 +81,7 @@ def test_clawhub_probe_reads_version(monkeypatch) -> None:
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     service = ClawHubConnectivityProbeService(
+        config_dir=Path("/tmp/.relay-teams"),
         get_clawhub_config=lambda: ClawHubConfig(token=None),
     )
 
@@ -101,7 +104,7 @@ def test_clawhub_probe_installs_missing_binary(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "relay_teams.env.clawhub_connectivity.install_clawhub_via_npm",
-        lambda *, timeout_seconds: ClawHubCliInstallResult(
+        lambda *, timeout_seconds, base_env=None: ClawHubCliInstallResult(
             ok=True,
             attempted=True,
             clawhub_path=str(installed_clawhub_path),
@@ -124,6 +127,7 @@ def test_clawhub_probe_installs_missing_binary(monkeypatch) -> None:
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     service = ClawHubConnectivityProbeService(
+        config_dir=Path("/tmp/.relay-teams"),
         get_clawhub_config=lambda: ClawHubConfig(token=None),
     )
 

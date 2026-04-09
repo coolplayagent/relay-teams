@@ -39,6 +39,10 @@ import {
 import { clearAllPanels } from './agentPanel.js';
 import { hideRoundNavigator } from './rounds/navigator.js';
 import { setSubagentRailExpanded } from './subagentRail.js';
+import {
+    bindClawHubSettingsHandlers,
+    loadClawHubSettingsPanel,
+} from './settings/clawhubSettings.js';
 import { state } from '../core/state.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
@@ -71,6 +75,13 @@ const FEATURE_VIEW_IDS = Object.freeze({
     skills: 'skills',
     automation: 'automation',
     gateway: 'gateway',
+});
+const FEATURE_CLAWHUB_FIELD_IDS = Object.freeze({
+    saveButtonId: 'feature-save-clawhub-token-btn',
+    probeButtonId: 'feature-test-clawhub-btn',
+    tokenInputId: 'feature-clawhub-token',
+    toggleTokenButtonId: 'feature-toggle-clawhub-token-btn',
+    statusId: 'feature-clawhub-probe-status',
 });
 const FEISHU_PLATFORM = 'feishu';
 const WECHAT_PLATFORM = 'wechat';
@@ -2250,13 +2261,50 @@ function renderSkillsFeatureView() {
         title: t('feature.skills.title'),
         mode: 'feature',
         summary: resolveSkillsSummary(currentSkillsStatus),
+        actions: `
+            <button class="secondary-btn project-view-toolbar-btn" type="button" data-feature-skills-reload>${escapeHtml(t('feature.skills.reload'))}</button>
+        `,
     });
     if (!els.projectViewContent) {
         return;
     }
     els.projectViewContent.innerHTML = `
         <div class="feature-page feature-page-neutral feature-skills-page">
+            <section class="workspace-view-panel skills-clawhub-panel">
+                <div class="workspace-view-panel-header">
+                    <h3>${escapeHtml(t('settings.clawhub.section'))}</h3>
+                    <span class="workspace-view-panel-meta">${escapeHtml(t('settings.clawhub.connectivity'))}</span>
+                </div>
+                <div class="feature-panel-body">
+                    <div class="proxy-form-grid">
+                        <div class="form-group proxy-inline-field">
+                            <label for="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.tokenInputId)}">${escapeHtml(t('settings.clawhub.token'))}</label>
+                            <div class="secure-input-row">
+                                <input type="password" id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.tokenInputId)}" placeholder="${escapeHtml(t('settings.clawhub.token_placeholder'))}" autocomplete="current-password">
+                                <button class="secure-input-btn" id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.toggleTokenButtonId)}" type="button" title="${escapeHtml(t('settings.clawhub.show_token'))}" aria-label="${escapeHtml(t('settings.clawhub.show_token'))}" style="display:none;">
+                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                        <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="form-group proxy-inline-field proxy-inline-field-actions">
+                            <label for="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.saveButtonId)}">${escapeHtml(t('settings.clawhub.token_action'))}</label>
+                            <div class="settings-inline-action-row">
+                                <button class="secondary-btn section-action-btn proxy-inline-test-btn" id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.probeButtonId)}" type="button">${escapeHtml(t('settings.clawhub.test_connection'))}</button>
+                                <button class="primary-btn section-action-btn proxy-inline-test-btn" id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.saveButtonId)}" type="button">${escapeHtml(t('settings.action.save'))}</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="proxy-probe-status" id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.statusId)}" style="display:none;"></div>
+                </div>
+            </section>
             <section class="workspace-view-panel skills-directory-panel">
+                <div class="workspace-view-panel-header">
+                    <h3>${escapeHtml(t('feature.skills.title'))}</h3>
+                    <span class="workspace-view-panel-meta">${escapeHtml(String(skills.length))}</span>
+                </div>
                 ${skills.length > 0 ? `
                     <div class="skills-directory-list">
                         ${skills.map(skill => `
@@ -2286,6 +2334,11 @@ function renderSkillsFeatureView() {
             </section>
         </div>
     `;
+    els.projectViewToolbarActions?.querySelector('[data-feature-skills-reload]')?.addEventListener('click', () => {
+        void handleSkillsReloadFeature();
+    });
+    bindClawHubSettingsHandlers(FEATURE_CLAWHUB_FIELD_IDS);
+    void loadClawHubSettingsPanel(FEATURE_CLAWHUB_FIELD_IDS);
 }
 
 function renderAutomationHomeView() {

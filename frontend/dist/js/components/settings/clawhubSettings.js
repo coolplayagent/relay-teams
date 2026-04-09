@@ -12,47 +12,66 @@ import { formatMessage, t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const MASKED_SECRET_PLACEHOLDER = '************';
+const DEFAULT_CLAWHUB_FIELD_IDS = Object.freeze({
+    saveButtonId: 'save-clawhub-token-btn',
+    probeButtonId: 'test-clawhub-btn',
+    tokenInputId: 'clawhub-token',
+    toggleTokenButtonId: 'toggle-clawhub-token-btn',
+    statusId: 'clawhub-probe-status',
+});
 
 let lastProbeState = null;
 let languageBound = false;
 let clawhubTokenState = createClawHubTokenState();
 
-export function bindClawHubSettingsHandlers() {
-    const saveBtn = document.getElementById('save-clawhub-token-btn');
+export function bindClawHubSettingsHandlers(fieldIds = DEFAULT_CLAWHUB_FIELD_IDS) {
+    const ids = resolveClawHubFieldIds(fieldIds);
+    const saveBtn = document.getElementById(ids.saveButtonId);
     if (saveBtn) {
-        saveBtn.onclick = handleSaveClawHubToken;
+        saveBtn.onclick = () => {
+            void handleSaveClawHubToken(ids);
+        };
     }
 
-    const probeBtn = document.getElementById('test-clawhub-btn');
+    const probeBtn = document.getElementById(ids.probeButtonId);
     if (probeBtn) {
-        probeBtn.onclick = handleProbeClawHub;
+        probeBtn.onclick = () => {
+            void handleProbeClawHub(ids);
+        };
     }
 
-    const tokenInput = document.getElementById('clawhub-token');
+    const tokenInput = document.getElementById(ids.tokenInputId);
     if (tokenInput) {
-        tokenInput.oninput = handleClawHubTokenInput;
-        tokenInput.onchange = handleClawHubTokenInput;
+        tokenInput.oninput = () => {
+            handleClawHubTokenInput(ids);
+        };
+        tokenInput.onchange = () => {
+            handleClawHubTokenInput(ids);
+        };
     }
 
-    const toggleTokenBtn = document.getElementById('toggle-clawhub-token-btn');
+    const toggleTokenBtn = document.getElementById(ids.toggleTokenButtonId);
     if (toggleTokenBtn) {
-        toggleTokenBtn.onclick = toggleClawHubTokenVisibility;
+        toggleTokenBtn.onclick = () => {
+            toggleClawHubTokenVisibility(ids);
+        };
     }
 
     if (!languageBound && typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => {
-            renderClawHubTokenField();
-            renderClawHubProbeState();
+            renderClawHubTokenField(ids);
+            renderClawHubProbeState(ids);
         });
         languageBound = true;
     }
 }
 
-export async function loadClawHubSettingsPanel() {
+export async function loadClawHubSettingsPanel(fieldIds = DEFAULT_CLAWHUB_FIELD_IDS) {
+    const ids = resolveClawHubFieldIds(fieldIds);
     try {
         const config = await fetchClawHubConfig();
-        writeClawHubFormValues(config);
-        renderClawHubProbeState();
+        writeClawHubFormValues(config, ids);
+        renderClawHubProbeState(ids);
     } catch (e) {
         logError(
             'frontend.clawhub_settings.load_failed',
@@ -67,15 +86,22 @@ export async function loadClawHubSettingsPanel() {
     }
 }
 
-async function handleSaveClawHubToken() {
+function resolveClawHubFieldIds(fieldIds) {
+    return {
+        ...DEFAULT_CLAWHUB_FIELD_IDS,
+        ...(fieldIds && typeof fieldIds === 'object' ? fieldIds : {}),
+    };
+}
+
+async function handleSaveClawHubToken(fieldIds) {
     try {
-        await saveClawHubConfig(readClawHubFormValues());
+        await saveClawHubConfig(readClawHubFormValues(fieldIds));
         showToast({
             title: t('settings.clawhub.saved'),
             message: t('settings.clawhub.saved_message'),
             tone: 'success',
         });
-        await loadClawHubSettingsPanel();
+        await loadClawHubSettingsPanel(fieldIds);
     } catch (e) {
         showToast({
             title: t('settings.clawhub.save_failed'),
@@ -85,14 +111,14 @@ async function handleSaveClawHubToken() {
     }
 }
 
-async function handleProbeClawHub() {
-    const token = readClawHubTokenValue();
+async function handleProbeClawHub(fieldIds) {
+    const token = readClawHubTokenValue(fieldIds);
     if (!token) {
         lastProbeState = {
             status: 'failed',
             message: t('settings.clawhub.enter_token'),
         };
-        renderClawHubProbeState();
+        renderClawHubProbeState(fieldIds);
         return;
     }
 
@@ -100,10 +126,10 @@ async function handleProbeClawHub() {
         status: 'probing',
         message: t('settings.clawhub.testing_message'),
     };
-    renderClawHubProbeState();
+    renderClawHubProbeState(fieldIds);
 
     try {
-        const result = await probeClawHubConnectivity(readClawHubFormValues());
+        const result = await probeClawHubConnectivity(readClawHubFormValues(fieldIds));
         lastProbeState = buildProbeState(result);
     } catch (e) {
         lastProbeState = {
@@ -112,7 +138,7 @@ async function handleProbeClawHub() {
         };
     }
 
-    renderClawHubProbeState();
+    renderClawHubProbeState(fieldIds);
 }
 
 function buildProbeState(result) {
@@ -137,9 +163,9 @@ function buildProbeState(result) {
     };
 }
 
-function renderClawHubProbeState() {
-    const statusEl = document.getElementById('clawhub-probe-status');
-    const probeBtn = document.getElementById('test-clawhub-btn');
+function renderClawHubProbeState(fieldIds) {
+    const statusEl = document.getElementById(fieldIds.statusId);
+    const probeBtn = document.getElementById(fieldIds.probeButtonId);
     if (!statusEl || !probeBtn) {
         return;
     }
@@ -162,14 +188,14 @@ function renderClawHubProbeState() {
         : t('settings.clawhub.test_connection');
 }
 
-function writeClawHubFormValues(config) {
+function writeClawHubFormValues(config, fieldIds) {
     clawhubTokenState = createClawHubTokenState(config.token);
-    renderClawHubTokenField();
+    renderClawHubTokenField(fieldIds);
 }
 
-function readClawHubFormValues() {
+function readClawHubFormValues(fieldIds) {
     return {
-        token: readClawHubTokenValue(),
+        token: readClawHubTokenValue(fieldIds),
     };
 }
 
@@ -184,29 +210,29 @@ function createClawHubTokenState(persistedValue = null) {
     };
 }
 
-function handleClawHubTokenInput() {
-    const tokenInput = document.getElementById('clawhub-token');
+function handleClawHubTokenInput(fieldIds) {
+    const tokenInput = document.getElementById(fieldIds.tokenInputId);
     const nextValue = tokenInput ? tokenInput.value : '';
     clawhubTokenState.draftValue = nextValue;
     clawhubTokenState.isDirty = clawhubTokenState.hasPersistedValue
         ? nextValue !== clawhubTokenState.persistedValue
         : nextValue.trim().length > 0;
-    if (!readClawHubTokenValue()) {
+    if (!readClawHubTokenValue(fieldIds)) {
         clawhubTokenState.revealed = false;
     }
-    renderClawHubTokenField();
+    renderClawHubTokenField(fieldIds);
 }
 
-function toggleClawHubTokenVisibility() {
-    if (!hasClawHubTokenValue()) {
+function toggleClawHubTokenVisibility(fieldIds) {
+    if (!hasClawHubTokenValue(fieldIds)) {
         return;
     }
     clawhubTokenState.revealed = !clawhubTokenState.revealed;
-    renderClawHubTokenField();
+    renderClawHubTokenField(fieldIds);
 }
 
-function readClawHubTokenValue() {
-    const tokenInput = document.getElementById('clawhub-token');
+function readClawHubTokenValue(fieldIds) {
+    const tokenInput = document.getElementById(fieldIds.tokenInputId);
     const inputValue = tokenInput ? tokenInput.value.trim() : '';
     if (!clawhubTokenState.hasPersistedValue) {
         return inputValue || null;
@@ -217,8 +243,8 @@ function readClawHubTokenValue() {
     return inputValue || clawhubTokenState.persistedValue || null;
 }
 
-function renderClawHubTokenField() {
-    const tokenInput = document.getElementById('clawhub-token');
+function renderClawHubTokenField(fieldIds) {
+    const tokenInput = document.getElementById(fieldIds.tokenInputId);
     if (!tokenInput) {
         return;
     }
@@ -239,16 +265,16 @@ function renderClawHubTokenField() {
         tokenInput.placeholder = t('settings.clawhub.token_placeholder');
     }
 
-    renderClawHubTokenToggle();
+    renderClawHubTokenToggle(fieldIds);
 }
 
-function renderClawHubTokenToggle() {
-    const toggleTokenBtn = document.getElementById('toggle-clawhub-token-btn');
+function renderClawHubTokenToggle(fieldIds) {
+    const toggleTokenBtn = document.getElementById(fieldIds.toggleTokenButtonId);
     if (!toggleTokenBtn) {
         return;
     }
 
-    toggleTokenBtn.style.display = hasClawHubTokenValue() ? 'inline-flex' : 'none';
+    toggleTokenBtn.style.display = hasClawHubTokenValue(fieldIds) ? 'inline-flex' : 'none';
     toggleTokenBtn.className = clawhubTokenState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
     toggleTokenBtn.title = clawhubTokenState.revealed
         ? t('settings.clawhub.hide_token')
@@ -260,8 +286,8 @@ function renderClawHubTokenToggle() {
     }
 }
 
-function hasClawHubTokenValue() {
-    const tokenInput = document.getElementById('clawhub-token');
+function hasClawHubTokenValue(fieldIds) {
+    const tokenInput = document.getElementById(fieldIds.tokenInputId);
     const inputValue = tokenInput ? tokenInput.value.trim() : '';
     if (clawhubTokenState.hasPersistedValue && !clawhubTokenState.isDirty) {
         return Boolean(clawhubTokenState.persistedValue || inputValue);

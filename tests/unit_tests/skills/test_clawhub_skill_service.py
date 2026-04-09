@@ -112,3 +112,60 @@ def test_list_skills_surfaces_invalid_skill_manifest(tmp_path: Path) -> None:
     assert listed[0].skill_id == "broken"
     assert listed[0].valid is False
     assert listed[0].error == "SKILL.md must start with YAML front matter"
+
+
+def test_save_skill_restores_backup_when_reload_callback_fails(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    config_dir.mkdir(parents=True)
+    existing_skill_dir = config_dir / "skills" / "skill-creator-2"
+    existing_skill_dir.mkdir(parents=True)
+    original_manifest = (
+        "---\n"
+        "name: skill-creator\n"
+        "description: Original skill.\n"
+        "---\n"
+        "Keep the original skill.\n"
+    )
+    (existing_skill_dir / "SKILL.md").write_text(original_manifest, encoding="utf-8")
+
+    service = ClawHubSkillService(
+        config_dir=config_dir,
+        on_skill_mutated=lambda: (_ for _ in ()).throw(RuntimeError("reload failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="reload failed"):
+        service.save_skill(
+            "skill-creator-2",
+            ClawHubSkillWriteRequest(
+                runtime_name="skill-creator",
+                description="Updated skill.",
+                instructions="Updated skill.",
+                files=(),
+            ),
+        )
+
+    assert (existing_skill_dir / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == original_manifest
+
+
+def test_delete_skill_rejects_symlink_outside_managed_root(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    config_dir.mkdir(parents=True)
+    external_skill_dir = tmp_path / "external-skill"
+    external_skill_dir.mkdir(parents=True)
+    (external_skill_dir / "SKILL.md").write_text(
+        "---\nname: external-skill\ndescription: external\n---\nexternal\n",
+        encoding="utf-8",
+    )
+    linked_skill_dir = config_dir / "skills" / "linked-skill"
+    linked_skill_dir.parent.mkdir(parents=True)
+    linked_skill_dir.symlink_to(external_skill_dir, target_is_directory=True)
+    service = ClawHubSkillService(config_dir=config_dir)
+
+    with pytest.raises(
+        ValueError, match="ClawHub skill path escapes the managed skills root"
+    ):
+        service.delete_skill("linked-skill")
+
+    assert external_skill_dir.exists()

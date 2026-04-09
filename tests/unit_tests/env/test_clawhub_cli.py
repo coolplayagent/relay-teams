@@ -20,8 +20,8 @@ def test_resolve_existing_clawhub_path_uses_npm_global_bin(
     monkeypatch.setattr(clawhub_cli, "resolve_system_clawhub_path", lambda: None)
     monkeypatch.setattr(
         clawhub_cli,
-        "resolve_npm_global_bin_dir",
-        lambda npm_path=None: npm_global_bin,
+        "resolve_npm_global_clawhub_path",
+        lambda npm_path=None, base_env=None: clawhub_path,
     )
 
     resolved = clawhub_cli.resolve_existing_clawhub_path()
@@ -46,7 +46,7 @@ def test_install_clawhub_via_npm_prefers_huaweicloud_registry(
     monkeypatch.setattr(
         clawhub_cli,
         "resolve_npm_global_bin_dir",
-        lambda npm_path=None: npm_global_bin,
+        lambda npm_path=None, base_env=None: npm_global_bin,
     )
 
     def fake_run(
@@ -101,7 +101,7 @@ def test_install_clawhub_via_npm_falls_back_to_default_registry(
     monkeypatch.setattr(
         clawhub_cli,
         "resolve_npm_global_bin_dir",
-        lambda npm_path=None: npm_global_bin,
+        lambda npm_path=None, base_env=None: npm_global_bin,
     )
 
     def fake_run(

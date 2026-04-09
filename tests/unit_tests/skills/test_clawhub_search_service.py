@@ -14,7 +14,10 @@ from relay_teams.skills.clawhub_search_service import (
 )
 
 
-def test_search_clawhub_skills_parses_search_output(monkeypatch) -> None:
+def test_search_clawhub_skills_parses_search_output(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.setattr(
         "relay_teams.skills.clawhub_search_service.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
@@ -42,7 +45,11 @@ def test_search_clawhub_skills_parses_search_output(monkeypatch) -> None:
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = search_clawhub_skills(query="skill creator", limit=2)
+    result = search_clawhub_skills(
+        query="skill creator",
+        limit=2,
+        config_dir=tmp_path / ".relay-teams",
+    )
 
     assert result.ok is True
     assert result.query == "skill creator"
@@ -57,7 +64,10 @@ def test_search_clawhub_skills_parses_search_output(monkeypatch) -> None:
     assert result.items[1].score == 66.021
 
 
-def test_search_clawhub_skills_installs_missing_binary(monkeypatch) -> None:
+def test_search_clawhub_skills_installs_missing_binary(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     installed_path = Path("/opt/tools/clawhub/bin/clawhub")
     monkeypatch.setattr(
         "relay_teams.skills.clawhub_search_service.resolve_existing_clawhub_path",
@@ -65,7 +75,7 @@ def test_search_clawhub_skills_installs_missing_binary(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "relay_teams.skills.clawhub_search_service.install_clawhub_via_npm",
-        lambda *, timeout_seconds: ClawHubCliInstallResult(
+        lambda *, timeout_seconds, base_env=None: ClawHubCliInstallResult(
             ok=True,
             attempted=True,
             clawhub_path=str(installed_path),
@@ -91,7 +101,11 @@ def test_search_clawhub_skills_installs_missing_binary(monkeypatch) -> None:
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = search_clawhub_skills(query="skill creator", limit=1)
+    result = search_clawhub_skills(
+        query="skill creator",
+        limit=1,
+        config_dir=tmp_path / ".relay-teams",
+    )
 
     assert result.ok is True
     assert result.clawhub_path == str(installed_path)
@@ -99,7 +113,10 @@ def test_search_clawhub_skills_installs_missing_binary(monkeypatch) -> None:
     assert result.diagnostics.installed_during_search is True
 
 
-def test_clawhub_search_service_reads_token_from_saved_config(monkeypatch) -> None:
+def test_clawhub_search_service_reads_token_from_saved_config(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.setattr(
         "relay_teams.skills.clawhub_search_service.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
@@ -122,6 +139,7 @@ def test_clawhub_search_service_reads_token_from_saved_config(monkeypatch) -> No
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     service = ClawHubSkillSearchService(
+        config_dir=tmp_path / ".relay-teams",
         get_clawhub_config=lambda: ClawHubConfig(token="ch_saved"),
     )
 

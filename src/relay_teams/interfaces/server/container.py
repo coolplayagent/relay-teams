@@ -231,7 +231,8 @@ class ServerContainer:
         )
         self.clawhub_search_service: ClawHubSkillSearchService = (
             ClawHubSkillSearchService(
-                get_clawhub_config=self.clawhub_config_service.get_clawhub_config
+                config_dir=config_dir,
+                get_clawhub_config=self.clawhub_config_service.get_clawhub_config,
             )
         )
         self.clawhub_install_service: ClawHubSkillInstallService = (

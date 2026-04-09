@@ -315,6 +315,8 @@ class AppSecretStore:
             return float(getattr(backend, "priority", 0.0)) > 0
         except (TypeError, ValueError):
             return False
+        except Exception:
+            return False
 
     def secrets_file_path(self, config_dir: Path) -> Path:
         return config_dir.expanduser().resolve() / _SECRETS_FILE_NAME

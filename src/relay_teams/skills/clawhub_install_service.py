@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import os
 from pathlib import Path
 from time import perf_counter
+import re
 import subprocess
 
 from relay_teams.env.clawhub_cli import (
@@ -14,7 +15,7 @@ from relay_teams.env.clawhub_cli import (
 )
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_env import (
-    build_clawhub_cli_env,
+    build_clawhub_subprocess_env,
     normalize_clawhub_token,
     resolve_clawhub_registry_from_env,
 )
@@ -29,6 +30,7 @@ from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 
 _DEFAULT_TIMEOUT_SECONDS = 180.0
 _DEFAULT_INSTALL_TIMEOUT_SECONDS = 180.0
+_INSTALLABLE_SKILL_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class ClawHubSkillInstallService:
@@ -72,9 +74,22 @@ def install_clawhub_skill(
 ) -> ClawHubSkillInstallResult:
     checked_at = datetime.now(timezone.utc)
     started = perf_counter()
-    normalized_slug = slug.strip()
     normalized_version = _normalize_optional_text(version)
     normalized_token = normalize_clawhub_token(token)
+    try:
+        normalized_slug = _normalize_installable_slug(slug)
+    except ValueError as exc:
+        return _build_result(
+            ok=False,
+            slug=slug.strip() or "<invalid>",
+            requested_version=normalized_version,
+            checked_at=checked_at,
+            started=started,
+            binary_available=False,
+            token_configured=normalized_token is not None,
+            error_code="unsupported_slug",
+            error_message=str(exc),
+        )
     resolved_config_dir = (
         get_app_config_dir()
         if config_dir is None
@@ -87,7 +102,12 @@ def install_clawhub_skill(
 
     if clawhub_path is None:
         install_result = install_clawhub_via_npm(
-            timeout_seconds=max(timeout_seconds, _DEFAULT_INSTALL_TIMEOUT_SECONDS)
+            timeout_seconds=max(timeout_seconds, _DEFAULT_INSTALL_TIMEOUT_SECONDS),
+            base_env=build_clawhub_subprocess_env(
+                None,
+                config_dir=resolved_config_dir,
+                base_env=os.environ,
+            ),
         )
         installation_attempted = install_result.attempted
         if install_result.ok and install_result.clawhub_path is not None:
@@ -110,8 +130,11 @@ def install_clawhub_skill(
                 or "ClawHub CLI is not available on PATH.",
             )
 
-    env = dict(os.environ)
-    env.update(build_clawhub_cli_env(normalized_token))
+    env = build_clawhub_subprocess_env(
+        normalized_token,
+        config_dir=resolved_config_dir,
+        base_env=os.environ,
+    )
     env["PATH"] = _prepend_to_path(env.get("PATH"), clawhub_path.parent)
     registry = resolve_clawhub_registry_from_env(env)
     command = [
@@ -322,6 +345,17 @@ def _normalize_optional_text(value: str | None) -> str | None:
         return None
     normalized_value = value.strip()
     return normalized_value or None
+
+
+def _normalize_installable_slug(value: str) -> str:
+    normalized_value = value.strip()
+    if not normalized_value:
+        raise ValueError("ClawHub skill slug cannot be blank.")
+    if not _INSTALLABLE_SKILL_SLUG_PATTERN.fullmatch(normalized_value):
+        raise ValueError(
+            "Unsupported ClawHub skill slug. Use letters, digits, '.', '_', or '-'."
+        )
+    return normalized_value
 
 
 def _prepend_to_path(existing_path: str | None, directory: Path) -> str:

@@ -80,19 +80,17 @@ class ClawHubSkillService:
                 backup_dir = target_dir.parent / f".{target_dir.name}.bak-{uuid4().hex}"
                 target_dir.rename(backup_dir)
             staging_dir.rename(target_dir)
-            if backup_dir is not None and backup_dir.exists():
-                shutil.rmtree(backup_dir)
             self._notify_skill_mutated()
         except Exception:
             if staging_dir.exists():
                 shutil.rmtree(staging_dir, ignore_errors=True)
-            if (
-                backup_dir is not None
-                and backup_dir.exists()
-                and not target_dir.exists()
-            ):
+            if backup_dir is not None and backup_dir.exists():
+                if target_dir.exists():
+                    shutil.rmtree(target_dir, ignore_errors=True)
                 backup_dir.rename(target_dir)
             raise
+        if backup_dir is not None and backup_dir.exists():
+            shutil.rmtree(backup_dir)
 
         return self.get_skill(normalized_skill_id)
 
@@ -117,7 +115,14 @@ class ClawHubSkillService:
 
     def _skill_dir_for_id(self, skill_id: str) -> Path:
         self._skills_dir.mkdir(parents=True, exist_ok=True)
-        return (self._skills_dir / skill_id).resolve()
+        resolved_path = (self._skills_dir / skill_id).resolve()
+        try:
+            resolved_path.relative_to(self._skills_dir)
+        except ValueError as exc:
+            raise ValueError(
+                f"ClawHub skill path escapes the managed skills root: {skill_id}"
+            ) from exc
+        return resolved_path
 
     def _build_summary(self, skill_dir: Path) -> ClawHubSkillSummary:
         skill_id = skill_dir.name

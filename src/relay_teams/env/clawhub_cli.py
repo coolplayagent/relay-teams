@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 from pathlib import Path
 import shutil
@@ -93,10 +94,15 @@ def resolve_npm_path() -> Path | None:
     return None
 
 
-def resolve_npm_global_bin_dir(npm_path: Path | None = None) -> Path | None:
+def resolve_npm_global_bin_dir(
+    npm_path: Path | None = None,
+    *,
+    base_env: Mapping[str, str] | None = None,
+) -> Path | None:
     resolved_npm_path = resolve_npm_path() if npm_path is None else npm_path
     if resolved_npm_path is None:
         return None
+    env = dict(os.environ if base_env is None else base_env)
     try:
         completed = subprocess.run(
             [str(resolved_npm_path), "config", "get", "prefix"],
@@ -104,7 +110,7 @@ def resolve_npm_global_bin_dir(npm_path: Path | None = None) -> Path | None:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=dict(os.environ),
+            env=env,
             timeout=_NPM_RESOLVE_TIMEOUT_SECONDS,
             check=False,
         )
@@ -124,8 +130,12 @@ def resolve_npm_global_bin_dir(npm_path: Path | None = None) -> Path | None:
     return prefix_path / "bin"
 
 
-def resolve_npm_global_clawhub_path(npm_path: Path | None = None) -> Path | None:
-    global_bin_dir = resolve_npm_global_bin_dir(npm_path)
+def resolve_npm_global_clawhub_path(
+    npm_path: Path | None = None,
+    *,
+    base_env: Mapping[str, str] | None = None,
+) -> Path | None:
+    global_bin_dir = resolve_npm_global_bin_dir(npm_path, base_env=base_env)
     if global_bin_dir is None:
         return None
     for suffix in _candidate_executable_suffixes():
@@ -138,6 +148,7 @@ def resolve_npm_global_clawhub_path(npm_path: Path | None = None) -> Path | None
 def install_clawhub_via_npm(
     *,
     timeout_seconds: float = _DEFAULT_INSTALL_TIMEOUT_SECONDS,
+    base_env: Mapping[str, str] | None = None,
 ) -> ClawHubCliInstallResult:
     npm_path = resolve_npm_path()
     if npm_path is None:
@@ -148,10 +159,10 @@ def install_clawhub_via_npm(
             error_message="npm is not available on PATH, so ClawHub CLI could not be installed automatically.",
         )
 
-    npm_bin_dir = resolve_npm_global_bin_dir(npm_path)
-    base_env = dict(os.environ)
+    npm_bin_dir = resolve_npm_global_bin_dir(npm_path, base_env=base_env)
+    command_env = dict(os.environ if base_env is None else base_env)
     if npm_bin_dir is not None:
-        base_env["PATH"] = _prepend_to_path(base_env.get("PATH"), npm_bin_dir)
+        command_env["PATH"] = _prepend_to_path(command_env.get("PATH"), npm_bin_dir)
 
     last_error_message = "Failed to install ClawHub CLI."
     attempted = False
@@ -174,7 +185,7 @@ def install_clawhub_via_npm(
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                env=base_env,
+                env=command_env,
                 timeout=timeout_seconds,
                 check=False,
             )

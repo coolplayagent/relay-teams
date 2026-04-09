@@ -15,7 +15,10 @@ from relay_teams.env.clawhub_cli import (
     resolve_existing_clawhub_path,
 )
 from relay_teams.env.clawhub_config_models import ClawHubConfig
-from relay_teams.env.clawhub_env import build_clawhub_cli_env, normalize_clawhub_token
+from relay_teams.env.clawhub_env import (
+    build_clawhub_subprocess_env,
+    normalize_clawhub_token,
+)
 
 _MAX_CLAWHUB_PROBE_TIMEOUT_MS = 300_000
 _DEFAULT_TIMEOUT_SECONDS = 15.0
@@ -61,8 +64,10 @@ class ClawHubConnectivityProbeService:
     def __init__(
         self,
         *,
+        config_dir: Path,
         get_clawhub_config: Callable[[], ClawHubConfig],
     ) -> None:
+        self._config_dir = config_dir
         self._get_clawhub_config = get_clawhub_config
 
     def probe(
@@ -95,7 +100,12 @@ class ClawHubConnectivityProbeService:
 
         if clawhub_path is None:
             install_result = install_clawhub_via_npm(
-                timeout_seconds=_resolve_install_timeout_seconds(request.timeout_ms)
+                timeout_seconds=_resolve_install_timeout_seconds(request.timeout_ms),
+                base_env=build_clawhub_subprocess_env(
+                    None,
+                    config_dir=self._config_dir,
+                    base_env=os.environ,
+                ),
             )
             installation_attempted = install_result.attempted
             if install_result.ok and install_result.clawhub_path is not None:
@@ -121,8 +131,11 @@ class ClawHubConnectivityProbeService:
             if request.timeout_ms is None
             else request.timeout_ms / 1000.0
         )
-        env = dict(os.environ)
-        env.update(build_clawhub_cli_env(token))
+        env = build_clawhub_subprocess_env(
+            token,
+            config_dir=self._config_dir,
+            base_env=os.environ,
+        )
         env["PATH"] = _prepend_to_path(env.get("PATH"), clawhub_path.parent)
 
         try:
