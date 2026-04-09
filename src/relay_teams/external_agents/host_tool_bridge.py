@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
 import inspect
 import json
 import sys
@@ -13,8 +14,6 @@ from uuid import uuid4
 
 import mcp.types as mcp_types
 from fastmcp.server.server import FastMCP
-from fastmcp.tools import Tool as FastMcpTool
-from fastmcp.tools import ToolResult
 from mcp.shared.exceptions import McpError
 from mcp.shared.memory import create_client_server_memory_streams
 from mcp.shared.message import SessionMessage
@@ -56,6 +55,8 @@ from relay_teams.workspace import WorkspaceManager, build_conversation_id
 
 if TYPE_CHECKING:
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
+    from fastmcp.tools import Tool as FastMcpTool
+    from fastmcp.tools import ToolResult
 
     from relay_teams.agents.execution.message_repository import MessageRepository
     from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
@@ -70,6 +71,33 @@ if TYPE_CHECKING:
     from relay_teams.notifications import NotificationService
     from relay_teams.persistence.shared_state_repo import SharedStateRepository
     from relay_teams.gateway.im import ImToolService
+
+
+def _load_fastmcp_tool_types() -> tuple[type[object], type[object]]:
+    try:
+        public_module = importlib.import_module("fastmcp.tools")
+    except ImportError:
+        return _load_legacy_fastmcp_tool_types()
+
+    tool_cls = getattr(public_module, "Tool", None)
+    tool_result_cls = getattr(public_module, "ToolResult", None)
+    if isinstance(tool_cls, type) and isinstance(tool_result_cls, type):
+        return tool_cls, tool_result_cls
+    return _load_legacy_fastmcp_tool_types()
+
+
+def _load_legacy_fastmcp_tool_types() -> tuple[type[object], type[object]]:
+    legacy_module = importlib.import_module("fastmcp.tools.tool")
+    tool_cls = getattr(legacy_module, "Tool", None)
+    tool_result_cls = getattr(legacy_module, "ToolResult", None)
+    if not isinstance(tool_cls, type) or not isinstance(tool_result_cls, type):
+        msg = "fastmcp tool module did not expose Tool and ToolResult classes"
+        raise TypeError(msg)
+    return tool_cls, tool_result_cls
+
+
+if not TYPE_CHECKING:
+    FastMcpTool, ToolResult = _load_fastmcp_tool_types()
 
 
 HOST_TOOL_SERVER_ID = "agent_teams_host_tools"
