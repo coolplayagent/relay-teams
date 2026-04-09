@@ -940,6 +940,7 @@ class AgentLlmSession:
                 delay_ms = compute_retry_delay_ms(
                     config=self._retry_config,
                     retry_number=next_retry_number,
+                    retry_after_ms=resolved_retry_error.retry_after_ms,
                 )
                 await self._handle_retry_scheduled(
                     request=request,
@@ -1013,6 +1014,7 @@ class AgentLlmSession:
                 delay_ms = compute_retry_delay_ms(
                     config=self._retry_config,
                     retry_number=next_retry_number,
+                    retry_after_ms=resolved_retry_error.retry_after_ms,
                 )
                 await self._handle_retry_scheduled(
                     request=request,

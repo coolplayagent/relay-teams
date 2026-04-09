@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+
+import httpx
 from datetime import UTC, datetime
 from typing import cast
 
 import pytest
+from openai import APIStatusError
 
 from relay_teams.agents.execution.llm_session import AgentLlmSession
 from relay_teams.agents.execution.conversation_compaction import (
@@ -18,7 +21,8 @@ from relay_teams.agents.execution.conversation_microcompact import (
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from relay_teams.mcp.mcp_registry import McpRegistry
-from relay_teams.providers.model_config import ModelEndpointConfig
+from relay_teams.providers.llm_retry import LlmRetrySchedule
+from relay_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from pydantic_ai.messages import (
@@ -567,3 +571,131 @@ def test_persist_user_prompt_keeps_microcompacted_history_in_memory() -> None:
     appended_part = appended_message.parts[0]
     assert isinstance(appended_part, UserPromptPart)
     assert appended_part.content == "new prompt"
+
+
+@pytest.mark.asyncio
+async def test_generate_async_passes_retry_after_to_retry_schedule() -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        context_window=600,
+    )
+    session.__dict__["_retry_config"] = LlmRetryConfig(
+        jitter=False,
+        max_retries=2,
+        initial_delay_ms=2000,
+    )
+    session.__dict__["_metric_recorder"] = None
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_allowed_tools"] = ()
+    session.__dict__["_allowed_mcp_servers"] = ()
+    session.__dict__["_allowed_skills"] = ()
+    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_shared_store"] = cast(object, None)
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_message_repo"] = cast(
+        MessageRepository, _FakeMessageRepo(history=[])
+    )
+    session.__dict__["_approval_ticket_repo"] = cast(object, None)
+    session.__dict__["_run_runtime_repo"] = cast(object, None)
+    session.__dict__["_injection_manager"] = type(
+        "_InjectionManager",
+        (),
+        {"drain_at_boundary": lambda self, run_id, instance_id: []},
+    )()
+    session.__dict__["_run_event_hub"] = type(
+        "_RunEventHub", (), {"publish": lambda self, event: None}
+    )()
+    session.__dict__["_agent_repo"] = cast(object, None)
+    session.__dict__["_workspace_manager"] = type(
+        "_WorkspaceManager",
+        (),
+        {"resolve": lambda self, **kwargs: cast(object, None)},
+    )()
+    session.__dict__["_role_memory_service"] = None
+    session.__dict__["_media_asset_service"] = None
+    session.__dict__["_computer_runtime"] = None
+    session.__dict__["_background_task_service"] = None
+    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_mcp_registry"] = McpRegistry()
+    session.__dict__["_task_service"] = cast(object, None)
+    session.__dict__["_task_execution_service"] = cast(object, object())
+    session.__dict__["_tool_approval_manager"] = cast(object, None)
+    session.__dict__["_shell_approval_repo"] = None
+    session.__dict__["_notification_service"] = None
+    session.__dict__["_im_tool_service"] = None
+    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
+        object, None
+    )
+    session.__dict__["_build_model_api_error_message"] = lambda error: "rate limited"
+
+    async def _no_recovery(**kwargs: object) -> None:
+        _ = kwargs
+        return None
+
+    session.__dict__["_maybe_recover_from_tool_args_parse_failure"] = _no_recovery
+    session.__dict__["_should_retry_request"] = lambda **kwargs: True
+
+    captured_schedules: list[LlmRetrySchedule] = []
+
+    async def _capture_retry_scheduled(**kwargs: object) -> None:
+        captured_schedules.append(cast(LlmRetrySchedule, kwargs["schedule"]))
+        raise RuntimeError("stop after scheduling retry")
+
+    session.__dict__["_handle_retry_scheduled"] = _capture_retry_scheduled
+    session.__dict__["_persist_user_prompt_if_needed"] = lambda **kwargs: kwargs[
+        "history"
+    ]
+    session.__dict__["_run_control_manager"] = type(
+        "_RunControlManager",
+        (),
+        {
+            "context": lambda self, run_id, instance_id: type(
+                "_ControlContext",
+                (),
+                {"raise_if_cancelled": lambda self: None},
+            )()
+        },
+    )()
+
+    class _FailingAgentContext:
+        async def __aenter__(self) -> object:
+            request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+            response = httpx.Response(
+                429,
+                headers={"Retry-After": "7"},
+                request=request,
+            )
+            raise APIStatusError(
+                "rate limited",
+                response=response,
+                body={"error": {"code": "rate_limited", "message": "slow down"}},
+            )
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            _ = (exc_type, exc, tb)
+            return False
+
+    class _FailingAgent:
+        def iter(self, *_args: object, **_kwargs: object) -> _FailingAgentContext:
+            return _FailingAgentContext()
+
+    async def _build_agent_iteration_context(
+        **kwargs: object,
+    ) -> tuple[str, list[object], str, object]:
+        _ = kwargs
+        return "", [], "System prompt", _FailingAgent()
+
+    session.__dict__["_build_agent_iteration_context"] = _build_agent_iteration_context
+
+    with pytest.raises(RuntimeError, match="stop after scheduling retry"):
+        await AgentLlmSession._generate_async(
+            session,
+            _build_request(),
+        )
+
+    assert len(captured_schedules) == 1
+    schedule = captured_schedules[0]
+    assert schedule.delay_ms == 7000
