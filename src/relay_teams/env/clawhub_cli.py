@@ -21,7 +21,6 @@ _WINDOWS_EXECUTABLE_SUFFIXES = (".cmd", ".ps1", ".exe", "")
 _POSIX_EXECUTABLE_SUFFIXES = ("",)
 
 _clawhub_path_cache: Path | None = None
-_clawhub_path_cache_ready = False
 
 
 class ClawHubCliInstallResult(BaseModel):
@@ -38,40 +37,31 @@ class ClawHubCliInstallResult(BaseModel):
 
 def clear_clawhub_path_cache() -> None:
     global _clawhub_path_cache
-    global _clawhub_path_cache_ready
 
     _clawhub_path_cache = None
-    _clawhub_path_cache_ready = False
 
 
 def resolve_existing_clawhub_path() -> Path | None:
     global _clawhub_path_cache
-    global _clawhub_path_cache_ready
 
     if _clawhub_path_cache is not None and _clawhub_path_cache.is_file():
         return _clawhub_path_cache
-    if _clawhub_path_cache_ready:
-        return None
 
     try:
         system_path = resolve_system_clawhub_path()
         if system_path is not None:
             _clawhub_path_cache = system_path
-            _clawhub_path_cache_ready = True
             return system_path
 
         npm_global_path = resolve_npm_global_clawhub_path()
         if npm_global_path is not None:
             _clawhub_path_cache = npm_global_path
-            _clawhub_path_cache_ready = True
             return npm_global_path
     except Exception:
         _clawhub_path_cache = None
-        _clawhub_path_cache_ready = True
         return None
 
     _clawhub_path_cache = None
-    _clawhub_path_cache_ready = True
     return None
 
 

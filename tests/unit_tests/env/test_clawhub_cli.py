@@ -29,6 +29,33 @@ def test_resolve_existing_clawhub_path_uses_npm_global_bin(
     assert resolved == clawhub_path
 
 
+def test_resolve_existing_clawhub_path_rechecks_after_cached_miss(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    clawhub_cli.clear_clawhub_path_cache()
+    clawhub_path = tmp_path / "clawhub"
+    clawhub_path.write_text("#!/bin/sh\n", encoding="utf-8")
+    call_count = 0
+
+    def resolve_system_path() -> Path | None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return None
+        return clawhub_path
+
+    monkeypatch.setattr(clawhub_cli, "resolve_system_clawhub_path", resolve_system_path)
+    monkeypatch.setattr(
+        clawhub_cli,
+        "resolve_npm_global_clawhub_path",
+        lambda npm_path=None, base_env=None: None,
+    )
+
+    assert clawhub_cli.resolve_existing_clawhub_path() is None
+    assert clawhub_cli.resolve_existing_clawhub_path() == clawhub_path
+
+
 def test_install_clawhub_via_npm_prefers_huaweicloud_registry(
     monkeypatch,
     tmp_path: Path,
