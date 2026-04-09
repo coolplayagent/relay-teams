@@ -7,8 +7,11 @@ from json import dumps, loads
 from pathlib import Path
 from typing import cast
 
+from relay_teams.providers.maas_auth import maas_password_secret_field_name
 from relay_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_MAAS_BASE_URL,
+    MaaSAuthConfig,
     ModelRequestHeader,
     ProviderType,
 )
@@ -23,6 +26,7 @@ from relay_teams.secrets import AppSecretStore, get_secret_store
 
 _MODEL_PROFILE_SECRET_NAMESPACE = "model_profile"
 _MODEL_PROFILE_SECRET_FIELD = "api_key"
+_MODEL_PROFILE_MAAS_PASSWORD_FIELD = maas_password_secret_field_name()
 
 
 class ModelConfigManager:
@@ -61,6 +65,7 @@ class ModelConfigManager:
             api_key, has_api_key = self._resolve_api_key(name, profile)
             normalized_profile = _normalize_profile_context_window(profile)
             headers = self._resolve_headers(name, normalized_profile)
+            maas_auth = self._resolve_maas_auth(name, normalized_profile)
             result[name] = {
                 "provider": normalized_profile.get("provider", "openai_compatible"),
                 "model": normalized_profile.get("model", ""),
@@ -68,6 +73,11 @@ class ModelConfigManager:
                 "api_key": api_key,
                 "has_api_key": has_api_key,
                 "headers": [binding.model_dump(mode="json") for binding in headers],
+                "maas_auth": (
+                    _build_maas_auth_profile_payload(maas_auth)
+                    if maas_auth is not None
+                    else None
+                ),
                 "ssl_verify": normalized_profile.get("ssl_verify"),
                 "temperature": normalized_profile.get("temperature", 0.7),
                 "top_p": normalized_profile.get("top_p", 1.0),
@@ -103,18 +113,40 @@ class ModelConfigManager:
             if source_name is not None and source_name != name
             else self._get_profile_secret(name)
         )
+        current_maas_password = (
+            self._get_profile_maas_password(source_name)
+            if source_name is not None and source_name != name
+            else self._get_profile_maas_password(name)
+        )
+        normalized_next_profile = _normalize_profile_context_window(profile)
         config[name], next_secret, preserve_secret = (
             _prepare_profile_api_key_for_storage(
                 existing_profile=existing_profile,
-                next_profile=_normalize_profile_context_window(profile),
+                next_profile=normalized_next_profile,
                 current_secret=current_secret,
             )
+        )
+        config[name], next_secret, preserve_secret = _drop_api_key_for_maas_profile(
+            profile=cast(dict[str, JsonValue], config[name]),
+            next_secret=next_secret,
+            preserve_secret=preserve_secret,
         )
         config[name] = self._prepare_profile_headers_for_storage(
             profile_name=name,
             existing_profile=existing_profile,
             next_profile=cast(dict[str, JsonValue], config[name]),
             source_name=source_name,
+        )
+        (
+            config[name],
+            next_maas_password,
+            preserve_maas_password,
+        ) = self._prepare_profile_maas_auth_for_storage(
+            profile_name=name,
+            existing_profile=existing_profile,
+            next_profile=cast(dict[str, JsonValue], config[name]),
+            source_name=source_name,
+            current_password=current_maas_password,
         )
         if cast(dict[str, JsonValue], config[name]).get("max_tokens") is None:
             cast(dict[str, JsonValue], config[name]).pop("max_tokens", None)
@@ -128,10 +160,16 @@ class ModelConfigManager:
             next_secret=next_secret,
             preserve_secret=preserve_secret,
         )
+        self._apply_profile_maas_password_update(
+            name=name,
+            source_name=source_name,
+            next_password=next_maas_password,
+            preserve_password=preserve_maas_password,
+        )
         self._sync_profile_header_secrets(
             profile_name=name,
             existing_profile=existing_profile,
-            next_profile=_normalize_profile_context_window(profile),
+            next_profile=normalized_next_profile,
             source_name=source_name,
         )
 
@@ -159,25 +197,49 @@ class ModelConfigManager:
         )
         next_config: dict[str, JsonValue] = {}
         secret_updates: dict[str, tuple[str | None, bool]] = {}
+        maas_password_updates: dict[str, tuple[str | None, bool]] = {}
         for name, profile in config.items():
             if not isinstance(profile, dict):
                 next_config[name] = profile
                 continue
             current_secret = self._get_profile_secret(name)
+            current_maas_password = self._get_profile_maas_password(name)
+            normalized_next_profile = _normalize_profile_context_window(profile)
             next_profile, next_secret, preserve_secret = (
                 _prepare_profile_api_key_for_storage(
                     existing_profile=existing_config.get(name),
-                    next_profile=_normalize_profile_context_window(profile),
+                    next_profile=normalized_next_profile,
                     current_secret=current_secret,
                 )
             )
-            next_config[name] = self._prepare_profile_headers_for_storage(
+            next_profile, next_secret, preserve_secret = _drop_api_key_for_maas_profile(
+                profile=next_profile,
+                next_secret=next_secret,
+                preserve_secret=preserve_secret,
+            )
+            next_profile = self._prepare_profile_headers_for_storage(
                 profile_name=name,
                 existing_profile=existing_config.get(name),
                 next_profile=next_profile,
                 source_name=None,
             )
+            (
+                next_profile,
+                next_maas_password,
+                preserve_maas_password,
+            ) = self._prepare_profile_maas_auth_for_storage(
+                profile_name=name,
+                existing_profile=existing_config.get(name),
+                next_profile=next_profile,
+                source_name=None,
+                current_password=current_maas_password,
+            )
+            next_config[name] = next_profile
             secret_updates[name] = (next_secret, preserve_secret)
+            maas_password_updates[name] = (
+                next_maas_password,
+                preserve_maas_password,
+            )
         _normalize_default_profile_flags(next_config)
         _ = model_file.write_text(dumps(next_config, indent=2), encoding="utf-8")
         existing_profile_names = {
@@ -197,6 +259,14 @@ class ModelConfigManager:
                 self._set_profile_secret(profile_name, next_secret)
             elif not preserve_secret:
                 self._delete_profile_secret(profile_name)
+            next_maas_password, preserve_maas_password = maas_password_updates.get(
+                profile_name,
+                (None, False),
+            )
+            if next_maas_password is not None:
+                self._set_profile_maas_password(profile_name, next_maas_password)
+            elif not preserve_maas_password:
+                self._delete_profile_maas_password(profile_name)
             next_profile = next_config.get(profile_name)
             if isinstance(next_profile, dict) and isinstance(
                 config.get(profile_name), dict
@@ -229,6 +299,9 @@ class ModelConfigManager:
                 next_profile["headers"] = [
                     binding.model_dump(mode="json") for binding in headers
                 ]
+            maas_auth = self._resolve_maas_auth(name, profile)
+            if maas_auth is not None:
+                next_profile["maas_auth"] = maas_auth.model_dump(mode="json")
             hydrated[name] = next_profile
         return hydrated
 
@@ -271,6 +344,32 @@ class ModelConfigManager:
                 )
             )
         return tuple(resolved_bindings)
+
+    def _resolve_maas_auth(
+        self,
+        profile_name: str,
+        profile: dict[str, JsonValue],
+    ) -> MaaSAuthConfig | None:
+        raw_maas_auth = profile.get("maas_auth")
+        if raw_maas_auth is None:
+            return None
+        if not isinstance(raw_maas_auth, dict):
+            raise ValueError("maas_auth must be an object")
+        resolved_payload: dict[str, str] = {}
+        username = raw_maas_auth.get("username")
+        if isinstance(username, str) and username.strip():
+            resolved_payload["username"] = username.strip()
+        password = raw_maas_auth.get("password")
+        if not isinstance(password, str) or not password.strip():
+            password = self._secret_store.get_secret(
+                self._config_dir,
+                namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                owner_id=profile_name,
+                field_name=_MODEL_PROFILE_MAAS_PASSWORD_FIELD,
+            )
+        if isinstance(password, str) and password.strip():
+            resolved_payload["password"] = password.strip()
+        return MaaSAuthConfig.model_validate(resolved_payload)
 
     def _prepare_profile_headers_for_storage(
         self,
@@ -492,6 +591,75 @@ class ModelConfigManager:
                 field_name=field_name,
             )
 
+    def _prepare_profile_maas_auth_for_storage(
+        self,
+        *,
+        profile_name: str,
+        existing_profile: object,
+        next_profile: dict[str, JsonValue],
+        source_name: str | None,
+        current_password: str | None,
+    ) -> tuple[dict[str, JsonValue], str | None, bool]:
+        merged_profile = dict(next_profile)
+        provider_raw = merged_profile.get(
+            "provider", ProviderType.OPENAI_COMPATIBLE.value
+        )
+        if provider_raw != ProviderType.MAAS.value:
+            merged_profile.pop("maas_auth", None)
+            return merged_profile, None, False
+        if "maas_auth" not in merged_profile:
+            if isinstance(existing_profile, dict) and "maas_auth" in existing_profile:
+                merged_profile["maas_auth"] = existing_profile["maas_auth"]
+                return merged_profile, None, current_password is not None
+            raise ValueError("MAAS model profile requires maas_auth configuration.")
+        raw_maas_auth = merged_profile.get("maas_auth")
+        if not isinstance(raw_maas_auth, dict):
+            raise ValueError("maas_auth must be an object")
+        current_owner = (
+            source_name
+            if source_name is not None and source_name != profile_name
+            else profile_name
+        )
+        existing_maas_auth = (
+            self._resolve_maas_auth(current_owner, existing_profile)
+            if isinstance(existing_profile, dict)
+            else None
+        )
+        password = raw_maas_auth.get("password")
+        if isinstance(password, str) and password.strip():
+            next_password = password.strip()
+            preserve_password = False
+        elif existing_maas_auth is not None and existing_maas_auth.password is not None:
+            next_password = None
+            preserve_password = True
+        elif current_password is not None:
+            next_password = None
+            preserve_password = True
+        else:
+            raise ValueError(
+                "MAAS auth password requires a value the first time it is configured."
+            )
+        username = raw_maas_auth.get("username")
+        validated = MaaSAuthConfig.model_validate(
+            {
+                "username": username,
+                "password": next_password
+                or current_password
+                or (
+                    existing_maas_auth.password
+                    if existing_maas_auth is not None
+                    else None
+                ),
+            }
+        )
+        merged_profile["maas_auth"] = cast(
+            JsonValue,
+            {
+                "username": validated.username,
+            },
+        )
+        return merged_profile, next_password, preserve_password
+
     def _migrate_legacy_profile_api_keys(
         self,
         config: dict[str, JsonValue],
@@ -548,6 +716,33 @@ class ModelConfigManager:
             field_name=_MODEL_PROFILE_SECRET_FIELD,
         )
 
+    def _get_profile_maas_password(self, profile_name: str | None) -> str | None:
+        if profile_name is None:
+            return None
+        return self._secret_store.get_secret(
+            self._config_dir,
+            namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+            owner_id=profile_name,
+            field_name=_MODEL_PROFILE_MAAS_PASSWORD_FIELD,
+        )
+
+    def _set_profile_maas_password(self, profile_name: str, password: str) -> None:
+        self._secret_store.set_secret(
+            self._config_dir,
+            namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+            owner_id=profile_name,
+            field_name=_MODEL_PROFILE_MAAS_PASSWORD_FIELD,
+            value=password,
+        )
+
+    def _delete_profile_maas_password(self, profile_name: str) -> None:
+        self._secret_store.delete_secret(
+            self._config_dir,
+            namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+            owner_id=profile_name,
+            field_name=_MODEL_PROFILE_MAAS_PASSWORD_FIELD,
+        )
+
     def _delete_profile_secret_owner(self, profile_name: str) -> None:
         self._secret_store.delete_owner(
             self._config_dir,
@@ -585,6 +780,35 @@ class ModelConfigManager:
         if preserve_secret:
             return
         self._delete_profile_secret(name)
+
+    def _apply_profile_maas_password_update(
+        self,
+        *,
+        name: str,
+        source_name: str | None,
+        next_password: str | None,
+        preserve_password: bool,
+    ) -> None:
+        if source_name is not None and source_name != name:
+            if next_password is not None:
+                self._set_profile_maas_password(name, next_password)
+                self._delete_profile_maas_password(source_name)
+                return
+            if preserve_password:
+                existing_password = self._get_profile_maas_password(source_name)
+                if existing_password is not None:
+                    self._set_profile_maas_password(name, existing_password)
+                self._delete_profile_maas_password(source_name)
+                return
+            self._delete_profile_maas_password(source_name)
+            self._delete_profile_maas_password(name)
+            return
+        if next_password is not None:
+            self._set_profile_maas_password(name, next_password)
+            return
+        if preserve_password:
+            return
+        self._delete_profile_maas_password(name)
 
 
 def _load_json_object(file_path: Path) -> dict[str, JsonValue]:
@@ -629,10 +853,36 @@ def _prepare_profile_api_key_for_storage(
     return merged_profile, None, False
 
 
-def _normalize_profile_context_window(
+def _drop_api_key_for_maas_profile(
+    *,
+    profile: dict[str, JsonValue],
+    next_secret: str | None,
+    preserve_secret: bool,
+) -> tuple[dict[str, JsonValue], str | None, bool]:
+    provider_raw = profile.get("provider", ProviderType.OPENAI_COMPATIBLE.value)
+    if provider_raw != ProviderType.MAAS.value:
+        return profile, next_secret, preserve_secret
+    sanitized = dict(profile)
+    sanitized.pop("api_key", None)
+    return sanitized, None, False
+
+
+def _normalize_profile_provider_defaults(
     profile: dict[str, JsonValue],
 ) -> dict[str, JsonValue]:
     normalized_profile = dict(profile)
+    provider_raw = normalized_profile.get(
+        "provider", ProviderType.OPENAI_COMPATIBLE.value
+    )
+    if provider_raw == ProviderType.MAAS.value:
+        normalized_profile["base_url"] = DEFAULT_MAAS_BASE_URL
+    return normalized_profile
+
+
+def _normalize_profile_context_window(
+    profile: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    normalized_profile = _normalize_profile_provider_defaults(profile)
     explicit_context_window = normalized_profile.get("context_window")
     if isinstance(explicit_context_window, int) and explicit_context_window > 0:
         return normalized_profile
@@ -722,3 +972,13 @@ def _profile_requests_default(
 
 def _is_env_placeholder(value: str) -> bool:
     return value.startswith("${") and value.endswith("}")
+
+
+def _build_maas_auth_profile_payload(
+    maas_auth: MaaSAuthConfig,
+) -> dict[str, JsonValue]:
+    return {
+        "username": maas_auth.username,
+        "password": maas_auth.password or "",
+        "has_password": maas_auth.password is not None,
+    }

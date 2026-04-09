@@ -279,6 +279,7 @@ console.log(JSON.stringify({
     assert 'value="openai_compatible"' in modal_html
     assert 'value="bigmodel"' in modal_html
     assert 'value="minimax"' in modal_html
+    assert 'value="maas"' in modal_html
     assert 'value="echo"' not in modal_html
     assert (
         '<input type="text" id="profile-model" autocomplete="off" spellcheck="false">'
@@ -290,6 +291,10 @@ console.log(JSON.stringify({
     assert 'id="fetch-profile-models-btn"' in modal_html
     assert 'title="Fetch Models"' in modal_html
     assert 'id="toggle-profile-api-key-btn"' in modal_html
+    assert 'id="profile-maas-auth-fields"' in modal_html
+    assert 'id="profile-maas-username"' in modal_html
+    assert 'id="profile-maas-password"' in modal_html
+    assert 'id="toggle-profile-maas-password-btn"' in modal_html
     assert 'id="toggle-web-api-key-btn"' in modal_html
     assert (
         'id="toggle-web-api-key-btn" type="button" title="Show API key" aria-label="Show API key"'

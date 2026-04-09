@@ -12,7 +12,9 @@ from relay_teams.agents.execution.recoverable_openai_chat_model import (
 from relay_teams.net.llm_client import build_llm_http_client
 from relay_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    MaaSAuthConfig,
     ModelRequestHeader,
+    ProviderType,
 )
 from relay_teams.providers.openai_support import build_openai_provider_for_endpoint
 from relay_teams.skills.skill_registry import SkillRegistry
@@ -26,6 +28,8 @@ def build_coordination_agent(
     base_url: str,
     api_key: str | None,
     headers: tuple[ModelRequestHeader, ...] = (),
+    provider_type: ProviderType = ProviderType.OPENAI_COMPATIBLE,
+    maas_auth: MaaSAuthConfig | None = None,
     system_prompt: str,
     allowed_tools: tuple[str, ...],
     model_settings: OpenAIChatModelSettings | None = None,
@@ -71,6 +75,10 @@ def build_coordination_agent(
             base_url=base_url,
             api_key=api_key,
             headers=headers,
+            provider_type=provider_type,
+            maas_auth=maas_auth,
+            ssl_verify=ssl_verify,
+            connect_timeout_seconds=connect_timeout_seconds,
             http_client=llm_http_client,
         ),
         profile=model_profile,

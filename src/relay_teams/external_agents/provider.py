@@ -967,6 +967,10 @@ class ExternalAcpSessionManager:
         model_config = self._resolve_model_config(role, request)
         if model_config is None:
             return agent
+        if model_config.provider == ProviderType.MAAS:
+            raise RuntimeError(
+                "MAAS model profiles are not supported for external ACP agents. Use the local runtime provider path instead."
+            )
         return _apply_opencode_model_config(
             agent=agent,
             model_config=model_config,

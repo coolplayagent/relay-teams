@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from relay_teams.providers.model_header_utils import model_header_secret_field_name
-from relay_teams.providers.model_config import DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
+from relay_teams.providers.maas_auth import maas_password_secret_field_name
+from relay_teams.providers.model_config import (
+    DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_MAAS_BASE_URL,
+)
 from relay_teams.secrets import get_secret_store
 from relay_teams.sessions.runs import runtime_config
 
@@ -467,3 +471,99 @@ def test_load_llm_configs_resolves_secret_headers_from_secret_store(
     profiles = runtime_config.load_llm_configs(tmp_path, {})
 
     assert profiles["default"].headers[0].value == "Bearer stored-secret"
+
+
+def test_load_llm_configs_resolves_maas_password_from_secret_store(
+    tmp_path: Path,
+) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "maas-profile": {
+                    "provider": "maas",
+                    "model": "maas-chat",
+                    "base_url": "https://maas.example/api/v2",
+                    "maas_auth": {
+                        "username": "relay-user",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    get_secret_store().set_secret(
+        tmp_path,
+        namespace="model_profile",
+        owner_id="maas-profile",
+        field_name=maas_password_secret_field_name(),
+        value="relay-password",
+    )
+
+    profiles = runtime_config.load_llm_configs(tmp_path, {})
+
+    assert profiles["maas-profile"].provider.value == "maas"
+    assert profiles["maas-profile"].base_url == DEFAULT_MAAS_BASE_URL
+    assert profiles["maas-profile"].api_key is None
+    assert profiles["maas-profile"].maas_auth is not None
+    assert profiles["maas-profile"].maas_auth.password == "relay-password"
+
+
+def test_load_llm_configs_accepts_legacy_maas_auth_fields(tmp_path: Path) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "maas-profile": {
+                    "provider": "maas",
+                    "model": "maas-chat",
+                    "base_url": "https://maas.example/api/v2",
+                    "maas_auth": {
+                        "auth_type": "maas_password_login",
+                        "login_url": "https://legacy.example/login",
+                        "username": "relay-user",
+                        "app_id": "LegacyApp",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    get_secret_store().set_secret(
+        tmp_path,
+        namespace="model_profile",
+        owner_id="maas-profile",
+        field_name=maas_password_secret_field_name(),
+        value="relay-password",
+    )
+
+    profiles = runtime_config.load_llm_configs(tmp_path, {})
+
+    assert profiles["maas-profile"].base_url == DEFAULT_MAAS_BASE_URL
+    assert profiles["maas-profile"].maas_auth is not None
+    assert profiles["maas-profile"].maas_auth.username == "relay-user"
+    assert profiles["maas-profile"].maas_auth.password == "relay-password"
+
+
+def test_load_llm_configs_rejects_maas_profile_without_password(tmp_path: Path) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "maas-profile": {
+                    "provider": "maas",
+                    "model": "maas-chat",
+                    "base_url": "https://maas.example/api/v2",
+                    "maas_auth": {
+                        "username": "relay-user",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        runtime_config.load_llm_configs(tmp_path, {})
+
+    assert "MAAS profiles require maas_auth with a password" in str(exc_info.value)
