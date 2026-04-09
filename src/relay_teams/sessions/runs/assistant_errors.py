@@ -39,8 +39,8 @@ INVALID_TOOL_ARGS_RECOVERY_MESSAGE = (
     "If you call a tool again, output strict JSON only, with double-quoted property names "
     "and arguments that exactly match the tool schema."
 )
-NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE = (
-    "The previous model stream was interrupted by a transient network or transport failure. "
+NETWORK_EXCEPTION_RECOVERY_MESSAGE = (
+    "The previous model request could not complete because of a transient network or transport failure. "
     "Continue from the latest successful conversation state already persisted. "
     "Do not repeat already successful tool calls or restate text that has already been sent. "
     "If prior work is incomplete, continue from the last confirmed point."
@@ -51,20 +51,44 @@ def build_auto_recovery_prompt(error_code: str | None) -> str | None:
     code = str(error_code or "").strip().lower()
     if code == "model_tool_args_invalid_json":
         return INVALID_TOOL_ARGS_RECOVERY_MESSAGE
-    if code == "network_stream_interrupted":
-        return NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE
+    if code in {"network_stream_interrupted", "network_timeout", "network_error"}:
+        return NETWORK_EXCEPTION_RECOVERY_MESSAGE
     return None
 
 
-def _build_recovery_guidance_message(error_code: str) -> str | None:
+def _append_error_detail(message: str, detail: str) -> str:
+    normalized_detail = detail.strip()
+    if not normalized_detail:
+        return message
+    return f"{message} Details: {normalized_detail}"
+
+
+def _build_recovery_guidance_message(
+    error_code: str,
+    *,
+    detail: str = "",
+) -> str | None:
     if error_code == "model_tool_args_invalid_json":
         return INVALID_TOOL_ARGS_RECOVERY_MESSAGE
-    if error_code in {
-        "network_stream_interrupted",
-        "network_timeout",
-        "network_error",
-    }:
-        return NETWORK_STREAM_INTERRUPTED_RECOVERY_MESSAGE
+    if error_code == "network_stream_interrupted":
+        return _append_error_detail(
+            "The model response stream was interrupted by a temporary network or transport failure. "
+            "Retry to continue from the latest saved conversation state.",
+            detail,
+        )
+    if error_code == "network_timeout":
+        return _append_error_detail(
+            "The request reached the model endpoint path but timed out while waiting for the provider to respond. "
+            "Check whether the provider is responding slowly, then review connect_timeout_seconds, proxy settings, and the configured base_url. "
+            "If this keeps happening, retry with a longer timeout or inspect upstream latency.",
+            detail,
+        )
+    if error_code == "network_error":
+        return _append_error_detail(
+            "The request failed before a usable response was received from the model endpoint. "
+            "Check DNS resolution, outbound network connectivity, proxy or NO_PROXY settings, and whether the configured base_url is reachable at all.",
+            detail,
+        )
     if error_code == "auth_invalid":
         return (
             "The previous request could not continue because the API key is invalid. "
@@ -81,7 +105,7 @@ def build_assistant_error_message(
     code = str(error_code or "").strip().lower()
     detail = str(error_message or "").strip()
 
-    recovery_guidance = _build_recovery_guidance_message(code)
+    recovery_guidance = _build_recovery_guidance_message(code, detail=detail)
     if recovery_guidance is not None:
         return recovery_guidance
     lowered = detail.lower()
