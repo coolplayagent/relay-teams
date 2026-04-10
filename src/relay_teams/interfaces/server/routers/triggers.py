@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import JsonValue
+from starlette.concurrency import run_in_threadpool
 
 from relay_teams.interfaces.server.deps import get_github_trigger_service
 from relay_teams.triggers import GitHubTriggerService
@@ -19,4 +20,8 @@ async def handle_github_delivery(
 ) -> dict[str, JsonValue]:
     body = await request.body()
     headers = {str(key): str(value) for key, value in request.headers.items()}
-    return service.handle_inbound_github_delivery(headers=headers, body=body)
+    return await run_in_threadpool(
+        service.handle_inbound_github_delivery,
+        headers=headers,
+        body=body,
+    )

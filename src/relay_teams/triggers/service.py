@@ -10,7 +10,6 @@ import secrets
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Event, Thread
 from typing import Protocol
 
 from pydantic import JsonValue
@@ -227,6 +226,10 @@ class GitHubTriggerService:
 
     def delete_account(self, account_id: str) -> None:
         _ = self._repository.get_account(account_id)
+        for repo_subscription in self._repository.list_repo_subscriptions_by_account(
+            account_id
+        ):
+            self._best_effort_unregister_repo_webhook(repo_subscription)
         self._repository.delete_account(account_id)
         self._secret_store.delete_token(self._config_dir, account_id=account_id)
         self._secret_store.delete_webhook_secret(
@@ -384,7 +387,8 @@ class GitHubTriggerService:
         return self._repository.update_repo_subscription(updated)
 
     def delete_repo_subscription(self, repo_subscription_id: str) -> None:
-        _ = self._repository.get_repo_subscription(repo_subscription_id)
+        existing = self._repository.get_repo_subscription(repo_subscription_id)
+        self._best_effort_unregister_repo_webhook(existing)
         self._repository.delete_repo_subscription(repo_subscription_id)
 
     def list_rules(self) -> tuple[TriggerRuleRecord, ...]:
@@ -1267,7 +1271,16 @@ class GitHubTriggerService:
                 "check_conclusion did not match",
             )
         if match_config.paths_any or match_config.paths_ignore:
-            changed_files = self._resolve_changed_files(delivery=delivery, repo=repo)
+            try:
+                changed_files = self._resolve_changed_files(
+                    delivery=delivery, repo=repo
+                )
+            except (GitHubApiError, ValueError) as exc:
+                return (
+                    False,
+                    "changed_files_unavailable",
+                    str(exc) or "failed to resolve pull request files",
+                )
             if match_config.paths_any and not any(
                 any(
                     fnmatch.fnmatchcase(path, pattern)
@@ -1314,15 +1327,43 @@ class GitHubTriggerService:
         if pull_request_number is None:
             return ()
         token = self._require_account_token(repo.account_id)
+        return self._github_client.list_pull_request_files(
+            token=token,
+            owner=repo.owner,
+            repo=repo.repo_name,
+            pull_request_number=pull_request_number,
+        )
+
+    def _best_effort_unregister_repo_webhook(
+        self,
+        repo_subscription: GitHubRepoSubscriptionRecord,
+    ) -> None:
+        webhook_id = _normalize_optional_text(repo_subscription.provider_webhook_id)
+        if webhook_id is None:
+            return
         try:
-            return self._github_client.list_pull_request_files(
+            token = self._require_account_token(repo_subscription.account_id)
+            self._github_client.delete_repository_webhook(
                 token=token,
-                owner=repo.owner,
-                repo=repo.repo_name,
-                pull_request_number=pull_request_number,
+                owner=repo_subscription.owner,
+                repo=repo_subscription.repo_name,
+                webhook_id=webhook_id,
             )
-        except GitHubApiError:
-            return ()
+        except (GitHubApiError, KeyError, ValueError) as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="github.trigger.webhook_cleanup_failed",
+                message="Failed to unregister GitHub webhook during trigger cleanup",
+                payload={
+                    "repo_subscription_id": repo_subscription.repo_subscription_id,
+                    "account_id": repo_subscription.account_id,
+                    "owner": repo_subscription.owner,
+                    "repo_name": repo_subscription.repo_name,
+                    "webhook_id": webhook_id,
+                    "error": str(exc),
+                },
+            )
 
     def _build_template_context(
         self,
@@ -1481,62 +1522,6 @@ class GitHubTriggerService:
                 occurred_at=delivery.received_at,
             )
         )
-
-
-class GitHubTriggerActionWorker:
-    def __init__(
-        self,
-        *,
-        trigger_service: GitHubTriggerService,
-        poll_interval_seconds: float = 1.0,
-    ) -> None:
-        self._trigger_service = trigger_service
-        self._poll_interval_seconds = poll_interval_seconds
-        self._stop_event = Event()
-        self._wake_event = Event()
-        self._thread: Thread | None = None
-
-    def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._wake_event.clear()
-        self._thread = Thread(
-            target=self._run_loop,
-            name="github-trigger-action-worker",
-            daemon=True,
-        )
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop_event.set()
-        self._wake_event.set()
-        thread = self._thread
-        if thread is None:
-            return
-        thread.join(timeout=10.0)
-        self._thread = None
-
-    def wake(self) -> None:
-        self._wake_event.set()
-
-    def _run_loop(self) -> None:
-        while not self._stop_event.is_set():
-            try:
-                progress = self._trigger_service.process_pending_actions()
-                if progress:
-                    continue
-            except Exception as exc:
-                log_event(
-                    LOGGER,
-                    logging.ERROR,
-                    event="github.trigger.action_worker_failed",
-                    message="GitHub trigger action worker failed",
-                    payload={"error": str(exc)},
-                    exc_info=exc,
-                )
-            self._wake_event.wait(timeout=self._poll_interval_seconds)
-            self._wake_event.clear()
 
 
 def _utc_now() -> datetime:
@@ -1887,7 +1872,6 @@ def _json_scalar_to_str(value: JsonValue) -> str | None:
 __all__ = [
     "GitHubRepoSubscriptionConflictError",
     "GitHubTriggerAccountNameConflictError",
-    "GitHubTriggerActionWorker",
     "GitHubTriggerService",
     "TriggerRuleNameConflictError",
 ]

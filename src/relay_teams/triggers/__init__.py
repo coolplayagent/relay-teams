@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from relay_teams.triggers.action_worker import GitHubTriggerActionWorker
 from relay_teams.triggers.github_client import GitHubApiClient, GitHubApiError
 from relay_teams.triggers.models import (
     GitHubActionSpec,
@@ -42,7 +43,7 @@ from relay_teams.triggers.secret_store import (
     GitHubTriggerSecretStore,
     get_github_trigger_secret_store,
 )
-from relay_teams.triggers.service import GitHubTriggerActionWorker, GitHubTriggerService
+from relay_teams.triggers.service import GitHubTriggerService
 
 __all__ = [
     "GitHubActionSpec",

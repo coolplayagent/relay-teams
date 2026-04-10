@@ -13,6 +13,7 @@ from relay_teams.net.clients import create_sync_http_client
 _GITHUB_API_BASE_URL = "https://api.github.com"
 _DEFAULT_TIMEOUT_SECONDS = 20.0
 _API_VERSION = "2022-11-28"
+_PULL_REQUEST_FILES_PAGE_SIZE = 100
 
 
 class GitHubApiError(RuntimeError):
@@ -99,20 +100,29 @@ class GitHubApiClient:
         repo: str,
         pull_request_number: int,
     ) -> tuple[str, ...]:
-        response = self._request_json(
-            token=token,
-            method="GET",
-            path=f"/repos/{owner}/{repo}/pulls/{pull_request_number}/files",
-        )
-        if not isinstance(response, list):
-            raise GitHubApiError(message="Unexpected pull request files response")
         filenames: list[str] = []
-        for item in response:
-            if not isinstance(item, dict):
-                continue
-            filename = item.get("filename")
-            if isinstance(filename, str) and filename.strip():
-                filenames.append(filename.strip())
+        page = 1
+        while True:
+            response = self._request_json(
+                token=token,
+                method="GET",
+                path=f"/repos/{owner}/{repo}/pulls/{pull_request_number}/files",
+                query_params={
+                    "per_page": str(_PULL_REQUEST_FILES_PAGE_SIZE),
+                    "page": str(page),
+                },
+            )
+            if not isinstance(response, list):
+                raise GitHubApiError(message="Unexpected pull request files response")
+            for item in response:
+                if not isinstance(item, dict):
+                    continue
+                filename = item.get("filename")
+                if isinstance(filename, str) and filename.strip():
+                    filenames.append(filename.strip())
+            if len(response) < _PULL_REQUEST_FILES_PAGE_SIZE:
+                break
+            page += 1
         return tuple(filenames)
 
     def create_issue_comment(
@@ -229,6 +239,7 @@ class GitHubApiClient:
         method: str,
         path: str,
         json_body: JsonObject | None = None,
+        query_params: Mapping[str, str] | None = None,
         allow_empty_response: bool = False,
     ) -> JsonObject:
         payload = self._request_json(
@@ -236,6 +247,7 @@ class GitHubApiClient:
             method=method,
             path=path,
             json_body=json_body,
+            query_params=query_params,
             allow_empty_response=allow_empty_response,
         )
         if isinstance(payload, dict):
@@ -249,6 +261,7 @@ class GitHubApiClient:
         method: str,
         path: str,
         json_body: JsonObject | None = None,
+        query_params: Mapping[str, str] | None = None,
         allow_empty_response: bool = False,
     ) -> JsonObject | JsonArray:
         url = f"{self._base_url}{path}"
@@ -268,6 +281,7 @@ class GitHubApiClient:
                     url,
                     headers=headers,
                     json=json_body,
+                    params=query_params,
                 )
             except httpx.HTTPError as exc:
                 raise GitHubApiError(message=str(exc)) from exc

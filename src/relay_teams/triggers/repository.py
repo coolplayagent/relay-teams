@@ -501,6 +501,22 @@ class TriggerRepository(SharedSqliteRepository):
         )
         return tuple(self._to_repo_subscription_record(row) for row in rows)
 
+    def list_repo_subscriptions_by_account(
+        self,
+        account_id: str,
+    ) -> tuple[GitHubRepoSubscriptionRecord, ...]:
+        rows = self._run_read(
+            lambda: self._conn.execute(
+                """
+                SELECT * FROM github_repo_subscriptions
+                WHERE account_id=?
+                ORDER BY created_at DESC
+                """,
+                (account_id,),
+            ).fetchall()
+        )
+        return tuple(self._to_repo_subscription_record(row) for row in rows)
+
     def delete_repo_subscription(self, repo_subscription_id: str) -> None:
         self._run_write(
             operation_name="delete_repo_subscription",
