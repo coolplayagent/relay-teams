@@ -707,25 +707,33 @@ These grants are local-only runtime permissions. They are separate from per-run 
 
 ```sql
 CREATE TABLE IF NOT EXISTS background_tasks (
-    background_task_id     TEXT PRIMARY KEY,
+    background_task_id  TEXT PRIMARY KEY,
     run_id              TEXT NOT NULL,
     session_id          TEXT NOT NULL,
+    kind                TEXT NOT NULL DEFAULT 'command',
     instance_id         TEXT,
     role_id             TEXT,
     tool_call_id        TEXT,
+    title               TEXT NOT NULL DEFAULT '',
     command             TEXT NOT NULL,
     cwd                 TEXT NOT NULL,
     execution_mode      TEXT NOT NULL,
     status              TEXT NOT NULL,
     tty                 INTEGER NOT NULL,
+    pid                 INTEGER,
     timeout_ms          INTEGER,
     exit_code           INTEGER,
     recent_output_json  TEXT NOT NULL,
     output_excerpt      TEXT NOT NULL,
     log_path            TEXT NOT NULL,
+    subagent_role_id    TEXT,
+    subagent_run_id     TEXT,
+    subagent_task_id    TEXT,
+    subagent_instance_id TEXT,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
-    completed_at        TEXT
+    completed_at        TEXT,
+    completion_notified_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_background_tasks_run
@@ -738,8 +746,13 @@ Purpose: durable metadata for managed background tasks bound to one run.
 
 Notes:
 - `execution_mode` is currently fixed to `background`.
+- `kind` is `command` for managed shell work and `subagent` for one-shot background subagent runs created by the normal-mode `spawn_subagent` tool.
+- `title` stores the operator-facing label used in recovery/UI lists. Command tasks may leave it empty; subagent tasks should set it.
 - `status` is one of `running`, `blocked`, `stopped`, `failed`, or `completed`.
+- `pid` is populated only for OS-backed command tasks.
 - `recent_output_json` stores recent non-empty output lines for recovery/UI. `output_excerpt` stores the bounded head/tail excerpt used by tool results and session detail views. The full stream is persisted to the workspace-scoped file at `log_path`.
+- Subagent rows keep `command` as a synthetic value like `subagent:<role_id>` for compatibility with existing projections, and also persist the concrete synthetic run/task/instance linkage in `subagent_role_id`, `subagent_run_id`, `subagent_task_id`, and `subagent_instance_id`.
+- `completion_notified_at` records when the runtime successfully emitted the background-task completion follow-up into the parent run or recovery flow.
 - Startup recovery marks non-terminal rows as interrupted/stopped rather than attempting to reattach to old OS processes.
 
 ---

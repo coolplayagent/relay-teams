@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from relay_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
 from relay_teams.sessions.runs.background_tasks.models import (
+    BackgroundTaskKind,
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
@@ -16,6 +17,7 @@ from relay_teams.sessions.runs.background_tasks.service import (
 
 __all__ = [
     "BackgroundTaskCompletionSink",
+    "BackgroundTaskKind",
     "BackgroundTaskManager",
     "BackgroundTaskRecord",
     "BackgroundTaskRepository",

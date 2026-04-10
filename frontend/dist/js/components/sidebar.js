@@ -9,6 +9,7 @@ import {
     createAutomationProject,
     deleteAutomationProject,
     deleteSession,
+    deleteSessionSubagent,
     deleteWorkspace,
     disableAutomationProject,
     enableAutomationProject,
@@ -21,7 +22,10 @@ import {
     updateSession,
 } from '../core/api.js';
 import { state } from '../core/state.js';
-import { detachActiveStreamForSessionSwitch } from '../core/stream.js';
+import {
+    closeNormalModeSubagentStream,
+    detachActiveStreamForSessionSwitch,
+} from '../core/stream.js';
 import { clearSessionRecovery, stopSessionContinuity } from '../app/recovery.js';
 import { clearAllStreamState } from './messageRenderer.js';
 import { clearAllPanels } from './agentPanel.js';
@@ -35,6 +39,16 @@ import {
     openWorkspaceProjectView,
     requestAutomationProjectInput as requestAutomationProjectEditorInput,
 } from './projectView.js';
+import {
+    buildSubagentSessionLabel,
+    ensureSessionSubagents,
+    getActiveSubagentSession,
+    removeSessionSubagent,
+    getSessionSubagentSessions,
+    isSubagentSessionListExpanded,
+    isSubagentSessionListLoading,
+    toggleSubagentSessionList,
+} from './subagentSessions.js';
 
 const DEFAULT_VISIBLE_SESSION_COUNT = 10;
 const AUTOMATION_INTERNAL_WORKSPACE_ID = 'automation-system';
@@ -184,6 +198,108 @@ function getSessionSourceClassName(session) {
         return '';
     }
     return ` ${sourceKinds.map(sourceKind => `session-item-${sourceKind}`).join(' ')}`;
+}
+
+function shouldRenderSubagentChildren(session) {
+    return String(session?.session_mode || '').trim() === 'normal';
+}
+
+function renderSubagentToggle(session) {
+    const sessionId = String(session?.session_id || '').trim();
+    if (!sessionId || !shouldRenderSubagentChildren(session)) {
+        return '';
+    }
+    const children = getSessionSubagentSessions(sessionId);
+    if (children.length === 0) {
+        return '';
+    }
+    const expanded = isSubagentSessionListExpanded(sessionId);
+    const icon = expanded ? '&#9662;' : '&#9656;';
+    return `
+        <button
+            class="session-subagents-toggle"
+            type="button"
+            data-session-id="${escapeHtml(sessionId)}"
+            aria-expanded="${expanded ? 'true' : 'false'}"
+            title="${escapeHtml(t('sidebar.subagent_sessions_toggle'))}"
+            aria-label="${escapeHtml(t('sidebar.subagent_sessions_toggle'))}"
+        >
+            <span class="session-subagents-toggle-icon" aria-hidden="true">${icon}</span>
+            <span class="session-subagents-toggle-count">${escapeHtml(String(children.length))}</span>
+        </button>
+    `;
+}
+
+function renderSubagentChildren(session) {
+    const sessionId = String(session?.session_id || '').trim();
+    if (!sessionId || !shouldRenderSubagentChildren(session)) {
+        return '';
+    }
+    const expanded = isSubagentSessionListExpanded(sessionId);
+    if (!expanded) {
+        return '';
+    }
+    const loading = isSubagentSessionListLoading(sessionId);
+    const children = getSessionSubagentSessions(sessionId);
+    if (loading && children.length === 0) {
+        return `
+            <div class="session-subagent-list">
+                <div class="session-subagent-empty">${escapeHtml(t('sidebar.subagent_sessions_loading'))}</div>
+            </div>
+        `;
+    }
+    if (children.length === 0) {
+        return '';
+    }
+    const activeSubagent = getActiveSubagentSession();
+    return `
+        <div class="session-subagent-list">
+            ${children.map(child => {
+                const active = !!(
+                    activeSubagent
+                    && activeSubagent.sessionId === sessionId
+                    && activeSubagent.instanceId === child.instanceId
+                );
+                return `
+                    <div
+                        class="session-item session-subagent-item${active ? ' active' : ''}"
+                        tabindex="0"
+                        role="button"
+                        data-session-id="${escapeHtml(sessionId)}"
+                        data-subagent-instance-id="${escapeHtml(child.instanceId)}"
+                        data-subagent-role-id="${escapeHtml(child.roleId)}"
+                        data-subagent-run-id="${escapeHtml(child.runId)}"
+                        data-subagent-title="${escapeHtml(child.title || '')}"
+                    >
+                        <span class="session-main">
+                            <span class="session-id">
+                                <span class="session-label-text">${escapeHtml(buildSubagentSessionLabel(child))}</span>
+                            </span>
+                        </span>
+                        <span class="session-meta">
+                            <span class="session-time">${escapeHtml(formatRelativeTime(child.updatedAt || child.createdAt || ''))}</span>
+                            <span class="session-actions">
+                                <button
+                                    class="session-delete-btn session-subagent-delete-btn"
+                                    type="button"
+                                    data-session-id="${escapeHtml(sessionId)}"
+                                    data-subagent-instance-id="${escapeHtml(child.instanceId)}"
+                                    data-subagent-run-id="${escapeHtml(child.runId)}"
+                                    data-subagent-label="${escapeHtml(buildSubagentSessionLabel(child))}"
+                                    title="${escapeHtml(t('sidebar.delete_subagent'))}"
+                                    aria-label="${escapeHtml(t('sidebar.delete_subagent'))}"
+                                >
+                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                        <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7M10 10.2v5.6M14 10.2v5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                            </span>
+                        </span>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
 }
 
 function timestampValue(value) {
@@ -640,6 +756,9 @@ function bindProjectCard(card, group) {
     });
 
     card.querySelectorAll('.session-item').forEach(button => {
+        if (button.classList.contains('session-subagent-item')) {
+            return;
+        }
         const selectTarget = () => {
             const sessionId = String(button.getAttribute('data-session-id') || '').trim();
             const targetWorkspaceId = String(button.getAttribute('data-workspace-id') || '').trim();
@@ -654,6 +773,51 @@ function bindProjectCard(card, group) {
             if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
                 selectTarget();
+            }
+        });
+    });
+
+    card.querySelectorAll('.session-subagents-toggle').forEach(button => {
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const sessionId = String(button.getAttribute('data-session-id') || '').trim();
+            if (!sessionId) return;
+            toggleSubagentSessionList(sessionId);
+        });
+    });
+
+    card.querySelectorAll('.session-subagent-item').forEach(button => {
+        const selectChild = () => {
+            const sessionId = String(button.getAttribute('data-session-id') || '').trim();
+            const instanceId = String(button.getAttribute('data-subagent-instance-id') || '').trim();
+            const roleId = String(button.getAttribute('data-subagent-role-id') || '').trim();
+            const runId = String(button.getAttribute('data-subagent-run-id') || '').trim();
+            const title = String(button.getAttribute('data-subagent-title') || '').trim();
+            if (!sessionId || !instanceId) return;
+            document.dispatchEvent(
+                new CustomEvent('agent-teams-select-subagent-session', {
+                    detail: {
+                        sessionId,
+                        subagent: {
+                            instanceId,
+                            roleId,
+                            runId,
+                            title,
+                        },
+                    },
+                }),
+            );
+        };
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            selectChild();
+        });
+        button.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                selectChild();
             }
         });
     });
@@ -685,8 +849,55 @@ function bindProjectCard(card, group) {
         });
     });
 
+    card.querySelectorAll('.session-subagent-delete-btn').forEach(button => {
+        button.addEventListener('click', async event => {
+            event.stopPropagation();
+            const sessionId = String(button.getAttribute('data-session-id') || '').trim();
+            const instanceId = String(button.getAttribute('data-subagent-instance-id') || '').trim();
+            const runId = String(button.getAttribute('data-subagent-run-id') || '').trim();
+            const subagentLabel = String(button.getAttribute('data-subagent-label') || '').trim() || instanceId;
+            if (!sessionId || !instanceId) return;
+            const shouldDelete = await showConfirmDialog({
+                title: t('sidebar.delete_subagent_title'),
+                message: formatMessage('sidebar.delete_subagent_message', { subagent: subagentLabel }),
+                tone: 'warning',
+                confirmLabel: t('settings.action.delete'),
+                cancelLabel: t('settings.action.cancel'),
+            });
+            if (!shouldDelete) return;
+            const subagentItem = button.closest?.('.session-subagent-item') || null;
+            animateSessionItem(subagentItem, 'removing');
+            await new Promise(resolve => globalThis.setTimeout(resolve, SESSION_ANIMATION_REMOVE_MS));
+            try {
+                await deleteSessionSubagent(sessionId, instanceId);
+            } catch (error) {
+                sysLog(
+                    formatMessage('sidebar.error.deleting_subagent', {
+                        error: error?.message || String(error),
+                    }),
+                    'log-error',
+                );
+                await loadProjects();
+                return;
+            }
+            const removed = removeSessionSubagent(sessionId, instanceId);
+            if (runId) {
+                closeNormalModeSubagentStream(runId);
+            } else if (removed?.runId) {
+                closeNormalModeSubagentStream(removed.runId);
+            }
+            if (state.currentSessionId === sessionId && !state.activeSubagentSession && typeof selectSessionHandler === 'function') {
+                await selectSessionHandler(sessionId);
+            }
+            await loadProjects();
+        });
+    });
+
     card.querySelectorAll('.session-delete-btn').forEach(button => {
         button.addEventListener('click', async event => {
+            if (String(button.className || '').includes('session-subagent-delete-btn')) {
+                return;
+            }
             event.stopPropagation();
             const sessionId = String(button.getAttribute('data-session-id') || '').trim();
             if (!sessionId) return;
@@ -717,7 +928,9 @@ function renderProjectCard(group) {
     const expanded = expandedProjectIds.has(projectKey);
     const menuOpen = openProjectMenuId === projectKey;
     const sessionsExpanded = expandedProjectSessionIds.has(projectKey);
-    const visibleSessions = sessionsExpanded ? group.sessions : group.sessions.slice(0, DEFAULT_VISIBLE_SESSION_COUNT);
+    const visibleSessions = visibleSessionsForGroup(group, {
+        sessionsExpanded,
+    });
     const hasHiddenSessions = group.sessions.length > DEFAULT_VISIBLE_SESSION_COUNT;
     const projectViewActive = state.currentMainView === 'project' && state.currentProjectViewWorkspaceId === projectId;
     const pathHint = String(group.workspace?.root_path || '').trim();
@@ -745,31 +958,37 @@ function renderProjectCard(group) {
                             const sessionMetadata = getSessionMetadata(session);
                             const sourceClassName = getSessionSourceClassName(session);
                             return `
-                                <div
-                                    class="session-item${sourceClassName}${session.session_id === state.currentSessionId ? ' active' : ''}"
-                                    tabindex="0"
-                                    role="button"
-                                    data-session-id="${escapeHtml(session.session_id)}"
-                                    data-workspace-id="${escapeHtml(session.workspace_id || group.workspace?.workspace_id || '')}"
-                                >
-                                    <span class="session-id">${renderSessionSourceIcon(session)}<span class="session-label-text">${escapeHtml(formatSessionLabel(session))}</span></span>
-                                    <span class="session-meta">
-                                        <span class="session-time">${escapeHtml(formatRelativeTime(session.updated_at))}</span>
-                                        <span class="session-actions">
-                                            <button class="session-rename-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" data-session-metadata="${escapeHtml(JSON.stringify(sessionMetadata))}" title="${escapeHtml(t('sidebar.rename_session'))}" aria-label="${escapeHtml(t('sidebar.rename_session'))}">
-                                                <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                                    <path d="M4 16.5V20h3.5L18 9.5 14.5 6 4 16.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
-                                                    <path d="M13 7.5 16.5 11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-                                                    <path d="M12 20h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
-                                                </svg>
-                                            </button>
-                                            <button class="session-delete-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" title="${escapeHtml(t('sidebar.delete_session'))}" aria-label="${escapeHtml(t('sidebar.delete_session'))}">
-                                                <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                                    <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7M10 10.2v5.6M14 10.2v5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-                                                </svg>
-                                            </button>
+                                <div class="session-entry">
+                                    <div
+                                        class="session-item${sourceClassName}${session.session_id === state.currentSessionId && !state.activeSubagentSession ? ' active' : ''}"
+                                        tabindex="0"
+                                        role="button"
+                                        data-session-id="${escapeHtml(session.session_id)}"
+                                        data-workspace-id="${escapeHtml(session.workspace_id || group.workspace?.workspace_id || '')}"
+                                    >
+                                        <span class="session-main">
+                                            ${renderSubagentToggle(session)}
+                                            <span class="session-id">${renderSessionSourceIcon(session)}<span class="session-label-text">${escapeHtml(formatSessionLabel(session))}</span></span>
                                         </span>
-                                    </span>
+                                        <span class="session-meta">
+                                            <span class="session-time">${escapeHtml(formatRelativeTime(session.updated_at))}</span>
+                                            <span class="session-actions">
+                                                <button class="session-rename-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" data-session-metadata="${escapeHtml(JSON.stringify(sessionMetadata))}" title="${escapeHtml(t('sidebar.rename_session'))}" aria-label="${escapeHtml(t('sidebar.rename_session'))}">
+                                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                        <path d="M4 16.5V20h3.5L18 9.5 14.5 6 4 16.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                                                        <path d="M13 7.5 16.5 11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                                                        <path d="M12 20h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                                                    </svg>
+                                                </button>
+                                                <button class="session-delete-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" title="${escapeHtml(t('sidebar.delete_session'))}" aria-label="${escapeHtml(t('sidebar.delete_session'))}">
+                                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                        <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7M10 10.2v5.6M14 10.2v5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                                                    </svg>
+                                                </button>
+                                            </span>
+                                        </span>
+                                    </div>
+                                    ${renderSubagentChildren(session)}
                                 </div>
                             `;
                         }).join('')
@@ -787,11 +1006,67 @@ function renderProjectCard(group) {
     return card;
 }
 
+function prefetchVisibleSubagentSessions(groups) {
+    const sessionIds = new Set();
+    const currentSessionId = String(state.currentSessionId || '').trim();
+    groups.forEach(group => {
+        const sessionsExpanded = expandedProjectSessionIds.has(group.key);
+        const visibleSessions = visibleSessionsForGroup(group, {
+            sessionsExpanded,
+        });
+        visibleSessions.forEach(session => {
+            const sessionId = String(session?.session_id || '').trim();
+            if (sessionId && shouldRenderSubagentChildren(session)) {
+                sessionIds.add(sessionId);
+            }
+        });
+        if (!currentSessionId) {
+            return;
+        }
+        const currentSession = group.sessions.find(session => String(session?.session_id || '').trim() === currentSessionId);
+        if (currentSession && shouldRenderSubagentChildren(currentSession)) {
+            sessionIds.add(currentSessionId);
+        }
+    });
+    sessionIds.forEach(sessionId => {
+        if (isSubagentSessionListLoading(sessionId)) {
+            return;
+        }
+        void ensureSessionSubagents(sessionId, {
+            force: false,
+            emitLoadingEvents: false,
+        });
+    });
+}
+
+function visibleSessionsForGroup(group, { sessionsExpanded = false } = {}) {
+    if (sessionsExpanded) {
+        return group.sessions;
+    }
+    const visibleSessions = group.sessions.slice(0, DEFAULT_VISIBLE_SESSION_COUNT);
+    const pendingSessionId = String(pendingSessionAnimation?.sessionId || '').trim();
+    if (!pendingSessionId) {
+        return visibleSessions;
+    }
+    const pendingIndex = group.sessions.findIndex(
+        session => String(session?.session_id || '').trim() === pendingSessionId,
+    );
+    if (pendingIndex < 0 || pendingIndex < DEFAULT_VISIBLE_SESSION_COUNT) {
+        return visibleSessions;
+    }
+    const nextVisibleSessions = [...visibleSessions];
+    nextVisibleSessions[nextVisibleSessions.length - 1] = group.sessions[pendingIndex];
+    return nextVisibleSessions;
+}
+
 export async function loadProjects() {
     if (!els.projectsList) return;
     if (!languageRefreshBound && typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => void loadProjects());
         document.addEventListener('agent-teams-projects-changed', () => void loadProjects());
+        document.addEventListener('agent-teams-subagent-sessions-changed', () => void loadProjects());
+        document.addEventListener('agent-teams-session-selected', () => void loadProjects());
+        document.addEventListener('agent-teams-subagent-session-selected', () => void loadProjects());
         languageRefreshBound = true;
     }
     try {
@@ -829,6 +1104,7 @@ export async function loadProjects() {
             openProjectMenuId = null;
         }
         groups.forEach(group => els.projectsList.appendChild(renderProjectCard(group)));
+        prefetchVisibleSubagentSessions(groups);
         playPendingSessionAnimation();
     } catch (error) {
         sysLog(formatMessage('sidebar.error.loading_projects', { error: error.message }), 'log-error');

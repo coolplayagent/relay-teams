@@ -20,6 +20,7 @@ export const els = {
   systemLogs: qs("#system-logs"),
   chatMessages: qs("#chat-messages"),
   chatContainer: qs(".chat-container"),
+  inputContainer: qs("#input-container"),
   projectView: qs("#project-view"),
   projectViewTitle: qs("#project-view-title"),
   projectViewSummary: qs("#project-view-summary"),

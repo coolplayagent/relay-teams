@@ -35,10 +35,13 @@ def test_tool_result_updates_can_patch_dom_after_stream_finalize() -> None:
         in stream_script
     )
     assert (
-        "const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);"
+        "const { container, isCoordinator } = resolveToolEventTarget(instanceId, roleId, eventMeta);"
         in tool_events_script
     )
     assert "container," in tool_events_script
+    assert (
+        "scheduleCurrentSessionSubagentDiscovery({ delayMs: 0 });" in tool_events_script
+    )
 
 
 def test_streaming_tool_calls_keep_indexed_dom_targets_and_message_metadata() -> None:

@@ -1074,6 +1074,190 @@ async def test_generate_recomputes_budget_after_injection_restart(
 
 
 @pytest.mark.asyncio
+async def test_generate_defers_injection_restart_until_pending_tool_call_completes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "pending_tool_call_injection_restart.db",
+        fake_hub,
+    )
+
+    class _InjectedMessage:
+        def __init__(self, content: str) -> None:
+            self.content = content
+
+        def model_dump_json(self) -> str:
+            return json.dumps({"content": self.content})
+
+    class _DeferredInjectionManager:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
+            _ = (run_id, instance_id)
+            self.calls += 1
+            if self.calls == 1:
+                return [_InjectedMessage("background follow-up")]
+            return []
+
+    injection_manager = _DeferredInjectionManager()
+    provider._session._injection_manager = cast(
+        RunInjectionManager,
+        cast(object, injection_manager),
+    )
+
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[
+                    _FakeModelRequestNode(
+                        SimpleNamespace(
+                            input_tokens=0,
+                            output_tokens=0,
+                            total_tokens=0,
+                            requests=1,
+                            tool_calls=1,
+                        )
+                    ),
+                    object(),
+                ],
+                messages_by_step=[
+                    [
+                        ModelResponse(
+                            parts=[
+                                ToolCallPart(
+                                    tool_name="wait_background_task",
+                                    args={"background_task_id": "bg-1"},
+                                    tool_call_id="call-wait",
+                                )
+                            ]
+                        )
+                    ],
+                    [
+                        ModelRequest(
+                            parts=[
+                                ToolReturnPart(
+                                    tool_name="wait_background_task",
+                                    tool_call_id="call-wait",
+                                    content={
+                                        "ok": True,
+                                        "data": {
+                                            "background_task_id": "bg-1",
+                                            "status": "completed",
+                                            "completed": True,
+                                            "output": "ok",
+                                        },
+                                        "error": None,
+                                        "meta": {},
+                                    },
+                                )
+                            ]
+                        )
+                    ],
+                ],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[]),
+                    messages=[],
+                ),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="done")]),
+                    messages=[ModelResponse(parts=[TextPart(content="done")])],
+                ),
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _FakeModelRequestNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-pending-tool-injection",
+        trace_id="run-pending-tool-injection",
+        task_id="task-pending-tool-injection",
+        session_id="session-pending-tool-injection",
+        workspace_id="default",
+        conversation_id=build_conversation_id(
+            "session-pending-tool-injection",
+            "Coordinator",
+        ),
+        instance_id="inst-pending-tool-injection",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="wait for the background task",
+    )
+
+    response = await provider.generate(request)
+
+    assert response == "done"
+    assert injection_manager.calls == 1
+    assert len(scripted_agent.histories) == 2
+
+    second_history = cast(
+        list[ModelRequest | ModelResponse],
+        scripted_agent.histories[1],
+    )
+    tool_call_index = next(
+        index
+        for index, message in enumerate(second_history)
+        if isinstance(message, ModelResponse)
+        and any(
+            isinstance(part, ToolCallPart)
+            and part.tool_name == "wait_background_task"
+            and part.tool_call_id == "call-wait"
+            for part in message.parts
+        )
+    )
+    tool_return_index = next(
+        index
+        for index, message in enumerate(second_history)
+        if isinstance(message, ModelRequest)
+        and any(
+            isinstance(part, ToolReturnPart)
+            and part.tool_name == "wait_background_task"
+            and part.tool_call_id == "call-wait"
+            for part in message.parts
+        )
+    )
+    injection_index = next(
+        index
+        for index, message in enumerate(second_history)
+        if isinstance(message, ModelRequest)
+        and any(
+            isinstance(part, UserPromptPart) and part.content == "background follow-up"
+            for part in message.parts
+        )
+    )
+    assert tool_call_index < tool_return_index < injection_index
+
+    stored_history = message_repo.get_history_for_conversation(
+        request.conversation_id or ""
+    )
+    assert (
+        sum(
+            1
+            for message in stored_history
+            if isinstance(message, ModelRequest)
+            and any(
+                isinstance(part, UserPromptPart)
+                and part.content == "background follow-up"
+                for part in message.parts
+            )
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
 async def test_generate_recovery_does_not_rereserve_original_user_prompt_tokens(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

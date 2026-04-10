@@ -438,6 +438,7 @@ class ServerContainer:
         self.background_task_service = BackgroundTaskService(
             background_task_manager=self.background_task_manager,
             repository=self.background_task_repository,
+            run_event_hub=self.run_event_hub,
         )
         self.feishu_client = FeishuClient()
         self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
@@ -542,6 +543,14 @@ class ServerContainer:
         self.task_execution_service: TaskExecutionService
         self.task_service: TaskOrchestrationService
         self._build_runtime_services()
+        self.background_task_service.replace_subagent_runtime_dependencies(
+            task_execution_service=self.task_execution_service,
+            agent_repo=self.agent_repo,
+            task_repo=self.task_repo,
+            run_intent_repo=self.run_intent_repo,
+            run_control_manager=self.run_control_manager,
+            run_runtime_repo=self.run_runtime_repo,
+        )
 
         coordinator = CoordinatorGraph(
             role_registry=self.role_registry,

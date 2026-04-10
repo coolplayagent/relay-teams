@@ -4,6 +4,7 @@ name: Crafter
 description: Implements changes in the workspace and validates them locally.
 model_profile: default
 version: 1.0.0
+mode: subagent
 tools:
   - grep
   - glob

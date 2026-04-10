@@ -10,6 +10,7 @@ from relay_teams.roles.role_models import (
     RoleDocumentDraft,
     RoleDocumentRecord,
     RoleDocumentSummary,
+    RoleMode,
     RoleSkillOption,
     RoleValidationResult,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "RoleDocumentDraft",
     "RoleDocumentRecord",
     "RoleDocumentSummary",
+    "RoleMode",
     "RoleLoader",
     "RoleMemoryRecord",
     "RoleMemoryRepository",

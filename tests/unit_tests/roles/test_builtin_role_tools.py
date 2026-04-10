@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from relay_teams.builtin import get_builtin_roles_dir
+from relay_teams.roles import RoleMode
 from relay_teams.roles.role_registry import RoleLoader
 
 
@@ -31,7 +32,14 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert background_task_tools.issubset(set(crafter.tools))
     assert background_task_tools.issubset(set(gater.tools))
     assert background_task_tools.issubset(set(main_agent.tools))
+    assert "spawn_subagent" in main_agent.tools
     assert background_task_tools.issubset(set(daily_ai_report.tools))
+    assert main_agent.mode == RoleMode.PRIMARY
+    assert crafter.mode == RoleMode.SUBAGENT
+    assert designer.mode == RoleMode.SUBAGENT
+    assert explorer.mode == RoleMode.SUBAGENT
+    assert gater.mode == RoleMode.SUBAGENT
+    assert daily_ai_report.mode == RoleMode.SUBAGENT
     assert "webfetch" in main_agent.tools
     assert "websearch" in main_agent.tools
     assert "skill-installer" in main_agent.skills

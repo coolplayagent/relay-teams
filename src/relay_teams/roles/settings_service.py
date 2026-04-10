@@ -205,6 +205,7 @@ class RoleSettingsService:
             model_profile=definition.model_profile,
             bound_agent_id=definition.bound_agent_id,
             execution_surface=definition.execution_surface,
+            mode=definition.mode,
             source=source,
             deletable=self._is_role_deletable(
                 role_id=definition.role_id,
@@ -234,6 +235,7 @@ class RoleSettingsService:
             model_profile=definition.model_profile,
             bound_agent_id=definition.bound_agent_id,
             execution_surface=definition.execution_surface,
+            mode=definition.mode,
             memory_profile=definition.memory_profile,
             system_prompt=definition.system_prompt,
             source=source,
@@ -268,6 +270,7 @@ class RoleSettingsService:
             "version": draft.version,
             "tools": list(draft.tools),
             "execution_surface": draft.execution_surface.value,
+            "mode": draft.mode.value,
         }
         if draft.bound_agent_id:
             front_matter["bound_agent_id"] = draft.bound_agent_id
@@ -452,6 +455,7 @@ class RoleSettingsService:
             ("name", source_definition.name, draft.name),
             ("description", source_definition.description, draft.description),
             ("version", source_definition.version, draft.version),
+            ("mode", source_definition.mode.value, draft.mode.value),
         )
         for field_name, source_value, next_value in locked_pairs:
             if str(source_value) != str(next_value):

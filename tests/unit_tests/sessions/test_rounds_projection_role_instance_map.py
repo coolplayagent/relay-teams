@@ -341,3 +341,61 @@ def test_build_session_rounds_keeps_exhausted_retry_card_after_run_failed() -> N
     assert retry_events[0]["attempt_number"] == 6
     assert retry_events[0]["phase"] == "failed"
     assert retry_events[0]["is_active"] is False
+
+
+def test_build_session_rounds_excludes_background_subagent_runs() -> None:
+    session_id = "session-1"
+    main_run_id = "run-1"
+    background_run_id = "subagent-run-1"
+    main_root = TaskRecord(
+        envelope=TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=main_run_id,
+            role_id="MainAgent",
+            objective="root",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        ),
+    )
+    background_root = TaskRecord(
+        envelope=TaskEnvelope(
+            task_id="task-bg-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=background_run_id,
+            role_id="Explorer",
+            objective="background work",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        ),
+    )
+    main_runtime = RunRuntimeRecord(
+        run_id=main_run_id,
+        session_id=session_id,
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+    )
+    background_runtime = RunRuntimeRecord(
+        run_id=background_run_id,
+        session_id=session_id,
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+    )
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=cast(AgentInstanceRepository, cast(object, _FakeAgentRepo())),
+        task_repo=cast(
+            TaskRepository,
+            cast(object, _FakeTaskRepo((main_root, background_root))),
+        ),
+        approval_tickets_by_run={},
+        run_runtime_repo=cast(
+            RunRuntimeRepository,
+            cast(object, _FakeRunRuntimeRepo((main_runtime, background_runtime))),
+        ),
+        get_session_messages=lambda _: [],
+        excluded_run_ids={background_run_id},
+    )
+
+    assert [round_item["run_id"] for round_item in rounds] == [main_run_id]

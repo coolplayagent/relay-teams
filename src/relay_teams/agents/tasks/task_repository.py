@@ -230,6 +230,19 @@ class TaskRepository:
             operation_name="delete_by_session",
         )
 
+    def delete(self, task_id: str) -> None:
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM tasks WHERE task_id=?",
+                (task_id,),
+            ),
+            lock=self._lock,
+            repository_name="TaskRepository",
+            operation_name="delete",
+        )
+
     def _to_record(self, row: sqlite3.Row) -> TaskRecord:
         envelope_data = json.loads(str(row["envelope_json"]))
         return TaskRecord(

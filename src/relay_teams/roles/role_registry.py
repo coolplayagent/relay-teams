@@ -7,8 +7,7 @@ import yaml
 
 from relay_teams.computer import ExecutionSurface
 from relay_teams.roles.memory_models import MemoryProfile, default_memory_profile
-from relay_teams.roles.role_models import RoleConfigSource
-from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_models import RoleConfigSource, RoleDefinition, RoleMode
 
 COORDINATOR_REQUIRED_TOOLS = frozenset(
     (
@@ -101,11 +100,26 @@ class RoleRegistry:
                 for role in self._roles
                 if not self.is_coordinator_role(role.role_id)
                 and not self.is_main_agent_role(role.role_id)
+                and _role_available_in_normal_mode(role)
             ),
             key=lambda role: (role.name, role.role_id),
         )
         roles.extend(non_system_roles)
         return tuple(roles)
+
+    def list_subagent_roles(self) -> tuple[RoleDefinition, ...]:
+        return tuple(
+            sorted(
+                (
+                    role
+                    for role in self._roles
+                    if not self.is_coordinator_role(role.role_id)
+                    and not self.is_main_agent_role(role.role_id)
+                    and _role_available_as_subagent(role)
+                ),
+                key=lambda role: (role.name, role.role_id),
+            )
+        )
 
     def resolve_normal_mode_role_id(self, role_id: str | None) -> str:
         main_agent_role_id = self.get_main_agent_role_id()
@@ -125,6 +139,36 @@ class RoleRegistry:
         if is_reserved_system_role_definition(role):
             raise ValueError(
                 f"Reserved system role cannot be used in normal mode: {role.role_id}"
+            )
+        if not _role_available_in_normal_mode(role):
+            raise ValueError(
+                f"Role cannot be used in normal mode: {role.role_id} (mode={role.mode.value})"
+            )
+        return role.role_id
+
+    def resolve_subagent_role_id(self, role_id: str) -> str:
+        normalized = str(role_id or "").strip()
+        if not normalized:
+            raise ValueError("role_id must not be empty")
+        if self.is_coordinator_role(normalized):
+            raise ValueError(
+                f"Coordinator role cannot be used as a subagent: {normalized}"
+            )
+        if self.is_main_agent_role(normalized):
+            raise ValueError(
+                f"Main agent role cannot be used as a subagent: {normalized}"
+            )
+        try:
+            role = self.get(normalized)
+        except KeyError as exc:
+            raise ValueError(f"Unknown subagent role: {normalized}") from exc
+        if is_reserved_system_role_definition(role):
+            raise ValueError(
+                f"Reserved system role cannot be used as a subagent: {role.role_id}"
+            )
+        if not _role_available_as_subagent(role):
+            raise ValueError(
+                f"Role cannot be used as a subagent: {role.role_id} (mode={role.mode.value})"
             )
         return role.role_id
 
@@ -253,6 +297,7 @@ class RoleLoader:
             execution_surface=ExecutionSurface(
                 str(parsed.get("execution_surface", ExecutionSurface.API.value))
             ),
+            mode=RoleMode(str(parsed.get("mode", RoleMode.PRIMARY.value))),
             memory_profile=memory_profile,
             system_prompt=body.strip(),
         )
@@ -294,3 +339,11 @@ def ensure_required_system_roles(registry: RoleRegistry) -> None:
         raise SystemRolesUnavailableError(
             "Required system roles are unavailable: " + "; ".join(errors)
         )
+
+
+def _role_available_in_normal_mode(role: RoleDefinition) -> bool:
+    return role.mode in {RoleMode.PRIMARY, RoleMode.ALL}
+
+
+def _role_available_as_subagent(role: RoleDefinition) -> bool:
+    return role.mode in {RoleMode.SUBAGENT, RoleMode.ALL}

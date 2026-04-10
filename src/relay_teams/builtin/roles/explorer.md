@@ -4,6 +4,7 @@ name: Explorer
 description: Explores the codebase and gathers relevant implementation facts, NEVER execute or edit any file.
 model_profile: default
 version: 1.0.0
+mode: subagent
 tools:
   - grep
   - glob

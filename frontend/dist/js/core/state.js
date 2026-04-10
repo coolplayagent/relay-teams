@@ -10,6 +10,7 @@ export const state = {
     currentMainView: 'session',
     currentProjectViewWorkspaceId: null,
     currentFeatureViewId: null,
+    activeSubagentSession: null,
     isGenerating: false,
     activeEventSource: null,
     agentViews: {},
@@ -173,6 +174,17 @@ export function resetCurrentSessionTopology() {
     state.currentNormalRootRoleId = null;
     state.currentOrchestrationPresetId = null;
     state.currentSessionCanSwitchMode = false;
+}
+
+export function getActiveSubagentSession() {
+    return state.activeSubagentSession
+        && typeof state.activeSubagentSession === 'object'
+        ? state.activeSubagentSession
+        : null;
+}
+
+export function isViewingSubagentSession() {
+    return !!getActiveSubagentSession();
 }
 
 export function getRoleDisplayName(roleId, { fallback = 'Agent' } = {}) {

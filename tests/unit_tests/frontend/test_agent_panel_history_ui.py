@@ -247,6 +247,10 @@ export function getInstanceStreamOverlay() {
     return null;
 }
 
+export function bindStreamOverlayToContainer() {
+    return null;
+}
+
 export function renderHistoricalMessageList() {
     return undefined;
 }

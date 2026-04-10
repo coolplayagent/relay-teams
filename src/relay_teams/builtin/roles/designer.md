@@ -4,6 +4,7 @@ name: Designer
 description: Turns ambiguous requests into concrete technical specifications, NEVER execute or edit any file.
 model_profile: default
 version: 1.0.0
+mode: subagent
 tools:
   - grep
   - glob

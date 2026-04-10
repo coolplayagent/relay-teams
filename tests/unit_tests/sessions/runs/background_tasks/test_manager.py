@@ -375,7 +375,6 @@ async def test_background_task_manager_write_finishes_shell_prompt(
         completed_record, completed = await manager.wait_for_run(
             run_id="run-1",
             background_task_id=started.background_task_id,
-            wait_ms=5000,
         )
     finally:
         await manager.close()
@@ -413,7 +412,6 @@ async def test_background_task_manager_wait_and_poll_keep_active_record_unresolv
         waited, completed = await manager.wait_for_run(
             run_id="run-1",
             background_task_id=record.background_task_id,
-            wait_ms=250,
         )
         polled, poll_completed = await manager.interact_for_run(
             run_id="run-1",

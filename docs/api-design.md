@@ -722,9 +722,11 @@ For `running` or `queued` recoverable runs, the frontend uses these event ids to
 - `background_task_id`
 - `run_id`
 - `session_id`
+- `kind`: `command | subagent`
 - `instance_id`
 - `role_id`
 - `tool_call_id`
+- `title`
 - `command`
 - `cwd`
 - `execution_mode = "background"`
@@ -735,13 +737,22 @@ For `running` or `queued` recoverable runs, the frontend uses these event ids to
 - `recent_output[]`
 - `output_excerpt`
 - `log_path`
+- `subagent_role_id`
+- `subagent_run_id`
+- `subagent_task_id`
+- `subagent_instance_id`
 - `created_at`
 - `updated_at`
 - `completed_at`
+- `completion_notified_at`
 
 ### `GET /sessions/{session_id}/agents`
 
 Lists one session-level agent instance per delegated role in the session. Each entry also includes a compact reflection preview for the subagent role in the current workspace, plus the latest runtime system prompt snapshot and runtime tools JSON captured before the most recent subagent execution step.
+
+Notes:
+- This endpoint continues to back the orchestration/legacy right-rail agent list.
+- Normal-mode `spawn_subagent` child sessions are excluded from this projection.
 
 Response fields include:
 - `instance_id`
@@ -753,6 +764,43 @@ Response fields include:
 - `reflection_updated_at`
 - `runtime_system_prompt`
 - `runtime_tools_json`
+
+### `GET /sessions/{session_id}/subagents`
+
+Lists normal-mode `spawn_subagent` runs as instance-level child-session projections.
+
+Notes:
+- Returns only subagent instances whose `run_id` is a normal-mode synthetic `subagent_run_*`.
+- Results are instance-scoped and are not collapsed by `role_id`, so multiple subagent runs under the same role are all returned.
+- Intended for the left sidebar child-session navigation, not the orchestration right rail.
+
+Response fields include:
+- `instance_id`
+- `role_id`
+- `run_id`
+- `status`
+- `run_status`
+- `run_phase`
+- `last_event_id`
+- `checkpoint_event_id`
+- `stream_connected`
+- `created_at`
+- `updated_at`
+- `conversation_id`
+- `title`
+- `reflection_summary_preview`
+- `reflection_updated_at`
+- `runtime_system_prompt`
+- `runtime_tools_json`
+
+### `DELETE /sessions/{session_id}/subagents/{instance_id}`
+
+Deletes one normal-mode child-session subagent projection and its persisted instance/run history.
+
+Notes:
+- Only applies to normal-mode synthetic `subagent_run_*` instances listed by `GET /sessions/{session_id}/subagents`.
+- Deletes the subagent instance, its run/task records, messages, run state, token usage, related compaction markers, and matching subagent background-task records.
+- Returns `409` if the target subagent or its matching background task is still running.
 
 ### `GET /sessions/{session_id}/events`
 
@@ -768,6 +816,10 @@ Lists the raw history timeline for one agent instance, including:
 - original message rows, even when they were marked hidden-from-context by automatic compaction
 - session `clear` dividers
 - conversation-local `compaction` dividers
+
+Notes:
+- History markers are resolved against the instance's persisted `conversation_id`.
+- This matters for normal-mode subagent child sessions, whose instance conversation may differ from the legacy `session_id + role_id` conversation id.
 
 Response entries are ordered oldest to newest and use `entry_type`:
 - `message`: original persisted message row. Includes `hidden_from_context`, `hidden_reason`, `hidden_at`, and `hidden_marker_id`.
@@ -927,7 +979,7 @@ Retry events:
   - `background_task_updated`
   - `background_task_completed`
   - `background_task_stopped`
-  Each payload is the current background task snapshot, including `background_task_id`, `status`, `command`, `cwd`, `recent_output[]`, `output_excerpt`, and `log_path`.
+  Each payload is the current background task snapshot, including `background_task_id`, `kind`, `title`, `status`, `command`, `cwd`, `recent_output[]`, `output_excerpt`, `log_path`, and subagent linkage fields when `kind="subagent"`.
 - Monitor lifecycle events:
   - `monitor_created`
   - `monitor_triggered`
@@ -965,6 +1017,8 @@ Response:
       "background_task_id": "exec_a1b2c3d4e5f6",
       "run_id": "run-1",
       "session_id": "session-1",
+      "kind": "command",
+      "title": "",
       "command": "sleep 30",
       "cwd": "/workspace/project",
       "execution_mode": "background",
@@ -975,9 +1029,14 @@ Response:
       "recent_output": [],
       "output_excerpt": "",
       "log_path": "tmp/background_tasks/exec_a1b2c3d4e5f6.log",
+      "subagent_role_id": null,
+      "subagent_run_id": null,
+      "subagent_task_id": null,
+      "subagent_instance_id": null,
       "created_at": "2026-03-31T10:00:00Z",
       "updated_at": "2026-03-31T10:00:00Z",
-      "completed_at": null
+      "completed_at": null,
+      "completion_notified_at": null
     }
   ]
 }
@@ -1041,6 +1100,8 @@ Stops one monitor subscription and returns its final snapshot.
 
 Notes:
 - Background tasks are scoped to the owning run. Cross-run access returns `404`.
+- `kind="command"` rows represent managed shell execution. `kind="subagent"` rows represent one-shot background subagent runs created from normal-mode tool calls.
+- Subagent rows use a synthetic `command` value of the form `subagent:<role_id>` for continuity with existing recovery and tool result surfaces. UI should prefer `title` and `subagent_role_id` for display.
 - The public API is intentionally read-mostly. Interactive stdin/resize remains tool-only, not a human-facing REST surface.
 - Runtime shell selection is internal, not part of the REST contract. Linux/macOS use the managed bash path; Windows prefers Git Bash and falls back to PowerShell when Git Bash is unavailable.
 - `tty=true` background tasks use a platform TTY backend: POSIX PTY on Linux/macOS and ConPTY via `pywinpty` on supported Windows hosts. When Windows TTY support is unavailable, only non-TTY background tasks remain available.
@@ -1208,6 +1269,11 @@ Response fields:
   - `role_id`
   - `name`
   - `description`
+- `subagent_roles[]`
+  - `role_id`
+  - `name`
+  - `description`
+- `role_modes[]`: `primary | subagent | all`
 - `tools`
 - `mcp_servers`
 - `skills[]`
@@ -1224,6 +1290,8 @@ Response fields:
 Notes:
 - Same-name builtin/app skills are both returned. Frontends must treat `ref` as
   the stable identity and use `name` only for display.
+- `normal_mode_roles[]` contains non-system roles whose `mode` is `primary` or `all`.
+- `subagent_roles[]` contains non-system roles whose `mode` is `subagent` or `all`.
 - Returns `503` when required builtin/system roles such as `Coordinator` or
   `MainAgent` are unavailable in the current runtime.
 
@@ -1246,6 +1314,7 @@ Response fields:
 - `version`
 - `model_profile`
 - `bound_agent_id`
+- `mode`
 - `source`
 
 ### `GET /roles/configs/{role_id}`
@@ -1264,6 +1333,7 @@ Response fields:
 - `model_profile`
 - `memory_profile`
 - `bound_agent_id`
+- `mode`
 - `source`
 - `system_prompt`
 - `file_name`
@@ -1292,6 +1362,7 @@ Request:
   "skills": [],
   "model_profile": "default",
   "bound_agent_id": "codex_local",
+  "mode": "subagent",
   "memory_profile": {
     "enabled": true
   },
@@ -1309,7 +1380,8 @@ Rules:
 - When `source_role_id` is omitted and the file does not exist yet, a new role file is created.
 - Renaming a role writes a new file and removes the previous file when validation succeeds.
 - When `bound_agent_id` is set, that role executes through the external ACP provider instead of the local model provider chain.
-- Reserved system roles keep fixed identity fields (`role_id`, `name`, `description`, `version`) and fixed `system_prompt` through this API.
+- `mode` controls where the role can be selected: `primary` for normal-mode root roles, `subagent` for background/delegated subagent roles, `all` for both.
+- Reserved system roles keep fixed identity fields (`role_id`, `name`, `description`, `version`), fixed `mode`, and fixed `system_prompt` through this API.
 
 ### `POST /roles:validate`
 
@@ -1327,6 +1399,53 @@ Validates one in-memory role draft without saving it.
 Use cases:
 - settings UI inline validation
 - pre-save editor checks for tools, MCP servers, skills, and role schema
+
+## Built-in Runtime Tool Contracts
+
+### Background Task Tool Family
+
+The following built-in tools all project the same managed background-task snapshot used by `/runs/{run_id}/background-tasks*` and recovery payloads:
+- `shell` with `background=true`
+- `list_background_tasks`
+- `wait_background_task`
+- `stop_background_task`
+- `spawn_subagent` with `background=true`
+
+Shared result fields include:
+- `background_task_id`
+- `kind`
+- `title`
+- `status`
+- `command`
+- `cwd`
+- `recent_output`
+- `output_excerpt`
+- `log_path`
+- `subagent_role_id`
+- `subagent_run_id`
+- `subagent_task_id`
+- `subagent_instance_id`
+- `completed`
+
+`wait_background_task` is a completion wait, not a polling primitive: it accepts only `background_task_id` and returns after the managed task reaches a terminal state. Use `list_background_tasks` for in-progress status snapshots.
+
+### `spawn_subagent`
+
+Starts a fresh one-shot subagent run under a subagent-capable role.
+
+Arguments:
+- `role_id`: target role. The role must resolve to `mode="subagent"` or `mode="all"`.
+- `description`: short task label used for background task lists and completion notifications.
+- `prompt`: full task instructions. Each spawned subagent starts from a fresh conversation and does not inherit ad-hoc conversational follow-up state from the caller.
+- `background`: optional boolean. Defaults to `false`. When `false`, the tool waits for the subagent to finish and returns its final text output. When `true`, the tool returns immediately with a managed `background_task_id`.
+
+Rules:
+- Only available to normal-mode runs. Orchestration mode continues to use delegated task dispatch instead of this tool.
+- Default behavior is synchronous: the tool waits for the subagent to finish and returns `{ completed, output }` as the model-visible payload.
+- Synchronous runs still persist their own subagent run/instance/message history, but they are not managed through the background-task API.
+- The spawned work is one-shot. There is no mid-run `send_input` or resume contract for this v1 path.
+- When `background=true`, operators and agents should manage spawned work through `list_background_tasks`, `wait_background_task`, and `stop_background_task`.
+- Completion notifications are not user-visible by themselves; the calling agent is responsible for summarizing relevant results back to the user.
 
 ## Workspace APIs
 

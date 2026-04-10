@@ -15,6 +15,7 @@ export {
     getCoordinatorStreamOverlay,
     getInstanceStreamOverlay,
     getRunStreamOverlaySnapshot,
+    bindStreamOverlayToContainer,
     startThinkingBlock,
     appendThinkingChunk,
     finalizeThinking,

@@ -79,6 +79,14 @@ export async function fetchSessionAgents(sessionId) {
     return requestJson(`/api/sessions/${sessionId}/agents`, undefined, 'Failed to fetch session agents');
 }
 
+export async function fetchSessionSubagents(sessionId) {
+    return requestJson(
+        `/api/sessions/${sessionId}/subagents`,
+        undefined,
+        'Failed to fetch session subagents',
+    );
+}
+
 export async function fetchSessionTasks(sessionId) {
     return requestJson(`/api/sessions/${sessionId}/tasks`, undefined, 'Failed to fetch session tasks');
 }
@@ -132,6 +140,14 @@ export async function deleteSession(sessionId) {
         `/api/sessions/${sessionId}`,
         { method: 'DELETE' },
         'Failed to delete session',
+    );
+}
+
+export async function deleteSessionSubagent(sessionId, instanceId) {
+    return requestJson(
+        `/api/sessions/${sessionId}/subagents/${instanceId}`,
+        { method: 'DELETE' },
+        'Failed to delete subagent session',
     );
 }
 

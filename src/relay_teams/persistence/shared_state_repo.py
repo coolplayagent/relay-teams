@@ -167,6 +167,45 @@ class SharedStateRepository(SharedSqliteRepository):
             ),
         )
 
+    def delete_for_subagent(
+        self,
+        *,
+        instance_id: str,
+        session_scope_id: str,
+        role_scope_id: str,
+        conversation_id: str,
+        task_ids: list[str] | None = None,
+    ) -> None:
+        task_values = task_ids or ["__dummy_id__"]
+        self._run_write(
+            operation_name="delete_for_subagent",
+            operation=lambda: self._conn.execute(
+                """
+                DELETE FROM shared_state WHERE
+                (scope_type=? AND scope_id=?) OR
+                (scope_type=? AND scope_id=?) OR
+                (scope_type=? AND scope_id=?) OR
+                (scope_type=? AND scope_id=?) OR
+                (scope_type=? AND scope_id IN ({task_placeholders}))
+                """.replace(
+                    "{task_placeholders}",
+                    ",".join("?" for _ in task_values),
+                ),
+                (
+                    ScopeType.INSTANCE.value,
+                    instance_id,
+                    ScopeType.SESSION.value,
+                    session_scope_id,
+                    ScopeType.ROLE.value,
+                    role_scope_id,
+                    ScopeType.CONVERSATION.value,
+                    conversation_id,
+                    ScopeType.TASK.value,
+                    *task_values,
+                ),
+            ),
+        )
+
 
 def build_global_scope_ref() -> ScopeRef:
     return ScopeRef(scope_type=ScopeType.GLOBAL, scope_id="global")

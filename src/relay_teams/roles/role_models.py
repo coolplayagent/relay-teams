@@ -15,6 +15,12 @@ class RoleConfigSource(str, Enum):
     APP = "app"
 
 
+class RoleMode(str, Enum):
+    PRIMARY = "primary"
+    SUBAGENT = "subagent"
+    ALL = "all"
+
+
 class RoleDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -28,6 +34,7 @@ class RoleDefinition(BaseModel):
     model_profile: str = Field(default="default")
     bound_agent_id: OptionalIdentifierStr = None
     execution_surface: ExecutionSurface = ExecutionSurface.API
+    mode: RoleMode = RoleMode.PRIMARY
     memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
 
@@ -42,6 +49,7 @@ class RoleDocumentSummary(BaseModel):
     model_profile: str = Field(min_length=1)
     bound_agent_id: OptionalIdentifierStr = None
     execution_surface: ExecutionSurface = ExecutionSurface.API
+    mode: RoleMode = RoleMode.PRIMARY
     source: RoleConfigSource = RoleConfigSource.APP
     deletable: bool = False
 
@@ -60,6 +68,7 @@ class RoleDocumentDraft(BaseModel):
     model_profile: str = Field(default="default", min_length=1)
     bound_agent_id: OptionalIdentifierStr = None
     execution_surface: ExecutionSurface = ExecutionSurface.API
+    mode: RoleMode = RoleMode.PRIMARY
     memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
 
@@ -108,6 +117,8 @@ class RoleConfigOptions(BaseModel):
     coordinator_role_id: RequiredIdentifierStr
     main_agent_role_id: RequiredIdentifierStr
     normal_mode_roles: tuple[NormalModeRoleOption, ...] = ()
+    subagent_roles: tuple[NormalModeRoleOption, ...] = ()
+    role_modes: tuple[RoleMode, ...] = Field(default=tuple(mode for mode in RoleMode))
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[RoleSkillOption, ...] = ()
