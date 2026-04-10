@@ -53,6 +53,10 @@ class TriggerRuleNameConflictError(ValueError):
     pass
 
 
+class TriggerDeliveryConflictError(ValueError):
+    pass
+
+
 class TriggerRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
         super().__init__(db_path)
@@ -688,37 +692,48 @@ class TriggerRepository(SharedSqliteRepository):
         )
 
     def create_delivery(self, record: TriggerDeliveryRecord) -> TriggerDeliveryRecord:
-        self._run_write(
-            operation_name="create_delivery",
-            operation=lambda: self._conn.execute(
-                """
-                INSERT INTO trigger_deliveries(
-                    trigger_delivery_id, provider, provider_delivery_id,
-                    account_id, repo_subscription_id, event_name, event_action,
-                    signature_status, ingest_status, headers_json, payload_json,
-                    normalized_payload_json, received_at, processed_at, last_error
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.trigger_delivery_id,
-                    record.provider.value,
-                    record.provider_delivery_id,
-                    record.account_id,
-                    record.repo_subscription_id,
-                    record.event_name,
-                    record.event_action,
-                    record.signature_status.value,
-                    record.ingest_status.value,
-                    _json_dumps(record.headers),
-                    _json_dumps(record.payload),
-                    _json_dumps(record.normalized_payload),
-                    record.received_at.isoformat(),
-                    _to_iso(record.processed_at),
-                    record.last_error,
+        try:
+            self._run_write(
+                operation_name="create_delivery",
+                operation=lambda: self._conn.execute(
+                    """
+                    INSERT INTO trigger_deliveries(
+                        trigger_delivery_id, provider, provider_delivery_id,
+                        account_id, repo_subscription_id, event_name, event_action,
+                        signature_status, ingest_status, headers_json, payload_json,
+                        normalized_payload_json, received_at, processed_at, last_error
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.trigger_delivery_id,
+                        record.provider.value,
+                        record.provider_delivery_id,
+                        record.account_id,
+                        record.repo_subscription_id,
+                        record.event_name,
+                        record.event_action,
+                        record.signature_status.value,
+                        record.ingest_status.value,
+                        _json_dumps(record.headers),
+                        _json_dumps(record.payload),
+                        _json_dumps(record.normalized_payload),
+                        record.received_at.isoformat(),
+                        _to_iso(record.processed_at),
+                        record.last_error,
+                    ),
                 ),
-            ),
-        )
+            )
+        except sqlite3.IntegrityError as exc:
+            message = str(exc).lower()
+            if (
+                "trigger_deliveries.provider" in message
+                and "provider_delivery_id" in message
+            ):
+                raise TriggerDeliveryConflictError(
+                    "Trigger delivery already exists for provider delivery id"
+                ) from exc
+            raise
         return record
 
     def update_delivery(self, record: TriggerDeliveryRecord) -> TriggerDeliveryRecord:

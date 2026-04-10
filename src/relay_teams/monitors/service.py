@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
 
@@ -145,52 +145,13 @@ class MonitorService:
         for subscription in subscriptions:
             if not _rule_matches(subscription.rule, envelope):
                 continue
-            if envelope.dedupe_key and self._repository.has_trigger_dedupe_key(
+            recorded = self._repository.record_matching_trigger(
                 monitor_id=subscription.monitor_id,
-                dedupe_key=envelope.dedupe_key,
-            ):
+                envelope=envelope,
+            )
+            if recorded is None:
                 continue
-            if _cooldown_active(subscription, envelope):
-                continue
-
-            now = _utc_now()
-            should_stop = subscription.rule.auto_stop_on_first_match or (
-                subscription.rule.max_triggers is not None
-                and subscription.trigger_count + 1 >= subscription.rule.max_triggers
-            )
-            updated = self._repository.update_subscription(
-                subscription.model_copy(
-                    update={
-                        "trigger_count": subscription.trigger_count + 1,
-                        "last_triggered_at": now,
-                        "updated_at": now,
-                        "status": (
-                            MonitorSubscriptionStatus.STOPPED
-                            if should_stop
-                            else subscription.status
-                        ),
-                        "stopped_at": now if should_stop else subscription.stopped_at,
-                    }
-                )
-            )
-            trigger = self._repository.create_trigger(
-                MonitorTriggerRecord(
-                    monitor_trigger_id=f"mntg_{uuid4().hex[:12]}",
-                    monitor_id=updated.monitor_id,
-                    run_id=updated.run_id,
-                    session_id=updated.session_id,
-                    source_kind=envelope.source_kind,
-                    source_key=envelope.source_key,
-                    event_name=envelope.event_name,
-                    dedupe_key=_normalize_optional_text(envelope.dedupe_key),
-                    body_text=envelope.body_text,
-                    attributes=dict(envelope.attributes),
-                    raw_payload_json=envelope.raw_payload_json,
-                    action_type=updated.action.action_type,
-                    occurred_at=envelope.occurred_at,
-                    created_at=now,
-                )
-            )
+            updated, trigger = recorded
             self._publish_monitor_event(
                 record=updated,
                 event_type=RunEventType.MONITOR_TRIGGERED,
@@ -204,7 +165,7 @@ class MonitorService:
                 },
             )
             self._dispatch_action(updated, envelope)
-            if should_stop:
+            if updated.status == MonitorSubscriptionStatus.STOPPED:
                 self._publish_monitor_event(
                     record=updated,
                     event_type=RunEventType.MONITOR_STOPPED,
@@ -330,20 +291,6 @@ def _rule_matches(rule: MonitorRule, envelope: MonitorEventEnvelope) -> bool:
         if actual not in expected_values:
             return False
     return True
-
-
-def _cooldown_active(
-    subscription: MonitorSubscriptionRecord,
-    envelope: MonitorEventEnvelope,
-) -> bool:
-    if subscription.last_triggered_at is None:
-        return False
-    cooldown_seconds = subscription.rule.cooldown_seconds
-    if cooldown_seconds <= 0:
-        return False
-    return envelope.occurred_at < subscription.last_triggered_at + timedelta(
-        seconds=cooldown_seconds
-    )
 
 
 def _normalize_optional_text(value: object) -> str | None:

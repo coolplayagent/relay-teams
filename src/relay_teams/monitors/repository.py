@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from relay_teams.monitors.models import (
     MonitorActionType,
+    MonitorEventEnvelope,
     MonitorSourceKind,
     MonitorSubscriptionRecord,
     MonitorSubscriptionStatus,
@@ -288,6 +290,151 @@ class MonitorRepository(SharedSqliteRepository):
         )
         return record
 
+    def record_matching_trigger(
+        self,
+        *,
+        monitor_id: str,
+        envelope: MonitorEventEnvelope,
+    ) -> tuple[MonitorSubscriptionRecord, MonitorTriggerRecord] | None:
+        dedupe_key = _nullable_text(envelope.dedupe_key)
+
+        def operation() -> (
+            tuple[MonitorSubscriptionRecord, MonitorTriggerRecord] | None
+        ):
+            row = self._conn.execute(
+                """
+                SELECT * FROM monitor_subscriptions
+                WHERE monitor_id=?
+                """,
+                (monitor_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown monitor: {monitor_id}")
+            subscription = _subscription_from_row(row)
+            if subscription.status != MonitorSubscriptionStatus.ACTIVE:
+                return None
+            if (
+                subscription.rule.max_triggers is not None
+                and subscription.trigger_count >= subscription.rule.max_triggers
+            ):
+                return None
+            if dedupe_key is not None:
+                existing = self._conn.execute(
+                    """
+                    SELECT 1
+                    FROM monitor_triggers
+                    WHERE monitor_id=? AND dedupe_key=?
+                    LIMIT 1
+                    """,
+                    (monitor_id, dedupe_key),
+                ).fetchone()
+                if existing is not None:
+                    return None
+            if _cooldown_active(
+                subscription=subscription,
+                occurred_at=envelope.occurred_at,
+            ):
+                return None
+
+            now = datetime.now(tz=UTC)
+            next_trigger_count = subscription.trigger_count + 1
+            should_stop = subscription.rule.auto_stop_on_first_match or (
+                subscription.rule.max_triggers is not None
+                and next_trigger_count >= subscription.rule.max_triggers
+            )
+            updated = subscription.model_copy(
+                update={
+                    "trigger_count": next_trigger_count,
+                    "last_triggered_at": now,
+                    "updated_at": now,
+                    "status": (
+                        MonitorSubscriptionStatus.STOPPED
+                        if should_stop
+                        else subscription.status
+                    ),
+                    "stopped_at": now if should_stop else subscription.stopped_at,
+                }
+            )
+            self._conn.execute(
+                """
+                UPDATE monitor_subscriptions
+                SET
+                    status=?,
+                    trigger_count=?,
+                    last_triggered_at=?,
+                    updated_at=?,
+                    stopped_at=?
+                WHERE monitor_id=?
+                """,
+                (
+                    updated.status.value,
+                    updated.trigger_count,
+                    _isoformat(updated.last_triggered_at),
+                    updated.updated_at.isoformat(),
+                    _isoformat(updated.stopped_at),
+                    updated.monitor_id,
+                ),
+            )
+            trigger = MonitorTriggerRecord(
+                monitor_trigger_id=f"mntg_{uuid4().hex[:12]}",
+                monitor_id=updated.monitor_id,
+                run_id=updated.run_id,
+                session_id=updated.session_id,
+                source_kind=envelope.source_kind,
+                source_key=envelope.source_key,
+                event_name=envelope.event_name,
+                dedupe_key=dedupe_key,
+                body_text=envelope.body_text,
+                attributes=dict(envelope.attributes),
+                raw_payload_json=envelope.raw_payload_json,
+                action_type=updated.action.action_type,
+                occurred_at=envelope.occurred_at,
+                created_at=now,
+            )
+            self._conn.execute(
+                """
+                INSERT INTO monitor_triggers(
+                    monitor_trigger_id,
+                    monitor_id,
+                    run_id,
+                    session_id,
+                    source_kind,
+                    source_key,
+                    event_name,
+                    dedupe_key,
+                    body_text,
+                    attributes_json,
+                    raw_payload_json,
+                    action_type,
+                    occurred_at,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trigger.monitor_trigger_id,
+                    trigger.monitor_id,
+                    trigger.run_id,
+                    trigger.session_id,
+                    trigger.source_kind.value,
+                    trigger.source_key,
+                    trigger.event_name,
+                    trigger.dedupe_key,
+                    trigger.body_text,
+                    json.dumps(trigger.attributes, ensure_ascii=False, sort_keys=True),
+                    trigger.raw_payload_json,
+                    trigger.action_type.value,
+                    trigger.occurred_at.isoformat(),
+                    trigger.created_at.isoformat(),
+                ),
+            )
+            return (updated, trigger)
+
+        return self._run_write(
+            operation_name="record_matching_trigger",
+            operation=operation,
+        )
+
     def has_trigger_dedupe_key(self, *, monitor_id: str, dedupe_key: str) -> bool:
         row = self._run_read(
             lambda: self._conn.execute(
@@ -379,3 +526,16 @@ def _isoformat(value: datetime | None) -> str | None:
     if value is None:
         return None
     return value.isoformat()
+
+
+def _cooldown_active(
+    *,
+    subscription: MonitorSubscriptionRecord,
+    occurred_at: datetime,
+) -> bool:
+    cooldown_seconds = subscription.rule.cooldown_seconds
+    if cooldown_seconds <= 0 or subscription.last_triggered_at is None:
+        return False
+    return (occurred_at - subscription.last_triggered_at).total_seconds() < (
+        cooldown_seconds
+    )

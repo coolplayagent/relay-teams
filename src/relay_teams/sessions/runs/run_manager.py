@@ -1825,11 +1825,17 @@ class RunManager:
         tool_call_id: str | None = None,
     ) -> dict[str, object]:
         service = self._require_monitor_service()
+        normalized_source_key = source_key.strip()
+        if source_kind == MonitorSourceKind.BACKGROUND_TASK:
+            _ = self.get_background_task(
+                run_id=run_id,
+                background_task_id=normalized_source_key,
+            )
         record = service.create_monitor(
             run_id=run_id,
             session_id=self._require_run_session_id(run_id),
             source_kind=source_kind,
-            source_key=source_key,
+            source_key=normalized_source_key,
             rule=rule,
             action=MonitorAction(action_type=action_type),
             created_by_instance_id=created_by_instance_id,

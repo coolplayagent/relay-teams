@@ -69,6 +69,7 @@ from relay_teams.triggers.models import (
 from relay_teams.triggers.repository import (
     GitHubRepoSubscriptionConflictError,
     GitHubTriggerAccountNameConflictError,
+    TriggerDeliveryConflictError,
     TriggerRepository,
     TriggerRuleNameConflictError,
 )
@@ -259,13 +260,20 @@ class GitHubTriggerService:
             owner=owner,
             repo=repo_name,
         )
+        resolved_owner, resolved_repo_name, resolved_full_name = (
+            _resolve_repository_identity(
+                repo_payload,
+                owner=owner,
+                repo_name=repo_name,
+            )
+        )
         now = _utc_now()
         record = GitHubRepoSubscriptionRecord(
             repo_subscription_id=f"ghrs_{uuid.uuid4().hex[:12]}",
             account_id=account.account_id,
-            owner=owner,
-            repo_name=repo_name,
-            full_name=f"{owner}/{repo_name}",
+            owner=resolved_owner,
+            repo_name=resolved_repo_name,
+            full_name=resolved_full_name,
             external_repo_id=_json_identifier(repo_payload.get("id")),
             default_branch=_json_text(repo_payload.get("default_branch")),
             subscribed_events=_normalize_events(payload.subscribed_events),
@@ -523,7 +531,7 @@ class GitHubTriggerService:
         payload_value, payload_error = _decode_json_payload(body)
         event_value = event_name or "unknown"
         if payload_error is not None:
-            delivery = self._repository.create_delivery(
+            delivery = self._create_delivery_or_get_duplicate(
                 TriggerDeliveryRecord(
                     trigger_delivery_id=f"tdel_{uuid.uuid4().hex[:12]}",
                     provider=TriggerProvider.GITHUB,
@@ -540,6 +548,8 @@ class GitHubTriggerService:
                     last_error=payload_error,
                 )
             )
+            if isinstance(delivery, dict):
+                return delivery
             return {
                 "trigger_delivery_id": delivery.trigger_delivery_id,
                 "ingest_status": delivery.ingest_status.value,
@@ -547,7 +557,7 @@ class GitHubTriggerService:
             }
         repository_full_name = _resolve_repository_full_name(payload_value)
         if repository_full_name is None:
-            delivery = self._repository.create_delivery(
+            delivery = self._create_delivery_or_get_duplicate(
                 TriggerDeliveryRecord(
                     trigger_delivery_id=f"tdel_{uuid.uuid4().hex[:12]}",
                     provider=TriggerProvider.GITHUB,
@@ -565,6 +575,8 @@ class GitHubTriggerService:
                     last_error="Missing repository.full_name in GitHub payload",
                 )
             )
+            if isinstance(delivery, dict):
+                return delivery
             return {
                 "trigger_delivery_id": delivery.trigger_delivery_id,
                 "ingest_status": delivery.ingest_status.value,
@@ -574,6 +586,7 @@ class GitHubTriggerService:
             repository_full_name,
             enabled_only=True,
         )
+        subscriptions = self._filter_enabled_account_subscriptions(subscriptions)
         matched_subscription = self._select_subscription_for_signature(
             subscriptions=subscriptions,
             signature=signature,
@@ -586,7 +599,7 @@ class GitHubTriggerService:
         normalized_payload = _normalize_github_payload(
             payload_value, event_name=event_value
         )
-        delivery = self._repository.create_delivery(
+        delivery = self._create_delivery_or_get_duplicate(
             TriggerDeliveryRecord(
                 trigger_delivery_id=f"tdel_{uuid.uuid4().hex[:12]}",
                 provider=TriggerProvider.GITHUB,
@@ -610,6 +623,8 @@ class GitHubTriggerService:
                 normalized_payload=normalized_payload,
             )
         )
+        if isinstance(delivery, dict):
+            return delivery
         if matched_subscription is None:
             updated = self._repository.update_delivery(
                 delivery.model_copy(
@@ -976,7 +991,6 @@ class GitHubTriggerService:
             _ = updated
             return True
         repo = self._repository.get_repo_subscription(repo_subscription_id)
-        token = self._require_account_token(repo.account_id)
         context = self._build_template_context(
             delivery=delivery,
             dispatch=dispatch,
@@ -991,6 +1005,7 @@ class GitHubTriggerService:
         )
         self._repository.update_action_attempt(next_attempt)
         try:
+            token = self._require_account_token(repo.account_id)
             request_payload, response_payload, resource_id = self._execute_action(
                 action_spec=attempt.action_spec,
                 token=token,
@@ -1442,6 +1457,58 @@ class GitHubTriggerService:
                 return subscription
         return None
 
+    def _create_delivery_or_get_duplicate(
+        self,
+        record: TriggerDeliveryRecord,
+    ) -> TriggerDeliveryRecord | dict[str, JsonValue]:
+        try:
+            return self._repository.create_delivery(record)
+        except TriggerDeliveryConflictError:
+            provider_delivery_id = _normalize_optional_text(record.provider_delivery_id)
+            if provider_delivery_id is None:
+                raise
+            existing = self._repository.get_delivery_by_provider_id(
+                provider=record.provider.value,
+                provider_delivery_id=provider_delivery_id,
+            )
+            if existing is None:
+                raise
+            return {
+                "trigger_delivery_id": existing.trigger_delivery_id,
+                "ingest_status": TriggerDeliveryIngestStatus.DUPLICATE.value,
+                "dispatch_count": len(
+                    self._repository.list_dispatches_by_delivery(
+                        existing.trigger_delivery_id
+                    )
+                ),
+            }
+
+    def _filter_enabled_account_subscriptions(
+        self,
+        subscriptions: tuple[GitHubRepoSubscriptionRecord, ...],
+    ) -> tuple[GitHubRepoSubscriptionRecord, ...]:
+        enabled: list[GitHubRepoSubscriptionRecord] = []
+        for subscription in subscriptions:
+            try:
+                account = self._repository.get_account(subscription.account_id)
+            except KeyError as exc:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="trigger.account.missing",
+                    message="Skipping GitHub repo subscription with missing account",
+                    payload={
+                        "account_id": subscription.account_id,
+                        "repo_subscription_id": subscription.repo_subscription_id,
+                    },
+                    exc_info=exc,
+                )
+                continue
+            if account.status != GitHubTriggerAccountStatus.ENABLED:
+                continue
+            enabled.append(subscription)
+        return tuple(enabled)
+
     def _resolve_signature_status(
         self,
         *,
@@ -1615,6 +1682,29 @@ def _resolve_repository_full_name(payload: dict[str, JsonValue]) -> str | None:
     if owner_login is None or not isinstance(repo_name, str) or not repo_name.strip():
         return None
     return f"{owner_login}/{repo_name.strip()}"
+
+
+def _resolve_repository_identity(
+    payload: dict[str, JsonValue],
+    *,
+    owner: str,
+    repo_name: str,
+) -> tuple[str, str, str]:
+    resolved_full_name = _normalize_optional_text(_json_text(payload.get("full_name")))
+    if resolved_full_name is not None:
+        owner_part, _, repo_part = resolved_full_name.partition("/")
+        if owner_part and repo_part:
+            return (owner_part, repo_part, resolved_full_name)
+
+    resolved_owner = _normalize_optional_text(_nested_text(payload, "owner", "login"))
+    resolved_repo_name = _normalize_optional_text(_json_text(payload.get("name")))
+    if resolved_owner is not None and resolved_repo_name is not None:
+        return (
+            resolved_owner,
+            resolved_repo_name,
+            f"{resolved_owner}/{resolved_repo_name}",
+        )
+    return (owner, repo_name, f"{owner}/{repo_name}")
 
 
 def _resolve_event_action(payload: dict[str, JsonValue]) -> str | None:

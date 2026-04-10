@@ -15,17 +15,26 @@ from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.triggers import (
+    GitHubActionSpec,
+    GitHubActionType,
     GitHubApiClient,
     GitHubRepoSubscriptionCreateInput,
     GitHubRepoSubscriptionUpdateInput,
     GitHubTriggerAccountCreateInput,
     GitHubTriggerAccountUpdateInput,
+    TriggerActionAttemptRecord,
+    TriggerActionPhase,
+    TriggerActionStatus,
     GitHubTriggerSecretStore,
     GitHubTriggerService,
     GitHubTriggerRunTemplate,
     GitHubWebhookStatus,
+    TriggerDeliveryRecord,
     TriggerDispatchConfig,
+    TriggerDispatchRecord,
+    TriggerDispatchStatus,
     TriggerDeliveryIngestStatus,
+    TriggerDeliverySignatureStatus,
     TriggerProvider,
     TriggerRepository,
     TriggerRuleCreateInput,
@@ -256,6 +265,87 @@ def test_handle_inbound_delivery_ignores_disabled_repo_subscriptions(
     )
 
 
+def test_handle_inbound_delivery_ignores_disabled_trigger_accounts(
+    tmp_path: Path,
+) -> None:
+    service, repository, _, _ = _build_service(tmp_path)
+    account_id = _create_account(service)
+    created = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            subscribed_events=("pull_request",),
+        )
+    )
+    _ = created
+    _ = service.update_account(
+        account_id,
+        GitHubTriggerAccountUpdateInput(enabled=False),
+    )
+    body = json.dumps(
+        {
+            "action": "opened",
+            "number": 318,
+            "repository": {"full_name": "coolplayagent/relay-teams"},
+            "pull_request": {"number": 318},
+        }
+    ).encode("utf-8")
+
+    response = service.handle_inbound_github_delivery(
+        headers={
+            "x-github-delivery": "delivery-disabled-account",
+            "x-github-event": "pull_request",
+            "x-hub-signature-256": _build_signature(body=body, secret="whsec_test"),
+        },
+        body=body,
+    )
+    delivery = repository.get_delivery(str(response["trigger_delivery_id"]))
+
+    assert (
+        response["ingest_status"] == TriggerDeliveryIngestStatus.INVALID_HEADERS.value
+    )
+    assert response["dispatch_count"] == 0
+    assert delivery.repo_subscription_id is None
+    assert delivery.account_id is None
+    assert (
+        delivery.last_error == "No repository subscription matched repository.full_name"
+    )
+
+
+def test_create_repo_subscription_uses_canonical_repository_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _, github_client = _build_service(tmp_path)
+    account_id = _create_account(service)
+
+    def _get_repository(*, token: str, owner: str, repo: str) -> dict[str, JsonValue]:
+        assert token == "ghp_test"
+        assert owner == "coolplayagent"
+        assert repo == "relay-teams"
+        return {
+            "id": 123456,
+            "default_branch": "main",
+            "full_name": "CoolPlayAgent/Relay-Teams",
+        }
+
+    monkeypatch.setattr(github_client, "get_repository", _get_repository)
+
+    created = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            subscribed_events=("pull_request",),
+        )
+    )
+
+    assert created.owner == "CoolPlayAgent"
+    assert created.repo_name == "Relay-Teams"
+    assert created.full_name == "CoolPlayAgent/Relay-Teams"
+
+
 def test_delete_repo_subscription_unregisters_remote_webhook(
     tmp_path: Path,
 ) -> None:
@@ -397,3 +487,157 @@ def test_handle_inbound_delivery_records_non_match_when_paths_need_missing_token
     assert len(evaluations) == 1
     assert evaluations[0].matched is False
     assert evaluations[0].reason_code == "changed_files_unavailable"
+
+
+def test_handle_inbound_delivery_returns_duplicate_on_insert_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, repository, _, _ = _build_service(tmp_path)
+    account_id = _create_account(service)
+    created = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            subscribed_events=("pull_request",),
+        )
+    )
+    body = json.dumps(
+        {
+            "action": "opened",
+            "number": 318,
+            "repository": {"full_name": "coolplayagent/relay-teams"},
+            "pull_request": {"number": 318},
+        }
+    ).encode("utf-8")
+    existing = repository.create_delivery(
+        TriggerDeliveryRecord(
+            trigger_delivery_id="tdel_existing",
+            provider=TriggerProvider.GITHUB,
+            provider_delivery_id="delivery-race",
+            account_id=account_id,
+            repo_subscription_id=created.repo_subscription_id,
+            event_name="pull_request",
+            event_action="opened",
+            signature_status=TriggerDeliverySignatureStatus.VALID,
+            ingest_status=TriggerDeliveryIngestStatus.RECEIVED,
+            headers={},
+            payload={"repository": {"full_name": "coolplayagent/relay-teams"}},
+            normalized_payload={"repository_full_name": "coolplayagent/relay-teams"},
+        )
+    )
+    original_get_delivery = repository.get_delivery_by_provider_id
+    lookup_calls = 0
+
+    def _get_delivery_by_provider_id(
+        *, provider: str, provider_delivery_id: str
+    ) -> TriggerDeliveryRecord | None:
+        nonlocal lookup_calls
+        lookup_calls += 1
+        if lookup_calls == 1:
+            return None
+        return original_get_delivery(
+            provider=provider,
+            provider_delivery_id=provider_delivery_id,
+        )
+
+    monkeypatch.setattr(
+        repository,
+        "get_delivery_by_provider_id",
+        _get_delivery_by_provider_id,
+    )
+
+    response = service.handle_inbound_github_delivery(
+        headers={
+            "x-github-delivery": "delivery-race",
+            "x-github-event": "pull_request",
+            "x-hub-signature-256": _build_signature(body=body, secret="whsec_test"),
+        },
+        body=body,
+    )
+
+    assert response == {
+        "trigger_delivery_id": existing.trigger_delivery_id,
+        "ingest_status": TriggerDeliveryIngestStatus.DUPLICATE.value,
+        "dispatch_count": 0,
+    }
+
+
+def test_process_pending_actions_marks_attempt_failed_when_token_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, repository, _, _ = _build_service(tmp_path)
+    account_id = _create_account(service)
+    created = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            subscribed_events=("pull_request",),
+        )
+    )
+    _ = service.update_account(
+        account_id,
+        GitHubTriggerAccountUpdateInput(token=None),
+    )
+    monkeypatch.setattr(service, "_get_system_github_token", lambda: None)
+    monkeypatch.setattr(
+        service,
+        "_execute_action",
+        lambda **_: (_ for _ in ()).throw(
+            AssertionError("_execute_action should not run without a token")
+        ),
+    )
+    delivery = repository.create_delivery(
+        TriggerDeliveryRecord(
+            trigger_delivery_id="tdel_pending",
+            provider=TriggerProvider.GITHUB,
+            provider_delivery_id="delivery-pending",
+            account_id=account_id,
+            repo_subscription_id=created.repo_subscription_id,
+            event_name="pull_request",
+            event_action="opened",
+            signature_status=TriggerDeliverySignatureStatus.VALID,
+            ingest_status=TriggerDeliveryIngestStatus.TRIGGERED,
+            headers={},
+            payload={"repository": {"full_name": "coolplayagent/relay-teams"}},
+            normalized_payload={
+                "repository_full_name": "coolplayagent/relay-teams",
+                "pull_request_number": 318,
+            },
+        )
+    )
+    dispatch = repository.create_dispatch(
+        TriggerDispatchRecord(
+            trigger_dispatch_id="tdis_pending",
+            trigger_delivery_id=delivery.trigger_delivery_id,
+            trigger_rule_id="trule_pending",
+            target_type=TriggerTargetType.RUN_TEMPLATE,
+            status=TriggerDispatchStatus.PENDING,
+        )
+    )
+    _ = repository.create_action_attempt(
+        TriggerActionAttemptRecord(
+            trigger_action_attempt_id="tact_pending",
+            trigger_dispatch_id=dispatch.trigger_dispatch_id,
+            phase=TriggerActionPhase.IMMEDIATE,
+            action_type=GitHubActionType.COMMENT,
+            status=TriggerActionStatus.PENDING,
+            action_spec=GitHubActionSpec(
+                action_type=GitHubActionType.COMMENT,
+                body_template="Investigating",
+            ),
+        )
+    )
+
+    assert service.process_pending_actions() is True
+
+    attempt = repository.list_action_attempts_by_dispatch(dispatch.trigger_dispatch_id)[
+        0
+    ]
+    assert attempt.status == TriggerActionStatus.FAILED
+    assert attempt.attempt_count == 1
+    assert attempt.last_error is not None
+    assert "not configured" in attempt.last_error
