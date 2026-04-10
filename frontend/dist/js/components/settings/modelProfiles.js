@@ -767,12 +767,13 @@ function applyProviderDefaultBaseUrl() {
     const initialValue = String(baseUrlInput.dataset.initialValue || '').trim();
     const currentBaseUrl = String(baseUrlInput.value || '').trim();
     const previousDefaultBaseUrl = PROVIDER_DEFAULT_BASE_URLS[previousProvider] || '';
+    const providerChanged = provider !== previousProvider;
     if (isMaaSProvider(provider)) {
         baseUrlInput.value = DEFAULT_MAAS_BASE_URL;
         baseUrlInput.dataset.previousProvider = provider;
         return;
     }
-    if (isMaaSProvider(previousProvider)) {
+    if (providerChanged && isMaaSProvider(previousProvider)) {
         baseUrlInput.value = '';
         baseUrlInput.dataset.previousProvider = provider;
         return;
@@ -780,6 +781,9 @@ function applyProviderDefaultBaseUrl() {
     baseUrlInput.dataset.previousProvider = provider;
     const defaultBaseUrl = PROVIDER_DEFAULT_BASE_URLS[provider];
     if (!defaultBaseUrl) {
+        return;
+    }
+    if (!providerChanged) {
         return;
     }
     if (!currentBaseUrl) {
