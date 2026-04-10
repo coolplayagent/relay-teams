@@ -187,6 +187,7 @@ function handleAddProfile() {
     document.getElementById('profile-provider').value = 'openai_compatible';
     setDraftModelValue('');
     document.getElementById('profile-base-url').value = '';
+    delete document.getElementById('profile-base-url').dataset.initialValue;
     delete document.getElementById('profile-base-url').dataset.previousProvider;
     draftApiKeyState = createDraftSecretState();
     draftMaasPasswordState = createDraftSecretState();
@@ -222,6 +223,7 @@ function handleEditProfile(name) {
     document.getElementById('profile-provider').value = profile.provider || 'openai_compatible';
     setDraftModelValue(profile.model || '');
     document.getElementById('profile-base-url').value = profile.base_url || '';
+    document.getElementById('profile-base-url').dataset.initialValue = profile.base_url || '';
     document.getElementById('profile-base-url').dataset.previousProvider = profile.provider || 'openai_compatible';
     draftApiKeyState = {
         persistedValue: typeof profile.api_key === 'string' ? profile.api_key : '',
@@ -762,6 +764,9 @@ function applyProviderDefaultBaseUrl() {
     }
     const provider = String(providerInput.value || '').trim();
     const previousProvider = String(baseUrlInput.dataset.previousProvider || '').trim();
+    const initialValue = String(baseUrlInput.dataset.initialValue || '').trim();
+    const currentBaseUrl = String(baseUrlInput.value || '').trim();
+    const previousDefaultBaseUrl = PROVIDER_DEFAULT_BASE_URLS[previousProvider] || '';
     if (isMaaSProvider(provider)) {
         baseUrlInput.value = DEFAULT_MAAS_BASE_URL;
         baseUrlInput.dataset.previousProvider = provider;
@@ -773,12 +778,18 @@ function applyProviderDefaultBaseUrl() {
         return;
     }
     baseUrlInput.dataset.previousProvider = provider;
-    if (editingProfile) {
+    const defaultBaseUrl = PROVIDER_DEFAULT_BASE_URLS[provider];
+    if (!defaultBaseUrl) {
         return;
     }
-    const defaultBaseUrl = PROVIDER_DEFAULT_BASE_URLS[provider];
-    const currentBaseUrl = String(baseUrlInput.value || '').trim();
-    if (!defaultBaseUrl || currentBaseUrl) {
+    if (!currentBaseUrl) {
+        baseUrlInput.value = defaultBaseUrl;
+        return;
+    }
+    if (!editingProfile) {
+        return;
+    }
+    if (currentBaseUrl !== initialValue && currentBaseUrl !== previousDefaultBaseUrl) {
         return;
     }
     baseUrlInput.value = defaultBaseUrl;

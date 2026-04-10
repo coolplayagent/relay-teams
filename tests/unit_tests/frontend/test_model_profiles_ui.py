@@ -375,6 +375,66 @@ console.log(JSON.stringify({
     assert payload["baseUrlValue"] == "https://custom.example/v1"
 
 
+def test_edit_profile_switching_to_bigmodel_prefills_default_base_url(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+document.getElementById("profile-provider").value = "bigmodel";
+document.getElementById("profile-provider").onchange();
+
+console.log(JSON.stringify({
+    providerValue: document.getElementById("profile-provider").value,
+    baseUrlValue: document.getElementById("profile-base-url").value,
+}));
+""".strip(),
+    )
+
+    assert payload["providerValue"] == "bigmodel"
+    assert payload["baseUrlValue"] == "https://open.bigmodel.cn/api/coding/paas/v4"
+
+
+def test_edit_profile_switching_provider_keeps_manually_changed_base_url(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+document.getElementById("profile-base-url").value = "https://custom.example/v1";
+document.getElementById("profile-base-url").oninput();
+document.getElementById("profile-provider").value = "bigmodel";
+document.getElementById("profile-provider").onchange();
+
+console.log(JSON.stringify({
+    baseUrlValue: document.getElementById("profile-base-url").value,
+}));
+""".strip(),
+    )
+
+    assert payload["baseUrlValue"] == "https://custom.example/v1"
+
+
 def test_selecting_minimax_prefills_default_base_url(tmp_path: Path) -> None:
     payload = _run_model_profiles_script(
         tmp_path=tmp_path,
