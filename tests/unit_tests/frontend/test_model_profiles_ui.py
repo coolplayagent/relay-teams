@@ -375,6 +375,39 @@ console.log(JSON.stringify({
     assert payload["baseUrlValue"] == "https://custom.example/v1"
 
 
+def test_switching_through_provider_without_default_keeps_default_url_provenance(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider").value = "minimax";
+document.getElementById("profile-provider").onchange();
+document.getElementById("profile-provider").value = "openai_compatible";
+document.getElementById("profile-provider").onchange();
+document.getElementById("profile-provider").value = "bigmodel";
+document.getElementById("profile-provider").onchange();
+
+console.log(JSON.stringify({
+    providerValue: document.getElementById("profile-provider").value,
+    baseUrlValue: document.getElementById("profile-base-url").value,
+}));
+""".strip(),
+    )
+
+    assert payload["providerValue"] == "bigmodel"
+    assert payload["baseUrlValue"] == "https://open.bigmodel.cn/api/coding/paas/v4"
+
+
 def test_edit_profile_switching_to_bigmodel_prefills_default_base_url(
     tmp_path: Path,
 ) -> None:
@@ -398,6 +431,84 @@ console.log(JSON.stringify({
     providerValue: document.getElementById("profile-provider").value,
     baseUrlValue: document.getElementById("profile-base-url").value,
 }));
+""".strip(),
+    )
+
+    assert payload["providerValue"] == "bigmodel"
+    assert payload["baseUrlValue"] == "https://open.bigmodel.cn/api/coding/paas/v4"
+
+
+def test_edit_profile_switching_through_provider_without_default_uses_new_default_base_url(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+document.getElementById("profile-provider").value = "openai_compatible";
+document.getElementById("profile-provider").onchange();
+document.getElementById("profile-provider").value = "bigmodel";
+document.getElementById("profile-provider").onchange();
+
+console.log(JSON.stringify({
+    providerValue: document.getElementById("profile-provider").value,
+    baseUrlValue: document.getElementById("profile-base-url").value,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        default: {
+            provider: "minimax",
+            model: "MiniMax-M1",
+            base_url: "https://api.minimaxi.com/v1",
+            api_key: "saved-secret-key",
+            has_api_key: true,
+            is_default: true,
+            temperature: 0.3,
+            top_p: 0.8,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return {
+        ok: true,
+        latency_ms: 42,
+    };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return {
+        ok: true,
+        latency_ms: 37,
+        models: [],
+    };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
 """.strip(),
     )
 

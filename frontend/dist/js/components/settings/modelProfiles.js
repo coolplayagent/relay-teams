@@ -72,7 +72,7 @@ export function bindModelProfileHandlers() {
 
     const baseUrlInput = document.getElementById('profile-base-url');
     if (baseUrlInput) {
-        baseUrlInput.oninput = handleDraftEndpointChanged;
+        baseUrlInput.oninput = handleDraftBaseUrlInput;
     }
 
     const providerInput = document.getElementById('profile-provider');
@@ -188,6 +188,7 @@ function handleAddProfile() {
     document.getElementById('profile-base-url').value = '';
     delete document.getElementById('profile-base-url').dataset.initialValue;
     delete document.getElementById('profile-base-url').dataset.previousProvider;
+    delete document.getElementById('profile-base-url').dataset.defaultSourceProvider;
     draftApiKeyState = createDraftSecretState();
     draftMaasPasswordState = createDraftSecretState();
     document.getElementById('profile-maas-username').value = '';
@@ -224,6 +225,7 @@ function handleEditProfile(name) {
     document.getElementById('profile-base-url').value = profile.base_url || '';
     document.getElementById('profile-base-url').dataset.initialValue = profile.base_url || '';
     document.getElementById('profile-base-url').dataset.previousProvider = profile.provider || 'openai_compatible';
+    setDraftBaseUrlDefaultSource(profile.provider || 'openai_compatible', profile.base_url || '');
     draftApiKeyState = {
         persistedValue: typeof profile.api_key === 'string' ? profile.api_key : '',
         draftValue: '',
@@ -750,6 +752,7 @@ function renderDiscoveredModels() {
 
 function handleDraftEndpointChanged() {
     applyProviderDefaultBaseUrl();
+    syncDraftBaseUrlDefaultSource();
     renderDraftProviderFields();
     draftDiscoveredModels = [];
     draftModelDiscoveryState = null;
@@ -767,38 +770,40 @@ function applyProviderDefaultBaseUrl() {
     const provider = String(providerInput.value || '').trim();
     const previousProvider = String(baseUrlInput.dataset.previousProvider || '').trim();
     const initialValue = String(baseUrlInput.dataset.initialValue || '').trim();
-    const currentBaseUrl = String(baseUrlInput.value || '').trim();
-    const previousDefaultBaseUrl = PROVIDER_DEFAULT_BASE_URLS[previousProvider] || '';
+    const previousDefaultSourceProvider = String(
+        baseUrlInput.dataset.defaultSourceProvider || '',
+    ).trim();
+    const previousDefaultBaseUrl = getProviderDefaultBaseUrl(previousDefaultSourceProvider);
     const providerChanged = provider !== previousProvider;
     if (isMaaSProvider(provider)) {
         baseUrlInput.value = DEFAULT_MAAS_BASE_URL;
         baseUrlInput.dataset.previousProvider = provider;
+        baseUrlInput.dataset.defaultSourceProvider = provider;
         return;
     }
     if (providerChanged && isMaaSProvider(previousProvider)) {
         baseUrlInput.value = '';
+        delete baseUrlInput.dataset.defaultSourceProvider;
+    }
+    const defaultBaseUrl = getProviderDefaultBaseUrl(provider);
+    if (!providerChanged || !defaultBaseUrl) {
         baseUrlInput.dataset.previousProvider = provider;
         return;
     }
-    baseUrlInput.dataset.previousProvider = provider;
-    const defaultBaseUrl = PROVIDER_DEFAULT_BASE_URLS[provider];
-    if (!defaultBaseUrl) {
-        return;
-    }
-    if (!providerChanged) {
-        return;
-    }
+    const currentBaseUrl = String(baseUrlInput.value || '').trim();
     if (!currentBaseUrl) {
         baseUrlInput.value = defaultBaseUrl;
-        return;
+    } else if (currentBaseUrl === previousDefaultBaseUrl) {
+        baseUrlInput.value = defaultBaseUrl;
+    } else if (editingProfile && currentBaseUrl === initialValue) {
+        baseUrlInput.value = defaultBaseUrl;
     }
-    if (!editingProfile) {
-        return;
-    }
-    if (currentBaseUrl !== initialValue && currentBaseUrl !== previousDefaultBaseUrl) {
-        return;
-    }
-    baseUrlInput.value = defaultBaseUrl;
+    baseUrlInput.dataset.previousProvider = provider;
+}
+
+function handleDraftBaseUrlInput() {
+    syncDraftBaseUrlDefaultSource();
+    handleDraftEndpointChanged();
 }
 
 function handleDraftApiKeyInput() {
@@ -991,6 +996,40 @@ function renderProfileEditorTitle() {
         return;
     }
     titleEl.textContent = editingProfile ? t('settings.model.edit_profile') : t('settings.model.add_profile');
+}
+
+function getProviderDefaultBaseUrl(provider) {
+    if (isMaaSProvider(provider)) {
+        return DEFAULT_MAAS_BASE_URL;
+    }
+    return PROVIDER_DEFAULT_BASE_URLS[String(provider || '').trim()] || '';
+}
+
+function setDraftBaseUrlDefaultSource(provider, baseUrl) {
+    const baseUrlInput = document.getElementById('profile-base-url');
+    if (!baseUrlInput) {
+        return;
+    }
+    const defaultBaseUrl = getProviderDefaultBaseUrl(provider);
+    if (defaultBaseUrl && String(baseUrl || '').trim() === defaultBaseUrl) {
+        baseUrlInput.dataset.defaultSourceProvider = String(provider || '').trim();
+        return;
+    }
+    delete baseUrlInput.dataset.defaultSourceProvider;
+}
+
+function syncDraftBaseUrlDefaultSource() {
+    const baseUrlInput = document.getElementById('profile-base-url');
+    if (!baseUrlInput) {
+        return;
+    }
+    const currentBaseUrl = String(baseUrlInput.value || '').trim();
+    const trackedProvider = String(baseUrlInput.dataset.defaultSourceProvider || '').trim();
+    const trackedDefaultBaseUrl = getProviderDefaultBaseUrl(trackedProvider);
+    if (trackedDefaultBaseUrl && currentBaseUrl === trackedDefaultBaseUrl) {
+        return;
+    }
+    setDraftBaseUrlDefaultSource(getDraftProvider(), currentBaseUrl);
 }
 
 function isMaaSProvider(provider) {
