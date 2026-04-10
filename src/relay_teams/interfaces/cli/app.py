@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -271,6 +272,11 @@ def root_command(
             "If omitted, the current default orchestration is used."
         ),
     ),
+    workspace: Path | None = typer.Option(
+        None,
+        "--workspace",
+        help="Create or reuse a workspace for the given workspace root path. Requires --message.",
+    ),
     yolo: bool = typer.Option(
         True,
         "--yolo/--no-yolo",
@@ -284,6 +290,7 @@ def root_command(
         mode,
         role,
         orchestration,
+        workspace,
         run_single_prompt=_run_single_prompt,
     )
 
@@ -294,6 +301,7 @@ def _run_single_prompt(
     session_mode: SessionMode,
     normal_root_role_id: str | None,
     orchestration_id: str | None,
+    workspace: Path | None,
 ) -> None:
     _run_single_prompt_impl(
         message,
@@ -301,6 +309,7 @@ def _run_single_prompt(
         session_mode,
         normal_root_role_id,
         orchestration_id,
+        workspace,
         default_base_url=DEFAULT_BASE_URL,
         execute_prompt=_execute_prompt,
     )
@@ -316,6 +325,7 @@ def _execute_prompt(
     session_mode: SessionMode = SessionMode.NORMAL,
     normal_root_role_id: str | None = None,
     orchestration_id: str | None = None,
+    workspace: Path | None = None,
     autostart: bool = True,
     debug: bool = False,
 ) -> None:
@@ -328,6 +338,7 @@ def _execute_prompt(
         session_mode,
         normal_root_role_id,
         orchestration_id,
+        workspace,
         autostart,
         debug,
         auto_start_if_needed=_module_auto_start,

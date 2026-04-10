@@ -28,6 +28,33 @@ def test_root_message_prints_fake_llm_output(
     assert after_calls > before_calls
 
 
+def test_root_message_supports_workspace_selection(
+    integration_env: IntegrationEnvironment,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "cli-workspace"
+    project_root.mkdir()
+    monkeypatch.setattr(cli_app, "DEFAULT_BASE_URL", integration_env.api_base_url)
+
+    result = runner.invoke(
+        cli_app.app,
+        ["-m", "hello integration workspace", "--workspace", str(project_root)],
+    )
+
+    assert result.exit_code == 0
+    assert "[fake-llm] hello integration workspace" in result.output
+
+    response = httpx.get(
+        f"{integration_env.api_base_url}/api/workspaces",
+        timeout=5.0,
+        trust_env=False,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    assert any(item["root_path"] == str(project_root.resolve()) for item in payload)
+
+
 def test_root_message_uses_yolo_by_default(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
