@@ -647,10 +647,15 @@ def _clip_rendered_message(text: str, *, max_chars: int) -> tuple[str, bool]:
         return ("", True)
     if len(stripped) <= max_chars:
         return (stripped, False)
-    prefix = stripped[:max_chars]
-    last_newline = prefix.rfind("\n")
-    if last_newline <= 0:
+    prefix = stripped[:max_chars].rstrip()
+    if not prefix:
         return ("", True)
+    last_newline = prefix.rfind("\n")
+    if last_newline < 0:
+        return (prefix, True)
+    first_newline = stripped.find("\n")
+    if last_newline <= first_newline:
+        return (prefix, True)
     return (prefix[:last_newline].rstrip(), True)
 
 

@@ -251,6 +251,23 @@ def test_render_transcript_does_not_clip_mid_line_fact() -> None:
     assert transcript.splitlines()[-1] == "Tool result [shell]: line-a"
 
 
+def test_render_transcript_keeps_single_line_message_body_when_truncated() -> None:
+    history = [
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content="preserve the exact facts about lunar-mint-407",
+                )
+            ]
+        )
+    ]
+
+    transcript = compaction_module._render_transcript(history, max_chars=24)
+
+    assert transcript.startswith("User/Tool\nUser:")
+    assert "User/Tool\nUser: p" in transcript
+
+
 @pytest.mark.asyncio
 async def test_conversation_compaction_service_hides_messages_and_creates_marker(
     monkeypatch: pytest.MonkeyPatch,
