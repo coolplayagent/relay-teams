@@ -262,10 +262,33 @@ def test_render_transcript_keeps_single_line_message_body_when_truncated() -> No
         )
     ]
 
-    transcript = compaction_module._render_transcript(history, max_chars=24)
+    transcript = compaction_module._render_transcript(history, max_chars=32)
 
     assert transcript.startswith("User/Tool\nUser:")
     assert "User/Tool\nUser: p" in transcript
+
+
+def test_render_transcript_does_not_clip_first_tool_line_mid_token() -> None:
+    history = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="shell",
+                    tool_call_id="call-1",
+                    content=(
+                        "ROLLING-SUMMARY | phase-4 anchor=lunar-mint-407 | "
+                        "phase-4 checksum=CHK-P4-DQ7\n"
+                        "tail line"
+                    ),
+                )
+            ]
+        )
+    ]
+
+    transcript = compaction_module._render_transcript(history, max_chars=72)
+
+    assert "lunar-min" not in transcript
+    assert transcript.startswith("User/Tool\nTool result [shell]:")
 
 
 @pytest.mark.asyncio

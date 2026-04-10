@@ -652,11 +652,24 @@ def _clip_rendered_message(text: str, *, max_chars: int) -> tuple[str, bool]:
         return ("", True)
     last_newline = prefix.rfind("\n")
     if last_newline < 0:
-        return (prefix, True)
+        return (_clip_prefix_to_safe_boundary(prefix, minimum_index=0), True)
     first_newline = stripped.find("\n")
     if last_newline <= first_newline:
-        return (prefix, True)
+        return (
+            _clip_prefix_to_safe_boundary(prefix, minimum_index=first_newline + 1),
+            True,
+        )
     return (prefix[:last_newline].rstrip(), True)
+
+
+def _clip_prefix_to_safe_boundary(prefix: str, *, minimum_index: int) -> str:
+    for index in range(len(prefix) - 1, minimum_index - 1, -1):
+        if not prefix[index].isspace():
+            continue
+        candidate = prefix[:index].rstrip()
+        if candidate:
+            return candidate
+    return prefix
 
 
 def _render_message(message: ModelRequest | ModelResponse) -> str:
