@@ -455,6 +455,40 @@ def test_browser_shell_settings_and_session_management(
     assert _wait_for_session_ids_snapshot(page) == baseline_session_ids
 
 
+def test_browser_model_profile_switching_to_bigmodel_prefills_base_url(
+    browser_page: Page,
+    integration_env: IntegrationEnvironment,
+) -> None:
+    page = browser_page
+    _open_app(page, integration_env)
+
+    page.locator("#settings-btn").click()
+    expect(page.locator("#settings-modal")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "GET"
+            and response.url
+            == f"{integration_env.api_base_url}/api/system/configs/model/profiles"
+            and response.ok
+        )
+    ):
+        page.locator('.settings-tab[data-tab="model"]').click()
+    expect(page.locator("#model-panel")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    page.locator(".edit-profile-btn").first.click()
+    expect(page.locator("#profile-editor")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    expect(page.locator("#profile-base-url")).to_have_value(
+        integration_env.fake_llm_v1_base_url,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+
+    page.locator("#profile-provider").select_option("bigmodel")
+
+    expect(page.locator("#profile-base-url")).to_have_value(
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+
+
 def test_browser_environment_variables_and_session_topology(
     browser_page: Page,
     integration_env: IntegrationEnvironment,
