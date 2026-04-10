@@ -5321,7 +5321,8 @@
     margin-top: 0.7rem;
 }
 
-.web-provider-inline-label {
+.web-provider-inline-label,
+.settings-token-source-label {
     display: flex;
     align-items: center;
     min-height: 42px;
@@ -5413,7 +5414,8 @@
     overflow-wrap: anywhere;
 }
 
-.web-provider-link-note {
+.web-provider-link-note,
+.settings-token-source-note {
     color: var(--text-secondary);
     font-size: 0.76rem;
     line-height: 1.4;
