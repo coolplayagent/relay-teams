@@ -10,14 +10,25 @@ from typing import cast
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from relay_teams.logger import get_logger
 from relay_teams.net.clients import create_sync_http_client
-from relay_teams.providers.maas_auth import MaaSLoginError, get_maas_token_service
+from relay_teams.providers.maas_auth import (
+    MaaSAuthContext,
+    MaaSLoginError,
+    get_maas_token_service,
+)
 from relay_teams.providers.known_model_context_windows import (
     infer_known_context_window,
 )
 from relay_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_APP_ID,
+    DEFAULT_MAAS_DISCOVERY_APPLICATION,
+    DEFAULT_MAAS_DISCOVERY_AREA,
+    DEFAULT_MAAS_DISCOVERY_IDE,
+    DEFAULT_MAAS_DISCOVERY_PLUGIN_NAME,
+    DEFAULT_MAAS_DISCOVERY_PLUGIN_VERSION,
+    DEFAULT_MAAS_DISCOVERY_URL,
     MaaSAuthConfig,
     ModelEndpointConfig,
     ModelRequestHeader,
@@ -30,6 +41,8 @@ from relay_teams.sessions.runs.runtime_config import RuntimeConfig
 
 _INVALID_RESPONSE_PAYLOAD = object()
 _MAX_PROBE_TIMEOUT_MS = 300_000
+
+LOGGER = get_logger(__name__)
 
 
 def _uses_openai_compatible_transport(provider: ProviderType) -> bool:
@@ -191,20 +204,9 @@ class ModelConnectivityProbeService:
                 models=("echo",),
             )
         if resolved_config.provider == ProviderType.MAAS:
-            return ModelDiscoveryResult(
-                ok=False,
-                provider=resolved_config.provider,
-                base_url=resolved_config.base_url,
-                latency_ms=0,
-                checked_at=datetime.now(timezone.utc),
-                diagnostics=ModelConnectivityDiagnostics(
-                    endpoint_reachable=True,
-                    auth_valid=True,
-                    rate_limited=False,
-                ),
-                error_code="unsupported_provider",
-                error_message="MAAS model discovery is not supported. Enter the model name manually.",
-                retryable=False,
+            return self._discover_maas_models(
+                config=resolved_config,
+                timeout_ms=timeout_ms,
             )
         if _uses_openai_compatible_transport(resolved_config.provider):
             return self._discover_openai_compatible_models(
@@ -635,6 +637,85 @@ class ModelConnectivityProbeService:
             started=started,
         )
 
+    def _discover_maas_models(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        timeout_ms: int,
+    ) -> ModelDiscoveryResult:
+        if config.maas_auth is None:
+            raise ValueError("MAAS model discovery requires maas_auth configuration.")
+        started = perf_counter()
+        checked_at = datetime.now(timezone.utc)
+        auth_context_or_result = self._get_maas_model_discovery_auth_context(
+            config=config,
+            checked_at=checked_at,
+            started=started,
+            timeout_ms=timeout_ms,
+        )
+        if isinstance(auth_context_or_result, ModelDiscoveryResult):
+            return auth_context_or_result
+        auth_context = auth_context_or_result
+
+        department = auth_context.department
+        assert department is not None
+        headers = {
+            "Content-Type": "application/json",
+            "X-Auth-Token": auth_context.token,
+        }
+        payload = self._build_maas_model_discovery_payload(department=department)
+        response = self._post_model_discovery_request(
+            config=config,
+            endpoint=DEFAULT_MAAS_DISCOVERY_URL,
+            headers=headers,
+            payload=payload,
+            checked_at=checked_at,
+            started=started,
+            timeout_ms=timeout_ms,
+        )
+        if isinstance(response, ModelDiscoveryResult):
+            return response
+
+        if response.status_code in {401, 403}:
+            refreshed_auth_context_or_result = (
+                self._get_maas_model_discovery_auth_context(
+                    config=config,
+                    checked_at=checked_at,
+                    started=started,
+                    timeout_ms=timeout_ms,
+                    force_refresh=True,
+                )
+            )
+            if isinstance(refreshed_auth_context_or_result, ModelDiscoveryResult):
+                return refreshed_auth_context_or_result
+            refreshed_auth_context = refreshed_auth_context_or_result
+
+            refreshed_department = refreshed_auth_context.department
+            assert refreshed_department is not None
+            retry_headers = dict(headers)
+            retry_headers["X-Auth-Token"] = refreshed_auth_context.token
+            retry_payload = self._build_maas_model_discovery_payload(
+                department=refreshed_department
+            )
+            response = self._post_model_discovery_request(
+                config=config,
+                endpoint=DEFAULT_MAAS_DISCOVERY_URL,
+                headers=retry_headers,
+                payload=retry_payload,
+                checked_at=checked_at,
+                started=started,
+                timeout_ms=timeout_ms,
+            )
+            if isinstance(response, ModelDiscoveryResult):
+                return response
+
+        return self._build_model_discovery_result_from_response(
+            config=config,
+            response=response,
+            checked_at=checked_at,
+            started=started,
+        )
+
     def _discover_openai_compatible_models(
         self,
         *,
@@ -682,6 +763,233 @@ class ModelConnectivityProbeService:
                 error_message=str(exc) or "Failed to reach model endpoint.",
             )
 
+        latency_ms = self._latency_ms(started)
+        response_payload = self._response_payload(response)
+        if response.status_code >= 400:
+            error_message = (
+                self._extract_error_message(response_payload) or response.text
+            )
+            return self._build_model_discovery_http_error_result(
+                config=config,
+                checked_at=checked_at,
+                latency_ms=latency_ms,
+                status_code=response.status_code,
+                error_message=error_message or "Model discovery failed.",
+            )
+
+        if response_payload is _INVALID_RESPONSE_PAYLOAD:
+            return ModelDiscoveryResult(
+                ok=False,
+                provider=config.provider,
+                base_url=config.base_url,
+                latency_ms=latency_ms,
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="invalid_response",
+                error_message="Provider returned invalid JSON.",
+                retryable=False,
+            )
+
+        if not isinstance(response_payload, dict):
+            return ModelDiscoveryResult(
+                ok=False,
+                provider=config.provider,
+                base_url=config.base_url,
+                latency_ms=latency_ms,
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="invalid_response",
+                error_message="Provider returned a non-object JSON payload.",
+                retryable=False,
+            )
+
+        model_entries = self._extract_model_entries(
+            payload=response_payload,
+            provider=config.provider,
+        )
+        if model_entries is None:
+            return ModelDiscoveryResult(
+                ok=False,
+                provider=config.provider,
+                base_url=config.base_url,
+                latency_ms=latency_ms,
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="invalid_response",
+                error_message="Provider returned an invalid model catalog payload.",
+                retryable=False,
+            )
+
+        return ModelDiscoveryResult(
+            ok=True,
+            provider=config.provider,
+            base_url=config.base_url,
+            latency_ms=latency_ms,
+            checked_at=checked_at,
+            diagnostics=ModelConnectivityDiagnostics(
+                endpoint_reachable=True,
+                auth_valid=True,
+                rate_limited=False,
+            ),
+            models=tuple(entry.model for entry in model_entries),
+            model_entries=model_entries,
+        )
+
+    def _get_maas_model_discovery_auth_context(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        checked_at: datetime,
+        started: float,
+        timeout_ms: int,
+        force_refresh: bool = False,
+    ) -> MaaSAuthContext | ModelDiscoveryResult:
+        auth_config = cast(MaaSAuthConfig, config.maas_auth)
+        try:
+            auth_context = get_maas_token_service().get_auth_context_sync(
+                auth_config=auth_config,
+                ssl_verify=config.ssl_verify,
+                connect_timeout_seconds=timeout_ms / 1000,
+                force_refresh=force_refresh,
+            )
+        except httpx.TimeoutException as exc:
+            return self._build_model_discovery_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_timeout",
+                error_message=str(exc) or "Connection timed out.",
+            )
+        except httpx.RequestError as exc:
+            return self._build_model_discovery_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_error",
+                error_message=str(exc) or "Failed to reach model endpoint.",
+            )
+        except MaaSLoginError as exc:
+            return self._build_model_discovery_maas_login_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error=exc,
+            )
+
+        if auth_context.department is not None:
+            return auth_context
+        if not force_refresh:
+            return self._get_maas_model_discovery_auth_context(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                timeout_ms=timeout_ms,
+                force_refresh=True,
+            )
+        return self._build_model_discovery_missing_maas_department_result(
+            config=config,
+            checked_at=checked_at,
+            started=started,
+        )
+
+    def _build_model_discovery_missing_maas_department_result(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        checked_at: datetime,
+        started: float,
+    ) -> ModelDiscoveryResult:
+        return ModelDiscoveryResult(
+            ok=False,
+            provider=config.provider,
+            base_url=config.base_url,
+            latency_ms=self._latency_ms(started),
+            checked_at=checked_at,
+            diagnostics=ModelConnectivityDiagnostics(
+                endpoint_reachable=True,
+                auth_valid=True,
+                rate_limited=False,
+            ),
+            error_code="invalid_response",
+            error_message=(
+                "MAAS login response did not include user department information."
+            ),
+            retryable=False,
+        )
+
+    def _build_maas_model_discovery_payload(
+        self,
+        *,
+        department: str,
+    ) -> dict[str, object]:
+        return {
+            "area": DEFAULT_MAAS_DISCOVERY_AREA,
+            "plugin_version": DEFAULT_MAAS_DISCOVERY_PLUGIN_VERSION,
+            "application": DEFAULT_MAAS_DISCOVERY_APPLICATION,
+            "ide": DEFAULT_MAAS_DISCOVERY_IDE,
+            "plugin_name": DEFAULT_MAAS_DISCOVERY_PLUGIN_NAME,
+            "department": department,
+        }
+
+    def _post_model_discovery_request(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        endpoint: str,
+        headers: dict[str, str],
+        payload: dict[str, object],
+        checked_at: datetime,
+        started: float,
+        timeout_ms: int,
+    ) -> httpx.Response | ModelDiscoveryResult:
+        try:
+            with create_sync_http_client(
+                timeout_seconds=timeout_ms / 1000,
+                connect_timeout_seconds=timeout_ms / 1000,
+                ssl_verify=config.ssl_verify,
+            ) as client:
+                return client.post(
+                    endpoint,
+                    headers=headers,
+                    json=payload,
+                )
+        except httpx.TimeoutException as exc:
+            return self._build_model_discovery_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_timeout",
+                error_message=str(exc) or "Connection timed out.",
+            )
+        except httpx.RequestError as exc:
+            return self._build_model_discovery_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_error",
+                error_message=str(exc) or "Failed to reach model endpoint.",
+            )
+
+    def _build_model_discovery_result_from_response(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        response: httpx.Response,
+        checked_at: datetime,
+        started: float,
+    ) -> ModelDiscoveryResult:
         latency_ms = self._latency_ms(started)
         response_payload = self._response_payload(response)
         if response.status_code >= 400:
@@ -841,6 +1149,54 @@ class ModelConnectivityProbeService:
             ok=False,
             provider=config.provider,
             model=config.model,
+            latency_ms=self._latency_ms(started),
+            checked_at=checked_at,
+            diagnostics=ModelConnectivityDiagnostics(
+                endpoint_reachable=True,
+                auth_valid=auth_valid,
+                rate_limited=rate_limited,
+            ),
+            error_code=error_code,
+            error_message=error_message,
+            retryable=retryable,
+        )
+
+    def _build_model_discovery_maas_login_error_result(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        checked_at: datetime,
+        started: float,
+        error: MaaSLoginError,
+    ) -> ModelDiscoveryResult:
+        status_code = error.status_code
+        error_message = str(error) or "MAAS login failed."
+        if status_code is None or status_code < 400:
+            return ModelDiscoveryResult(
+                ok=False,
+                provider=config.provider,
+                base_url=config.base_url,
+                latency_ms=self._latency_ms(started),
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="invalid_response",
+                error_message=error_message,
+                retryable=False,
+            )
+        auth_valid = status_code not in {400, 401, 403}
+        rate_limited = status_code == 429
+        retryable = rate_limited or status_code >= 500
+        error_code = (
+            "auth_invalid" if not auth_valid else self._http_error_code(status_code)
+        )
+        return ModelDiscoveryResult(
+            ok=False,
+            provider=config.provider,
+            base_url=config.base_url,
             latency_ms=self._latency_ms(started),
             checked_at=checked_at,
             diagnostics=ModelConnectivityDiagnostics(
@@ -1069,6 +1425,8 @@ class ModelConnectivityProbeService:
         payload: dict[str, object],
         provider: ProviderType,
     ) -> tuple[ModelDiscoveryEntry, ...] | None:
+        if provider == ProviderType.MAAS:
+            return self._extract_maas_model_entries(payload)
         data = payload.get("data")
         if not isinstance(data, list):
             return None
@@ -1098,6 +1456,112 @@ class ModelConnectivityProbeService:
             )
         model_entries.sort(key=lambda item: item.model)
         return tuple(model_entries)
+
+    def _extract_maas_model_entries(
+        self,
+        payload: dict[str, object],
+    ) -> tuple[ModelDiscoveryEntry, ...] | None:
+        has_supported_section = False
+        model_ids: set[str] = set()
+
+        user_model_list = payload.get("user_model_list")
+        if isinstance(user_model_list, list):
+            has_supported_section = True
+            self._collect_maas_model_ids(
+                models=user_model_list,
+                target=model_ids,
+            )
+
+        plugin_config = payload.get("plugin_config")
+        if isinstance(plugin_config, list):
+            has_supported_section = True
+            for plugin_index, plugin_entry in enumerate(plugin_config):
+                if not isinstance(plugin_entry, dict):
+                    continue
+                config_payload = plugin_entry.get("config")
+                if not isinstance(config_payload, str):
+                    continue
+                parsed_config = self._parse_maas_plugin_config(
+                    raw_config=config_payload,
+                    plugin_index=plugin_index,
+                )
+                if parsed_config is None:
+                    continue
+                for config_item in parsed_config:
+                    if not isinstance(config_item, dict):
+                        continue
+                    for field_name in (
+                        "composor_act_mode_model_list",
+                        "composor_plan_mode_model_list",
+                        "user_model_list",
+                    ):
+                        nested_models = config_item.get(field_name)
+                        if not isinstance(nested_models, list):
+                            continue
+                        self._collect_maas_model_ids(
+                            models=nested_models,
+                            target=model_ids,
+                        )
+
+        if not has_supported_section:
+            return None
+
+        return tuple(
+            ModelDiscoveryEntry(model=model_id) for model_id in sorted(model_ids)
+        )
+
+    def _parse_maas_plugin_config(
+        self,
+        *,
+        raw_config: str,
+        plugin_index: int,
+    ) -> list[object] | None:
+        try:
+            parsed = cast(object, json.loads(raw_config))
+        except ValueError:
+            LOGGER.warning(
+                "Ignoring invalid MAAS discovery plugin config JSON.",
+                extra={
+                    "event": "providers.maas.discovery.invalid_plugin_config",
+                    "plugin_index": plugin_index,
+                },
+            )
+            return None
+        if not isinstance(parsed, list):
+            LOGGER.warning(
+                "Ignoring MAAS discovery plugin config with non-list payload.",
+                extra={
+                    "event": "providers.maas.discovery.invalid_plugin_config_shape",
+                    "plugin_index": plugin_index,
+                },
+            )
+            return None
+        return parsed
+
+    def _collect_maas_model_ids(
+        self,
+        *,
+        models: list[object],
+        target: set[str],
+    ) -> None:
+        for model_entry in models:
+            if not isinstance(model_entry, dict):
+                continue
+            model_id = model_entry.get("model_id")
+            if not isinstance(model_id, str):
+                continue
+            normalized = model_id.strip()
+            if self._is_valid_maas_model_id(normalized):
+                target.add(normalized)
+
+    def _is_valid_maas_model_id(self, model_id: str) -> bool:
+        if not model_id:
+            return False
+        if model_id.isdigit():
+            return False
+        if ":" in model_id:
+            return False
+        return True
 
     def _extract_context_window(self, entry: dict[str, object]) -> int | None:
         direct_keys = (

@@ -25,7 +25,6 @@ let draftMaasPasswordState = createDraftSecretState();
 let isModelMenuOpen = false;
 
 const DEFAULT_MAAS_BASE_URL = 'http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/';
-const MAAS_DISCOVERY_UNSUPPORTED_MESSAGE = 'MAAS model discovery is not supported. Enter the model name manually.';
 
 const PROVIDER_DEFAULT_BASE_URLS = {
     bigmodel: 'https://open.bigmodel.cn/api/coding/paas/v4',
@@ -558,21 +557,22 @@ function buildDraftModelDiscoveryPayload() {
     const provider = getDraftProvider();
     const baseUrl = document.getElementById('profile-base-url').value.trim();
     const apiKey = readDraftApiKeyValue();
+    const maasAuth = readDraftMaasAuth();
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
 
     if (isMaaSProvider(provider)) {
-        draftDiscoveredModels = [];
-        draftModelDiscoveryState = {
-            status: 'failed',
-            message: MAAS_DISCOVERY_UNSUPPORTED_MESSAGE,
-        };
-        renderDiscoveredModels();
-        renderDraftModelDiscoveryState();
-        return null;
-    }
-
-    if (!baseUrl || (!apiKey && !editingProfile)) {
+        if (!baseUrl || !maasAuth.username || !hasDraftMaasPassword(maasAuth)) {
+            draftDiscoveredModels = [];
+            draftModelDiscoveryState = {
+                status: 'failed',
+                message: 'Base URL, username, and password are required before fetching models for a MAAS profile.',
+            };
+            renderDiscoveredModels();
+            renderDraftModelDiscoveryState();
+            return null;
+        }
+    } else if (!baseUrl || (!apiKey && !editingProfile)) {
         draftDiscoveredModels = [];
         draftModelDiscoveryState = {
             status: 'failed',
@@ -590,7 +590,14 @@ function buildDraftModelDiscoveryPayload() {
     if (sslVerify !== null) {
         override.ssl_verify = sslVerify;
     }
-    if (apiKey) {
+    if (isMaaSProvider(provider)) {
+        override.maas_auth = {
+            username: maasAuth.username,
+        };
+        if (maasAuth.password) {
+            override.maas_auth.password = maasAuth.password;
+        }
+    } else if (apiKey) {
         override.api_key = apiKey;
     }
 
@@ -655,16 +662,13 @@ function renderDraftModelDiscoveryState() {
         return;
     }
 
-    const maasProvider = isMaaSProvider(getDraftProvider());
-    const defaultTitle = maasProvider
-        ? MAAS_DISCOVERY_UNSUPPORTED_MESSAGE
-        : t('settings.model.fetch_models');
+    const defaultTitle = t('settings.model.fetch_models');
 
     if (!draftModelDiscoveryState) {
         statusEl.style.display = 'none';
         statusEl.textContent = '';
         statusEl.className = 'profile-model-discovery-status';
-        fetchBtn.disabled = maasProvider;
+        fetchBtn.disabled = false;
         fetchBtn.className = 'secure-input-btn profile-discovery-btn';
         fetchBtn.title = defaultTitle;
         if (typeof fetchBtn.setAttribute === 'function') {
@@ -678,15 +682,13 @@ function renderDraftModelDiscoveryState() {
     statusEl.style.display = 'block';
     statusEl.textContent = draftModelDiscoveryState.message;
     statusEl.className = `profile-model-discovery-status probe-status probe-status-${draftModelDiscoveryState.status}`;
-    fetchBtn.disabled = maasProvider || draftModelDiscoveryState.status === 'probing';
+    fetchBtn.disabled = draftModelDiscoveryState.status === 'probing';
     fetchBtn.className = draftModelDiscoveryState.status === 'probing'
         ? 'secure-input-btn profile-discovery-btn is-loading'
         : 'secure-input-btn profile-discovery-btn';
-    fetchBtn.title = maasProvider
-        ? defaultTitle
-        : draftModelDiscoveryState.status === 'probing'
-            ? t('settings.model.fetching_models')
-            : t('settings.model.fetch_models');
+    fetchBtn.title = draftModelDiscoveryState.status === 'probing'
+        ? t('settings.model.fetching_models')
+        : t('settings.model.fetch_models');
     if (typeof fetchBtn.setAttribute === 'function') {
         fetchBtn.setAttribute('aria-label', fetchBtn.title);
     } else {
