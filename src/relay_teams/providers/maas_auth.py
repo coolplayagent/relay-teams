@@ -9,6 +9,7 @@ from threading import Lock
 
 import httpx
 from openai import AsyncOpenAI
+from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.net.clients import create_async_http_client, create_sync_http_client
 from relay_teams.providers.model_config import (
@@ -23,6 +24,7 @@ __all__ = [
     "build_maas_openai_client",
     "clear_maas_token_service_cache",
     "get_maas_token_service",
+    "MaaSAuthContext",
     "MaaSLoginError",
     "is_maas_provider",
     "maas_password_secret_field_name",
@@ -31,12 +33,24 @@ __all__ = [
 
 MAAS_PASSWORD_SECRET_FIELD = "maas_password"
 _MAAS_TOKEN_TTL = timedelta(hours=24)
-_MAAS_REFRESH_SKEW = timedelta(minutes=5)
+_MAAS_REFRESH_SKEW = timedelta(hours=1)
+
+
+class MaaSAuthContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    token: str = Field(min_length=1)
+    department: str | None = Field(default=None, min_length=1)
 
 
 class _MaaSTokenRecord:
-    def __init__(self, *, token: str, expires_at: datetime) -> None:
-        self.token = token
+    def __init__(
+        self,
+        *,
+        auth_context: MaaSAuthContext,
+        expires_at: datetime,
+    ) -> None:
+        self.auth_context = auth_context
         self.expires_at = expires_at
 
 
@@ -65,6 +79,21 @@ class MaaSTokenService:
         connect_timeout_seconds: float,
         force_refresh: bool = False,
     ) -> str:
+        return self.get_auth_context_sync(
+            auth_config=auth_config,
+            ssl_verify=ssl_verify,
+            connect_timeout_seconds=connect_timeout_seconds,
+            force_refresh=force_refresh,
+        ).token
+
+    def get_auth_context_sync(
+        self,
+        *,
+        auth_config: MaaSAuthConfig,
+        ssl_verify: bool | None,
+        connect_timeout_seconds: float,
+        force_refresh: bool = False,
+    ) -> MaaSAuthContext:
         cache_key = self._cache_key(auth_config)
         cached = self._tokens.get(cache_key)
         if (
@@ -72,7 +101,7 @@ class MaaSTokenService:
             and cached is not None
             and not self._should_refresh(cached)
         ):
-            return cached.token
+            return cached.auth_context
         lock = self._sync_locks.setdefault(cache_key, Lock())
         with lock:
             cached = self._tokens.get(cache_key)
@@ -81,14 +110,14 @@ class MaaSTokenService:
                 and cached is not None
                 and not self._should_refresh(cached)
             ):
-                return cached.token
+                return cached.auth_context
             record = self._login_sync(
                 auth_config=auth_config,
                 ssl_verify=ssl_verify,
                 connect_timeout_seconds=connect_timeout_seconds,
             )
             self._tokens[cache_key] = record
-            return record.token
+            return record.auth_context
 
     async def get_token(
         self,
@@ -98,6 +127,23 @@ class MaaSTokenService:
         connect_timeout_seconds: float,
         force_refresh: bool = False,
     ) -> str:
+        return (
+            await self.get_auth_context(
+                auth_config=auth_config,
+                ssl_verify=ssl_verify,
+                connect_timeout_seconds=connect_timeout_seconds,
+                force_refresh=force_refresh,
+            )
+        ).token
+
+    async def get_auth_context(
+        self,
+        *,
+        auth_config: MaaSAuthConfig,
+        ssl_verify: bool | None,
+        connect_timeout_seconds: float,
+        force_refresh: bool = False,
+    ) -> MaaSAuthContext:
         cache_key = self._cache_key(auth_config)
         cached = self._tokens.get(cache_key)
         if (
@@ -105,7 +151,7 @@ class MaaSTokenService:
             and cached is not None
             and not self._should_refresh(cached)
         ):
-            return cached.token
+            return cached.auth_context
         lock = self._async_locks.setdefault(cache_key, asyncio.Lock())
         async with lock:
             cached = self._tokens.get(cache_key)
@@ -114,14 +160,14 @@ class MaaSTokenService:
                 and cached is not None
                 and not self._should_refresh(cached)
             ):
-                return cached.token
+                return cached.auth_context
             record = await self._login_async(
                 auth_config=auth_config,
                 ssl_verify=ssl_verify,
                 connect_timeout_seconds=connect_timeout_seconds,
             )
             self._tokens[cache_key] = record
-            return record.token
+            return record.auth_context
 
     def _cache_key(self, auth_config: MaaSAuthConfig) -> str:
         password = auth_config.password or ""
@@ -347,7 +393,13 @@ def _build_token_record(response: httpx.Response) -> _MaaSTokenRecord:
             "MAAS login response did not include cloudDragonTokens.authToken.",
             status_code=response.status_code,
         )
-    return _MaaSTokenRecord(token=token, expires_at=datetime.now(UTC) + _MAAS_TOKEN_TTL)
+    return _MaaSTokenRecord(
+        auth_context=MaaSAuthContext(
+            token=token,
+            department=_extract_department(payload),
+        ),
+        expires_at=datetime.now(UTC) + _MAAS_TOKEN_TTL,
+    )
 
 
 def _extract_token(payload: object) -> str | None:
@@ -377,6 +429,30 @@ def _extract_error_message(payload: object) -> str | None:
         if isinstance(error, str) and error.strip():
             return error.strip()
     return None
+
+
+def _extract_department(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    user_info = payload.get("userInfo")
+    if not isinstance(user_info, dict):
+        return None
+    direct_department = user_info.get("hwDepartName")
+    if isinstance(direct_department, str):
+        normalized = direct_department.strip()
+        if normalized:
+            return normalized
+    segments: list[str] = []
+    for index in range(1, 7):
+        segment = user_info.get(f"hwDepartName{index}")
+        if not isinstance(segment, str):
+            continue
+        normalized = segment.strip()
+        if normalized:
+            segments.append(normalized)
+    if len(segments) == 0:
+        return None
+    return "/".join(segments)
 
 
 def _response_json(response: httpx.Response) -> object:

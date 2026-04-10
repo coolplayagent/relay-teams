@@ -27,6 +27,15 @@ DEFAULT_MAAS_LOGIN_URL = (
 DEFAULT_MAAS_BASE_URL = (
     "http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/"
 )
+DEFAULT_MAAS_DISCOVERY_URL = (
+    "https://promptcenter.aims.cce.prod.dragon.tools.huawei.com/"
+    "PromptCenterService/v1/policy/bundle"
+)
+DEFAULT_MAAS_DISCOVERY_AREA = "green"
+DEFAULT_MAAS_DISCOVERY_PLUGIN_VERSION = "1.0.4"
+DEFAULT_MAAS_DISCOVERY_APPLICATION = "RelayAgent"
+DEFAULT_MAAS_DISCOVERY_IDE = "RelayAgent"
+DEFAULT_MAAS_DISCOVERY_PLUGIN_NAME = "maas_relay"
 DEFAULT_MAAS_APP_ID = "RelayTeams"
 
 
