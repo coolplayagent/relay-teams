@@ -1,0 +1,14 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+from pathlib import Path
+
+
+def test_core_api_facade_re_exports_session_subagent_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (repo_root / "frontend" / "dist" / "js" / "core" / "api.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "fetchSessionSubagents" in source
+    assert "deleteSessionSubagent" in source

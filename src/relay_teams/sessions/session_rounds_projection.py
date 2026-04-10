@@ -28,6 +28,7 @@ def build_session_rounds(
     get_session_messages: Callable[[str], list[dict[str, object]]],
     get_session_history_markers: Callable[[str], list[dict[str, object]]] | None = None,
     get_session_events: Callable[[str], list[dict[str, object]]] | None = None,
+    excluded_run_ids: set[str] | None = None,
 ) -> list[dict[str, object]]:
     session_tasks = task_repo.list_by_session(session_id)
     session_agents = agent_repo.list_session_role_instances(session_id)
@@ -176,6 +177,8 @@ def build_session_rounds(
     run_ids.update(completed_output_by_run.keys())
     run_ids.update(delegated_tasks_by_run.keys())
     run_ids.update(run_runtime.keys())
+    if excluded_run_ids:
+        run_ids.difference_update(excluded_run_ids)
 
     rounds: list[dict[str, object]] = []
     for run_id in run_ids:
@@ -315,15 +318,13 @@ def _round_intent(
         envelope = getattr(root_task, "envelope", None)
         objective = getattr(envelope, "objective", None)
         if isinstance(objective, str) and objective.strip():
-            summarized = _summarize_background_task_prompt(objective)
-            return summarized or objective
+            return objective
     for message in run_messages:
         if str(message.get("role") or "") != "user":
             continue
         prompt = _extract_user_prompt(cast(object, message.get("message")))
         if prompt:
-            summarized = _summarize_background_task_prompt(prompt)
-            return summarized or prompt
+            return prompt
     return None
 
 
@@ -345,18 +346,6 @@ def _extract_user_prompt(message: object) -> str | None:
     if not chunks:
         return None
     return "\n".join(chunks).strip() or None
-
-
-def _summarize_background_task_prompt(prompt: str) -> str | None:
-    if "<background-task-notification>" not in prompt:
-        return None
-    if "<status>failed</status>" in prompt:
-        return "Background task failed"
-    if "<status>stopped</status>" in prompt:
-        return "Background task stopped"
-    if "<status>completed</status>" in prompt:
-        return "Background task completed"
-    return "Background task update"
 
 
 def _is_round_coordinator_message(

@@ -25,6 +25,7 @@ from relay_teams.roles import (
     RoleDefinition,
     RoleDocumentRecord,
     RoleDocumentSummary,
+    RoleMode,
     RoleRegistry,
     RoleSkillOption,
     SystemRolesUnavailableError,
@@ -45,6 +46,7 @@ class _FakeRoleSettingsService:
                 description="Drafts user-facing content.",
                 version="1.0.0",
                 model_profile="default",
+                mode=RoleMode.PRIMARY,
                 source=RoleConfigSource.APP,
                 deletable=True,
             ),
@@ -63,6 +65,7 @@ class _FakeRoleSettingsService:
             mcp_servers=(),
             skills=(),
             model_profile="default",
+            mode=RoleMode.SUBAGENT,
             memory_profile=default_memory_profile(),
             system_prompt="Write clearly.",
             source=RoleConfigSource.APP,
@@ -180,6 +183,7 @@ def _create_test_client(
                 version="1.0.0",
                 tools=("dispatch_task",),
                 model_profile="default",
+                mode=RoleMode.PRIMARY,
                 system_prompt="Coordinate the run.",
             )
         )
@@ -191,6 +195,7 @@ def _create_test_client(
                 version="1.0.0",
                 tools=("dispatch_task",),
                 model_profile="default",
+                mode=RoleMode.PRIMARY,
                 system_prompt="Handle the run directly.",
             )
         )
@@ -202,6 +207,7 @@ def _create_test_client(
                 version="1.0.0",
                 tools=("dispatch_task",),
                 model_profile="default",
+                mode=RoleMode.SUBAGENT,
                 system_prompt="Write clearly.",
             )
         )
@@ -241,6 +247,7 @@ def test_list_role_configs() -> None:
             "execution_surface": "api",
             "source": "app",
             "deletable": True,
+            "mode": "primary",
         }
     ]
 
@@ -255,6 +262,7 @@ def test_get_role_config() -> None:
     assert payload["role_id"] == "writer"
     assert payload["file_name"] == "writer.md"
     assert payload["execution_surface"] == "api"
+    assert payload["mode"] == "subagent"
 
 
 def test_validate_role_config() -> None:
@@ -358,6 +366,8 @@ def test_get_role_config_options() -> None:
                 name="Main Agent",
                 description="Executes normal-mode runs.",
             ),
+        ),
+        subagent_roles=(
             NormalModeRoleOption(
                 role_id="writer",
                 name="Writer",
@@ -387,6 +397,7 @@ def test_get_role_config_options() -> None:
                 transport="stdio",
             ),
         ),
+        role_modes=tuple(mode for mode in RoleMode),
         execution_surfaces=tuple(surface for surface in ExecutionSurface),
     ).model_dump(mode="json")
 

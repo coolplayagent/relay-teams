@@ -298,3 +298,65 @@ def _insert_invalid_approval_ticket_row(
     )
     connection.commit()
     connection.close()
+
+
+def test_list_normal_mode_subagents_reports_awaiting_tool_approval_phase(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_subagent_approval_phase.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+
+    _seed_root_task(db_path, run_id="run-root", session_id="session-1")
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-root",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-root",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+
+    from relay_teams.agents.instances.enums import InstanceStatus
+    from relay_teams.agents.instances.instance_repository import (
+        AgentInstanceRepository,
+    )
+
+    AgentInstanceRepository(db_path).upsert_instance(
+        run_id="subagent_run_proj123",
+        trace_id="subagent_run_proj123",
+        session_id="session-1",
+        instance_id="inst-sub-1",
+        role_id="Explorer",
+        workspace_id="default",
+        conversation_id="conv_session_1_explorer_inst_sub_1",
+        status=InstanceStatus.RUNNING,
+    )
+    runtime_repo.ensure(
+        run_id="subagent_run_proj123",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "subagent_run_proj123",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    ApprovalTicketRepository(db_path).upsert_requested(
+        tool_call_id="webfetch:1",
+        run_id="subagent_run_proj123",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-sub-1",
+        role_id="Explorer",
+        tool_name="webfetch",
+        args_preview='{"url":"https://example.com"}',
+    )
+
+    subagents = service.list_normal_mode_subagents("session-1")
+    assert len(subagents) == 1
+    assert subagents[0]["run_phase"] == "awaiting_tool_approval"
+    assert subagents[0]["run_status"] == "paused"

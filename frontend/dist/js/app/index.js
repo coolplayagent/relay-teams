@@ -5,11 +5,11 @@
 import { initApp } from './bootstrap.js';
 import { handleSend } from './prompt.js';
 import { setSelectSessionHandler } from '../components/sidebar.js';
-import { selectSession } from './session.js';
+import { selectSession, selectSubagentSession } from './session.js';
 
-export { selectSession } from './session.js';
+export { selectSession, selectSubagentSession } from './session.js';
 
 export async function startApp() {
     setSelectSessionHandler(selectSession);
-    await initApp(selectSession, handleSend);
+    await initApp(selectSession, selectSubagentSession, handleSend);
 }

@@ -169,6 +169,42 @@ class SessionHistoryMarkerRepository:
             operation_name="delete_by_session",
         )
 
+    def delete_by_conversation(self, session_id: str, conversation_id: str) -> None:
+        def operation() -> None:
+            rows = self._conn.execute(
+                """
+                SELECT marker_id, metadata_json
+                FROM session_history_markers
+                WHERE session_id=? AND marker_type=?
+                """,
+                (
+                    session_id,
+                    SessionHistoryMarkerType.COMPACTION.value,
+                ),
+            ).fetchall()
+            marker_ids = [
+                str(row["marker_id"])
+                for row in rows
+                if _load_metadata(str(row["metadata_json"])).get("conversation_id")
+                == conversation_id
+            ]
+            if not marker_ids:
+                return
+            placeholders = ",".join("?" for _ in marker_ids)
+            self._conn.execute(
+                f"DELETE FROM session_history_markers WHERE marker_id IN ({placeholders})",
+                marker_ids,
+            )
+
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="SessionHistoryMarkerRepository",
+            operation_name="delete_by_conversation",
+        )
+
     @staticmethod
     def _to_record(row: sqlite3.Row) -> SessionHistoryMarkerRecord:
         metadata = _load_metadata(str(row["metadata_json"]))

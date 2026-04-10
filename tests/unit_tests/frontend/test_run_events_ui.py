@@ -49,6 +49,223 @@ console.log(JSON.stringify({
     assert payload["activeAgentInstanceId"] == "writer-1"
 
 
+def test_model_step_started_tracks_normal_mode_subagents_as_child_sessions(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleModelStepStarted } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.currentSessionMode = 'normal';
+state.mainAgentRoleId = 'MainAgent';
+
+handleModelStepStarted({ run_id: 'subagent_run_deadbeef' }, 'writer-1', 'writer');
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    rememberCalls: globalThis.__rememberLiveSubagentCalls,
+    refreshCalls: globalThis.__refreshSubagentRailCalls,
+    openCalls: globalThis.__openAgentPanelCalls,
+    rememberSessionCalls: globalThis.__rememberNormalModeSubagentSessionCalls,
+    activeAgentRoleId: state.activeAgentRoleId,
+    activeAgentInstanceId: state.activeAgentInstanceId,
+}));
+""".strip(),
+    )
+
+    assert payload["rememberCalls"] == []
+    assert payload["refreshCalls"] == []
+    assert payload["openCalls"] == []
+    assert payload["rememberSessionCalls"] == [
+        {
+            "sessionId": "session-1",
+            "record": {
+                "instance_id": "writer-1",
+                "role_id": "writer",
+                "run_id": "subagent_run_deadbeef",
+                "status": "running",
+            },
+        }
+    ]
+    assert payload["activeAgentRoleId"] == "writer"
+    assert payload["activeAgentInstanceId"] == "writer-1"
+
+
+def test_route_event_routes_subagent_stream_events_without_overwriting_parent_run(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.activeRunId = 'run-parent';
+
+routeEvent('text_delta', {}, { run_id: 'subagent_run_deadbeef', trace_id: 'subagent_run_deadbeef' });
+routeEvent('token_usage', {}, { run_id: 'subagent_run_deadbeef', trace_id: 'subagent_run_deadbeef' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    activeRunId: state.activeRunId,
+    recoveryCalls: globalThis.__scheduleRecoveryContinuityRefreshCalls,
+    tokenUsageCalls: globalThis.__scheduleSessionTokenUsageRefreshCalls,
+    runEventCalls: globalThis.__runEventCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["activeRunId"] == "run-parent"
+    assert payload["recoveryCalls"] == []
+    assert payload["tokenUsageCalls"] == [{"immediate": True}]
+    assert payload["runEventCalls"] == [
+        {
+            "name": "handleTextDelta",
+            "args": [
+                {},
+                {
+                    "run_id": "subagent_run_deadbeef",
+                    "trace_id": "subagent_run_deadbeef",
+                },
+                None,
+                None,
+            ],
+        }
+    ]
+
+
+def test_handle_subagent_run_terminal_finalizes_with_run_id(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleSubagentRunTerminal } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.instanceRoleMap['writer-1'] = 'writer';
+
+handleSubagentRunTerminal(
+    'writer-1',
+    'completed',
+    { run_id: 'subagent_run_deadbeef', trace_id: 'subagent_run_deadbeef' },
+    'writer',
+);
+
+console.log(JSON.stringify({
+    finalizeCalls: globalThis.__finalizeStreamCalls,
+    statusCalls: globalThis.__updateNormalModeSubagentSessionStatusCalls,
+    settleCalls: globalThis.__settleActiveSubagentSessionAfterTerminalCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["finalizeCalls"] == [
+        {
+            "instanceId": "writer-1",
+            "roleId": "writer",
+            "options": {"runId": "subagent_run_deadbeef"},
+        }
+    ]
+    assert payload["statusCalls"] == [
+        {
+            "sessionId": "session-1",
+            "instanceId": "writer-1",
+            "status": "completed",
+        }
+    ]
+    assert payload["settleCalls"] == []
+
+
+def test_handle_subagent_run_terminal_settles_active_child_session(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleSubagentRunTerminal } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.instanceRoleMap['writer-1'] = 'writer';
+globalThis.__activeSubagentSession = {
+    sessionId: 'session-1',
+    instanceId: 'writer-1',
+};
+
+handleSubagentRunTerminal(
+    'writer-1',
+    'completed',
+    { run_id: 'subagent_run_deadbeef', trace_id: 'subagent_run_deadbeef' },
+    'writer',
+);
+
+console.log(JSON.stringify({
+    finalizeCalls: globalThis.__finalizeStreamCalls,
+    settleCalls: globalThis.__settleActiveSubagentSessionAfterTerminalCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["finalizeCalls"] == [
+        {
+            "instanceId": "writer-1",
+            "roleId": "writer",
+            "options": {"runId": "subagent_run_deadbeef"},
+        }
+    ]
+    assert payload["settleCalls"] == ["writer-1"]
+
+
+def test_handle_model_step_finished_passes_run_id_for_normal_mode_subagent(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleModelStepFinished } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.currentSessionMode = 'normal';
+state.mainAgentRoleId = 'MainAgent';
+state.instanceRoleMap['writer-1'] = 'writer';
+globalThis.__activeSubagentSessionStreamContainer = {};
+
+handleModelStepFinished(
+    { run_id: 'subagent_run_deadbeef', trace_id: 'subagent_run_deadbeef' },
+    'writer-1',
+);
+
+console.log(JSON.stringify({
+    finalizeCalls: globalThis.__finalizeStreamCalls,
+    statusCalls: globalThis.__updateNormalModeSubagentSessionStatusCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["finalizeCalls"] == [
+        {
+            "instanceId": "writer-1",
+            "roleId": "writer",
+            "options": {"runId": "subagent_run_deadbeef"},
+        }
+    ]
+    assert payload["statusCalls"] == [
+        {
+            "sessionId": "session-1",
+            "instanceId": "writer-1",
+            "status": "completed",
+        }
+    ]
+
+
 def _run_run_events_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -63,6 +280,7 @@ def _run_run_events_script(tmp_path: Path, runner_source: str) -> dict[str, obje
         "../../app/recovery.js": "./mockRecovery.mjs",
         "../../app/retryStatus.js": "./mockRetryStatus.mjs",
         "../../components/subagentRail.js": "./mockSubagentRail.mjs",
+        "../../components/subagentSessions.js": "./mockSubagentSessions.mjs",
         "../../utils/dom.js": "./mockDom.mjs",
         "../../utils/logger.js": "./mockLogger.mjs",
         "../../components/messageRenderer.js": "./mockMessageRenderer.mjs",
@@ -81,6 +299,7 @@ export const state = {
     currentSessionMode: 'normal',
     coordinatorRoleId: null,
     mainAgentRoleId: null,
+    activeSubagentSession: null,
     activeRunId: null,
     activeAgentRoleId: null,
     activeAgentInstanceId: null,
@@ -174,12 +393,46 @@ export function markSubagentStatus() {
 """.strip(),
         encoding="utf-8",
     )
+    (tmp_path / "mockSubagentSessions.mjs").write_text(
+        """
+export function getActiveSubagentSession() {
+    return globalThis.__activeSubagentSession || null;
+}
+
+export function getActiveSubagentSessionStreamContainer() {
+    return globalThis.__activeSubagentSessionStreamContainer || null;
+}
+
+export function rememberNormalModeSubagentSession(sessionId, record) {
+    globalThis.__rememberNormalModeSubagentSessionCalls.push({ sessionId, record });
+}
+
+export async function renderActiveSubagentSession() {
+    globalThis.__renderActiveSubagentSessionCalls.push(true);
+}
+
+export function settleActiveSubagentSessionAfterTerminal(instanceId) {
+    globalThis.__settleActiveSubagentSessionAfterTerminalCalls.push(instanceId);
+}
+
+export function updateNormalModeSubagentSessionStatus(sessionId, instanceId, status) {
+    globalThis.__updateNormalModeSubagentSessionStatusCalls.push({
+        sessionId,
+        instanceId,
+        status,
+    });
+}
+""".strip(),
+        encoding="utf-8",
+    )
     (tmp_path / "mockDom.mjs").write_text(
         """
 export const els = {
     sendBtn: null,
     stopBtn: null,
     promptInput: null,
+    promptInputHint: null,
+    chatMessages: null,
 };
 """.strip(),
         encoding="utf-8",
@@ -198,6 +451,10 @@ export function appendThinkingChunk() {
     return undefined;
 }
 
+export function applyStreamOverlayEvent() {
+    return undefined;
+}
+
 export function appendStreamChunk() {
     return undefined;
 }
@@ -210,8 +467,8 @@ export function finalizeThinking() {
     return undefined;
 }
 
-export function finalizeStream() {
-    return undefined;
+export function finalizeStream(instanceId, roleId = '', options = null) {
+    globalThis.__finalizeStreamCalls.push({ instanceId, roleId, options });
 }
 
 export function getOrCreateStreamBlock() {
@@ -254,6 +511,155 @@ export function coordinatorContainerFor() {
 globalThis.__rememberLiveSubagentCalls = [];
 globalThis.__refreshSubagentRailCalls = [];
 globalThis.__openAgentPanelCalls = [];
+globalThis.__rememberNormalModeSubagentSessionCalls = [];
+globalThis.__renderActiveSubagentSessionCalls = [];
+globalThis.__updateNormalModeSubagentSessionStatusCalls = [];
+globalThis.__finalizeStreamCalls = [];
+globalThis.__settleActiveSubagentSessionAfterTerminalCalls = [];
+globalThis.__activeSubagentSession = null;
+globalThis.__activeSubagentSessionStreamContainer = null;
+
+{runner_source}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        encoding="utf-8",
+        timeout=3,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node runner failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    return json.loads(completed.stdout)
+
+
+def _run_event_router_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "eventRouter" / "index.js"
+    )
+
+    module_under_test_path = tmp_path / "eventRouterIndex.mjs"
+    runner_path = tmp_path / "runner-event-router.mjs"
+
+    replacements = {
+        "../../app/recovery.js": "./mockRecovery.mjs",
+        "../../components/sessionTokenUsage.js": "./mockSessionTokenUsage.mjs",
+        "../state.js": "./mockState.mjs",
+        "../../utils/logger.js": "./mockLogger.mjs",
+        "./runEvents.js": "./mockRunEvents.mjs",
+        "./toolEvents.js": "./mockToolEvents.mjs",
+        "./humanEvents.js": "./mockHumanEvents.mjs",
+        "./notificationEvents.js": "./mockNotificationEvents.mjs",
+    }
+    source_text = source_path.read_text(encoding="utf-8")
+    for original, replacement in replacements.items():
+        source_text = source_text.replace(original, replacement)
+    module_under_test_path.write_text(source_text, encoding="utf-8")
+
+    (tmp_path / "mockState.mjs").write_text(
+        """
+export const state = {
+    currentSessionId: 'session-1',
+    activeRunId: null,
+    taskInstanceMap: {},
+    taskStatusMap: {},
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockRecovery.mjs").write_text(
+        """
+export function scheduleRecoveryContinuityRefresh(options) {
+    globalThis.__scheduleRecoveryContinuityRefreshCalls.push(options);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockSessionTokenUsage.mjs").write_text(
+        """
+export function scheduleSessionTokenUsageRefresh(options) {
+    globalThis.__scheduleSessionTokenUsageRefreshCalls.push(options);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockLogger.mjs").write_text(
+        """
+export function sysLog() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockRunEvents.mjs").write_text(
+        """
+function pushCall(name, args) {
+    globalThis.__runEventCalls.push({ name, args });
+}
+
+export function handleLlmRetryExhausted(...args) { pushCall('handleLlmRetryExhausted', args); }
+export function handleLlmRetryScheduled(...args) { pushCall('handleLlmRetryScheduled', args); }
+export function handleModelStepFinished(...args) { pushCall('handleModelStepFinished', args); }
+export function handleModelStepStarted(...args) { pushCall('handleModelStepStarted', args); }
+export function handleOutputDelta(...args) { pushCall('handleOutputDelta', args); }
+export function handleGenerationProgress(...args) { pushCall('handleGenerationProgress', args); }
+export function handleRunCompleted(...args) { pushCall('handleRunCompleted', args); }
+export function handleRunFailed(...args) { pushCall('handleRunFailed', args); }
+export function handleRunStarted(...args) { pushCall('handleRunStarted', args); }
+export function handleRunStopped(...args) { pushCall('handleRunStopped', args); }
+export function handleSubagentRunTerminal(...args) { pushCall('handleSubagentRunTerminal', args); }
+export function handleThinkingDelta(...args) { pushCall('handleThinkingDelta', args); }
+export function handleThinkingFinished(...args) { pushCall('handleThinkingFinished', args); }
+export function handleThinkingStarted(...args) { pushCall('handleThinkingStarted', args); }
+export function handleTextDelta(...args) { pushCall('handleTextDelta', args); }
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockToolEvents.mjs").write_text(
+        """
+export function handleToolApprovalRequested() { return undefined; }
+export function handleToolApprovalResolved() { return undefined; }
+export function handleToolCall() { return undefined; }
+export function handleToolInputValidationFailed() { return undefined; }
+export function handleToolResult() { return undefined; }
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockHumanEvents.mjs").write_text(
+        """
+export function handleAwaitingHumanDispatch() { return undefined; }
+export function handleGateResolved() { return undefined; }
+export function handleHumanTaskDispatched() { return undefined; }
+export function handleSubagentGate() { return undefined; }
+export function handleSubagentResumed() { return undefined; }
+export function handleSubagentStopped() { return undefined; }
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockNotificationEvents.mjs").write_text(
+        """
+export function handleNotificationRequested() { return undefined; }
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner_path.write_text(
+        f"""
+globalThis.__scheduleRecoveryContinuityRefreshCalls = [];
+globalThis.__scheduleSessionTokenUsageRefreshCalls = [];
+globalThis.__runEventCalls = [];
 
 {runner_source}
 """.strip(),

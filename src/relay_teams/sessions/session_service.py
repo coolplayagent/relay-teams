@@ -30,6 +30,7 @@ from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
+from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskKind
 from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
@@ -424,6 +425,75 @@ class SessionService:
             if session_dir.exists():
                 shutil.rmtree(session_dir, ignore_errors=True)
 
+    def delete_normal_mode_subagent(self, session_id: str, instance_id: str) -> None:
+        session = self._session_repo.get(session_id)
+        agent = self._require_session_agent(session_id, instance_id)
+        if not self._is_normal_mode_subagent_record(agent, session=session):
+            raise KeyError(instance_id)
+        runtime = self._run_runtime_repo.get(agent.run_id)
+        if runtime is not None and runtime.status in {
+            RunRuntimeStatus.QUEUED,
+            RunRuntimeStatus.RUNNING,
+            RunRuntimeStatus.STOPPING,
+            RunRuntimeStatus.PAUSED,
+        }:
+            raise RuntimeError("Cannot delete a running subagent")
+
+        background_task_records = self._list_subagent_background_tasks(
+            session_id=session_id,
+            instance_id=agent.instance_id,
+            run_id=agent.run_id,
+        )
+        if any(record.is_active for record in background_task_records):
+            raise RuntimeError("Cannot delete a running subagent")
+
+        task_ids = [
+            record.envelope.task_id
+            for record in self._task_repo.list_by_session(session_id)
+            if record.envelope.trace_id == agent.run_id
+        ]
+        self._message_repo.delete_by_instance(agent.instance_id)
+        if self._event_log is not None:
+            self._event_log.delete_by_trace(agent.run_id)
+        if self._run_state_repo is not None:
+            self._run_state_repo.delete(agent.run_id)
+        if self._shared_store is not None:
+            self._shared_store.delete_for_subagent(
+                instance_id=agent.instance_id,
+                session_scope_id=build_instance_session_scope_id(
+                    session_id,
+                    agent.instance_id,
+                ),
+                role_scope_id=build_instance_role_scope_id(
+                    session_id,
+                    agent.role_id,
+                    agent.instance_id,
+                ),
+                conversation_id=agent.conversation_id,
+                task_ids=task_ids,
+            )
+        self._approval_ticket_repo.delete_by_run(agent.run_id)
+        for background_task_record in background_task_records:
+            if self._background_task_repository is None:
+                break
+            self._background_task_repository.delete(
+                background_task_record.background_task_id
+            )
+        self._delete_background_task_logs(
+            session=session,
+            background_task_records=background_task_records,
+        )
+        self._run_runtime_repo.delete(agent.run_id)
+        for task_id in task_ids:
+            self._task_repo.delete(task_id)
+        self._agent_repo.delete_instance(agent.instance_id)
+        if self._session_history_marker_repo is not None:
+            self._session_history_marker_repo.delete_by_conversation(
+                session_id,
+                agent.conversation_id,
+            )
+        self._token_usage_repo.delete_by_run(agent.run_id)
+
     def _delete_background_task_logs(
         self,
         *,
@@ -453,6 +523,25 @@ class SessionService:
 
     def get_session(self, session_id: str) -> SessionRecord:
         return self._session_repo.get(session_id)
+
+    def _list_subagent_background_tasks(
+        self,
+        *,
+        session_id: str,
+        instance_id: str,
+        run_id: str,
+    ) -> tuple[BackgroundTaskRecord, ...]:
+        if self._background_task_repository is None:
+            return ()
+        return tuple(
+            record
+            for record in self._background_task_repository.list_by_session(session_id)
+            if record.kind == BackgroundTaskKind.SUBAGENT
+            and (
+                record.subagent_instance_id == instance_id
+                or record.subagent_run_id == run_id
+            )
+        )
 
     def list_sessions(self) -> tuple[SessionRecord, ...]:
         sessions = self._session_repo.list_all()
@@ -489,9 +578,52 @@ class SessionService:
             if record.project_kind == project_kind and record.project_id == project_id
         )
 
+    def list_normal_mode_subagents(
+        self, session_id: str
+    ) -> tuple[dict[str, object], ...]:
+        session = self._session_repo.get(session_id)
+        if session.session_mode != SessionMode.NORMAL:
+            return ()
+        root_tasks_by_run: dict[str, object] = {}
+        for task in self._task_repo.list_by_session(session_id):
+            if task.envelope.parent_task_id is None:
+                root_tasks_by_run[task.envelope.trace_id] = task
+        records = [
+            record
+            for record in self._agent_repo.list_by_session(session_id)
+            if self._is_normal_mode_subagent_record(record, session=session)
+        ]
+        records.sort(key=lambda item: (item.updated_at, item.created_at), reverse=True)
+        return tuple(
+            {
+                **self._normal_mode_subagent_projection(record),
+                "title": self._subagent_title_for_run(
+                    run_id=record.run_id,
+                    root_tasks_by_run=root_tasks_by_run,
+                ),
+            }
+            for record in records
+        )
+
     def list_agents_in_session(self, session_id: str) -> tuple[dict[str, object], ...]:
-        records = self._agent_repo.list_session_role_instances(session_id)
-        return tuple(self._agent_projection(record) for record in records)
+        session = self._session_repo.get(session_id)
+        latest_by_role: dict[str, AgentRuntimeRecord] = {}
+        for record in self._agent_repo.list_by_session(session_id):
+            if self._is_normal_mode_subagent_record(record, session=session):
+                continue
+            existing = latest_by_role.get(record.role_id)
+            if existing is None or (
+                record.updated_at,
+                record.created_at,
+            ) >= (
+                existing.updated_at,
+                existing.created_at,
+            ):
+                latest_by_role[record.role_id] = record
+        return tuple(
+            self._agent_projection(latest_by_role[role_id])
+            for role_id in sorted(latest_by_role.keys())
+        )
 
     def get_agent_reflection(
         self,
@@ -572,13 +704,12 @@ class SessionService:
             return [
                 self._project_message_timeline_entry(message) for message in messages
             ]
-        conversation_id = build_conversation_id(session_id, agent.role_id)
         for message in messages:
             if "role_id" not in message or not message.get("role_id"):
                 message["role_id"] = agent.role_id
         markers = self._list_agent_history_markers(
             session_id=session_id,
-            conversation_id=conversation_id,
+            conversation_id=agent.conversation_id,
         )
         return self._build_agent_timeline_entries(
             messages=messages,
@@ -617,6 +748,7 @@ class SessionService:
         ]
 
     def build_session_rounds(self, session_id: str) -> list[dict[str, object]]:
+        excluded_run_ids = self._subagent_run_ids(session_id)
         rounds = build_session_rounds(
             session_id=session_id,
             agent_repo=self._agent_repo,
@@ -635,6 +767,7 @@ class SessionService:
             ),
             get_session_history_markers=self._get_session_history_markers,
             get_session_events=self.get_global_events,
+            excluded_run_ids=excluded_run_ids,
         )
         for round_item in rounds:
             runtime = self._run_runtime_repo.get(str(round_item.get("run_id") or ""))
@@ -865,12 +998,13 @@ class SessionService:
     def _select_active_run(
         self, session_id: str
     ) -> tuple[str, RunRuntimeRecord] | None:
+        excluded_run_ids = self._subagent_run_ids(session_id)
         hinted_run_id = (
             self._active_run_registry.get_active_run_id(session_id)
             if self._active_run_registry is not None
             else None
         )
-        if hinted_run_id:
+        if hinted_run_id and hinted_run_id not in excluded_run_ids:
             hinted_runtime = self._run_runtime_repo.get(hinted_run_id)
             if hinted_runtime is not None:
                 return hinted_run_id, hinted_runtime
@@ -880,6 +1014,8 @@ class SessionService:
             return None
         runtimes.sort(key=lambda item: item.updated_at, reverse=True)
         for runtime in runtimes:
+            if runtime.run_id in excluded_run_ids:
+                continue
             if runtime.status in {
                 RunRuntimeStatus.RUNNING,
                 RunRuntimeStatus.STOPPING,
@@ -889,6 +1025,8 @@ class SessionService:
             }:
                 return runtime.run_id, runtime
         for runtime in runtimes:
+            if runtime.run_id in excluded_run_ids:
+                continue
             if runtime.status not in {
                 RunRuntimeStatus.COMPLETED,
                 RunRuntimeStatus.FAILED,
@@ -897,6 +1035,23 @@ class SessionService:
             if self._has_background_tasks(runtime.run_id):
                 return runtime.run_id, runtime
         return None
+
+    def _subagent_run_ids(self, session_id: str) -> set[str]:
+        run_ids = {
+            runtime.run_id
+            for runtime in self._run_runtime_repo.list_by_session(session_id)
+            if str(runtime.run_id).strip().startswith("subagent_run_")
+        }
+        if self._background_task_repository is None:
+            return run_ids
+        return run_ids | {
+            record.subagent_run_id
+            for record in self._background_task_repository.list_by_session(session_id)
+            if (
+                record.kind == BackgroundTaskKind.SUBAGENT
+                and record.subagent_run_id is not None
+            )
+        }
 
     def _has_background_tasks(self, run_id: str) -> bool:
         if self._background_task_repository is None:
@@ -970,6 +1125,42 @@ class SessionService:
             "reflection_updated_at": reflection["updated_at"],
         }
 
+    def _normal_mode_subagent_projection(
+        self,
+        record: AgentRuntimeRecord,
+    ) -> dict[str, object]:
+        projected = self._agent_projection(record)
+        runtime = self._run_runtime_repo.get(record.run_id)
+        run_state = (
+            self._run_state_repo.get_run_state(record.run_id)
+            if self._run_state_repo is not None
+            else None
+        )
+        stream_connected = (
+            self._run_event_hub.has_subscribers(record.run_id)
+            if self._run_event_hub is not None
+            else False
+        )
+        projected["run_status"] = (
+            runtime.status.value if runtime is not None else projected["status"]
+        )
+        approval_count = 0
+        if runtime is not None and self._approval_ticket_repo is not None:
+            approval_count = len(
+                self._approval_ticket_repo.list_open_by_run(runtime.run_id)
+            )
+        projected["run_phase"] = (
+            self._public_phase(runtime, approval_count) if runtime is not None else ""
+        )
+        projected["last_event_id"] = (
+            int(run_state.last_event_id) if run_state is not None else 0
+        )
+        projected["checkpoint_event_id"] = (
+            int(run_state.checkpoint_event_id) if run_state is not None else 0
+        )
+        projected["stream_connected"] = stream_connected
+        return projected
+
     def _reflection_projection(
         self,
         record: AgentRuntimeRecord,
@@ -1038,6 +1229,34 @@ class SessionService:
 
     def _is_runtime_publicly_recoverable(self, runtime: RunRuntimeRecord) -> bool:
         return runtime.is_recoverable and runtime.status != RunRuntimeStatus.STOPPING
+
+    @staticmethod
+    def _subagent_title_for_run(
+        *,
+        run_id: str,
+        root_tasks_by_run: dict[str, object],
+    ) -> str:
+        root_task = root_tasks_by_run.get(run_id)
+        if root_task is None:
+            return ""
+        envelope = getattr(root_task, "envelope", None)
+        title = str(getattr(envelope, "title", "") or "").strip()
+        if title:
+            return title
+        objective = str(getattr(envelope, "objective", "") or "").strip()
+        if not objective:
+            return ""
+        return objective[:80]
+
+    @staticmethod
+    def _is_normal_mode_subagent_record(
+        record: AgentRuntimeRecord,
+        *,
+        session: SessionRecord,
+    ) -> bool:
+        return session.session_mode == SessionMode.NORMAL and str(
+            record.run_id
+        ).strip().startswith("subagent_run_")
 
     def _shared_state_snapshot(
         self,

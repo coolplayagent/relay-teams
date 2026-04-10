@@ -30,12 +30,14 @@ export let currentRound = null;
 let retryTimelineTimerId = 0;
 const expandedHistorySegments = new Set();
 
-export async function loadSessionRounds(sessionId) {
+export async function loadSessionRounds(sessionId, options = {}) {
     try {
         const page = await fetchInitialRoundsPage(sessionId);
         applyRoundPage(page, { prepend: false });
         syncExportedState();
-        renderSessionTimeline(roundsState.currentRounds, { preserveScroll: false });
+        if (options.render !== false && !shouldPreserveSubagentView(sessionId)) {
+            renderSessionTimeline(roundsState.currentRounds, { preserveScroll: false });
+        }
     } catch (e) {
         logError(
             'frontend.rounds.load_failed',
@@ -81,12 +83,24 @@ export function createLiveRound(runId, intentText) {
         );
     }
     syncExportedState();
-    renderSessionTimeline(roundsState.currentRounds, { preserveScroll: false });
+    if (!shouldPreserveSubagentView(state.currentSessionId)) {
+        renderSessionTimeline(roundsState.currentRounds, { preserveScroll: false });
+    }
 
     const section = document.getElementById(roundSectionId(safeRunId));
     if (section) {
         section.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
+}
+
+function shouldPreserveSubagentView(sessionId) {
+    const active = state.activeSubagentSession;
+    const safeSessionId = String(sessionId || state.currentSessionId || '').trim();
+    return !!(
+        active
+        && typeof active === 'object'
+        && String(active.sessionId || '').trim() === safeSessionId
+    );
 }
 
 export function appendRoundUserMessage(runId, text) {

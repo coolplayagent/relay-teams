@@ -18,15 +18,22 @@ class BackgroundTaskStatus(str, Enum):
     COMPLETED = "completed"
 
 
+class BackgroundTaskKind(str, Enum):
+    COMMAND = "command"
+    SUBAGENT = "subagent"
+
+
 class BackgroundTaskRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     background_task_id: RequiredIdentifierStr
     run_id: RequiredIdentifierStr
     session_id: RequiredIdentifierStr
+    kind: BackgroundTaskKind = BackgroundTaskKind.COMMAND
     instance_id: OptionalIdentifierStr = None
     role_id: OptionalIdentifierStr = None
     tool_call_id: OptionalIdentifierStr = None
+    title: str = ""
     command: str = Field(min_length=1)
     cwd: str = Field(min_length=1)
     execution_mode: Literal["foreground", "background"] = "background"
@@ -38,6 +45,10 @@ class BackgroundTaskRecord(BaseModel):
     recent_output: tuple[str, ...] = ()
     output_excerpt: str = ""
     log_path: str = ""
+    subagent_role_id: OptionalIdentifierStr = None
+    subagent_run_id: OptionalIdentifierStr = None
+    subagent_task_id: OptionalIdentifierStr = None
+    subagent_instance_id: OptionalIdentifierStr = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     completed_at: datetime | None = None

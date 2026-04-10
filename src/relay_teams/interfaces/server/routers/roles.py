@@ -75,6 +75,14 @@ def get_role_config_options(
                 )
                 for role in role_registry.list_normal_mode_roles()
             ),
+            subagent_roles=tuple(
+                NormalModeRoleOption(
+                    role_id=role.role_id,
+                    name=role.name,
+                    description=role.description,
+                )
+                for role in role_registry.list_subagent_roles()
+            ),
             tools=tool_registry.list_configurable_names(),
             mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
             skills=skill_options,

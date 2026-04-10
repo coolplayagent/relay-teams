@@ -38,6 +38,7 @@ def test_registry_contains_registered_local_tools() -> None:
         "read",
         "scroll_view",
         "shell",
+        "spawn_subagent",
         "stop_background_task",
         "stop_monitor",
         "type_text",

@@ -29,6 +29,7 @@ from relay_teams.sessions.runs.run_models import (
     RuntimePromptConversationContext,
     RunTopologySnapshot,
 )
+from relay_teams.sessions.session_models import SessionMode
 
 COMMON_MODE_PROMPT = (
     "## Runtime Rules\n"
@@ -51,6 +52,15 @@ ORCHESTRATION_USAGE_PROMPT = (
     "- Use the dispatch prompt to pass stage-specific instructions and upstream context.\n"
     "- The roles listed below are dispatch targets, not your own capabilities."
 )
+SUBAGENT_USAGE_PROMPT = (
+    "## Subagent Rules\n"
+    "- Use `spawn_subagent` when another role is a better fit for a bounded task.\n"
+    "- Inspect the `spawn_subagent` tool description for the current list of subagent capabilities.\n"
+    "- Pass the full task context in the spawn prompt because each subagent starts fresh.\n"
+    "- `spawn_subagent` waits for the final result by default; pass `background=true` only for work that should continue independently.\n"
+    "- Use `list_background_tasks`, `wait_background_task`, and `stop_background_task` only for background subagent runs.\n"
+    "- Summarize completed subagent work yourself when it becomes relevant to the user."
+)
 SKILL_USAGE_PROMPT = (
     "## Skill Usage\n"
     "The list below is a catalog of available skills in the form `skill_name: description`. "
@@ -66,6 +76,8 @@ FEISHU_GROUP_CONTEXT_PROMPT = (
 )
 AVAILABLE_ROLES_HEADING = "## Available Roles"
 AVAILABLE_ROLES_EMPTY_PROMPT = f"{AVAILABLE_ROLES_HEADING}\nnone"
+AVAILABLE_SUBAGENTS_HEADING = "## Available Subagents"
+AVAILABLE_SUBAGENTS_EMPTY_PROMPT = f"{AVAILABLE_SUBAGENTS_HEADING}\nnone"
 ROLE_BLOCK_HEADING_PREFIX = "### "
 ROLE_BLOCK_SOURCE_PREFIX = "- Source: "
 ROLE_BLOCK_DESCRIPTION_PREFIX = "- Description: "
@@ -328,6 +340,12 @@ async def build_runtime_system_prompt_result(
         workspace_context_sections.append(runtime_tools_prompt)
 
     if is_main_agent_role_definition(data.role):
+        _append_available_subagents_prompt(
+            data=data,
+            role_registry=role_registry,
+            base_instruction_sections=base_instruction_sections,
+            capability_summary_sections=capability_summary_sections,
+        )
         return _build_runtime_prompt_sections(
             role_instructions=data.role.system_prompt,
             base_instruction_sections=base_instruction_sections,
@@ -336,6 +354,12 @@ async def build_runtime_system_prompt_result(
             local_instruction_paths=loaded_instructions.local_paths,
         )
     if not is_coordinator_role_definition(data.role):
+        _append_available_subagents_prompt(
+            data=data,
+            role_registry=role_registry,
+            base_instruction_sections=base_instruction_sections,
+            capability_summary_sections=capability_summary_sections,
+        )
         return _build_runtime_prompt_sections(
             role_instructions=data.role.system_prompt,
             base_instruction_sections=base_instruction_sections,
@@ -415,6 +439,16 @@ async def build_available_roles_prompt(
         ]
     )
     return AVAILABLE_ROLES_HEADING + "\n\n" + "\n\n".join(role_blocks)
+
+
+def build_available_subagents_prompt(*, role_registry: RoleRegistry) -> str:
+    roles = role_registry.list_subagent_roles()
+    if not roles:
+        return AVAILABLE_SUBAGENTS_EMPTY_PROMPT
+    lines = [AVAILABLE_SUBAGENTS_HEADING]
+    for role in roles:
+        lines.append(f"- {role.role_id}: {role.name} - {role.description}")
+    return "\n".join(lines)
 
 
 def build_skill_instructions_prompt(
@@ -559,6 +593,22 @@ def _tool_names(entries: Sequence[object]) -> tuple[str, ...]:
         if isinstance(name, str) and name.strip():
             names.append(name)
     return tuple(names)
+
+
+def _append_available_subagents_prompt(
+    *,
+    data: RuntimePromptBuildInput,
+    role_registry: RoleRegistry | None,
+    base_instruction_sections: list[str],
+    capability_summary_sections: list[str],
+) -> None:
+    if role_registry is None:
+        return
+    if data.topology is not None and data.topology.session_mode != SessionMode.NORMAL:
+        return
+    if "spawn_subagent" not in data.role.tools:
+        return
+    base_instruction_sections.append(SUBAGENT_USAGE_PROMPT)
 
 
 def _format_mcp_tool_lines(runtime_tools: RuntimeToolsSnapshot) -> list[str]:

@@ -4,6 +4,7 @@ name: daily-ai-report
 description: daily-ai-report
 model_profile: default
 version: 1.0.0
+mode: subagent
 tools:
 - edit
 - glob

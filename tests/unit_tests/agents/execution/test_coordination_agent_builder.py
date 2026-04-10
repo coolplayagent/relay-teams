@@ -9,8 +9,11 @@ from relay_teams.agents.execution import (
     coordination_agent_builder as coordination_agent,
 )
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.roles.role_models import RoleDefinition, RoleMode
+from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
+from relay_teams.tools.workspace_tools import register_spawn_subagent
 
 
 class _FakeOpenAIProvider:
@@ -27,14 +30,27 @@ class _FakeOpenAIChatModel:
 class _FakeAgent:
     def __init__(self, **kwargs: object) -> None:
         self.kwargs = kwargs
+        self.tools: dict[str, object] = {}
+        self.tool_descriptions: dict[str, str] = {}
+
+    def tool(self, *, description: str):
+        def _decorator(func: object) -> object:
+            name = getattr(func, "__name__", "")
+            if isinstance(name, str) and name:
+                self.tools[name] = func
+                self.tool_descriptions[name] = description
+            return func
+
+        return _decorator
 
 
 class _FakeToolRegistry:
-    def __init__(self) -> None:
+    def __init__(self, registers: tuple[object, ...] = ()) -> None:
         self.required: tuple[str, ...] | None = None
         self.calls: list[
             tuple[tuple[str, ...], ToolResolutionContext | None, bool, str | None]
         ] = []
+        self.registers = registers
 
     def resolve_known(
         self,
@@ -49,7 +65,7 @@ class _FakeToolRegistry:
 
     def require(self, allowed_tools: tuple[str, ...]):
         self.required = allowed_tools
-        return ()
+        return self.registers
 
 
 class _FakeSkillRegistry:
@@ -283,3 +299,67 @@ def test_build_coordination_agent_ignores_unknown_tools_and_mcp_servers(
             "agents.execution.coordination_agent_builder",
         )
     ]
+
+
+def test_build_coordination_agent_injects_subagent_capabilities_into_spawn_subagent_description(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Crafter",
+            name="Crafter",
+            description="Implements requested changes.",
+            version="1",
+            tools=("read", "write"),
+            mcp_servers=("docs",),
+            skills=("time",),
+            mode=RoleMode.SUBAGENT,
+            model_profile="default",
+            system_prompt="You are a crafter.",
+        )
+    )
+    fake_tool_registry = _FakeToolRegistry(registers=(register_spawn_subagent,))
+
+    monkeypatch.setattr(
+        coordination_agent, "build_llm_http_client", lambda **_: object()
+    )
+    monkeypatch.setattr(
+        coordination_agent,
+        "build_openai_provider_for_endpoint",
+        lambda **kwargs: _FakeOpenAIProvider(**kwargs),
+    )
+    monkeypatch.setattr(
+        coordination_agent,
+        "OpenAIChatModel",
+        lambda model_name, provider, profile=None: _FakeOpenAIChatModel(
+            model_name, provider
+        ),
+    )
+
+    def _fake_agent(**kwargs: object) -> _FakeAgent:
+        agent = _FakeAgent(**kwargs)
+        captured["agent"] = agent
+        return agent
+
+    monkeypatch.setattr(coordination_agent, "Agent", _fake_agent)
+
+    coordination_agent.build_coordination_agent(
+        model_name="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        system_prompt="system",
+        allowed_tools=("spawn_subagent",),
+        tool_registry=cast(ToolRegistry, fake_tool_registry),
+        role_registry=registry,
+    )
+
+    built_agent = cast(_FakeAgent, captured["agent"])
+    description = built_agent.tool_descriptions["spawn_subagent"]
+    assert "Available Subagent Capabilities" in description
+    assert "### Crafter" in description
+    assert "- Description: Implements requested changes." in description
+    assert "- Tools: read, write" in description
+    assert "- MCP Servers: docs" in description
+    assert "- Skills: time" in description

@@ -24,7 +24,7 @@ from relay_teams.agents.execution.user_prompts import (
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
 from relay_teams.mcp.mcp_registry import McpRegistry
-from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.roles.temporary_role_models import TemporaryRoleSpec
@@ -439,22 +439,20 @@ def test_runtime_environment_prompt_mentions_clawhub_when_only_token_exists(
 def test_runtime_environment_prompt_mentions_package_tools_and_uv_fallback_hint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    pip_path = Path("/usr/local/bin/pip")
+    uv_path = Path("/usr/local/bin/uv")
     monkeypatch.setattr(
         system_prompts,
         "_resolve_package_tool_path",
-        lambda command_names: (
-            Path("/usr/local/bin/pip")
-            if command_names == ("pip", "pip3")
-            else Path("/usr/local/bin/uv")
-        ),
+        lambda command_names: pip_path if command_names == ("pip", "pip3") else uv_path,
     )
 
     prompt = system_prompts.build_environment_info_prompt(
         working_directory=Path("/tmp/project")
     )
 
-    assert "- Python Package Tool (pip): /usr/local/bin/pip" in prompt
-    assert "- Python Package Tool (uv): /usr/local/bin/uv" in prompt
+    assert f"- Python Package Tool (pip): {pip_path}" in prompt
+    assert f"- Python Package Tool (uv): {uv_path}" in prompt
     assert (
         "If pip install fails with externally-managed-environment (PEP 668), try "
         "uv pip install <packages>." in prompt
@@ -464,19 +462,18 @@ def test_runtime_environment_prompt_mentions_package_tools_and_uv_fallback_hint(
 def test_runtime_environment_prompt_omits_uv_fallback_hint_when_uv_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    pip_path = Path("/usr/local/bin/pip")
     monkeypatch.setattr(
         system_prompts,
         "_resolve_package_tool_path",
-        lambda command_names: (
-            Path("/usr/local/bin/pip") if command_names == ("pip", "pip3") else None
-        ),
+        lambda command_names: pip_path if command_names == ("pip", "pip3") else None,
     )
 
     prompt = system_prompts.build_environment_info_prompt(
         working_directory=Path("/tmp/project")
     )
 
-    assert "- Python Package Tool (pip): /usr/local/bin/pip" in prompt
+    assert f"- Python Package Tool (pip): {pip_path}" in prompt
     assert "- Python Package Tool (uv): not found on PATH" in prompt
     assert "uv pip install <packages>" not in prompt
 
@@ -676,6 +673,58 @@ def test_runtime_system_prompt_for_main_agent_uses_base_role_prompt_only() -> No
     assert "## Normal Mode" not in prompt
     assert "You are a focused agent." in prompt
     assert "## Available Roles" not in prompt
+
+
+def test_runtime_system_prompt_for_normal_mode_root_includes_available_subagents() -> (
+    None
+):
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Handles direct runs.",
+            version="1",
+            tools=("read", "spawn_subagent"),
+            model_profile="default",
+            system_prompt="You are a focused agent.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="Crafter",
+            name="Crafter",
+            description="Implements requested changes.",
+            version="1",
+            tools=("read", "write"),
+            mode=RoleMode.SUBAGENT,
+            model_profile="default",
+            system_prompt="You are a crafter.",
+        )
+    )
+
+    prompt = asyncio.run(
+        build_runtime_system_prompt(
+            RuntimePromptBuildInput(
+                role=registry.get("MainAgent"),
+                topology=RunTopologySnapshot(
+                    session_mode=SessionMode.NORMAL,
+                    main_agent_role_id="MainAgent",
+                    normal_root_role_id="MainAgent",
+                    coordinator_role_id="Coordinator",
+                    orchestration_preset_id=None,
+                    orchestration_prompt="",
+                    allowed_role_ids=(),
+                ),
+                shared_state_snapshot=(),
+            ),
+            role_registry=registry,
+        )
+    )
+
+    assert "## Subagent Rules" in prompt
+    assert "Inspect the `spawn_subagent` tool description" in prompt
+    assert "## Available Subagents" not in prompt
 
 
 def test_runtime_system_prompt_loads_all_project_agents_files_before_fallback(

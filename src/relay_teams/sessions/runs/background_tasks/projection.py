@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+
 from pydantic import JsonValue
 
 from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
@@ -10,7 +12,11 @@ _MAX_VISIBLE_OUTPUT_CHARS = 32_000
 _OUTPUT_TRUNCATED_SUFFIX = "\n\n... output truncated; see log_path for full output ..."
 _COMPLETION_FOLLOWUP_PREFIX = (
     "A managed background task finished. "
-    "Respond to the user with one short status update based on the notification below.\n\n"
+    "The notification below includes the same result payload returned by "
+    "wait_background_task(background_task_id) for this completed task. "
+    "Use that payload directly to continue the conversation and respond to the user "
+    "with one short status update grounded in the task result. "
+    "Do not say that you need to re-open or re-query the task before replying.\n\n"
 )
 
 
@@ -22,9 +28,11 @@ def build_background_task_payload(
         "background_task_id": record.background_task_id,
         "run_id": record.run_id,
         "session_id": record.session_id,
+        "kind": record.kind.value,
         "instance_id": record.instance_id,
         "role_id": record.role_id,
         "tool_call_id": record.tool_call_id,
+        "title": record.title,
         "command": record.command,
         "cwd": record.cwd,
         "status": record.status.value,
@@ -35,6 +43,10 @@ def build_background_task_payload(
         "output_excerpt": visible_output,
         "output_truncated": output_truncated,
         "log_path": record.log_path,
+        "subagent_role_id": record.subagent_role_id,
+        "subagent_run_id": record.subagent_run_id,
+        "subagent_task_id": record.subagent_task_id,
+        "subagent_instance_id": record.subagent_instance_id,
         "created_at": record.created_at.isoformat(),
         "updated_at": record.updated_at.isoformat(),
         "completed_at": (
@@ -63,19 +75,33 @@ def build_background_task_result_payload(
 
 
 def build_background_task_completion_message(record: BackgroundTaskRecord) -> str:
+    payload = build_background_task_result_payload(
+        record,
+        completed=True,
+        include_task_id=True,
+    )
+    payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
     exit_code = "" if record.exit_code is None else str(record.exit_code)
     tool_call_id = record.tool_call_id or ""
     summary = _notification_summary(record)
+    title = record.title or record.command
+    subagent_role_id = record.subagent_role_id or ""
     return (
         f"{_COMPLETION_FOLLOWUP_PREFIX}"
         "<background-task-notification>\n"
         f"<background-task-id>{_xml_escape(record.background_task_id)}</background-task-id>\n"
         f"<tool-call-id>{_xml_escape(tool_call_id)}</tool-call-id>\n"
+        f"<kind>{_xml_escape(record.kind.value)}</kind>\n"
         f"<status>{_xml_escape(record.status.value)}</status>\n"
+        f"<title>{_xml_escape(title)}</title>\n"
+        f"<subagent-role-id>{_xml_escape(subagent_role_id)}</subagent-role-id>\n"
         f"<command>{_xml_escape(record.command)}</command>\n"
         f"<exit-code>{_xml_escape(exit_code)}</exit-code>\n"
         f"<log-path>{_xml_escape(record.log_path)}</log-path>\n"
         f"<summary>{_xml_escape(summary)}</summary>\n"
+        "<result-payload>\n"
+        f"{_xml_escape(payload_json)}\n"
+        "</result-payload>\n"
         "</background-task-notification>"
     )
 

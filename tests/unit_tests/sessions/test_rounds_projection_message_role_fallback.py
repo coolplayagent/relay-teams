@@ -315,7 +315,7 @@ def test_build_session_rounds_clears_stale_microcompact_badge_on_later_false_eve
     assert round_item["microcompact"] is None
 
 
-def test_build_session_rounds_summarizes_background_task_notification_intent(
+def test_build_session_rounds_preserves_background_task_notification_intent(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "rounds_projection_background_task_intent.db"
@@ -372,7 +372,11 @@ def test_build_session_rounds_summarizes_background_task_notification_intent(
     )
     round_item = next(item for item in rounds if item["run_id"] == run_id)
 
-    assert round_item["intent"] == "Background task completed"
+    intent = str(round_item["intent"] or "")
+    assert "Respond to the user with one short status update" in intent
+    assert "<background-task-notification>" in intent
+    assert "<status>completed</status>" in intent
+    assert "Background task completed" not in intent
 
 
 def test_build_session_rounds_reconstructs_completed_output_and_marks_clear_boundary(

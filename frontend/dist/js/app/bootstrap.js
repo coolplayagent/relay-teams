@@ -94,7 +94,7 @@ function setupSettingsButton() {
   }
 }
 
-export async function initApp(selectSession, handleSend) {
+export async function initApp(selectSession, selectSubagentSession, handleSend) {
   installGlobalErrorLogging();
   logInfo("frontend.bootstrap.started", "Frontend bootstrap started");
   await initializeLanguage();
@@ -123,6 +123,15 @@ export async function initApp(selectSession, handleSend) {
       return;
     }
     void selectSession(sessionId);
+  });
+
+  document.addEventListener("agent-teams-select-subagent-session", (event) => {
+    const sessionId = String(event?.detail?.sessionId || "").trim();
+    const subagent = event?.detail?.subagent || null;
+    if (!sessionId || !subagent) {
+      return;
+    }
+    void selectSubagentSession(sessionId, subagent);
   });
 
   const firstSessionEl = document.querySelector(".session-item");

@@ -302,6 +302,19 @@ class RunRuntimeRepository:
             operation_name="delete_by_session",
         )
 
+    def delete(self, run_id: str) -> None:
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM run_runtime WHERE run_id=?",
+                (run_id,),
+            ),
+            lock=self._lock,
+            repository_name="RunRuntimeRepository",
+            operation_name="delete",
+        )
+
     def _to_record(
         self,
         row: sqlite3.Row,

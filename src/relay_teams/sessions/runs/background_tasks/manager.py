@@ -546,7 +546,6 @@ class BackgroundTaskManager:
             follow_up, completed = await self.wait_for_run(
                 run_id=run_id,
                 background_task_id=record.background_task_id,
-                wait_ms=250,
             )
             return follow_up, completed
         return updated, True
@@ -572,7 +571,6 @@ class BackgroundTaskManager:
         *,
         run_id: str,
         background_task_id: str,
-        wait_ms: int,
     ) -> tuple[BackgroundTaskRecord, bool]:
         record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
         runtime = self._runtimes.get(background_task_id)
@@ -580,13 +578,8 @@ class BackgroundTaskManager:
             return record, True
         if runtime is None:
             return record, False
-        if wait_ms < 1:
-            raise ValueError("wait_ms must be >= 1")
-        try:
-            await asyncio.wait_for(runtime.completed.wait(), timeout=wait_ms / 1000.0)
-            return self._get_record(background_task_id), True
-        except asyncio.TimeoutError:
-            return self._get_record(background_task_id), False
+        await runtime.completed.wait()
+        return self._get_record(background_task_id), True
 
     async def interact_for_run(
         self,

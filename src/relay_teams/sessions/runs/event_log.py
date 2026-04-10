@@ -244,6 +244,19 @@ class EventLog:
             operation_name="delete_by_session",
         )
 
+    def delete_by_trace(self, trace_id: str) -> None:
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM events WHERE trace_id=?",
+                (trace_id,),
+            ),
+            lock=self._lock,
+            repository_name="EventLog",
+            operation_name="delete_by_trace",
+        )
+
     def _row_to_dict(self, row: sqlite3.Row) -> dict[str, JsonValue]:
         result: dict[str, JsonValue] = {
             "event_type": str(row["event_type"]),

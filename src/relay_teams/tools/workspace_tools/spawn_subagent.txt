@@ -1,0 +1,14 @@
+Start a fresh subagent run under a subagent-capable role. By default this waits for the subagent to finish and returns its final output. Pass `background=true` to run it as a managed background task instead.
+
+Arguments:
+- `role_id`: subagent-capable role to run.
+- `description`: short task label for background task lists and notifications.
+- `prompt`: complete task instructions for the spawned subagent.
+- `background`: optional. Defaults to `false`. When `true`, returns immediately with a `background_task_id`.
+
+Usage rules:
+- Use the default synchronous mode when you need the subagent's result immediately.
+- Use `background=true` only for parallelizable work that can finish independently in the background.
+- Pass all necessary context in `prompt`; each spawned subagent starts with a fresh conversation.
+- Background tasks should be managed with `list_background_tasks`, `wait_background_task`, and `stop_background_task`.
+- Do not assume the result is shown to the user automatically. Summarize it yourself when needed.

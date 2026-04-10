@@ -4,6 +4,7 @@ name: Gater
 description: Audits completed work against evidence and acceptance criteria, NEVER edit any file.
 model_profile: default
 version: 1.0.0
+mode: subagent
 tools:
   - grep
   - glob
