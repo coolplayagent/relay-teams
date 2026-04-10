@@ -30,5 +30,13 @@
       "toast"
     ],
     "feishu_format": "text"
+  },
+  "monitor_triggered": {
+    "enabled": true,
+    "channels": [
+      "browser",
+      "toast"
+    ],
+    "feishu_format": "text"
   }
 }

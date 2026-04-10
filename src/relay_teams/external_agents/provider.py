@@ -44,6 +44,7 @@ from relay_teams.external_agents.session_repository import (
 )
 from relay_teams.logger import get_logger, log_event
 from relay_teams.media import MediaAssetService
+from relay_teams.monitors import MonitorService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.model_config import ModelEndpointConfig, ProviderType
 from relay_teams.providers.openai_support import build_model_request_headers
@@ -143,6 +144,7 @@ class ExternalAcpSessionManager:
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         background_task_service: BackgroundTaskService | None,
+        monitor_service: MonitorService | None = None,
         role_memory_service: RoleMemoryService | None,
         tool_registry: ToolRegistry,
         get_mcp_registry: Callable[[], McpRegistry],
@@ -179,6 +181,7 @@ class ExternalAcpSessionManager:
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._background_task_service = background_task_service
+        self._monitor_service = monitor_service
         self._role_memory_service = role_memory_service
         self._tool_registry = tool_registry
         self._get_mcp_registry = get_mcp_registry
@@ -933,6 +936,7 @@ class ExternalAcpSessionManager:
             run_runtime_repo=self._run_runtime_repo,
             run_intent_repo=self._run_intent_repo,
             background_task_service=self._background_task_service,
+            monitor_service=self._monitor_service,
             workspace_manager=self._workspace_manager,
             media_asset_service=self._media_asset_service,
             role_memory_service=self._role_memory_service,

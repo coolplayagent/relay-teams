@@ -43,11 +43,29 @@ def register_stop_background_task(agent: Agent[ToolDeps, str]) -> None:
     _register_workspace_tools(agent, ("stop_background_task",))
 
 
+def register_create_monitor(agent: Agent[ToolDeps, str]) -> None:
+    _register_workspace_tools(agent, ("create_monitor",))
+
+
+def register_list_monitors(agent: Agent[ToolDeps, str]) -> None:
+    _register_workspace_tools(agent, ("list_monitors",))
+
+
+def register_stop_monitor(agent: Agent[ToolDeps, str]) -> None:
+    _register_workspace_tools(agent, ("stop_monitor",))
+
+
 def register_background_tasks(agent: Agent[ToolDeps, str]) -> None:
     register_shell(agent)
     register_list_background_tasks(agent)
     register_wait_background_task(agent)
     register_stop_background_task(agent)
+
+
+def register_monitors(agent: Agent[ToolDeps, str]) -> None:
+    register_create_monitor(agent)
+    register_list_monitors(agent)
+    register_stop_monitor(agent)
 
 
 def register_write(agent: Agent[ToolDeps, str]) -> None:
@@ -106,6 +124,18 @@ def _register_single_tool(agent: Agent[ToolDeps, str], tool_name: str) -> None:
         from relay_teams.tools.workspace_tools.stop_background_task import (
             register as register_impl,
         )
+    elif tool_name == "create_monitor":
+        from relay_teams.tools.workspace_tools.create_monitor import (
+            register as register_impl,
+        )
+    elif tool_name == "list_monitors":
+        from relay_teams.tools.workspace_tools.list_monitors import (
+            register as register_impl,
+        )
+    elif tool_name == "stop_monitor":
+        from relay_teams.tools.workspace_tools.stop_monitor import (
+            register as register_impl,
+        )
     else:
         raise ValueError(f"Unknown workspace tool: {tool_name}")
     register_impl(agent)
@@ -122,18 +152,25 @@ TOOLS = {
     "list_background_tasks": register_list_background_tasks,
     "wait_background_task": register_wait_background_task,
     "stop_background_task": register_stop_background_task,
+    "create_monitor": register_create_monitor,
+    "list_monitors": register_list_monitors,
+    "stop_monitor": register_stop_monitor,
 }
 
 __all__ = [
     "TOOLS",
     "register_background_tasks",
+    "register_create_monitor",
     "register_edit",
     "register_glob",
     "register_grep",
     "register_list_background_tasks",
+    "register_list_monitors",
+    "register_monitors",
     "register_read",
     "register_shell",
     "register_stop_background_task",
+    "register_stop_monitor",
     "register_wait_background_task",
     "register_write",
     "register_write_tmp",

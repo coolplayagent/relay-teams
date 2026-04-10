@@ -88,6 +88,7 @@ from relay_teams.metrics import (
     SqliteMetricAggregateStore,
 )
 from relay_teams.media import MediaAssetRepository, MediaAssetService
+from relay_teams.monitors import MonitorRepository, MonitorService
 from relay_teams.notifications import NotificationConfigManager, NotificationService
 from relay_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
@@ -168,6 +169,13 @@ from relay_teams.tools.runtime import (
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
 )
+from relay_teams.triggers import (
+    GitHubApiClient,
+    GitHubTriggerActionWorker,
+    GitHubTriggerService,
+    TriggerRepository,
+    get_github_trigger_secret_store,
+)
 from relay_teams.gateway.wechat import (
     WeChatAccountRepository,
     WeChatClient,
@@ -201,52 +209,53 @@ class ServerContainer:
             roles_dir=roles_dir,
             db_path=db_path,
         )
-        ensure_app_config_bootstrap(config_dir)
-        self.config_dir: Path = config_dir
+        app_config_dir = runtime.paths.config_dir
+        ensure_app_config_bootstrap(app_config_dir)
+        self.config_dir: Path = app_config_dir
         self.runtime: RuntimeConfig = runtime
         self._session_model_profile_lookup = session_model_profile_lookup
 
         self.model_config_manager: ModelConfigManager = ModelConfigManager(
-            config_dir=config_dir
+            config_dir=app_config_dir
         )
         self.notification_config_manager: NotificationConfigManager = (
-            NotificationConfigManager(config_dir=config_dir)
+            NotificationConfigManager(config_dir=app_config_dir)
         )
         self.orchestration_settings_config_manager = OrchestrationSettingsConfigManager(
-            config_dir=config_dir
+            config_dir=app_config_dir
         )
         self.proxy_config_service: ProxyConfigService = ProxyConfigService(
-            config_dir=config_dir,
+            config_dir=app_config_dir,
             on_proxy_reloaded=self._on_proxy_reloaded,
         )
         self.web_config_service: WebConfigService = WebConfigService(
-            config_dir=config_dir
+            config_dir=app_config_dir
         )
         self.github_config_service: GitHubConfigService = GitHubConfigService(
-            config_dir=config_dir,
+            config_dir=app_config_dir,
             get_proxy_config=self.proxy_config_service.get_proxy_config,
         )
         self.clawhub_config_service: ClawHubConfigService = ClawHubConfigService(
-            config_dir=config_dir
+            config_dir=app_config_dir
         )
         self.clawhub_search_service: ClawHubSkillSearchService = (
             ClawHubSkillSearchService(
-                config_dir=config_dir,
+                config_dir=app_config_dir,
                 get_clawhub_config=self.clawhub_config_service.get_clawhub_config,
             )
         )
         self.clawhub_install_service: ClawHubSkillInstallService = (
             ClawHubSkillInstallService(
-                config_dir=config_dir,
+                config_dir=app_config_dir,
                 get_clawhub_config=self.clawhub_config_service.get_clawhub_config,
                 on_skill_installed=self._reload_skills_config,
             )
         )
         self.ui_language_settings_service = UiLanguageSettingsService(
-            config_dir=config_dir
+            config_dir=app_config_dir
         )
         self.external_agent_config_service = ExternalAgentConfigService(
-            config_dir=config_dir
+            config_dir=app_config_dir
         )
         self.environment_variable_service: EnvironmentVariableService = (
             EnvironmentVariableService(
@@ -255,13 +264,13 @@ class ServerContainer:
             )
         )
         self.mcp_config_manager: McpConfigManager = McpConfigManager(
-            app_config_dir=config_dir
+            app_config_dir=app_config_dir
         )
         self.tool_registry: ToolRegistry = build_default_registry()
         self.mcp_registry: McpRegistry = self.mcp_config_manager.load_registry()
         self.mcp_service: McpService = McpService(registry=self.mcp_registry)
         self.skill_registry: SkillRegistry = SkillRegistry.from_config_dirs(
-            app_config_dir=config_dir
+            app_config_dir=app_config_dir
         )
         self.role_registry = self._sanitize_role_registry(
             RoleLoader().load_builtin_and_app(
@@ -283,10 +292,10 @@ class ServerContainer:
         )
         self.workspace_manager: WorkspaceManager = WorkspaceManager(
             project_root=Path.cwd(),
-            app_config_dir=config_dir,
+            app_config_dir=app_config_dir,
             workspace_repo=self.workspace_repo,
             builtin_skills_dir=get_builtin_skills_dir(),
-            app_skills_dir=config_dir / "skills",
+            app_skills_dir=app_config_dir / "skills",
         )
         self.media_asset_repo: MediaAssetRepository = MediaAssetRepository(
             runtime.paths.db_path
@@ -325,6 +334,7 @@ class ServerContainer:
         self.run_state_repo: RunStateRepository = RunStateRepository(
             runtime.paths.db_path
         )
+        self.trigger_repository = TriggerRepository(runtime.paths.db_path)
         self.session_repo: SessionRepository = SessionRepository(runtime.paths.db_path)
         self.external_session_binding_repo: ExternalSessionBindingRepository = (
             ExternalSessionBindingRepository(runtime.paths.db_path)
@@ -415,9 +425,15 @@ class ServerContainer:
             event_log=self.event_log,
             run_state_repo=self.run_state_repo,
         )
+        self.monitor_repository = MonitorRepository(runtime.paths.db_path)
+        self.monitor_service = MonitorService(
+            repository=self.monitor_repository,
+            run_event_hub=self.run_event_hub,
+        )
         self.background_task_manager = BackgroundTaskManager(
             repository=self.background_task_repository,
             run_event_hub=self.run_event_hub,
+            monitor_service=self.monitor_service,
         )
         self.background_task_service = BackgroundTaskService(
             background_task_manager=self.background_task_manager,
@@ -429,8 +445,12 @@ class ServerContainer:
             runtime.paths.db_path
         )
         self.wechat_client = WeChatClient()
+        self.github_trigger_secret_store = get_github_trigger_secret_store()
+        self.github_api_client = GitHubApiClient(
+            get_proxy_config=self.proxy_config_service.get_proxy_config
+        )
         self.feishu_gateway_service = FeishuGatewayService(
-            config_dir=config_dir,
+            config_dir=app_config_dir,
             repository=self.feishu_account_repository,
             secret_store=None,
             role_registry=self.role_registry,
@@ -439,7 +459,7 @@ class ServerContainer:
             external_session_binding_repo=self.external_session_binding_repo,
         )
         self.im_tool_service: ImToolService = ImToolService(
-            config_dir=config_dir,
+            config_dir=app_config_dir,
             session_repo=self.session_repo,
             runtime_config_lookup=self.feishu_gateway_service,
             automation_project_repo=self.automation_repo,
@@ -490,6 +510,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             background_task_service=self.background_task_service,
+            monitor_service=self.monitor_service,
             role_memory_service=self.role_memory_service,
             tool_registry=self.tool_registry,
             get_mcp_registry=lambda: self.mcp_registry,
@@ -565,12 +586,14 @@ class ServerContainer:
             run_state_repo=self.run_state_repo,
             background_task_manager=self.background_task_manager,
             background_task_service=self.background_task_service,
+            monitor_service=self.monitor_service,
             notification_service=self.notification_service,
             orchestration_settings_service=self.orchestration_settings_service,
             media_asset_service=self.media_asset_service,
             runtime_role_resolver=self.runtime_role_resolver,
             shell_approval_repo=self.shell_approval_repo,
         )
+        self.monitor_service.bind_action_sink(self.run_service)
         self.session_service: SessionService = SessionService(
             session_repo=self.session_repo,
             task_repo=self.task_repo,
@@ -579,6 +602,7 @@ class ServerContainer:
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
             token_usage_repo=self.token_usage_repo,
+            monitor_repository=self.monitor_repository,
             background_task_repository=self.background_task_repository,
             run_state_repo=self.run_state_repo,
             run_event_hub=self.run_event_hub,
@@ -633,7 +657,7 @@ class ServerContainer:
             feishu_message_pool_service=self.feishu_message_pool_service,
         )
         self.wechat_gateway_service = WeChatGatewayService(
-            config_dir=config_dir,
+            config_dir=app_config_dir,
             repository=self.wechat_account_repository,
             secret_store=None,
             client=self.wechat_client,
@@ -682,6 +706,7 @@ class ServerContainer:
             ),
         )
         self.run_service._notification_service = self.notification_service
+        self.monitor_service.bind_notification_service(self.notification_service)
         self.automation_bound_session_queue_service = (
             AutomationBoundSessionQueueService(
                 repository=self.automation_bound_session_queue_repo,
@@ -719,6 +744,22 @@ class ServerContainer:
             workspace_service=self.workspace_service,
             session_ingress_service=self.session_ingress_service,
         )
+        self.github_trigger_service = GitHubTriggerService(
+            config_dir=app_config_dir,
+            repository=self.trigger_repository,
+            secret_store=self.github_trigger_secret_store,
+            github_client=self.github_api_client,
+            automation_service=self.automation_service,
+            session_service=self.session_service,
+            run_service=self.run_service,
+            run_runtime_repo=self.run_runtime_repo,
+            event_log=self.event_log,
+            monitor_service=self.monitor_service,
+            session_ingress_service=self.session_ingress_service,
+        )
+        self.github_trigger_action_worker = GitHubTriggerActionWorker(
+            trigger_service=self.github_trigger_service
+        )
         self.automation_scheduler_service: AutomationSchedulerService = (
             AutomationSchedulerService(automation_service=self.automation_service)
         )
@@ -729,7 +770,7 @@ class ServerContainer:
             get_proxy_status=self.proxy_config_service.get_proxy_status,
         )
         self.model_config_service: ModelConfigService = ModelConfigService(
-            config_dir=config_dir,
+            config_dir=app_config_dir,
             roles_dir=self.runtime.paths.roles_dir,
             db_path=self.runtime.paths.db_path,
             model_config_manager=self.model_config_manager,
@@ -760,13 +801,13 @@ class ServerContainer:
         )
         self.skills_config_reload_service: SkillsConfigReloadService = (
             SkillsConfigReloadService(
-                config_dir=config_dir,
+                config_dir=app_config_dir,
                 role_registry=self.role_registry,
                 on_skill_reloaded=self._on_skill_reloaded,
             )
         )
         self.clawhub_skill_service: ClawHubSkillService = ClawHubSkillService(
-            config_dir=config_dir,
+            config_dir=app_config_dir,
             on_skill_mutated=self._reload_skills_config,
         )
 
@@ -789,6 +830,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             background_task_service=self.background_task_service,
+            monitor_service=self.monitor_service,
             workspace_manager=self.workspace_manager,
             media_asset_service=self.media_asset_service,
             computer_runtime=self.computer_runtime,
@@ -895,11 +937,13 @@ class ServerContainer:
         self.feishu_message_pool_service.start()
         self.automation_delivery_worker.start()
         self.automation_bound_session_queue_worker.start()
+        self.github_trigger_action_worker.start()
         await self.automation_scheduler_service.start()
         return None
 
     async def stop(self) -> None:
         await self.automation_scheduler_service.stop()
+        self.github_trigger_action_worker.stop()
         self.automation_bound_session_queue_worker.stop()
         self.automation_delivery_worker.stop()
         self.feishu_message_pool_service.stop()
@@ -979,17 +1023,17 @@ class ServerContainer:
             on_mcp_reloaded=self._on_mcp_reloaded,
         )
         self.skills_config_reload_service = SkillsConfigReloadService(
-            config_dir=self.config_dir,
+            config_dir=self.runtime.paths.config_dir,
             role_registry=self.role_registry,
             on_skill_reloaded=self._on_skill_reloaded,
         )
         self.clawhub_install_service = ClawHubSkillInstallService(
-            config_dir=self.config_dir,
+            config_dir=self.runtime.paths.config_dir,
             get_clawhub_config=self.clawhub_config_service.get_clawhub_config,
             on_skill_installed=self._reload_skills_config,
         )
         self.clawhub_skill_service = ClawHubSkillService(
-            config_dir=self.config_dir,
+            config_dir=self.runtime.paths.config_dir,
             on_skill_mutated=self._reload_skills_config,
         )
         self._refresh_coordinator_runtime()

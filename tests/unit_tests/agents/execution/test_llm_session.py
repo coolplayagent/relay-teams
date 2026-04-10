@@ -29,6 +29,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
+    TextPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -573,6 +574,24 @@ def test_persist_user_prompt_keeps_microcompacted_history_in_memory() -> None:
     assert appended_part.content == "new prompt"
 
 
+def test_apply_streamed_text_fallback_repairs_truncated_final_message() -> None:
+    session = object.__new__(AgentLlmSession)
+    messages: list[ModelRequest | ModelResponse] = [
+        ModelResponse(parts=[TextPart(content="lunar-min")], model_name="fake-model")
+    ]
+
+    repaired = AgentLlmSession._apply_streamed_text_fallback(
+        session,
+        messages,
+        streamed_text="lunar-mint-407",
+    )
+
+    assert len(repaired) == 1
+    repaired_response = repaired[0]
+    assert isinstance(repaired_response, ModelResponse)
+    assert AgentLlmSession._extract_text(session, repaired_response) == "lunar-mint-407"
+
+
 @pytest.mark.asyncio
 async def test_generate_async_passes_retry_after_to_retry_schedule() -> None:
     session = object.__new__(AgentLlmSession)
@@ -618,6 +637,7 @@ async def test_generate_async_passes_retry_after_to_retry_schedule() -> None:
     session.__dict__["_media_asset_service"] = None
     session.__dict__["_computer_runtime"] = None
     session.__dict__["_background_task_service"] = None
+    session.__dict__["_monitor_service"] = None
     session.__dict__["_role_registry"] = cast(object, None)
     session.__dict__["_mcp_registry"] = McpRegistry()
     session.__dict__["_task_service"] = cast(object, None)

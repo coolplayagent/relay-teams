@@ -6,6 +6,13 @@ from pathlib import Path
 import pytest
 
 from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.monitors import (
+    MonitorActionType,
+    MonitorSourceKind,
+    MonitorSubscriptionRecord,
+    MonitorTriggerRecord,
+    MonitorRepository,
+)
 from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
@@ -57,6 +64,7 @@ def _build_service(
         message_repo=MessageRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
+        monitor_repository=MonitorRepository(db_path),
         background_task_repository=BackgroundTaskRepository(db_path),
         event_log=EventLog(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
@@ -103,6 +111,7 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
     background_task_repository = BackgroundTaskRepository(db_path)
+    monitor_repository = MonitorRepository(db_path)
     shared_store = SharedStateRepository(db_path)
     workspace_manager = WorkspaceManager(
         project_root=project_root,
@@ -221,6 +230,27 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
             log_path="tmp/background_tasks/exec-1.log",
         )
     )
+    monitor_record = monitor_repository.create_subscription(
+        MonitorSubscriptionRecord(
+            monitor_id="mon-1",
+            run_id="run-1",
+            session_id="session-1",
+            source_kind=MonitorSourceKind.BACKGROUND_TASK,
+            source_key="exec-1",
+        )
+    )
+    _ = monitor_repository.create_trigger(
+        MonitorTriggerRecord(
+            monitor_trigger_id="mntg-1",
+            monitor_id=monitor_record.monitor_id,
+            run_id="run-1",
+            session_id="session-1",
+            source_kind=MonitorSourceKind.BACKGROUND_TASK,
+            source_key="exec-1",
+            event_name="background_task.line",
+            action_type=MonitorActionType.WAKE_INSTANCE,
+        )
+    )
 
     service.delete_session("session-1")
 
@@ -271,6 +301,8 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
         == ()
     )
     assert background_task_repository.get(exec_record.background_task_id) is None
+    assert monitor_repository.list_for_run("run-1") == ()
+    assert monitor_repository.list_triggers_for_monitor(monitor_record.monitor_id) == ()
     assert not background_log_path.exists()
     assert not session_dir.exists()
     assert project_root.exists()

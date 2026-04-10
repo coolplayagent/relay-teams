@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 from relay_teams.agents.instances.models import AgentRuntimeRecord
 from relay_teams.metrics import SqliteMetricAggregateStore
+from relay_teams.monitors.repository import MonitorRepository
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType
 from relay_teams.gateway.feishu import (
     SESSION_METADATA_TITLE_SOURCE_KEY,
@@ -116,6 +117,7 @@ class SessionService:
         approval_ticket_repo: ApprovalTicketRepository,
         run_runtime_repo: RunRuntimeRepository,
         token_usage_repo: TokenUsageRepository,
+        monitor_repository: MonitorRepository | None = None,
         session_history_marker_repo: SessionHistoryMarkerRepository | None = None,
         run_state_repo: RunStateRepository | None = None,
         background_task_repository: BackgroundTaskRepository | None = None,
@@ -143,6 +145,7 @@ class SessionService:
         self._approval_ticket_repo = approval_ticket_repo
         self._run_runtime_repo = run_runtime_repo
         self._token_usage_repo = token_usage_repo
+        self._monitor_repository = monitor_repository
         self._session_history_marker_repo = session_history_marker_repo
         self._run_state_repo = run_state_repo
         self._background_task_repository = background_task_repository
@@ -399,6 +402,8 @@ class SessionService:
             background_task_records=background_task_records,
         )
         self._run_runtime_repo.delete_by_session(session_id)
+        if self._monitor_repository is not None:
+            self._monitor_repository.delete_by_session(session_id)
         self._task_repo.delete_by_session(session_id)
         self._agent_repo.delete_by_session(session_id)
         if self._session_history_marker_repo is not None:

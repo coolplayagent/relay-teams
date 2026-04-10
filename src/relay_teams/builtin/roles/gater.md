@@ -13,6 +13,9 @@ tools:
   - list_background_tasks
   - wait_background_task
   - stop_background_task
+  - create_monitor
+  - list_monitors
+  - stop_monitor
 ---
 
 ## 角色：Gater (质量审计员) 

@@ -38,6 +38,7 @@ from relay_teams.interfaces.server.routers import (
     sessions,
     system,
     tasks,
+    triggers,
     workspaces,
 )
 from relay_teams.logger import (
@@ -175,6 +176,7 @@ app.include_router(observability.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
 app.include_router(session_media.router, prefix="/api")
 app.include_router(runs.router, prefix="/api")
+app.include_router(triggers.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(roles.router, prefix="/api")
 app.include_router(prompts.router, prefix="/api")

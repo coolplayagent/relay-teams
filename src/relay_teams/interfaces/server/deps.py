@@ -45,6 +45,7 @@ from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.tools.registry import ToolRegistry
+from relay_teams.triggers import GitHubTriggerService
 from relay_teams.gateway.wechat import WeChatGatewayService
 from relay_teams.workspace import WorkspaceManager, WorkspaceService
 
@@ -201,3 +202,7 @@ def get_metrics_service(request: Request) -> MetricsService:
 
 def get_wechat_gateway_service(request: Request) -> WeChatGatewayService:
     return get_container(request).wechat_gateway_service
+
+
+def get_github_trigger_service(request: Request) -> GitHubTriggerService:
+    return get_container(request).github_trigger_service

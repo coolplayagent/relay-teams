@@ -29,6 +29,7 @@ except ImportError:
 from pydantic import JsonValue
 
 from relay_teams.logger import get_logger, log_event
+from relay_teams.monitors import MonitorEventEnvelope, MonitorService, MonitorSourceKind
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.background_tasks.models import (
@@ -127,6 +128,25 @@ class _HeadTailBuffer:
         if not tail_text:
             return head_text
         return f"{head_text}\n\n... omitted ...\n\n{tail_text}"
+
+
+class _MonitorOutputLineBuffer:
+    def __init__(self) -> None:
+        self._partial = ""
+
+    def feed(self, chunk: str) -> tuple[str, ...]:
+        normalized = chunk.replace("\r\n", "\n").replace("\r", "\n")
+        text = self._partial + normalized
+        parts = text.split("\n")
+        self._partial = parts.pop() if parts else ""
+        return tuple(line.strip() for line in parts if line.strip())
+
+    def finalize(self) -> tuple[str, ...]:
+        line = self._partial.strip()
+        self._partial = ""
+        if not line:
+            return ()
+        return (line,)
 
 
 class _WindowsPtyProcessProtocol(Protocol):
@@ -384,6 +404,8 @@ class _BackgroundTaskRuntime:
         self.stream_count = transport.stream_count
         self.recent_output = _RecentOutputBuffer(max_lines=MAX_RECENT_OUTPUT_LINES)
         self.output_buffer = _HeadTailBuffer(max_bytes=MAX_OUTPUT_BUFFER_BYTES)
+        self.monitor_line_buffers: dict[str, _MonitorOutputLineBuffer] = {}
+        self.monitor_line_sequence = 0
         self.pump_tasks: list[asyncio.Task[None]] = []
         self.supervisor_task: asyncio.Task[None] | None = None
         self.completed = asyncio.Event()
@@ -399,9 +421,11 @@ class BackgroundTaskManager:
         *,
         repository: BackgroundTaskRepository,
         run_event_hub: RunEventHub,
+        monitor_service: MonitorService | None = None,
     ) -> None:
         self._repository = repository
         self._run_event_hub = run_event_hub
+        self._monitor_service = monitor_service
         self._runtimes: dict[str, _BackgroundTaskRuntime] = {}
         self._admission_lock = asyncio.Lock()
         self._completion_listener: _BackgroundTaskCompletionListener | None = None
@@ -467,6 +491,10 @@ class BackgroundTaskManager:
                 self._publish_background_task_event(
                     event_type=RunEventType.BACKGROUND_TASK_STARTED,
                     record=runtime.record,
+                )
+                self._emit_monitor_state_event(
+                    record=runtime.record,
+                    event_name="background_task.started",
                 )
             except Exception:
                 self._runtimes.pop(background_task_id, None)
@@ -690,6 +718,10 @@ class BackgroundTaskManager:
         self._publish_background_task_event(
             event_type=RunEventType.BACKGROUND_TASK_STOPPED,
             record=updated,
+        )
+        self._emit_monitor_state_event(
+            record=updated,
+            event_name="background_task.stopped",
         )
         return updated
 
@@ -992,6 +1024,11 @@ class BackgroundTaskManager:
                 }
             )
         )
+        self._emit_monitor_lines(
+            runtime,
+            stream_name=stream_name,
+            chunk=chunk,
+        )
         await self._mark_runtime_changed(runtime)
         self._publish_background_task_event(
             event_type=RunEventType.BACKGROUND_TASK_UPDATED,
@@ -1014,6 +1051,7 @@ class BackgroundTaskManager:
             if runtime.completed.is_set():
                 return
             runtime.recent_output.finalize()
+            self._emit_monitor_final_lines(runtime)
             exit_code = runtime.transport.returncode
             if exit_code is None and not timed_out and wait_for_exit:
                 exit_code = await runtime.transport.wait()
@@ -1056,6 +1094,10 @@ class BackgroundTaskManager:
                     else RunEventType.BACKGROUND_TASK_COMPLETED
                 ),
                 record=runtime.record,
+            )
+            self._emit_monitor_state_event(
+                record=runtime.record,
+                event_name=_background_task_state_event_name(status),
             )
             if self._completion_listener is not None:
                 await self._completion_listener(runtime.record)
@@ -1210,6 +1252,120 @@ class BackgroundTaskManager:
         payload["delta"] = chunk
         return payload
 
+    def _emit_monitor_lines(
+        self,
+        runtime: _BackgroundTaskRuntime,
+        *,
+        stream_name: str,
+        chunk: str,
+    ) -> None:
+        if self._monitor_service is None:
+            return
+        buffer = runtime.monitor_line_buffers.setdefault(
+            stream_name,
+            _MonitorOutputLineBuffer(),
+        )
+        for line in buffer.feed(chunk):
+            runtime.monitor_line_sequence += 1
+            self._emit_monitor_event(
+                record=runtime.record,
+                event_name="background_task.line",
+                body_text=line,
+                attributes={
+                    "stream_name": stream_name,
+                    "status": runtime.record.status.value,
+                    "execution_mode": runtime.record.execution_mode,
+                },
+                dedupe_key=(
+                    f"{runtime.record.background_task_id}:line:{runtime.monitor_line_sequence}"
+                ),
+            )
+
+    def _emit_monitor_final_lines(self, runtime: _BackgroundTaskRuntime) -> None:
+        if self._monitor_service is None:
+            return
+        for stream_name, buffer in runtime.monitor_line_buffers.items():
+            for line in buffer.finalize():
+                runtime.monitor_line_sequence += 1
+                self._emit_monitor_event(
+                    record=runtime.record,
+                    event_name="background_task.line",
+                    body_text=line,
+                    attributes={
+                        "stream_name": stream_name,
+                        "status": runtime.record.status.value,
+                        "execution_mode": runtime.record.execution_mode,
+                    },
+                    dedupe_key=(
+                        f"{runtime.record.background_task_id}:line:{runtime.monitor_line_sequence}"
+                    ),
+                )
+
+    def _emit_monitor_state_event(
+        self,
+        *,
+        record: BackgroundTaskRecord,
+        event_name: str,
+    ) -> None:
+        self._emit_monitor_event(
+            record=record,
+            event_name=event_name,
+            body_text=record.output_excerpt or record.command,
+            attributes={
+                "status": record.status.value,
+                "execution_mode": record.execution_mode,
+                "exit_code": "" if record.exit_code is None else str(record.exit_code),
+            },
+            dedupe_key=(
+                f"{record.background_task_id}:state:{event_name}:{record.updated_at.isoformat()}"
+            ),
+        )
+
+    def _emit_monitor_event(
+        self,
+        *,
+        record: BackgroundTaskRecord,
+        event_name: str,
+        body_text: str,
+        attributes: dict[str, str],
+        dedupe_key: str,
+    ) -> None:
+        if self._monitor_service is None:
+            return
+        normalized_attributes: dict[str, str] = {
+            "background_task_id": record.background_task_id,
+            "run_id": record.run_id,
+            "session_id": record.session_id,
+            "command": record.command,
+            "cwd": record.cwd,
+        }
+        for key, value in attributes.items():
+            normalized_value = value.strip()
+            if normalized_value:
+                normalized_attributes[key] = normalized_value
+        if record.instance_id is not None and record.instance_id.strip():
+            normalized_attributes["instance_id"] = record.instance_id
+        if record.role_id is not None and record.role_id.strip():
+            normalized_attributes["role_id"] = record.role_id
+        raw_payload = {
+            "event_name": event_name,
+            "body_text": body_text,
+            "attributes": normalized_attributes,
+        }
+        self._monitor_service.emit(
+            MonitorEventEnvelope(
+                source_kind=MonitorSourceKind.BACKGROUND_TASK,
+                source_key=record.background_task_id,
+                event_name=event_name,
+                run_id=record.run_id,
+                session_id=record.session_id,
+                body_text=body_text,
+                attributes=normalized_attributes,
+                dedupe_key=dedupe_key,
+                raw_payload_json=json.dumps(raw_payload, ensure_ascii=False),
+            )
+        )
+
     def _get_record(self, background_task_id: str) -> BackgroundTaskRecord:
         record = self._repository.get(background_task_id)
         if record is None:
@@ -1244,6 +1400,16 @@ def _normalize_poll_timeout(
     if yield_time_ms is None:
         return MIN_EMPTY_POLL_YIELD_MS
     return min(MAX_BACKGROUND_POLL_MS, max(MIN_EMPTY_POLL_YIELD_MS, yield_time_ms))
+
+
+def _background_task_state_event_name(status: BackgroundTaskStatus) -> str:
+    if status == BackgroundTaskStatus.COMPLETED:
+        return "background_task.completed"
+    if status == BackgroundTaskStatus.STOPPED:
+        return "background_task.stopped"
+    if status == BackgroundTaskStatus.FAILED:
+        return "background_task.failed"
+    return "background_task.updated"
 
 
 def _set_terminal_size(fd: int, *, columns: int, rows: int) -> None:

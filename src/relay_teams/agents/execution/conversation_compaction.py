@@ -11,8 +11,12 @@ from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
+    PartDeltaEvent,
+    PartEndEvent,
+    PartStartEvent,
     RetryPromptPart,
     TextPart,
+    TextPartDelta,
     ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
@@ -485,16 +489,81 @@ class ConversationCompactionService:
         agent: Agent[None, str],
         prompt: str,
     ) -> str:
+        emitted_text_chunks: list[str] = []
+        text_lengths: dict[int, int] = {}
         async with agent.iter(prompt) as agent_run:
             async for node in agent_run:
                 if not isinstance(node, ModelRequestNode):
                     continue
                 async with node.stream(agent_run.ctx) as stream:
-                    async for _event in stream:
-                        pass
+                    async for event in stream:
+                        self._capture_streamed_summary_text(
+                            event=event,
+                            emitted_text_chunks=emitted_text_chunks,
+                            text_lengths=text_lengths,
+                        )
             if agent_run.result is None:
                 raise RuntimeError("Conversation compaction summary did not complete")
-            return agent_run.result.output.strip()
+            result_output = agent_run.result.output.strip()
+            streamed_output = "".join(emitted_text_chunks).strip()
+            if streamed_output and streamed_output != result_output:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="conversation.compaction.stream_text_fallback_applied",
+                    message=("Repairing compacted summary with streamed text fallback"),
+                    payload={
+                        "result_output_length": len(result_output),
+                        "streamed_output_length": len(streamed_output),
+                    },
+                )
+                return streamed_output
+            return result_output
+
+    def _capture_streamed_summary_text(
+        self,
+        *,
+        event: object,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+    ) -> None:
+        if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
+            self._append_streamed_summary_text(
+                part_index=event.index,
+                content=event.part.content,
+                emitted_text_chunks=emitted_text_chunks,
+                text_lengths=text_lengths,
+            )
+            return
+        if isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+            text = str(event.delta.content_delta or "")
+            if not text:
+                return
+            text_lengths[event.index] = text_lengths.get(event.index, 0) + len(text)
+            emitted_text_chunks.append(text)
+            return
+        if isinstance(event, PartEndEvent) and isinstance(event.part, TextPart):
+            self._append_streamed_summary_text(
+                part_index=event.index,
+                content=event.part.content,
+                emitted_text_chunks=emitted_text_chunks,
+                text_lengths=text_lengths,
+            )
+
+    def _append_streamed_summary_text(
+        self,
+        *,
+        part_index: int,
+        content: str,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+    ) -> None:
+        previous_length = text_lengths.get(part_index, 0)
+        suffix = content[previous_length:]
+        text_lengths[part_index] = len(content)
+        if not suffix:
+            return
+        emitted_text_chunks.append(suffix)
 
     def _get_latest_active_compaction_marker(
         self,
@@ -561,13 +630,46 @@ def _render_transcript(
         rendered = _render_message(message)
         if not rendered:
             continue
-        clipped = rendered[:remaining].strip()
+        clipped, truncated = _clip_rendered_message(rendered, max_chars=remaining)
         if clipped:
             lines.append(clipped)
             remaining -= len(clipped)
-        if remaining <= 0:
+        if truncated or remaining <= 0:
             break
     return "\n\n".join(lines).strip()
+
+
+def _clip_rendered_message(text: str, *, max_chars: int) -> tuple[str, bool]:
+    stripped = text.strip()
+    if not stripped:
+        return ("", False)
+    if max_chars <= 0:
+        return ("", True)
+    if len(stripped) <= max_chars:
+        return (stripped, False)
+    prefix = stripped[:max_chars].rstrip()
+    if not prefix:
+        return ("", True)
+    last_newline = prefix.rfind("\n")
+    if last_newline < 0:
+        return (_clip_prefix_to_safe_boundary(prefix, minimum_index=0), True)
+    first_newline = stripped.find("\n")
+    if last_newline <= first_newline:
+        return (
+            _clip_prefix_to_safe_boundary(prefix, minimum_index=first_newline + 1),
+            True,
+        )
+    return (prefix[:last_newline].rstrip(), True)
+
+
+def _clip_prefix_to_safe_boundary(prefix: str, *, minimum_index: int) -> str:
+    for index in range(len(prefix) - 1, minimum_index - 1, -1):
+        if not prefix[index].isspace():
+            continue
+        candidate = prefix[:index].rstrip()
+        if candidate:
+            return candidate
+    return prefix
 
 
 def _render_message(message: ModelRequest | ModelResponse) -> str:

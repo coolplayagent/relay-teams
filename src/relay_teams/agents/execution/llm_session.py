@@ -8,6 +8,7 @@ import json
 import logging
 from copy import deepcopy
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import replace
 from json import dumps
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -19,6 +20,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelRequestPart,
     ModelResponse,
+    ModelResponsePart,
     PartDeltaEvent,
     PartEndEvent,
     PartStartEvent,
@@ -113,6 +115,7 @@ from relay_teams.computer import (
     describe_mcp_tool,
 )
 from relay_teams.media import MediaAssetService
+from relay_teams.monitors import MonitorService
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime import (
     ToolApprovalManager,
@@ -342,6 +345,7 @@ class AgentLlmSession:
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         background_task_service: BackgroundTaskService | None,
+        monitor_service: MonitorService | None = None,
         workspace_manager: WorkspaceManager,
         media_asset_service: MediaAssetService | None,
         role_memory_service: RoleMemoryService | None,
@@ -380,6 +384,7 @@ class AgentLlmSession:
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._background_task_service = background_task_service
+        self._monitor_service = monitor_service
         self._workspace_manager = workspace_manager
         self._media_asset_service = media_asset_service
         self._role_memory_service = role_memory_service
@@ -494,6 +499,7 @@ class AgentLlmSession:
             media_asset_service=self._media_asset_service,
             computer_runtime=self._computer_runtime,
             background_task_service=self._background_task_service,
+            monitor_service=self._monitor_service,
             run_id=request.run_id,
             trace_id=request.trace_id,
             task_id=request.task_id,
@@ -570,6 +576,7 @@ class AgentLlmSession:
         request_level_requests = 0
         saw_request_level_usage = False
         streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta] = {}
+        latest_streamed_text = ""
 
         try:
             while True:
@@ -586,6 +593,7 @@ class AgentLlmSession:
                         if isinstance(node, ModelRequestNode):
                             streamable_node = cast(_StreamableModelRequestNode, node)
                             streamed_tool_calls = {}
+                            streamed_text_start = len(emitted_text_chunks)
                             usage_before = deepcopy(agent_run.usage())
                             # Stream text chunks from this model response in real-time
                             async with streamable_node.stream(agent_run.ctx) as stream:
@@ -653,6 +661,12 @@ class AgentLlmSession:
                                 field_name="requests",
                             )
                             saw_request_level_usage = True
+                            streamed_node_text = "".join(
+                                emitted_text_chunks[streamed_text_start:]
+                            )
+                            latest_streamed_text = streamed_node_text
+                        else:
+                            streamed_node_text = ""
 
                         # After each node (ModelRequestNode or others like CallToolsNode),
                         # scan for new messages to emit tool call/result events
@@ -661,6 +675,10 @@ class AgentLlmSession:
                         new_to_process = self._drop_duplicate_leading_request(
                             history=history,
                             new_messages=new_batch,
+                        )
+                        new_to_process = self._apply_streamed_text_fallback(
+                            new_to_process,
+                            streamed_text=streamed_node_text,
                         )
                         if new_to_process:
                             tool_call_events_emitted = (
@@ -788,6 +806,10 @@ class AgentLlmSession:
                     to_save = self._drop_duplicate_leading_request(
                         history=history,
                         new_messages=list(all_new)[seen_count:],
+                    )
+                    to_save = self._apply_streamed_text_fallback(
+                        to_save,
+                        streamed_text=latest_streamed_text,
                     )
                     if to_save:
                         tool_call_events_emitted = (
@@ -1449,6 +1471,53 @@ class AgentLlmSession:
                 return "".join(texts)
             return ""
         return str(response)
+
+    def _apply_streamed_text_fallback(
+        self,
+        messages: list[ModelRequest | ModelResponse],
+        *,
+        streamed_text: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        if not streamed_text or not messages:
+            return messages
+        updated_messages = list(messages)
+        for index in range(len(updated_messages) - 1, -1, -1):
+            message = updated_messages[index]
+            if not isinstance(message, ModelResponse):
+                continue
+            if any(isinstance(part, ToolCallPart) for part in message.parts):
+                continue
+            if not any(isinstance(part, TextPart) for part in message.parts):
+                continue
+            existing_text = self._extract_text(message)
+            if existing_text == streamed_text:
+                return updated_messages
+            next_parts: list[ModelResponsePart] = []
+            text_inserted = False
+            for part in message.parts:
+                if isinstance(part, TextPart):
+                    if not text_inserted:
+                        next_parts.append(TextPart(content=streamed_text))
+                        text_inserted = True
+                    continue
+                next_parts.append(part)
+            if not text_inserted:
+                return updated_messages
+            updated_messages[index] = replace(message, parts=next_parts)
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.stream_text_fallback_applied",
+                message=(
+                    "Repairing final assistant message with streamed text fallback"
+                ),
+                payload={
+                    "original_text_length": len(existing_text),
+                    "streamed_text_length": len(streamed_text),
+                },
+            )
+            return updated_messages
+        return updated_messages
 
     def _looks_like_tool_args_parse_failure(self, message: str) -> bool:
         lowered = message.strip().lower()

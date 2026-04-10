@@ -11,7 +11,7 @@
 
 - SQLite tables do not currently enforce identifier-text `CHECK` constraints. The application layer rejects identifier and reference inputs that are blank, whitespace-only, or the explicit strings `"None"` and `"null"`.
 - Optional identifier fields still allow real `NULL` at the API and model layer.
-- Repository read paths tolerate previously persisted dirty rows for identifier-heavy tables such as `sessions`, `workspaces`, `external_session_bindings`, `session_history_markers`, `run_runtime`, `background_tasks`, `approval_tickets`, `gateway_sessions`, `feishu_gateway_accounts`, and `wechat_accounts`.
+- Repository read paths tolerate previously persisted dirty rows for identifier-heavy tables such as `sessions`, `workspaces`, `external_session_bindings`, `session_history_markers`, `run_runtime`, `background_tasks`, `monitor_subscriptions`, `monitor_triggers`, `approval_tickets`, `gateway_sessions`, `feishu_gateway_accounts`, and `wechat_accounts`.
 - When those readers encounter invalid persisted identifiers or timestamps, they log a warning and skip the bad row or treat the row as missing instead of failing the whole `/api/*` request.
 
 ---
@@ -634,6 +634,7 @@ Primary query keys used by repositories:
 - `relay_teams.external_agents`: `external_agent_sessions`.
 - `relay_teams.workspace`: `workspaces`.
 - `relay_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`, `background_tasks`.
+- `relay_teams.monitors`: `monitor_subscriptions`, `monitor_triggers`.
 - `relay_teams.agents`: `agent_instances`.
 - `relay_teams.agents.tasks`: `tasks`.
 - `relay_teams.agents.execution`: `messages`.
@@ -740,6 +741,81 @@ Notes:
 - `status` is one of `running`, `blocked`, `stopped`, `failed`, or `completed`.
 - `recent_output_json` stores recent non-empty output lines for recovery/UI. `output_excerpt` stores the bounded head/tail excerpt used by tool results and session detail views. The full stream is persisted to the workspace-scoped file at `log_path`.
 - Startup recovery marks non-terminal rows as interrupted/stopped rather than attempting to reattach to old OS processes.
+
+---
+
+### 2.9.1.1 `monitor_subscriptions`
+
+```sql
+CREATE TABLE IF NOT EXISTS monitor_subscriptions (
+    monitor_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    created_by_instance_id TEXT,
+    created_by_role_id TEXT,
+    tool_call_id TEXT,
+    status TEXT NOT NULL,
+    rule_json TEXT NOT NULL,
+    action_json TEXT NOT NULL,
+    trigger_count INTEGER NOT NULL DEFAULT 0,
+    last_triggered_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    stopped_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_subscriptions_run
+    ON monitor_subscriptions(run_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_monitor_subscriptions_source
+    ON monitor_subscriptions(source_kind, source_key, status, created_at DESC);
+```
+
+Purpose: durable run-scoped monitor definitions that subscribe one run to one event source.
+
+Notes:
+- `source_kind` is currently `background_task` or `github`.
+- `source_key` is source-specific, currently a managed `background_task_id` or a GitHub repository full name such as `owner/repo`.
+- `rule_json` stores the deterministic match contract (`event_names`, `text_patterns_any`, attribute filters, cooldown, and trigger caps).
+- `action_json` stores the follow-up action contract (`wake_instance`, `wake_coordinator`, `start_followup_run`, or `emit_notification`).
+- `created_by_instance_id`, `created_by_role_id`, and `tool_call_id` preserve provenance for routing and audit.
+
+---
+
+### 2.9.1.2 `monitor_triggers`
+
+```sql
+CREATE TABLE IF NOT EXISTS monitor_triggers (
+    monitor_trigger_id TEXT PRIMARY KEY,
+    monitor_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    event_name TEXT NOT NULL,
+    dedupe_key TEXT,
+    body_text TEXT NOT NULL,
+    attributes_json TEXT NOT NULL,
+    raw_payload_json TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_triggers_monitor
+    ON monitor_triggers(monitor_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_monitor_triggers_dedupe
+    ON monitor_triggers(monitor_id, dedupe_key);
+```
+
+Purpose: immutable audit log of matched monitor events.
+
+Notes:
+- `dedupe_key` is optional but enables at-most-once behavior per monitor when event sources provide a stable delivery or line key.
+- `attributes_json` stores the normalized event envelope used for deterministic matching and later inspection.
+- `raw_payload_json` preserves the source-native normalized payload used to wake the run or emit a notification.
 
 ---
 

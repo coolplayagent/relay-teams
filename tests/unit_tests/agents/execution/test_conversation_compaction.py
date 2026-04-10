@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from collections.abc import Sequence
+from typing import cast
 
 import pytest
 
@@ -27,7 +28,10 @@ from relay_teams.workspace import build_conversation_id
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
+    PartDeltaEvent,
+    PartStartEvent,
     TextPart,
+    TextPartDelta,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -52,22 +56,33 @@ class _FakeAgent:
     def __class_getitem__(cls, _item: object) -> type[_FakeAgent]:
         return cls
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
+    def __init__(
+        self,
+        *args: object,
+        output: str = "## Active summary\n- remember this",
+        stream_events: Sequence[object] = (),
+        **kwargs: object,
+    ) -> None:
         _ = (args, kwargs)
+        self._output = output
+        self._stream_events = tuple(stream_events)
 
     @asynccontextmanager
     async def iter(self, prompt: str) -> AsyncIterator[_FakeAgentRun]:
         _ = prompt
-        yield _FakeAgentRun()
+        yield _FakeAgentRun(output=self._output, stream_events=self._stream_events)
 
 
 class _FakeAgentRun:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        output: str = "## Active summary\n- remember this",
+        stream_events: Sequence[object] = (),
+    ) -> None:
         self.ctx = object()
-        self.result = type(
-            "_Result", (), {"output": "## Active summary\n- remember this"}
-        )()
-        self._nodes = [_FakeModelRequestNode()]
+        self.result = type("_Result", (), {"output": output})()
+        self._nodes = [_FakeModelRequestNode(stream_events=stream_events)]
 
     def __aiter__(self) -> _FakeAgentRun:
         return self
@@ -79,17 +94,25 @@ class _FakeAgentRun:
 
 
 class _FakeStream:
+    def __init__(self, events: Sequence[object] = ()) -> None:
+        self._events = list(events)
+
     def __aiter__(self) -> _FakeStream:
         return self
 
     async def __anext__(self) -> object:
-        raise StopAsyncIteration
+        if not self._events:
+            raise StopAsyncIteration
+        return self._events.pop(0)
 
 
 class _FakeModelRequestNode:
+    def __init__(self, *, stream_events: Sequence[object] = ()) -> None:
+        self._stream_events = tuple(stream_events)
+
     @asynccontextmanager
     async def stream(self, _ctx: object) -> AsyncIterator[_FakeStream]:
-        yield _FakeStream()
+        yield _FakeStream(self._stream_events)
 
 
 def test_default_conversation_compaction_strategy_respects_threshold_and_tail() -> None:
@@ -203,6 +226,71 @@ def test_default_conversation_compaction_strategy_precomputes_replayable_suffixe
     assert plan.compacted_message_count > 0
 
 
+def test_render_transcript_does_not_clip_mid_line_fact() -> None:
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="preserve the exact facts")]),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="shell",
+                    tool_call_id="call-1",
+                    content=(
+                        "line-a\n"
+                        "- phase-4 anchor: lunar-mint-407\n"
+                        "- phase-4 checksum: CHK-P4-DQ7"
+                    ),
+                )
+            ]
+        ),
+    ]
+
+    transcript = compaction_module._render_transcript(history, max_chars=80)
+
+    assert "lunar-min" not in transcript
+    assert "phase-4 anchor" not in transcript
+    assert transcript.splitlines()[-1] == "Tool result [shell]: line-a"
+
+
+def test_render_transcript_keeps_single_line_message_body_when_truncated() -> None:
+    history = [
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content="preserve the exact facts about lunar-mint-407",
+                )
+            ]
+        )
+    ]
+
+    transcript = compaction_module._render_transcript(history, max_chars=32)
+
+    assert transcript.startswith("User/Tool\nUser:")
+    assert "User/Tool\nUser: p" in transcript
+
+
+def test_render_transcript_does_not_clip_first_tool_line_mid_token() -> None:
+    history = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="shell",
+                    tool_call_id="call-1",
+                    content=(
+                        "ROLLING-SUMMARY | phase-4 anchor=lunar-mint-407 | "
+                        "phase-4 checksum=CHK-P4-DQ7\n"
+                        "tail line"
+                    ),
+                )
+            ]
+        )
+    ]
+
+    transcript = compaction_module._render_transcript(history, max_chars=72)
+
+    assert "lunar-min" not in transcript
+    assert transcript.startswith("User/Tool\nTool result [shell]:")
+
+
 @pytest.mark.asyncio
 async def test_conversation_compaction_service_hides_messages_and_creates_marker(
     monkeypatch: pytest.MonkeyPatch,
@@ -304,6 +392,50 @@ async def test_conversation_compaction_service_hides_messages_and_creates_marker
         )
         == "## Active summary\n- remember this"
     )
+
+
+@pytest.mark.asyncio
+async def test_run_streaming_summary_prefers_streamed_text_when_result_is_truncated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "conversation_compaction_streaming_summary.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    service = ConversationCompactionService(
+        config=ModelEndpointConfig(
+            model="gpt-test",
+            base_url="https://example.test/v1",
+            api_key="secret",
+            context_window=100,
+        ),
+        retry_config=LlmRetryConfig(),
+        message_repo=MessageRepository(
+            db_path,
+            session_history_marker_repo=marker_repo,
+        ),
+        session_history_marker_repo=marker_repo,
+    )
+    agent = _FakeAgent(
+        output="## Active summary\n- lunar-min",
+        stream_events=(
+            PartStartEvent(
+                index=0,
+                part=TextPart(content="## Active summary\n- lunar-min"),
+            ),
+            PartDeltaEvent(
+                index=0,
+                delta=TextPartDelta(content_delta="t-407"),
+            ),
+        ),
+    )
+    monkeypatch.setattr(compaction_module, "ModelRequestNode", _FakeModelRequestNode)
+
+    summary = await service._run_streaming_summary(
+        agent=cast(compaction_module.Agent[None, str], agent),
+        prompt="Rewrite the summary.",
+    )
+
+    assert summary == "## Active summary\n- lunar-mint-407"
 
 
 @pytest.mark.asyncio

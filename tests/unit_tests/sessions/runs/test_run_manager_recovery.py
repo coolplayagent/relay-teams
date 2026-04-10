@@ -11,6 +11,14 @@ import pytest
 from relay_teams.agents.orchestration.meta_agent import MetaAgent
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.media import content_parts_from_text
+from relay_teams.monitors import (
+    MonitorAction,
+    MonitorActionType,
+    MonitorRule,
+    MonitorService,
+    MonitorSourceKind,
+    MonitorSubscriptionRecord,
+)
 from relay_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
@@ -102,6 +110,7 @@ def _build_manager(
     meta_agent: object | None = None,
     background_task_manager: BackgroundTaskManager | None = None,
     background_task_service: BackgroundTaskService | None = None,
+    monitor_service: MonitorService | None = None,
 ) -> RunManager:
     control = RunControlManager()
     injection = RunInjectionManager()
@@ -142,6 +151,7 @@ def _build_manager(
         run_state_repo=run_state_repo,
         background_task_manager=background_task_manager,
         background_task_service=background_task_service,
+        monitor_service=monitor_service,
         notification_service=None,
         shell_approval_repo=shell_approval_repo,
     )
@@ -609,6 +619,87 @@ async def test_run_manager_background_task_endpoints_delegate_to_service(
         ("get", ("run-existing", "exec-1")),
         ("stop", ("run-existing", "exec-1")),
     ]
+
+
+def test_create_monitor_validates_background_task_belongs_to_run(
+    tmp_path: Path,
+) -> None:
+    class _CapturingBackgroundTaskService:
+        def __init__(self, record: BackgroundTaskRecord) -> None:
+            self.record = record
+
+        def list_for_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
+            _ = run_id
+            return (self.record,)
+
+        def get_for_run(
+            self, *, run_id: str, background_task_id: str
+        ) -> BackgroundTaskRecord:
+            _ = run_id
+            if background_task_id != self.record.background_task_id:
+                raise KeyError(background_task_id)
+            return self.record
+
+        async def stop_for_run(
+            self, *, run_id: str, background_task_id: str
+        ) -> BackgroundTaskRecord:
+            _ = (run_id, background_task_id)
+            return self.record
+
+    class _CapturingMonitorService:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def create_monitor(
+            self,
+            *,
+            run_id: str,
+            session_id: str,
+            source_kind: MonitorSourceKind,
+            source_key: str,
+            rule: MonitorRule,
+            action: MonitorAction,
+            created_by_instance_id: str | None,
+            created_by_role_id: str | None,
+            tool_call_id: str | None,
+        ) -> MonitorSubscriptionRecord:
+            _ = (
+                source_kind,
+                rule,
+                action,
+                created_by_instance_id,
+                created_by_role_id,
+                tool_call_id,
+            )
+            self.calls.append((run_id, source_key))
+            return MonitorSubscriptionRecord(
+                monitor_id="mon_1",
+                run_id=run_id,
+                session_id=session_id,
+                source_kind=MonitorSourceKind.BACKGROUND_TASK,
+                source_key=source_key,
+            )
+
+    background_task_service = _CapturingBackgroundTaskService(
+        _build_background_record()
+    )
+    monitor_service = _CapturingMonitorService()
+    manager = _build_manager(
+        tmp_path / "run_manager_monitor_validation.db",
+        background_task_service=cast(BackgroundTaskService, background_task_service),
+        monitor_service=cast(MonitorService, monitor_service),
+    )
+
+    with pytest.raises(KeyError, match="missing-task"):
+        manager.create_monitor(
+            run_id="run-existing",
+            source_kind=MonitorSourceKind.BACKGROUND_TASK,
+            source_key="missing-task",
+            rule=MonitorRule(),
+            action_type=MonitorActionType.WAKE_INSTANCE,
+        )
+
+    assert monitor_service.calls == []
 
 
 def test_create_run_marks_recoverable_run_for_resume(tmp_path: Path) -> None:
