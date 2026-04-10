@@ -225,6 +225,36 @@ class MonitorRepository(SharedSqliteRepository):
         )
         return tuple(_subscription_from_row(row) for row in rows)
 
+    def delete_by_run(self, run_id: str) -> None:
+        self._run_write(
+            operation_name="delete_by_run",
+            operation=lambda: (
+                self._conn.execute(
+                    "DELETE FROM monitor_triggers WHERE run_id=?",
+                    (run_id,),
+                ),
+                self._conn.execute(
+                    "DELETE FROM monitor_subscriptions WHERE run_id=?",
+                    (run_id,),
+                ),
+            ),
+        )
+
+    def delete_by_session(self, session_id: str) -> None:
+        self._run_write(
+            operation_name="delete_by_session",
+            operation=lambda: (
+                self._conn.execute(
+                    "DELETE FROM monitor_triggers WHERE session_id=?",
+                    (session_id,),
+                ),
+                self._conn.execute(
+                    "DELETE FROM monitor_subscriptions WHERE session_id=?",
+                    (session_id,),
+                ),
+            ),
+        )
+
     def list_active_for_source(
         self,
         *,

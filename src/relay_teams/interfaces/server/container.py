@@ -602,6 +602,7 @@ class ServerContainer:
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
             token_usage_repo=self.token_usage_repo,
+            monitor_repository=self.monitor_repository,
             background_task_repository=self.background_task_repository,
             run_state_repo=self.run_state_repo,
             run_event_hub=self.run_event_hub,
