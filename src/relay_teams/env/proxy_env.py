@@ -51,8 +51,10 @@ class ProxyEnvConfig(BaseModel):
             env_values["ALL_PROXY"] = self.all_proxy
             env_values["all_proxy"] = self.all_proxy
         if self.no_proxy:
-            env_values["NO_PROXY"] = self.no_proxy
-            env_values["no_proxy"] = self.no_proxy
+            exported_no_proxy = _normalize_no_proxy_for_export(self.no_proxy)
+            if exported_no_proxy:
+                env_values["NO_PROXY"] = exported_no_proxy
+                env_values["no_proxy"] = exported_no_proxy
         if self.ssl_verify is not None:
             env_values["SSL_VERIFY"] = "true" if self.ssl_verify else "false"
         return env_values
@@ -310,6 +312,20 @@ def _normalize_proxy_value(value: str | None) -> str | None:
     if not normalized:
         return None
     return normalized
+
+
+def _normalize_no_proxy_for_export(value: str | None) -> str | None:
+    normalized = _normalize_proxy_value(value)
+    if normalized is None:
+        return None
+    tokens: list[str] = []
+    for raw_candidate in normalized.replace(";", ",").split(","):
+        candidate = raw_candidate.strip()
+        if candidate:
+            tokens.append(candidate)
+    if not tokens:
+        return None
+    return ",".join(tokens)
 
 
 def host_matches_no_proxy(host: str, no_proxy: str | None) -> bool:

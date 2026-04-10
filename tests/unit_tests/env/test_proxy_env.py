@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os
@@ -148,6 +147,127 @@ def test_parse_no_proxy_rules_normalizes_semicolon_separated_entries() -> None:
         ("wildcard", "192.168.*"),
         ("local", None),
     ]
+
+
+def test_extract_proxy_env_vars_converts_semicolons_to_commas_for_no_proxy() -> None:
+    proxy_env = extract_proxy_env_vars(
+        {
+            "HTTP_PROXY": "http://proxy.example:8080",
+            "NO_PROXY": "localhost;127.*;<local>",
+        }
+    )
+
+    assert proxy_env["NO_PROXY"] == "localhost,127.*,<local>"
+    assert proxy_env["no_proxy"] == "localhost,127.*,<local>"
+
+
+def test_extract_proxy_env_vars_strips_empty_no_proxy_tokens() -> None:
+    proxy_env = extract_proxy_env_vars(
+        {
+            "HTTP_PROXY": "http://proxy.example:8080",
+            "NO_PROXY": "a,,b; ;c",
+        }
+    )
+
+    assert proxy_env["NO_PROXY"] == "a,b,c"
+
+
+def test_extract_proxy_env_vars_omits_no_proxy_when_only_separators() -> None:
+    proxy_env = extract_proxy_env_vars(
+        {
+            "HTTP_PROXY": "http://proxy.example:8080",
+            "NO_PROXY": " ; , ",
+        }
+    )
+
+    assert "NO_PROXY" not in proxy_env
+    assert "no_proxy" not in proxy_env
+
+
+def test_build_subprocess_env_keeps_username_only_proxy_url_unchanged(
+    monkeypatch,
+) -> None:
+    for key in (
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://alice@proxy.example:8443")
+    monkeypatch.setenv("ALL_PROXY", "http://alice@proxy.example:1080")
+
+    subprocess_env = build_subprocess_env()
+
+    assert subprocess_env["HTTPS_PROXY"] == "http://alice@proxy.example:8443"
+    assert subprocess_env["https_proxy"] == "http://alice@proxy.example:8443"
+    assert subprocess_env["ALL_PROXY"] == "http://alice@proxy.example:1080"
+    assert subprocess_env["all_proxy"] == "http://alice@proxy.example:1080"
+
+
+def test_build_subprocess_env_leaves_url_without_username_unchanged(
+    monkeypatch,
+) -> None:
+    for key in (
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:8443")
+
+    subprocess_env = build_subprocess_env()
+
+    assert subprocess_env["HTTPS_PROXY"] == "http://proxy.example:8443"
+
+
+def test_build_subprocess_env_keeps_inline_password_when_already_present(
+    monkeypatch,
+) -> None:
+    for key in (
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://alice:inline-pw@proxy.example:8443")
+
+    subprocess_env = build_subprocess_env()
+
+    assert subprocess_env["HTTPS_PROXY"] == "http://alice:inline-pw@proxy.example:8443"
+
+
+def test_build_subprocess_env_exports_comma_separated_no_proxy(monkeypatch) -> None:
+    monkeypatch.delenv("HTTP_PROXY", raising=False)
+    monkeypatch.delenv("http_proxy", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("https_proxy", raising=False)
+    monkeypatch.delenv("ALL_PROXY", raising=False)
+    monkeypatch.delenv("all_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:8080")
+    monkeypatch.setenv("NO_PROXY", "localhost;127.*;example.com")
+
+    subprocess_env = build_subprocess_env()
+
+    assert subprocess_env["NO_PROXY"] == "localhost,127.*,example.com"
+    assert subprocess_env["no_proxy"] == "localhost,127.*,example.com"
 
 
 def test_proxy_env_input_splits_and_rebuilds_shared_proxy_credentials() -> None:
