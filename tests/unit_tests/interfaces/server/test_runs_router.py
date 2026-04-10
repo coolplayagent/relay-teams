@@ -24,6 +24,16 @@ class _FakeRunService:
                 "command": "sleep 30",
             }
         }
+        self.monitors: dict[str, dict[str, object]] = {
+            "mon-1": {
+                "monitor_id": "mon-1",
+                "run_id": "run-1",
+                "session_id": "session-1",
+                "source_kind": "background_task",
+                "source_key": "exec-1",
+                "status": "active",
+            }
+        }
 
     def create_run(self, intent_input) -> tuple[str, str]:
         self.created_run_inputs.append(intent_input)
@@ -77,6 +87,48 @@ class _FakeRunService:
         )
         background_task["status"] = "stopped"
         return background_task
+
+    def list_monitors(self, run_id: str) -> tuple[dict[str, object], ...]:
+        _ = run_id
+        return tuple(self.monitors.values())
+
+    def create_monitor(
+        self,
+        *,
+        run_id: str,
+        source_kind,
+        source_key: str,
+        rule,
+        action_type,
+        created_by_instance_id: str | None = None,
+        created_by_role_id: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> dict[str, object]:
+        _ = (
+            run_id,
+            source_kind,
+            rule,
+            action_type,
+            created_by_instance_id,
+            created_by_role_id,
+            tool_call_id,
+        )
+        monitor: dict[str, object] = {
+            "monitor_id": "mon-2",
+            "run_id": "run-1",
+            "session_id": "session-1",
+            "source_kind": "background_task",
+            "source_key": source_key,
+            "status": "active",
+        }
+        self.monitors["mon-2"] = monitor
+        return monitor
+
+    def stop_monitor(self, *, run_id: str, monitor_id: str) -> dict[str, object]:
+        _ = run_id
+        monitor = self.monitors[monitor_id]
+        monitor["status"] = "stopped"
+        return monitor
 
 
 def _create_client(fake_service: _FakeRunService) -> TestClient:
@@ -283,5 +335,53 @@ def test_stop_background_task_route_returns_updated_terminal() -> None:
             "run_id": "run-1",
             "status": "stopped",
             "command": "sleep 30",
+        }
+    }
+
+
+def test_list_monitors_route_returns_items() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.get("/api/runs/run-1/monitors")
+
+    assert response.status_code == 200
+    assert response.json() == {"items": [fake_service.monitors["mon-1"]]}
+
+
+def test_create_monitor_route_returns_monitor() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs/run-1/monitors",
+        json={
+            "source_kind": "background_task",
+            "source_key": "exec-1",
+            "event_names": ["background_task.line"],
+            "patterns": ["ERROR"],
+            "action_type": "wake_instance",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"monitor": fake_service.monitors["mon-2"]}
+
+
+def test_stop_monitor_route_returns_updated_monitor() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post("/api/runs/run-1/monitors/mon-1:stop")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "monitor": {
+            "monitor_id": "mon-1",
+            "run_id": "run-1",
+            "session_id": "session-1",
+            "source_kind": "background_task",
+            "source_key": "exec-1",
+            "status": "stopped",
         }
     }

@@ -13,6 +13,7 @@ class NotificationType(str, Enum):
     RUN_COMPLETED = "run_completed"
     RUN_FAILED = "run_failed"
     RUN_STOPPED = "run_stopped"
+    MONITOR_TRIGGERED = "monitor_triggered"
 
 
 class NotificationChannel(str, Enum):
@@ -63,6 +64,12 @@ class NotificationConfig(BaseModel):
             channels=(NotificationChannel.TOAST,),
         )
     )
+    monitor_triggered: NotificationRule = Field(
+        default_factory=lambda: NotificationRule(
+            enabled=True,
+            channels=(NotificationChannel.BROWSER, NotificationChannel.TOAST),
+        )
+    )
 
     def rule_for(self, notification_type: NotificationType) -> NotificationRule:
         if notification_type == NotificationType.TOOL_APPROVAL_REQUESTED:
@@ -71,7 +78,9 @@ class NotificationConfig(BaseModel):
             return self.run_completed
         if notification_type == NotificationType.RUN_FAILED:
             return self.run_failed
-        return self.run_stopped
+        if notification_type == NotificationType.RUN_STOPPED:
+            return self.run_stopped
+        return self.monitor_triggered
 
 
 class NotificationContext(BaseModel):

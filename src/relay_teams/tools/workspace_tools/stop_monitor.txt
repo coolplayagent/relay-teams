@@ -1,0 +1,4 @@
+Stop a managed monitor created by the current run.
+
+- Stopping a monitor prevents future matching events from waking the agent.
+- Existing trigger history is preserved for inspection.

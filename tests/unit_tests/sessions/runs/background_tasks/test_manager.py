@@ -11,6 +11,13 @@ from typing import Callable, cast
 
 import pytest
 
+from relay_teams.monitors import (
+    MonitorAction,
+    MonitorRepository,
+    MonitorRule,
+    MonitorService,
+    MonitorSourceKind,
+)
 from relay_teams.sessions.runs.background_tasks.manager import (
     BackgroundTaskManager,
     MAX_BACKGROUND_TASKS,
@@ -156,6 +163,21 @@ class _CloseFailingWaitableTransport(_WaitableTransport):
         raise RuntimeError("close failed")
 
 
+class _FakeMonitorSink:
+    def __init__(self) -> None:
+        self.body_texts: list[str] = []
+
+    def handle_monitor_trigger(
+        self,
+        *,
+        subscription,
+        envelope,
+        message: str,
+    ) -> None:
+        _ = (subscription, message)
+        self.body_texts.append(envelope.body_text)
+
+
 @pytest.mark.asyncio
 async def test_background_task_manager_completes_and_publishes_events(
     tmp_path: Path,
@@ -256,6 +278,69 @@ async def test_background_task_manager_writes_logs_via_to_thread(
 
     assert calls
     assert runtime.log_file_path.read_text(encoding="utf-8") == "hello\n"
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_emits_monitor_line_events(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-monitor.db")
+    hub = RunEventHub()
+    monitor_repository = MonitorRepository(tmp_path / "background-terminal-monitor.db")
+    monitor_service = MonitorService(
+        repository=monitor_repository,
+        run_event_hub=hub,
+    )
+    sink = _FakeMonitorSink()
+    monitor_service.bind_action_sink(sink)
+    manager = BackgroundTaskManager(
+        repository=repo,
+        run_event_hub=hub,
+        monitor_service=monitor_service,
+    )
+    record = repo.upsert(
+        BackgroundTaskRecord(
+            background_task_id="exec-1",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            command="tail -f app.log",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.RUNNING,
+            log_path=str(tmp_path / "exec-1.log"),
+        )
+    )
+    monitor_service.create_monitor(
+        run_id="run-1",
+        session_id="session-1",
+        source_kind=MonitorSourceKind.BACKGROUND_TASK,
+        source_key="exec-1",
+        rule=MonitorRule(
+            event_names=("background_task.line",),
+            text_patterns_any=("ERROR",),
+        ),
+        action=MonitorAction(),
+        created_by_instance_id="inst-1",
+        created_by_role_id="writer",
+        tool_call_id="toolcall-1",
+    )
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+
+    runtime = manager_module._BackgroundTaskRuntime(
+        record=record,
+        transport=cast(manager_module._BackgroundTaskTransport, _FakeTransport()),
+        log_file_path=tmp_path / "exec-1.log",
+        queue=asyncio.Queue(),
+    )
+
+    await manager._handle_output_chunk(
+        runtime,
+        stream_name="stderr",
+        chunk="INFO ok\nERROR boom\n",
+    )
+
+    assert sink.body_texts == ["ERROR boom"]
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,7 @@ from relay_teams.computer import ComputerRuntime
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.metrics import MetricRecorder
 from relay_teams.media import MediaAssetService
+from relay_teams.monitors import MonitorService
 from relay_teams.notifications import NotificationService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.roles.memory_service import RoleMemoryService
@@ -130,6 +131,7 @@ class ToolDeps(BaseModel):
     media_asset_service: SkipValidation[MediaAssetService | None] = None
     computer_runtime: SkipValidation[ComputerRuntime | None] = None
     background_task_service: SkipValidation[BackgroundTaskService | None] = None
+    monitor_service: SkipValidation[MonitorService | None] = None
     run_id: str
     trace_id: str
     task_id: str

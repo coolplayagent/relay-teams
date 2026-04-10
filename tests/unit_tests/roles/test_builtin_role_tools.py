@@ -19,6 +19,9 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
         "list_background_tasks",
         "wait_background_task",
         "stop_background_task",
+        "create_monitor",
+        "list_monitors",
+        "stop_monitor",
     }
 
     assert "write" in crafter.tools

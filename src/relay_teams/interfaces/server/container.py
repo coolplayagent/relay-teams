@@ -88,6 +88,7 @@ from relay_teams.metrics import (
     SqliteMetricAggregateStore,
 )
 from relay_teams.media import MediaAssetRepository, MediaAssetService
+from relay_teams.monitors import MonitorRepository, MonitorService
 from relay_teams.notifications import NotificationConfigManager, NotificationService
 from relay_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
@@ -167,6 +168,13 @@ from relay_teams.tools.runtime import (
 )
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
+)
+from relay_teams.triggers import (
+    GitHubApiClient,
+    GitHubTriggerActionWorker,
+    GitHubTriggerService,
+    TriggerRepository,
+    get_github_trigger_secret_store,
 )
 from relay_teams.gateway.wechat import (
     WeChatAccountRepository,
@@ -325,6 +333,7 @@ class ServerContainer:
         self.run_state_repo: RunStateRepository = RunStateRepository(
             runtime.paths.db_path
         )
+        self.trigger_repository = TriggerRepository(runtime.paths.db_path)
         self.session_repo: SessionRepository = SessionRepository(runtime.paths.db_path)
         self.external_session_binding_repo: ExternalSessionBindingRepository = (
             ExternalSessionBindingRepository(runtime.paths.db_path)
@@ -415,9 +424,15 @@ class ServerContainer:
             event_log=self.event_log,
             run_state_repo=self.run_state_repo,
         )
+        self.monitor_repository = MonitorRepository(runtime.paths.db_path)
+        self.monitor_service = MonitorService(
+            repository=self.monitor_repository,
+            run_event_hub=self.run_event_hub,
+        )
         self.background_task_manager = BackgroundTaskManager(
             repository=self.background_task_repository,
             run_event_hub=self.run_event_hub,
+            monitor_service=self.monitor_service,
         )
         self.background_task_service = BackgroundTaskService(
             background_task_manager=self.background_task_manager,
@@ -429,6 +444,10 @@ class ServerContainer:
             runtime.paths.db_path
         )
         self.wechat_client = WeChatClient()
+        self.github_trigger_secret_store = get_github_trigger_secret_store()
+        self.github_api_client = GitHubApiClient(
+            get_proxy_config=self.proxy_config_service.get_proxy_config
+        )
         self.feishu_gateway_service = FeishuGatewayService(
             config_dir=config_dir,
             repository=self.feishu_account_repository,
@@ -490,6 +509,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             background_task_service=self.background_task_service,
+            monitor_service=self.monitor_service,
             role_memory_service=self.role_memory_service,
             tool_registry=self.tool_registry,
             get_mcp_registry=lambda: self.mcp_registry,
@@ -565,12 +585,14 @@ class ServerContainer:
             run_state_repo=self.run_state_repo,
             background_task_manager=self.background_task_manager,
             background_task_service=self.background_task_service,
+            monitor_service=self.monitor_service,
             notification_service=self.notification_service,
             orchestration_settings_service=self.orchestration_settings_service,
             media_asset_service=self.media_asset_service,
             runtime_role_resolver=self.runtime_role_resolver,
             shell_approval_repo=self.shell_approval_repo,
         )
+        self.monitor_service.bind_action_sink(self.run_service)
         self.session_service: SessionService = SessionService(
             session_repo=self.session_repo,
             task_repo=self.task_repo,
@@ -682,6 +704,7 @@ class ServerContainer:
             ),
         )
         self.run_service._notification_service = self.notification_service
+        self.monitor_service.bind_notification_service(self.notification_service)
         self.automation_bound_session_queue_service = (
             AutomationBoundSessionQueueService(
                 repository=self.automation_bound_session_queue_repo,
@@ -718,6 +741,22 @@ class ServerContainer:
             bound_session_queue_service=self.automation_bound_session_queue_service,
             workspace_service=self.workspace_service,
             session_ingress_service=self.session_ingress_service,
+        )
+        self.github_trigger_service = GitHubTriggerService(
+            config_dir=config_dir,
+            repository=self.trigger_repository,
+            secret_store=self.github_trigger_secret_store,
+            github_client=self.github_api_client,
+            automation_service=self.automation_service,
+            session_service=self.session_service,
+            run_service=self.run_service,
+            run_runtime_repo=self.run_runtime_repo,
+            event_log=self.event_log,
+            monitor_service=self.monitor_service,
+            session_ingress_service=self.session_ingress_service,
+        )
+        self.github_trigger_action_worker = GitHubTriggerActionWorker(
+            trigger_service=self.github_trigger_service
         )
         self.automation_scheduler_service: AutomationSchedulerService = (
             AutomationSchedulerService(automation_service=self.automation_service)
@@ -789,6 +828,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             background_task_service=self.background_task_service,
+            monitor_service=self.monitor_service,
             workspace_manager=self.workspace_manager,
             media_asset_service=self.media_asset_service,
             computer_runtime=self.computer_runtime,
@@ -895,11 +935,13 @@ class ServerContainer:
         self.feishu_message_pool_service.start()
         self.automation_delivery_worker.start()
         self.automation_bound_session_queue_worker.start()
+        self.github_trigger_action_worker.start()
         await self.automation_scheduler_service.start()
         return None
 
     async def stop(self) -> None:
         await self.automation_scheduler_service.stop()
+        self.github_trigger_action_worker.stop()
         self.automation_bound_session_queue_worker.stop()
         self.automation_delivery_worker.stop()
         self.feishu_message_pool_service.stop()

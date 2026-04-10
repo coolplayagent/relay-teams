@@ -18,6 +18,9 @@ tools:
   - list_background_tasks
   - wait_background_task
   - stop_background_task
+  - create_monitor
+  - list_monitors
+  - stop_monitor
   - webfetch
   - websearch
 ---
@@ -123,4 +126,3 @@ When referencing specific functions or pieces of code include the pattern `file_
 user: Where are errors from the client handled?
 assistant: Clients are marked as failed in the `connectToServer` function in src/services/process.ts:712.
 </example>
-

@@ -1,0 +1,6 @@
+Create a managed monitor for a background task started by the current run.
+
+- Use this after `shell(..., background=True)` to watch task output without polling.
+- By default it subscribes to `background_task.line` events from that task.
+- Set `patterns` to wake only when a line contains one of the target substrings.
+- `action_type` controls whether the matching event wakes the current instance, wakes the coordinator, or starts a follow-up run.

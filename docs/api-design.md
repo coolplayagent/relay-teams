@@ -13,6 +13,7 @@ Common status codes:
 - `400`: invalid task/run request
 - `404`: resource not found
 - `409`: runtime conflict
+- `503`: runtime capability not configured
 - `422`: request validation error
 
 Common validation rules:
@@ -927,6 +928,11 @@ Retry events:
   - `background_task_completed`
   - `background_task_stopped`
   Each payload is the current background task snapshot, including `background_task_id`, `status`, `command`, `cwd`, `recent_output[]`, `output_excerpt`, and `log_path`.
+- Monitor lifecycle events:
+  - `monitor_created`
+  - `monitor_triggered`
+  - `monitor_stopped`
+  `monitor_created` and `monitor_stopped` payloads include `monitor_id`. `monitor_triggered` also includes `monitor_trigger_id`, `event_name`, `source_kind`, `source_key`, and `action_type`.
 
 Frontend behavior:
 - The web UI uses `llm_retry_scheduled` to render one active retry card in the round timeline and keep its countdown live while the retry backoff window is active.
@@ -985,12 +991,71 @@ Returns one managed background task snapshot for the run.
 
 Stops one managed background task and returns its final snapshot.
 
+### `GET /runs/{run_id}/monitors`
+
+Lists monitor subscriptions bound to the run.
+
+### `POST /runs/{run_id}/monitors`
+
+Creates a run-scoped monitor subscription.
+
+Request fields:
+- `source_kind`: currently `background_task` or `github`
+- `source_key`: background task id or GitHub `owner/repo`
+- `event_names[]`: monitor event names such as `background_task.line`, `background_task.completed`, `pr.opened`, `check_run.completed`
+- `patterns[]`: optional substring match set applied to `body_text`
+- `action_type`: `wake_instance`, `wake_coordinator`, or `start_followup_run`
+- `cooldown_seconds`
+- `max_triggers`
+- `auto_stop_on_first_match`
+- `case_sensitive`
+
+Response:
+
+```json
+{
+  "monitor": {
+    "monitor_id": "mon_ab12cd34ef56",
+    "run_id": "run-1",
+    "session_id": "session-1",
+    "source_kind": "background_task",
+    "source_key": "background_task_ab12cd34ef56",
+    "status": "active",
+    "rule": {
+      "event_names": ["background_task.line"],
+      "text_patterns_any": ["ERROR"],
+      "cooldown_seconds": 0,
+      "max_triggers": null,
+      "auto_stop_on_first_match": false,
+      "case_sensitive": false
+    },
+    "action": {"action_type": "wake_instance"},
+    "trigger_count": 0
+  }
+}
+```
+
+### `POST /runs/{run_id}/monitors/{monitor_id}:stop`
+
+Stops one monitor subscription and returns its final snapshot.
+
 Notes:
 - Background tasks are scoped to the owning run. Cross-run access returns `404`.
 - The public API is intentionally read-mostly. Interactive stdin/resize remains tool-only, not a human-facing REST surface.
 - Runtime shell selection is internal, not part of the REST contract. Linux/macOS use the managed bash path; Windows prefers Git Bash and falls back to PowerShell when Git Bash is unavailable.
 - `tty=true` background tasks use a platform TTY backend: POSIX PTY on Linux/macOS and ConPTY via `pywinpty` on supported Windows hosts. When Windows TTY support is unavailable, only non-TTY background tasks remain available.
 - Unlike Codex's stricter unified-exec contract, Agent Teams keeps non-TTY `write_stdin` enabled for compatibility with existing pipe-style workflows.
+- `create_monitor` is also exposed as a tool for run-local `background_task` subscriptions; REST keeps the generic `source_kind/source_key` contract so future event sources reuse the same substrate.
+
+### `POST /triggers/github/deliveries`
+
+Accepts one inbound GitHub webhook delivery.
+
+Notes:
+- Signature validation uses the configured repository/account webhook secret.
+- A valid delivery is normalized once and then feeds both the existing GitHub trigger pipeline and the monitor substrate.
+- GitHub monitor source keys use `repository.full_name` such as `owner/repo`.
+- Current normalized monitor event names are `pr.opened`, `pr.updated`, `pr.review_requested`, `check_run.completed`, `check_suite.completed`, and `status.updated`.
 
 ### `POST /runs/{run_id}/tool-approvals/{tool_call_id}/resolve`
 

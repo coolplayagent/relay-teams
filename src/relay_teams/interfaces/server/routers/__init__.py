@@ -15,6 +15,7 @@ from relay_teams.interfaces.server.routers import (
     sessions,
     system,
     tasks,
+    triggers,
     workspaces,
 )
 
@@ -32,5 +33,6 @@ __all__ = [
     "sessions",
     "system",
     "tasks",
+    "triggers",
     "workspaces",
 ]

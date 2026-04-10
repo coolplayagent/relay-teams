@@ -26,6 +26,15 @@ from relay_teams.logger import get_logger, log_event
 from relay_teams.media import MediaAssetService, MediaRefContentPart, TextContentPart
 from relay_teams.media import content_parts_from_text
 from relay_teams.media import content_parts_to_text
+from relay_teams.monitors import (
+    MonitorAction,
+    MonitorActionType,
+    MonitorEventEnvelope,
+    MonitorRule,
+    MonitorService,
+    MonitorSourceKind,
+    MonitorSubscriptionRecord,
+)
 from relay_teams.notifications import (
     NotificationContext,
     NotificationService,
@@ -227,6 +236,7 @@ class RunManager:
         run_state_repo: RunStateRepository | None = None,
         background_task_manager: BackgroundTaskManager | None = None,
         background_task_service: BackgroundTaskService | None = None,
+        monitor_service: MonitorService | None = None,
         notification_service: NotificationService | None = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
         media_asset_service: MediaAssetService | None = None,
@@ -256,6 +266,7 @@ class RunManager:
         self._run_state_repo: RunStateRepository | None = run_state_repo
         self._background_task_manager = background_task_manager
         self._background_task_service = background_task_service
+        self._monitor_service = monitor_service
         self._notification_service: NotificationService | None = notification_service
         self._orchestration_settings_service = orchestration_settings_service
         self._media_asset_service = media_asset_service
@@ -1418,6 +1429,30 @@ class RunManager:
             return
         self._handle_background_task_completion_local(record=record, message=message)
 
+    def handle_monitor_trigger(
+        self,
+        *,
+        subscription: MonitorSubscriptionRecord,
+        envelope: MonitorEventEnvelope,
+        message: str,
+    ) -> None:
+        if self._should_delegate_to_bound_loop():
+            subscription_copy = subscription.model_copy(deep=True)
+            envelope_copy = envelope.model_copy(deep=True)
+            self._call_in_bound_loop(
+                lambda: self._handle_monitor_trigger_local(
+                    subscription=subscription_copy,
+                    envelope=envelope_copy,
+                    message=message,
+                )
+            )
+            return
+        self._handle_monitor_trigger_local(
+            subscription=subscription,
+            envelope=envelope,
+            message=message,
+        )
+
     def stop_run(self, run_id: str) -> None:
         if self._should_delegate_to_bound_loop():
             self._call_in_bound_loop(lambda: self._stop_run_local(run_id))
@@ -1494,109 +1529,200 @@ class RunManager:
         record: "BackgroundTaskRecord",
         message: str,
     ) -> None:
+        payload: dict[str, JsonValue] = {
+            "background_task_id": record.background_task_id,
+        }
+        self._route_system_message(
+            source_run_id=record.run_id,
+            session_id=record.session_id,
+            preferred_instance_id=record.instance_id,
+            role_id=record.role_id,
+            task_id_fallback="background-task-notification",
+            message=message,
+            allow_coordinator=True,
+            event_prefix="background_task.notification",
+            payload=payload,
+        )
+
+    def _handle_monitor_trigger_local(
+        self,
+        *,
+        subscription: MonitorSubscriptionRecord,
+        envelope: MonitorEventEnvelope,
+        message: str,
+    ) -> None:
+        payload: dict[str, JsonValue] = {
+            "monitor_id": subscription.monitor_id,
+            "event_name": envelope.event_name,
+            "source_key": envelope.source_key,
+        }
+        if subscription.action.action_type == MonitorActionType.START_FOLLOWUP_RUN:
+            self._spawn_system_followup_run(
+                source_run_id=subscription.run_id,
+                session_id=subscription.session_id,
+                message=message,
+                event_prefix="monitor.trigger",
+                payload=payload,
+            )
+            return
+        self._route_system_message(
+            source_run_id=subscription.run_id,
+            session_id=subscription.session_id,
+            preferred_instance_id=(
+                subscription.created_by_instance_id
+                if subscription.action.action_type == MonitorActionType.WAKE_INSTANCE
+                else None
+            ),
+            role_id=subscription.created_by_role_id,
+            task_id_fallback="monitor-trigger-notification",
+            message=message,
+            allow_coordinator=subscription.action.action_type
+            in {
+                MonitorActionType.WAKE_INSTANCE,
+                MonitorActionType.WAKE_COORDINATOR,
+            },
+            event_prefix="monitor.trigger",
+            payload=payload,
+        )
+
+    def _route_system_message(
+        self,
+        *,
+        source_run_id: str,
+        session_id: str,
+        preferred_instance_id: str | None,
+        role_id: str | None,
+        task_id_fallback: str,
+        message: str,
+        allow_coordinator: bool,
+        event_prefix: str,
+        payload: dict[str, JsonValue],
+    ) -> None:
         task_id = self._find_task_for_instance(
-            run_id=record.run_id,
-            instance_id=record.instance_id or "",
+            run_id=source_run_id,
+            instance_id=preferred_instance_id or "",
         )
         if (
-            record.instance_id
+            preferred_instance_id
             and self._can_enqueue_followup_to_instance(
-                run_id=record.run_id,
-                instance_id=record.instance_id,
+                run_id=source_run_id,
+                instance_id=preferred_instance_id,
             )
             and self._append_followup_to_instance(
-                run_id=record.run_id,
-                instance_id=record.instance_id,
-                task_id=task_id or "background-task-notification",
+                run_id=source_run_id,
+                instance_id=preferred_instance_id,
+                task_id=task_id or task_id_fallback,
                 content=message,
                 enqueue=True,
                 source=InjectionSource.SYSTEM,
             )
         ):
             with bind_trace_context(
-                trace_id=record.run_id,
-                run_id=record.run_id,
-                session_id=record.session_id,
-                instance_id=record.instance_id,
-                role_id=record.role_id,
+                trace_id=source_run_id,
+                run_id=source_run_id,
+                session_id=session_id,
+                instance_id=preferred_instance_id,
+                role_id=role_id,
             ):
                 log_event(
                     logger,
                     logging.INFO,
-                    event="background_task.notification.enqueued",
-                    message="Background task notification enqueued to originating instance",
-                    payload={"background_task_id": record.background_task_id},
+                    event=f"{event_prefix}.enqueued",
+                    message="System follow-up enqueued to originating instance",
+                    payload=payload,
                 )
             return
-        if self._can_enqueue_followup_to_coordinator(record.run_id) and (
-            self._append_followup_to_coordinator(
-                record.run_id,
+        if allow_coordinator and self._can_enqueue_followup_to_coordinator(
+            source_run_id
+        ):
+            if self._append_followup_to_coordinator(
+                source_run_id,
                 message,
                 enqueue=True,
                 source=InjectionSource.SYSTEM,
-            )
-        ):
-            with bind_trace_context(
-                trace_id=record.run_id,
-                run_id=record.run_id,
-                session_id=record.session_id,
             ):
-                log_event(
-                    logger,
-                    logging.INFO,
-                    event="background_task.notification.enqueued",
-                    message="Background task notification enqueued to coordinator",
-                    payload={"background_task_id": record.background_task_id},
-                )
-            return
-
-        session_id = self._ensure_session(record.session_id)
-        active_run_before = self._active_run_registry.get_active_run_id(session_id)
-        self._run_control_manager.assert_session_allows_main_input(session_id)
-        _ = self._session_repo.mark_started(session_id)
-        intent = IntentInput(
+                with bind_trace_context(
+                    trace_id=source_run_id,
+                    run_id=source_run_id,
+                    session_id=session_id,
+                ):
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        event=f"{event_prefix}.enqueued",
+                        message="System follow-up enqueued to coordinator",
+                        payload=payload,
+                    )
+                return
+        self._spawn_system_followup_run(
+            source_run_id=source_run_id,
             session_id=session_id,
+            message=message,
+            event_prefix=event_prefix,
+            payload=payload,
+        )
+
+    def _spawn_system_followup_run(
+        self,
+        *,
+        source_run_id: str,
+        session_id: str,
+        message: str,
+        event_prefix: str,
+        payload: dict[str, JsonValue],
+    ) -> str:
+        normalized_session_id = self._ensure_session(session_id)
+        active_run_before = self._active_run_registry.get_active_run_id(
+            normalized_session_id
+        )
+        self._run_control_manager.assert_session_allows_main_input(
+            normalized_session_id
+        )
+        _ = self._session_repo.mark_started(normalized_session_id)
+        intent = IntentInput(
+            session_id=normalized_session_id,
             input=(TextContentPart(text=message),),
         )
         new_run_id, _ = self.create_run(intent, source=InjectionSource.SYSTEM)
         self.ensure_run_started(new_run_id)
         if active_run_before in {
             None,
-            record.run_id,
-        } and self._has_active_background_tasks(record.run_id):
-            self._remember_active_run(session_id, record.run_id)
+            source_run_id,
+        } and self._has_active_background_tasks(source_run_id):
+            self._remember_active_run(normalized_session_id, source_run_id)
             with bind_trace_context(
-                trace_id=record.run_id,
-                run_id=record.run_id,
-                session_id=record.session_id,
+                trace_id=source_run_id,
+                run_id=source_run_id,
+                session_id=normalized_session_id,
             ):
                 log_event(
                     logger,
                     logging.INFO,
-                    event="background_task.notification.source_run_retained",
+                    event=f"{event_prefix}.source_run_retained",
                     message="Source run remains active while sibling background tasks are still running",
                     payload={
-                        "background_task_id": record.background_task_id,
-                        "source_run_id": record.run_id,
+                        **payload,
+                        "source_run_id": source_run_id,
                         "target_run_id": new_run_id,
                     },
                 )
         with bind_trace_context(
             trace_id=new_run_id,
             run_id=new_run_id,
-            session_id=record.session_id,
+            session_id=normalized_session_id,
         ):
             log_event(
                 logger,
                 logging.INFO,
-                event="background_task.notification.spawned",
-                message="Background task notification routed through create_run",
+                event=f"{event_prefix}.spawned",
+                message="System follow-up routed through create_run",
                 payload={
-                    "background_task_id": record.background_task_id,
-                    "source_run_id": record.run_id,
+                    **payload,
+                    "source_run_id": source_run_id,
                     "target_run_id": new_run_id,
                 },
             )
+        return new_run_id
 
     def _has_active_background_tasks(self, run_id: str) -> bool:
         records: tuple["BackgroundTaskRecord", ...]
@@ -1686,6 +1812,50 @@ class RunManager:
             instance_id=instance_id,
         )
 
+    def create_monitor(
+        self,
+        *,
+        run_id: str,
+        source_kind: MonitorSourceKind,
+        source_key: str,
+        rule: MonitorRule,
+        action_type: MonitorActionType,
+        created_by_instance_id: str | None = None,
+        created_by_role_id: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> dict[str, object]:
+        service = self._require_monitor_service()
+        record = service.create_monitor(
+            run_id=run_id,
+            session_id=self._require_run_session_id(run_id),
+            source_kind=source_kind,
+            source_key=source_key,
+            rule=rule,
+            action=MonitorAction(action_type=action_type),
+            created_by_instance_id=created_by_instance_id,
+            created_by_role_id=created_by_role_id,
+            tool_call_id=tool_call_id,
+        )
+        return record.model_dump(mode="json")
+
+    def list_monitors(self, run_id: str) -> tuple[dict[str, object], ...]:
+        service = self._require_monitor_service()
+        return tuple(
+            record.model_dump(mode="json") for record in service.list_for_run(run_id)
+        )
+
+    def stop_monitor(
+        self,
+        *,
+        run_id: str,
+        monitor_id: str,
+    ) -> dict[str, object]:
+        service = self._require_monitor_service()
+        return service.stop_for_run(
+            run_id=run_id,
+            monitor_id=monitor_id,
+        ).model_dump(mode="json")
+
     def list_background_tasks(self, run_id: str) -> tuple[dict[str, object], ...]:
         if self._background_task_service is not None:
             return tuple(
@@ -1746,6 +1916,22 @@ class RunManager:
             background_task_id=background_task_id,
         )
         return record.model_dump(mode="json")
+
+    def _require_monitor_service(self) -> MonitorService:
+        if self._monitor_service is None:
+            raise RuntimeError("Monitor service is not configured")
+        return self._monitor_service
+
+    def _require_run_session_id(self, run_id: str) -> str:
+        runtime = self._runtime_for_run(run_id)
+        if runtime is not None:
+            return runtime.session_id
+        if self._run_intent_repo is not None:
+            try:
+                return self._run_intent_repo.get(run_id).session_id
+            except KeyError:
+                pass
+        raise KeyError(f"Run {run_id} not found")
 
     def inject_subagent_message(
         self,

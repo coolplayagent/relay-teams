@@ -13,6 +13,7 @@ from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from relay_teams.media import MediaAssetService
+from relay_teams.monitors import MonitorService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.metrics import MetricRecorder
 from relay_teams.notifications import NotificationService
@@ -71,6 +72,7 @@ def create_provider_factory(
     run_runtime_repo: RunRuntimeRepository,
     run_intent_repo: RunIntentRepository,
     background_task_service: BackgroundTaskService | None,
+    monitor_service: MonitorService | None = None,
     workspace_manager: WorkspaceManager,
     media_asset_service: MediaAssetService,
     role_memory_service: RoleMemoryService | None = None,
@@ -142,6 +144,7 @@ def create_provider_factory(
                 run_runtime_repo=run_runtime_repo,
                 run_intent_repo=run_intent_repo,
                 background_task_service=background_task_service,
+                monitor_service=monitor_service,
                 workspace_manager=workspace_manager,
                 media_asset_service=media_asset_service,
                 computer_runtime=computer_runtime,

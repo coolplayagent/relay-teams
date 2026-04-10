@@ -15,6 +15,7 @@ from relay_teams.media import (
     ContentPart,
     InlineMediaContentPart,
 )
+from relay_teams.monitors import MonitorActionType, MonitorRule, MonitorSourceKind
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.enums import ExecutionMode, InjectionSource
 from relay_teams.sessions.runs.run_models import (
@@ -88,6 +89,26 @@ class StopBackgroundTaskResponse(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     background_task: dict[str, object]
+
+
+class CreateMonitorRequest(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    source_kind: MonitorSourceKind = MonitorSourceKind.BACKGROUND_TASK
+    source_key: str = Field(min_length=1)
+    event_names: tuple[str, ...] = ("background_task.line",)
+    patterns: tuple[str, ...] = ()
+    action_type: MonitorActionType = MonitorActionType.WAKE_INSTANCE
+    cooldown_seconds: int = Field(default=0, ge=0)
+    max_triggers: int | None = Field(default=None, ge=1)
+    auto_stop_on_first_match: bool = False
+    case_sensitive: bool = False
+
+
+class MonitorResponse(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    monitor: dict[str, object]
 
 
 @router.post(
@@ -218,6 +239,68 @@ async def stream_run_events(
                 yield f"data: {json.dumps({'error': str(exc)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/{run_id}/monitors")
+def list_monitors(
+    run_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> dict[str, object]:
+    try:
+        return {"items": list(service.list_monitors(run_id))}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        status_code = 503 if "not configured" in str(exc).lower() else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.post("/{run_id}/monitors", response_model=MonitorResponse)
+def create_monitor(
+    run_id: RequiredIdentifierStr,
+    req: CreateMonitorRequest,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> MonitorResponse:
+    try:
+        monitor = service.create_monitor(
+            run_id=run_id,
+            source_kind=req.source_kind,
+            source_key=req.source_key,
+            rule=MonitorRule(
+                event_names=req.event_names,
+                text_patterns_any=req.patterns,
+                cooldown_seconds=req.cooldown_seconds,
+                max_triggers=req.max_triggers,
+                auto_stop_on_first_match=req.auto_stop_on_first_match,
+                case_sensitive=req.case_sensitive,
+            ),
+            action_type=req.action_type,
+        )
+        return MonitorResponse(monitor=monitor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        status_code = 503 if "not configured" in str(exc).lower() else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@router.post("/{run_id}/monitors/{monitor_id}:stop", response_model=MonitorResponse)
+def stop_monitor(
+    run_id: RequiredIdentifierStr,
+    monitor_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> MonitorResponse:
+    try:
+        return MonitorResponse(
+            monitor=service.stop_monitor(run_id=run_id, monitor_id=monitor_id)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        status_code = 503 if "not configured" in str(exc).lower() else 409
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.post("/{run_id}/inject")

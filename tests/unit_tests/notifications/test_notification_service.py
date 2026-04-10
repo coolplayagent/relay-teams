@@ -170,3 +170,8 @@ def test_default_notification_config_enables_feishu_run_delivery() -> None:
         NotificationChannel.TOAST,
         NotificationChannel.FEISHU,
     )
+    assert config.monitor_triggered.enabled is True
+    assert config.monitor_triggered.channels == (
+        NotificationChannel.BROWSER,
+        NotificationChannel.TOAST,
+    )

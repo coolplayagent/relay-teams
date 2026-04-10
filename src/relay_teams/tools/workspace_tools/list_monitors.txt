@@ -1,0 +1,4 @@
+List managed monitors created for the current run.
+
+- Use this to inspect active and stopped subscriptions.
+- Each item includes the source, rule, action, status, and trigger counters.

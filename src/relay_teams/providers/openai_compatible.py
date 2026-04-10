@@ -21,6 +21,7 @@ from relay_teams.agents.execution.llm_session import AgentLlmSession
 from relay_teams.computer import ComputerRuntime
 from relay_teams.media import ContentPart, MediaAssetService, MediaModality
 from relay_teams.metrics import MetricRecorder
+from relay_teams.monitors import MonitorService
 from relay_teams.net.llm_client import build_llm_http_client
 from relay_teams.providers.model_config import LlmRetryConfig, ProviderType
 from relay_teams.providers.openai_support import build_model_request_headers
@@ -95,6 +96,7 @@ class OpenAICompatibleProvider(LLMProvider):
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         background_task_service: BackgroundTaskService | None,
+        monitor_service: MonitorService | None = None,
         workspace_manager: WorkspaceManager,
         media_asset_service: MediaAssetService,
         role_memory_service: RoleMemoryService | None,
@@ -135,6 +137,7 @@ class OpenAICompatibleProvider(LLMProvider):
             run_runtime_repo=run_runtime_repo,
             run_intent_repo=run_intent_repo,
             background_task_service=background_task_service,
+            monitor_service=monitor_service,
             workspace_manager=workspace_manager,
             media_asset_service=media_asset_service,
             role_memory_service=role_memory_service,

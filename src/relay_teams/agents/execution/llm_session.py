@@ -113,6 +113,7 @@ from relay_teams.computer import (
     describe_mcp_tool,
 )
 from relay_teams.media import MediaAssetService
+from relay_teams.monitors import MonitorService
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime import (
     ToolApprovalManager,
@@ -342,6 +343,7 @@ class AgentLlmSession:
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         background_task_service: BackgroundTaskService | None,
+        monitor_service: MonitorService | None = None,
         workspace_manager: WorkspaceManager,
         media_asset_service: MediaAssetService | None,
         role_memory_service: RoleMemoryService | None,
@@ -380,6 +382,7 @@ class AgentLlmSession:
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._background_task_service = background_task_service
+        self._monitor_service = monitor_service
         self._workspace_manager = workspace_manager
         self._media_asset_service = media_asset_service
         self._role_memory_service = role_memory_service
@@ -494,6 +497,7 @@ class AgentLlmSession:
             media_asset_service=self._media_asset_service,
             computer_runtime=self._computer_runtime,
             background_task_service=self._background_task_service,
+            monitor_service=self._monitor_service,
             run_id=request.run_id,
             trace_id=request.trace_id,
             task_id=request.task_id,
