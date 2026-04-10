@@ -140,7 +140,8 @@ def stream_chat_completions(
         return
 
     content = str(response_spec.get("content") or "")
-    chunks = split_text(content, size=12)
+    chunk_size = max(1, _coerce_int(response_spec.get("chunk_size"), default=12))
+    chunks = split_text(content, size=chunk_size)
 
     for index, part in enumerate(chunks):
         delta: dict[str, str] = {"content": part}
@@ -273,6 +274,7 @@ def _plan_rolling_summary_compaction_response(
     return {
         "kind": "text",
         "content": _render_rolling_summary_markdown(facts),
+        "chunk_size": 4096,
     }
 
 
@@ -330,6 +332,7 @@ def _plan_rolling_summary_recall_response(messages: list[object]) -> dict[str, o
     return {
         "kind": "text",
         "content": _render_rolling_summary_recall_text(facts),
+        "chunk_size": 4096,
     }
 
 
