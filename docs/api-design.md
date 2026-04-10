@@ -140,7 +140,8 @@ Fetches the available model catalog for a saved profile and/or draft override.
 Draft overrides may omit `model`, but must provide `base_url` and `api_key` or `headers` when `profile_name` is omitted. For `provider = "maas"`, the override must provide `base_url` and `maas_auth`.
 When `profile_name` is provided, the request may override `base_url`, `api_key`, `headers`, and `ssl_verify` while reusing the saved credentials for any omitted fields.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
-`openai_compatible`, `bigmodel`, and `minimax` map this call to `GET {base_url}/models` and return the normalized `models` list sorted and deduplicated. `maas` does not support catalog discovery through this API and returns `error_code = "unsupported_provider"`, so callers must enter the model name manually.
+`openai_compatible`, `bigmodel`, and `minimax` map this call to `GET {base_url}/models` and return the normalized `models` list sorted and deduplicated. `maas` maps this call to the fixed PromptCenter discovery endpoint after MAAS login, using the returned `X-Auth-Token` plus department info from `userInfo` to build the discovery request payload.
+For `maas`, the backend merges model ids from top-level `user_model_list` and nested `plugin_config[].config` payloads, filters invalid ids, then returns sorted deduplicated ids in `models[]` and `model_entries[]`.
 When the provider exposes per-model context-limit metadata in the catalog payload, the response also includes `model_entries[]` with:
 - `model`
 - optional `context_window`

@@ -7,7 +7,7 @@ from typing import cast
 import httpx
 import pytest
 
-from relay_teams.providers.maas_auth import MaaSLoginError
+from relay_teams.providers.maas_auth import MaaSAuthContext, MaaSLoginError
 from relay_teams.providers.model_config import (
     MaaSAuthConfig,
     ModelEndpointConfig,
@@ -72,9 +72,16 @@ class _FakeHttpClient:
 
 
 class _FakeMaaSTokenService:
-    def __init__(self, tokens: list[str], captured: dict[str, object]) -> None:
+    def __init__(
+        self,
+        tokens: list[str],
+        captured: dict[str, object],
+        *,
+        departments: list[str | None] | None = None,
+    ) -> None:
         self._tokens = tokens
         self._captured = captured
+        self._departments = departments or ["Relay/Department"] * len(tokens)
 
     def get_token_sync(
         self,
@@ -84,6 +91,21 @@ class _FakeMaaSTokenService:
         connect_timeout_seconds: float,
         force_refresh: bool = False,
     ) -> str:
+        return self.get_auth_context_sync(
+            auth_config=auth_config,
+            ssl_verify=ssl_verify,
+            connect_timeout_seconds=connect_timeout_seconds,
+            force_refresh=force_refresh,
+        ).token
+
+    def get_auth_context_sync(
+        self,
+        *,
+        auth_config: MaaSAuthConfig,
+        ssl_verify: bool | None,
+        connect_timeout_seconds: float,
+        force_refresh: bool = False,
+    ) -> MaaSAuthContext:
         calls = self._captured.setdefault("maas_token_calls", [])
         assert isinstance(calls, list)
         calls.append(
@@ -95,7 +117,9 @@ class _FakeMaaSTokenService:
                 "force_refresh": force_refresh,
             }
         )
-        return self._tokens.pop(0)
+        token = self._tokens.pop(0)
+        department = self._departments.pop(0)
+        return MaaSAuthContext(token=token, department=department)
 
 
 def test_probe_uses_saved_profile_and_returns_usage(monkeypatch) -> None:
@@ -580,8 +604,248 @@ def test_probe_refreshes_maas_token_after_unauthorized_response(monkeypatch) -> 
     assert token_calls[1]["force_refresh"] is True
 
 
-def test_discover_models_returns_unsupported_for_maas() -> None:
+def test_discover_models_supports_maas_provider(monkeypatch) -> None:
+    captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: _FakeMaaSTokenService(["maas-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(
+                    200,
+                    json={
+                        "user_model_list": [
+                            {"model_id": "gpt-4"},
+                            {"model_id": "123"},
+                        ],
+                        "plugin_config": [
+                            {
+                                "config": (
+                                    '[{"composor_act_mode_model_list":[{"model_id":"gpt-4.5"}],'
+                                    '"composor_plan_mode_model_list":[{"model_id":"model:ignored"}],'
+                                    '"user_model_list":[{"model_id":"gpt-4.1"},{"model_id":"gpt-4"}]}]'
+                                )
+                            },
+                            {"config": "{not-valid-json}"},
+                        ],
+                    },
+                ),
+            )
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.MAAS,
+                base_url="https://maas.example/api/v2",
+                maas_auth=MaaSAuthConfig(
+                    username="relay-user",
+                    password="relay-password",
+                ),
+            ),
+            timeout_ms=2800,
+        )
+    )
+
+    assert result.ok is True
+    assert result.provider == ProviderType.MAAS
+    assert result.models == ("gpt-4", "gpt-4.1", "gpt-4.5")
+    assert (
+        captured["url"]
+        == "https://promptcenter.aims.cce.prod.dragon.tools.huawei.com/PromptCenterService/v1/policy/bundle"
+    )
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["X-Auth-Token"] == "maas-token"
+    request_payload = cast(dict[str, str], captured["json"])
+    assert request_payload == {
+        "area": "green",
+        "plugin_version": "1.0.4",
+        "application": "RelayAgent",
+        "ide": "RelayAgent",
+        "plugin_name": "maas_relay",
+        "department": "Relay/Department",
+    }
+    assert tuple(entry.model for entry in result.model_entries) == (
+        "gpt-4",
+        "gpt-4.1",
+        "gpt-4.5",
+    )
+
+
+def test_discover_models_merges_saved_maas_password_when_override_omits_it(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: _runtime_config(
+            profile_name="maas-profile",
+            provider=ProviderType.MAAS,
+            model="maas-chat",
+            base_url="https://maas.example/api/v2",
+            api_key=None,
+            maas_auth=MaaSAuthConfig(
+                username="saved-user",
+                password="saved-password",
+            ),
+        )
+    )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: _FakeMaaSTokenService(["maas-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(
+                    200,
+                    json={"user_model_list": [{"model_id": "maas-chat"}]},
+                ),
+            )
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            profile_name="maas-profile",
+            override=ModelConnectivityProbeOverride(
+                maas_auth=MaaSAuthConfig(username="edited-user"),
+            ),
+        )
+    )
+
+    assert result.ok is True
+    token_calls = cast(list[dict[str, object]], captured["maas_token_calls"])
+    assert token_calls[0]["username"] == "edited-user"
+    assert token_calls[0]["password"] == "saved-password"
+
+
+def test_discover_models_refreshes_maas_token_after_unauthorized_response(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {"requests": []}
+    responses = [
+        httpx.Response(401, json={"error": {"message": "expired"}}),
+        httpx.Response(200, json={"user_model_list": [{"model_id": "maas-chat"}]}),
+    ]
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    token_service = _FakeMaaSTokenService(["expired-token", "fresh-token"], captured)
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: token_service,
+    )
+
+    def build_client(**_kwargs: object) -> _FakeHttpClient:
+        requests = cast(list[dict[str, object]], captured["requests"])
+        local_capture: dict[str, object] = {}
+        requests.append(local_capture)
+        return _FakeHttpClient(captured=local_capture, response=responses.pop(0))
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        build_client,
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.MAAS,
+                base_url="https://maas.example/api/v2",
+                maas_auth=MaaSAuthConfig(
+                    username="relay-user",
+                    password="relay-password",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is True
+    requests = cast(list[dict[str, object]], captured["requests"])
+    first_headers = cast(dict[str, str], requests[0]["headers"])
+    second_headers = cast(dict[str, str], requests[1]["headers"])
+    assert first_headers["X-Auth-Token"] == "expired-token"
+    assert second_headers["X-Auth-Token"] == "fresh-token"
+    token_calls = cast(list[dict[str, object]], captured["maas_token_calls"])
+    assert token_calls[0]["force_refresh"] is False
+    assert token_calls[1]["force_refresh"] is True
+
+
+def test_discover_models_refreshes_maas_auth_when_department_missing(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    token_service = _FakeMaaSTokenService(
+        ["stale-token", "fresh-token"],
+        captured,
+        departments=[None, "Relay/Department"],
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: token_service,
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(
+                    200,
+                    json={"user_model_list": [{"model_id": "maas-chat"}]},
+                ),
+            )
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.MAAS,
+                base_url="https://maas.example/api/v2",
+                maas_auth=MaaSAuthConfig(
+                    username="relay-user",
+                    password="relay-password",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is True
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["X-Auth-Token"] == "fresh-token"
+    token_calls = cast(list[dict[str, object]], captured["maas_token_calls"])
+    assert token_calls[0]["force_refresh"] is False
+    assert token_calls[1]["force_refresh"] is True
+
+
+def test_discover_models_returns_invalid_response_when_maas_department_missing(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: _FakeMaaSTokenService(
+            ["stale-token", "fresh-token"],
+            captured,
+            departments=[None, None],
+        ),
+    )
 
     result = service.discover_models(
         ModelDiscoveryRequest(
@@ -597,11 +861,13 @@ def test_discover_models_returns_unsupported_for_maas() -> None:
     )
 
     assert result.ok is False
-    assert result.error_code == "unsupported_provider"
-    assert (
-        result.error_message
-        == "MAAS model discovery is not supported. Enter the model name manually."
+    assert result.error_code == "invalid_response"
+    assert result.error_message == (
+        "MAAS login response did not include user department information."
     )
+    token_calls = cast(list[dict[str, object]], captured["maas_token_calls"])
+    assert token_calls[0]["force_refresh"] is False
+    assert token_calls[1]["force_refresh"] is True
 
 
 def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> None:

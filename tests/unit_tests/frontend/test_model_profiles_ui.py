@@ -1249,7 +1249,7 @@ console.log(JSON.stringify({
     assert payload["maasFieldDisplay"] == "grid"
 
 
-def test_selecting_maas_disables_model_discovery(tmp_path: Path) -> None:
+def test_selecting_maas_keeps_model_discovery_enabled(tmp_path: Path) -> None:
     payload = _run_model_profiles_script(
         tmp_path=tmp_path,
         runner_source="""
@@ -1272,11 +1272,125 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    assert payload["fetchDisabled"] is True
-    assert (
-        payload["fetchTitle"]
-        == "MAAS model discovery is not supported. Enter the model name manually."
+    assert payload["fetchDisabled"] is False
+    assert payload["fetchTitle"] == "Fetch Models"
+
+
+def test_discover_models_for_new_maas_profile_sends_maas_auth(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider").value = "maas";
+document.getElementById("profile-provider").onchange();
+document.getElementById("profile-maas-username").value = "relay-user";
+document.getElementById("profile-maas-password").value = "relay-password";
+document.getElementById("profile-maas-password").oninput();
+
+await document.getElementById("fetch-profile-models-btn").onclick();
+
+console.log(JSON.stringify({
+    discoverPayload: globalThis.__discoverPayload,
+    discoveryStatusText: document.getElementById("profile-model-discovery-status").textContent,
+}));
+""".strip(),
     )
+
+    discover_payload = cast(dict[str, JsonValue], payload["discoverPayload"])
+    discover_override = cast(dict[str, JsonValue], discover_payload["override"])
+    maas_auth = cast(dict[str, JsonValue], discover_override["maas_auth"])
+    assert discover_override["provider"] == "maas"
+    assert discover_override["base_url"] == (
+        "http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/"
+    )
+    assert maas_auth == {
+        "username": "relay-user",
+        "password": "relay-password",
+    }
+    assert payload["discoveryStatusText"] == "Fetched 2 models in 37ms."
+
+
+def test_discover_models_for_existing_maas_profile_reuses_saved_password(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+await loadModelProfilesPanel();
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "maas-profile").onclick();
+await document.getElementById("fetch-profile-models-btn").onclick();
+
+console.log(JSON.stringify({
+    discoverPayload: globalThis.__discoverPayload,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        "maas-profile": {
+            provider: "maas",
+            model: "maas-chat",
+            base_url: "http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/",
+            maas_auth: {
+                username: "saved-user",
+                password: "saved-password",
+                has_password: true,
+            },
+            is_default: false,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42, token_usage: { total_tokens: 9 } };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: ["maas-chat"] };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+    )
+
+    discover_payload = cast(dict[str, JsonValue], payload["discoverPayload"])
+    discover_override = cast(dict[str, JsonValue], discover_payload["override"])
+    maas_auth = cast(dict[str, JsonValue], discover_override["maas_auth"])
+    assert discover_payload["profile_name"] == "maas-profile"
+    assert maas_auth == {
+        "username": "saved-user",
+    }
 
 
 def _run_model_profiles_script(
