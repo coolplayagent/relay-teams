@@ -564,6 +564,155 @@ def test_handle_inbound_delivery_returns_duplicate_on_insert_race(
     }
 
 
+def test_handle_inbound_delivery_preserves_rule_last_error_when_dispatch_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, repository, _, _ = _build_service(tmp_path)
+    account_id = _create_account(service)
+    created = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            subscribed_events=("pull_request",),
+        )
+    )
+    rule = service.create_rule(
+        TriggerRuleCreateInput(
+            name="dispatch-failure",
+            provider=TriggerProvider.GITHUB,
+            account_id=account_id,
+            repo_subscription_id=created.repo_subscription_id,
+            match_config=TriggerRuleMatchConfig(
+                event_name="pull_request",
+                actions=("opened",),
+            ),
+            dispatch_config=TriggerDispatchConfig(
+                target_type=TriggerTargetType.RUN_TEMPLATE,
+                run_template=_run_template(),
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        service,
+        "_start_run_template",
+        lambda **_: (_ for _ in ()).throw(RuntimeError("run template failed")),
+    )
+    body = json.dumps(
+        {
+            "action": "opened",
+            "number": 318,
+            "repository": {"full_name": "coolplayagent/relay-teams"},
+            "pull_request": {"number": 318},
+        }
+    ).encode("utf-8")
+
+    response = service.handle_inbound_github_delivery(
+        headers={
+            "x-github-delivery": "delivery-dispatch-failure",
+            "x-github-event": "pull_request",
+            "x-hub-signature-256": _build_signature(body=body, secret="whsec_test"),
+        },
+        body=body,
+    )
+
+    dispatches = repository.list_dispatches_by_delivery(
+        str(response["trigger_delivery_id"])
+    )
+    persisted_rule = repository.get_rule(rule.trigger_rule_id)
+
+    assert response["ingest_status"] == TriggerDeliveryIngestStatus.TRIGGERED.value
+    assert response["dispatch_count"] == 1
+    assert len(dispatches) == 1
+    assert dispatches[0].status == TriggerDispatchStatus.FAILED
+    assert dispatches[0].last_error == "run template failed"
+    assert persisted_rule.last_error == "run template failed"
+    assert persisted_rule.last_fired_at is not None
+
+
+def test_handle_inbound_delivery_caches_changed_files_lookup_per_delivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, repository, _, github_client = _build_service(tmp_path)
+    account_id = _create_account(service)
+    created = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            subscribed_events=("pull_request",),
+        )
+    )
+    for name in ("paths-one", "paths-two"):
+        _ = service.create_rule(
+            TriggerRuleCreateInput(
+                name=name,
+                provider=TriggerProvider.GITHUB,
+                account_id=account_id,
+                repo_subscription_id=created.repo_subscription_id,
+                match_config=TriggerRuleMatchConfig(
+                    event_name="pull_request",
+                    actions=("opened",),
+                    paths_any=("src/**/*.py",),
+                ),
+                dispatch_config=TriggerDispatchConfig(
+                    target_type=TriggerTargetType.RUN_TEMPLATE,
+                    run_template=_run_template(),
+                ),
+            )
+        )
+    pull_request_files_calls = 0
+
+    def _list_pull_request_files(
+        *,
+        token: str,
+        owner: str,
+        repo: str,
+        pull_request_number: int,
+    ) -> tuple[str, ...]:
+        nonlocal pull_request_files_calls
+        pull_request_files_calls += 1
+        assert token == "ghp_test"
+        _ = (owner, repo, pull_request_number)
+        return ("docs/readme.md",)
+
+    monkeypatch.setattr(
+        github_client,
+        "list_pull_request_files",
+        _list_pull_request_files,
+    )
+    body = json.dumps(
+        {
+            "action": "opened",
+            "number": 318,
+            "repository": {"full_name": "coolplayagent/relay-teams"},
+            "pull_request": {"number": 318},
+        }
+    ).encode("utf-8")
+
+    response = service.handle_inbound_github_delivery(
+        headers={
+            "x-github-delivery": "delivery-path-cache",
+            "x-github-event": "pull_request",
+            "x-hub-signature-256": _build_signature(body=body, secret="whsec_test"),
+        },
+        body=body,
+    )
+
+    evaluations = repository.list_evaluations_by_delivery(
+        str(response["trigger_delivery_id"])
+    )
+
+    assert response["ingest_status"] == TriggerDeliveryIngestStatus.UNMATCHED.value
+    assert response["dispatch_count"] == 0
+    assert pull_request_files_calls == 1
+    assert len(evaluations) == 2
+    assert evaluations[0].reason_code == "paths_any_mismatch"
+    assert evaluations[1].reason_code == "paths_any_mismatch"
+
+
 def test_process_pending_actions_marks_attempt_failed_when_token_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

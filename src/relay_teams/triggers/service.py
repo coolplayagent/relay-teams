@@ -8,6 +8,7 @@ import json
 import logging
 import secrets
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -79,6 +80,29 @@ LOGGER = get_logger(__name__)
 _GITHUB_DELIVERY_HEADER = "x-github-delivery"
 _GITHUB_EVENT_HEADER = "x-github-event"
 _GITHUB_SIGNATURE_HEADER = "x-hub-signature-256"
+
+
+class _ChangedFilesResolutionCache:
+    def __init__(self) -> None:
+        self._resolved = False
+        self._changed_files: tuple[str, ...] = ()
+        self._error: str | None = None
+
+    def get_or_resolve(
+        self,
+        resolver: Callable[[], tuple[str, ...]],
+    ) -> tuple[tuple[str, ...] | None, str | None]:
+        if not self._resolved:
+            self._resolved = True
+            try:
+                self._changed_files = resolver()
+                self._error = None
+            except (GitHubApiError, ValueError) as exc:
+                message = str(exc)
+                self._error = message or "failed to resolve pull request files"
+        if self._error is not None:
+            return None, self._error
+        return self._changed_files, None
 
 
 class EventLogLike(Protocol):
@@ -699,11 +723,13 @@ class GitHubTriggerService:
     ) -> tuple[TriggerDispatchRecord, ...]:
         rules = self._repository.list_enabled_rules_for_repo(repo.repo_subscription_id)
         dispatches: list[TriggerDispatchRecord] = []
+        changed_files_cache = _ChangedFilesResolutionCache()
         for rule in rules:
             matched, reason_code, reason_detail = self._match_rule(
                 rule.match_config,
                 delivery=delivery,
                 repo=repo,
+                changed_files_cache=changed_files_cache,
             )
             self._repository.create_evaluation(
                 TriggerEvaluationRecord(
@@ -717,14 +743,18 @@ class GitHubTriggerService:
             )
             if not matched:
                 continue
-            dispatches.append(
-                self._create_dispatch(delivery=delivery, rule=rule, repo=repo)
+            dispatch = self._create_dispatch(delivery=delivery, rule=rule, repo=repo)
+            dispatches.append(dispatch)
+            rule_last_error = (
+                dispatch.last_error
+                if dispatch.status == TriggerDispatchStatus.FAILED
+                else None
             )
             self._repository.update_rule(
                 rule.model_copy(
                     update={
                         "last_fired_at": _utc_now(),
-                        "last_error": None,
+                        "last_error": rule_last_error,
                         "updated_at": _utc_now(),
                     }
                 )
@@ -1232,6 +1262,7 @@ class GitHubTriggerService:
         *,
         delivery: TriggerDeliveryRecord,
         repo: GitHubRepoSubscriptionRecord,
+        changed_files_cache: _ChangedFilesResolutionCache | None = None,
     ) -> tuple[bool, str, str | None]:
         normalized = delivery.normalized_payload
         if delivery.event_name != match_config.event_name:
@@ -1286,22 +1317,27 @@ class GitHubTriggerService:
                 "check_conclusion did not match",
             )
         if match_config.paths_any or match_config.paths_ignore:
-            try:
-                changed_files = self._resolve_changed_files(
-                    delivery=delivery, repo=repo
-                )
-            except (GitHubApiError, ValueError) as exc:
+            cache = (
+                changed_files_cache
+                if changed_files_cache is not None
+                else _ChangedFilesResolutionCache()
+            )
+            changed_files, changed_files_error = cache.get_or_resolve(
+                lambda: self._resolve_changed_files(delivery=delivery, repo=repo)
+            )
+            if changed_files_error is not None:
                 return (
                     False,
                     "changed_files_unavailable",
-                    str(exc) or "failed to resolve pull request files",
+                    changed_files_error,
                 )
+            resolved_changed_files = changed_files or ()
             if match_config.paths_any and not any(
                 any(
                     fnmatch.fnmatchcase(path, pattern)
                     for pattern in match_config.paths_any
                 )
-                for path in changed_files
+                for path in resolved_changed_files
             ):
                 return (
                     False,
@@ -1310,13 +1346,13 @@ class GitHubTriggerService:
                 )
             if (
                 match_config.paths_ignore
-                and changed_files
+                and resolved_changed_files
                 and all(
                     any(
                         fnmatch.fnmatchcase(path, pattern)
                         for pattern in match_config.paths_ignore
                     )
-                    for path in changed_files
+                    for path in resolved_changed_files
                 )
             ):
                 return (
