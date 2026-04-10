@@ -162,6 +162,18 @@ console.log(JSON.stringify({
     ]
 
 
+def test_github_settings_markup_includes_token_link_card() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "settings" / "index.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="github-token-link"' in source
+    assert 'href="https://github.com/settings/tokens"' in source
+    assert 'target="_blank"' in source
+    assert 'rel="noreferrer"' in source
+
+
 def _run_github_settings_script(
     tmp_path: Path,
     runner_source: str,

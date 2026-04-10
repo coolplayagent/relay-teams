@@ -837,6 +837,22 @@ function createModal() {
                                                     </button>
                                                 </div>
                                             </div>
+                                            <div class="form-group proxy-inline-field web-provider-inline-field">
+                                                <span class="settings-token-source-label" data-i18n="settings.github.token_source">Get token</span>
+                                                <a class="web-provider-link-card" id="github-token-link" href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" title="https://github.com/settings/tokens" aria-label="https://github.com/settings/tokens">
+                                                    <span class="web-provider-link-copy">
+                                                        <span class="web-provider-link-badge">GitHub</span>
+                                                        <span class="web-provider-link-url">https://github.com/settings/tokens</span>
+                                                        <span class="settings-token-source-note" data-i18n="settings.github.token_source_help">Open GitHub token settings to create or copy a token</span>
+                                                    </span>
+                                                    <span class="web-provider-link-arrow" aria-hidden="true">
+                                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
+                                                            <path d="M7 17L17 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                                            <path d="M9 7h8v8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                                        </svg>
+                                                    </span>
+                                                </a>
+                                            </div>
                                         </div>
                                     </section>
                                     <section class="proxy-form-section proxy-form-section-test">

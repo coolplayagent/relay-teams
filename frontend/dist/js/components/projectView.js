@@ -2289,6 +2289,22 @@ function renderSkillsFeatureView() {
                                 </button>
                             </div>
                         </div>
+                        <div class="form-group proxy-inline-field web-provider-inline-field">
+                            <span class="settings-token-source-label">${escapeHtml(t('settings.clawhub.token_source'))}</span>
+                            <a class="web-provider-link-card" id="feature-clawhub-token-link" href="https://clawhub.ai/settings" target="_blank" rel="noreferrer" title="https://clawhub.ai/settings" aria-label="https://clawhub.ai/settings">
+                                <span class="web-provider-link-copy">
+                                    <span class="web-provider-link-badge">ClawHub</span>
+                                    <span class="web-provider-link-url">https://clawhub.ai/settings</span>
+                                    <span class="settings-token-source-note">${escapeHtml(t('settings.clawhub.token_source_help'))}</span>
+                                </span>
+                                <span class="web-provider-link-arrow" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
+                                        <path d="M7 17L17 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                        <path d="M9 7h8v8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                    </svg>
+                                </span>
+                            </a>
+                        </div>
                         <div class="form-group proxy-inline-field proxy-inline-field-actions">
                             <label for="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.saveButtonId)}">${escapeHtml(t('settings.clawhub.token_action'))}</label>
                             <div class="settings-inline-action-row">
