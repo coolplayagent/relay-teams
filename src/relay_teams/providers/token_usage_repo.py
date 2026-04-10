@@ -340,6 +340,15 @@ class TokenUsageRepository(SharedSqliteRepository):
             ),
         )
 
+    def delete_by_run(self, run_id: str) -> None:
+        self._run_write(
+            operation_name="delete_by_run",
+            operation=lambda: self._conn.execute(
+                "DELETE FROM token_usage WHERE run_id=?",
+                (run_id,),
+            ),
+        )
+
     def _latest_clear_cutoff(self, session_id: str) -> str | None:
         if self._session_history_marker_repo is None:
             return None

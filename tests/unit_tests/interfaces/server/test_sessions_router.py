@@ -15,11 +15,15 @@ class _FakeSessionService:
         self.created_calls: list[tuple[str | None, str, dict[str, str] | None]] = []
         self.updated_calls: list[tuple[str, dict[str, str]]] = []
         self.topology_update_calls: list[tuple[str, str, str | None, str | None]] = []
+        self.delete_subagent_calls: list[tuple[str, str]] = []
         self.reflection_refresh_calls: list[tuple[str, str]] = []
         self.reflection_update_calls: list[tuple[str, str, str]] = []
         self.reflection_delete_calls: list[tuple[str, str]] = []
         self.create_session_error: Exception | None = None
         self.raise_missing = False
+        self.raise_missing_list_agents = False
+        self.raise_missing_list_subagents = False
+        self.delete_subagent_error: Exception | None = None
 
     def create_session(
         self,
@@ -45,11 +49,54 @@ class _FakeSessionService:
     def list_sessions(self) -> tuple[SessionRecord, ...]:  # pragma: no cover
         raise AssertionError("not used")
 
+    def list_normal_mode_subagents(
+        self, session_id: str
+    ) -> tuple[dict[str, object], ...]:
+        if self.raise_missing_list_subagents:
+            raise KeyError(session_id)
+        return (
+            {
+                "instance_id": "inst-subagent-1",
+                "role_id": "Explorer",
+                "run_id": "subagent_run_123",
+                "title": "Explore issue",
+                "status": "completed",
+                "run_status": "running",
+                "run_phase": "running",
+                "last_event_id": 12,
+                "checkpoint_event_id": 8,
+                "stream_connected": True,
+                "conversation_id": "conv_session_1_explorer_inst_subagent_1",
+            },
+        )
+
+    def list_agents_in_session(self, session_id: str) -> tuple[dict[str, object], ...]:
+        if self.raise_missing_list_agents:
+            raise KeyError(session_id)
+        return (
+            {
+                "instance_id": "inst-coordinator-1",
+                "role_id": "Coordinator",
+                "run_id": "run_123",
+                "status": "completed",
+                "conversation_id": "conv_session_1_coordinator_inst_coordinator_1",
+            },
+        )
+
     def get_session(self, session_id: str) -> SessionRecord:  # pragma: no cover
         raise AssertionError(f"not used: {session_id}")
 
     def delete_session(self, session_id: str) -> None:  # pragma: no cover
         raise AssertionError(f"not used: {session_id}")
+
+    def delete_normal_mode_subagent(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> None:
+        if self.delete_subagent_error is not None:
+            raise self.delete_subagent_error
+        self.delete_subagent_calls.append((session_id, instance_id))
 
     def update_session_topology(
         self,
@@ -251,6 +298,87 @@ def test_update_session_route_returns_not_found_for_missing_session() -> None:
         "/api/sessions/missing-session",
         json={"metadata": {"title": "Renamed Session"}},
     )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Session not found"}
+
+
+def test_list_session_subagents_route_returns_projected_subagents() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.get("/api/sessions/session-1/subagents")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "instance_id": "inst-subagent-1",
+            "role_id": "Explorer",
+            "run_id": "subagent_run_123",
+            "title": "Explore issue",
+            "status": "completed",
+            "run_status": "running",
+            "run_phase": "running",
+            "last_event_id": 12,
+            "checkpoint_event_id": 8,
+            "stream_connected": True,
+            "conversation_id": "conv_session_1_explorer_inst_subagent_1",
+        }
+    ]
+
+
+def test_delete_session_subagent_route_returns_ok() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.delete("/api/sessions/session-1/subagents/inst-subagent-1")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert fake_service.delete_subagent_calls == [("session-1", "inst-subagent-1")]
+
+
+def test_delete_session_subagent_route_returns_not_found() -> None:
+    fake_service = _FakeSessionService()
+    fake_service.delete_subagent_error = KeyError("missing")
+    client = _create_client(fake_service)
+
+    response = client.delete("/api/sessions/session-1/subagents/inst-missing")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Subagent not found"}
+
+
+def test_delete_session_subagent_route_returns_conflict_for_running_subagent() -> None:
+    fake_service = _FakeSessionService()
+    fake_service.delete_subagent_error = RuntimeError(
+        "Cannot delete a running subagent"
+    )
+    client = _create_client(fake_service)
+
+    response = client.delete("/api/sessions/session-1/subagents/inst-running")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Cannot delete a running subagent"}
+
+
+def test_list_session_agents_route_returns_not_found_for_missing_session() -> None:
+    fake_service = _FakeSessionService()
+    fake_service.raise_missing_list_agents = True
+    client = _create_client(fake_service)
+
+    response = client.get("/api/sessions/missing-session/agents")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Session not found"}
+
+
+def test_list_session_subagents_route_returns_not_found_for_missing_session() -> None:
+    fake_service = _FakeSessionService()
+    fake_service.raise_missing_list_subagents = True
+    client = _create_client(fake_service)
+
+    response = client.get("/api/sessions/missing-session/subagents")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Session not found"}

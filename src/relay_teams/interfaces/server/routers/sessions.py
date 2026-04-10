@@ -163,7 +163,36 @@ def list_session_agents(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return list(service.list_agents_in_session(session_id))
+    try:
+        return list(service.list_agents_in_session(session_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Session not found") from exc
+
+
+@router.get("/{session_id}/subagents")
+def list_session_subagents(
+    session_id: RequiredIdentifierStr,
+    service: SessionService = Depends(get_session_service),
+) -> list[dict[str, object]]:
+    try:
+        return list(service.list_normal_mode_subagents(session_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Session not found") from exc
+
+
+@router.delete("/{session_id}/subagents/{instance_id}")
+def delete_session_subagent(
+    session_id: RequiredIdentifierStr,
+    instance_id: RequiredIdentifierStr,
+    service: SessionService = Depends(get_session_service),
+) -> dict[str, str]:
+    try:
+        service.delete_normal_mode_subagent(session_id, instance_id)
+        return {"status": "ok"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Subagent not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/{session_id}/agents/{instance_id}/reflection")

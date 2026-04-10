@@ -275,6 +275,19 @@ class MessageRepository:
             operation_name="delete_by_session",
         )
 
+    def delete_by_instance(self, instance_id: str) -> None:
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM messages WHERE instance_id=?",
+                (instance_id,),
+            ),
+            lock=self._lock,
+            repository_name="MessageRepository",
+            operation_name="delete_by_instance",
+        )
+
     def prune_history_to_safe_boundary(self, instance_id: str) -> None:
         self._prune_to_safe_boundary(
             "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? ORDER BY id ASC",

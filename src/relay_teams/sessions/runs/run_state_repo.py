@@ -225,6 +225,25 @@ class RunStateRepository:
         result.sort(key=lambda item: item.updated_at, reverse=True)
         return tuple(result)
 
+    def delete(self, run_id: str) -> None:
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: (
+                self._conn.execute(
+                    "DELETE FROM run_states WHERE run_id=?",
+                    (run_id,),
+                ),
+                self._conn.execute(
+                    "DELETE FROM run_snapshots WHERE run_id=?",
+                    (run_id,),
+                ),
+            ),
+            lock=self._lock,
+            repository_name="RunStateRepository",
+            operation_name="delete",
+        )
+
     def _upsert_snapshot(self, snapshot: RunSnapshotRecord) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,

@@ -118,7 +118,14 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
             || streamOverlayEntry.textStreaming === true
         )
     ) {
-        renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBlocks, lastRenderedMessage, runId);
+        renderStreamOverlayEntry(
+            container,
+            streamOverlayEntry,
+            pendingToolBlocks,
+            lastRenderedMessage,
+            runId,
+            options,
+        );
     }
 
     applyPendingApprovalsToHistory(container, pendingToolApprovals, runId);
@@ -180,6 +187,7 @@ function renderStreamOverlayEntry(
     pendingToolBlocks,
     lastRenderedMessage = null,
     runId = '',
+    options = {},
 ) {
     const label = streamOverlayEntry.label
         || labelFromRole('assistant', streamOverlayEntry.roleId, streamOverlayEntry.instanceId);
@@ -189,6 +197,7 @@ function renderStreamOverlayEntry(
         streamOverlayEntry,
         lastRenderedMessage,
         runId,
+        options,
     );
     let combinedText = '';
     let renderedLiveTextTail = false;
@@ -245,8 +254,27 @@ function renderStreamOverlayEntry(
     }
 }
 
-function resolveOverlayContentTarget(container, label, streamOverlayEntry, lastRenderedMessage, runId = '') {
+function resolveOverlayContentTarget(
+    container,
+    label,
+    streamOverlayEntry,
+    lastRenderedMessage,
+    runId = '',
+    options = {},
+) {
     const safeLabel = String(label || '').trim();
+    if (options.separateOverlayMessage === true) {
+        return renderMessageBlock(container, 'assistant', label, [], {
+            runId: runId || lastRenderedMessage?.runId || '',
+            roleId: String(streamOverlayEntry?.roleId || '').trim(),
+            instanceId: String(streamOverlayEntry?.instanceId || '').trim(),
+            streamKey: resolveHistoryStreamKey(
+                runId || lastRenderedMessage?.runId || '',
+                streamOverlayEntry?.instanceId,
+                streamOverlayEntry?.roleId,
+            ),
+        }).contentEl;
+    }
     const lastLabel = String(lastRenderedMessage?.label || '').trim();
     const overlayStreamKey = resolveHistoryStreamKey(
         runId || lastRenderedMessage?.runId || '',

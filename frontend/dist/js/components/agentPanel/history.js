@@ -6,6 +6,7 @@ import { fetchAgentMessages, fetchAgentReflection, fetchRunTokenUsage } from '..
 import { state } from '../../core/state.js';
 import { t } from '../../utils/i18n.js';
 import {
+    bindStreamOverlayToContainer,
     getInstanceStreamOverlay,
     renderHistoricalMessageList,
 } from '../messageRenderer.js';
@@ -208,6 +209,166 @@ function escapeAttribute(value) {
     return escapeHtml(value).replaceAll('`', '&#96;');
 }
 
+export async function renderInstanceHistoryInto(container, options = {}) {
+    if (!container) {
+        return null;
+    }
+    const sessionId = String(options.sessionId || '').trim();
+    const instanceId = String(options.instanceId || '').trim();
+    const runId = String(options.runId || '').trim();
+    const userRoleLabel = String(
+        options.userRoleLabel || t('subagent.task_prompt'),
+    ).trim();
+    const emptyLabel = String(
+        options.emptyLabel || t('agent_panel.history.empty'),
+    ).trim();
+    const loadFailedLabel = String(
+        options.loadFailedLabel || t('agent_panel.history.load_failed'),
+    ).trim();
+    const pendingToolApprovals = Array.isArray(options.pendingToolApprovals)
+        ? options.pendingToolApprovals
+        : [];
+    const overlayMode = String(options.overlayMode || 'render').trim().toLowerCase();
+    const requireToolBoundary = options.requireToolBoundary === true;
+    if (!sessionId || !instanceId) {
+        container.innerHTML = `<div class="panel-empty">${escapeHtml(emptyLabel)}</div>`;
+        return null;
+    }
+    try {
+        const messages = await fetchAgentMessages(sessionId, instanceId);
+        const overlayEntry = getInstanceStreamOverlay(runId, instanceId);
+        const streamOverlayEntry = shouldRenderLiveOverlay(options, overlayEntry)
+            ? overlayEntry
+            : null;
+        if (requireToolBoundary && hasPendingToolResults(messages)) {
+            return {
+                messages,
+                streamOverlayEntry,
+                deferred: true,
+            };
+        }
+        container.innerHTML = '';
+        if (
+            messages.length === 0
+            && pendingToolApprovals.length === 0
+            && !streamOverlayEntry
+        ) {
+            container.innerHTML = `<div class="panel-empty">${escapeHtml(emptyLabel)}</div>`;
+            return {
+                messages,
+                streamOverlayEntry,
+            };
+        }
+        renderHistoricalMessageList(container, messages, {
+            pendingToolApprovals,
+            runId,
+            streamOverlayEntry:
+                overlayMode === 'bind' && messages.length > 0
+                    ? null
+                    : streamOverlayEntry,
+            separateOverlayMessage: overlayMode === 'separate',
+            userRoleLabel,
+        });
+        if (overlayMode === 'bind' && messages.length > 0 && streamOverlayEntry) {
+            bindStreamOverlayToContainer(container, {
+                instanceId,
+                runId,
+                roleId: streamOverlayEntry.roleId || options.roleId || '',
+                label: streamOverlayEntry.label || '',
+            });
+        }
+        return {
+            messages,
+            streamOverlayEntry,
+        };
+    } catch (e) {
+        container.innerHTML =
+            `<div class="panel-empty" style="color:var(--danger)">${escapeHtml(loadFailedLabel)}</div>`;
+        throw e;
+    }
+}
+
+function shouldRenderLiveOverlay(options = {}, streamOverlayEntry = null) {
+    if (!streamOverlayEntry || typeof streamOverlayEntry !== 'object') {
+        return false;
+    }
+    const explicitStates = [
+        String(options.status || '').trim().toLowerCase(),
+        String(options.runStatus || '').trim().toLowerCase(),
+        String(options.runPhase || '').trim().toLowerCase(),
+    ].filter(Boolean);
+    if (explicitStates.length === 0) {
+        return true;
+    }
+    if (explicitStates.some(state => isTerminalOverlayState(state))) {
+        return false;
+    }
+    return true;
+}
+
+function isTerminalOverlayState(value) {
+    return value === 'completed'
+        || value === 'failed'
+        || value === 'stopped'
+        || value === 'terminal'
+        || value === 'idle';
+}
+
+function hasPendingToolResults(messages) {
+    const pending = new Set();
+    (Array.isArray(messages) ? messages : []).forEach(item => {
+        if (!item || String(item.entry_type || '') === 'marker') {
+            return;
+        }
+        const parts = Array.isArray(item?.message?.parts) ? item.message.parts : [];
+        parts.forEach(part => {
+            const partKind = String(part?.part_kind || '').trim().toLowerCase();
+            if (partKind === 'tool-call' || isLegacyToolCallPart(part)) {
+                const key = toolPartKey(part);
+                if (key) {
+                    pending.add(key);
+                }
+                return;
+            }
+            if (partKind === 'tool-return' || isLegacyToolReturnPart(part)) {
+                const key = toolPartKey(part);
+                if (key) {
+                    pending.delete(key);
+                }
+            }
+        });
+    });
+    return pending.size > 0;
+}
+
+function isLegacyToolCallPart(part) {
+    return !!(
+        part
+        && typeof part === 'object'
+        && part.tool_name !== undefined
+        && part.args !== undefined
+    );
+}
+
+function isLegacyToolReturnPart(part) {
+    return !!(
+        part
+        && typeof part === 'object'
+        && part.tool_name !== undefined
+        && part.content !== undefined
+        && part.args === undefined
+    );
+}
+
+function toolPartKey(part) {
+    const toolCallId = String(part?.tool_call_id || '').trim();
+    if (toolCallId) {
+        return `id:${toolCallId}`;
+    }
+    const toolName = String(part?.tool_name || '').trim();
+    return toolName ? `name:${toolName}` : '';
+}
+
 export function syncAgentPanelState(instanceId, roleId = null) {
     const panel = getPanel(instanceId);
     if (!panel) return;
@@ -224,13 +385,6 @@ export async function loadAgentHistory(instanceId, roleId = null) {
     const runId = state.activeRunId || getActiveRoundRunId();
     try {
         scrollEl.innerHTML = `<div class="panel-loading">${escapeHtml(t('agent_panel.history.loading'))}</div>`;
-        const [messages, runUsage, reflection] = await Promise.all([
-            fetchAgentMessages(state.currentSessionId, instanceId),
-            runId && runId !== '__live__'
-                ? fetchRunTokenUsage(state.currentSessionId, runId)
-                : Promise.resolve(null),
-            fetchAgentReflection(state.currentSessionId, instanceId),
-        ]);
         const recoveryApprovals = (
             state.currentRecoverySnapshot?.pendingToolApprovals || []
         ).filter(item => {
@@ -243,27 +397,27 @@ export async function loadAgentHistory(instanceId, roleId = null) {
             ...getPendingApprovalsForPanel(instanceId, roleId),
             ...recoveryApprovals,
         ];
-        const streamOverlayEntry = getInstanceStreamOverlay(runId, instanceId);
-        scrollEl.innerHTML = '';
-        if (
-            messages.length === 0
-            && pendingToolApprovals.length === 0
-            && !streamOverlayEntry
-        ) {
-            scrollEl.innerHTML = `<div class="panel-empty">${escapeHtml(t('agent_panel.history.empty'))}</div>`;
-        } else {
-            renderHistoricalMessageList(scrollEl, messages, {
-                pendingToolApprovals,
+        const [historyResult, runUsage, reflection] = await Promise.all([
+            renderInstanceHistoryInto(scrollEl, {
+                sessionId: state.currentSessionId,
+                instanceId,
                 runId,
-                streamOverlayEntry,
+                pendingToolApprovals,
+                emptyLabel: t('agent_panel.history.empty'),
+                loadFailedLabel: t('agent_panel.history.load_failed'),
                 userRoleLabel: t('subagent.task_prompt'),
-            });
-        }
+            }),
+            runId && runId !== '__live__'
+                ? fetchRunTokenUsage(state.currentSessionId, runId)
+                : Promise.resolve(null),
+            fetchAgentReflection(state.currentSessionId, instanceId),
+        ]);
         panel.loadedSessionId = state.currentSessionId || '';
         panel.loadedRunId = runId || '';
         renderTokenBadge(panel.panelEl, instanceId, runUsage);
         syncAgentPanelState(instanceId, roleId);
         renderReflection(panel.panelEl, reflection);
+        void historyResult;
     } catch (e) {
         scrollEl.innerHTML =
             `<div class="panel-empty" style="color:var(--danger)">${escapeHtml(t('agent_panel.history.load_failed'))}</div>`;

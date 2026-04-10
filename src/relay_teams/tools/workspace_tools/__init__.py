@@ -55,8 +55,13 @@ def register_stop_monitor(agent: Agent[ToolDeps, str]) -> None:
     _register_workspace_tools(agent, ("stop_monitor",))
 
 
+def register_spawn_subagent(agent: Agent[ToolDeps, str]) -> None:
+    _register_workspace_tools(agent, ("spawn_subagent",))
+
+
 def register_background_tasks(agent: Agent[ToolDeps, str]) -> None:
     register_shell(agent)
+    register_spawn_subagent(agent)
     register_list_background_tasks(agent)
     register_wait_background_task(agent)
     register_stop_background_task(agent)
@@ -136,6 +141,10 @@ def _register_single_tool(agent: Agent[ToolDeps, str], tool_name: str) -> None:
         from relay_teams.tools.workspace_tools.stop_monitor import (
             register as register_impl,
         )
+    elif tool_name == "spawn_subagent":
+        from relay_teams.tools.workspace_tools.spawn_subagent import (
+            register as register_impl,
+        )
     else:
         raise ValueError(f"Unknown workspace tool: {tool_name}")
     register_impl(agent)
@@ -149,6 +158,7 @@ TOOLS = {
     "write": register_write,
     "write_tmp": register_write_tmp,
     "shell": register_shell,
+    "spawn_subagent": register_spawn_subagent,
     "list_background_tasks": register_list_background_tasks,
     "wait_background_task": register_wait_background_task,
     "stop_background_task": register_stop_background_task,
@@ -169,6 +179,7 @@ __all__ = [
     "register_monitors",
     "register_read",
     "register_shell",
+    "register_spawn_subagent",
     "register_stop_background_task",
     "register_stop_monitor",
     "register_wait_background_task",

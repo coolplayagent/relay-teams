@@ -182,6 +182,489 @@ console.log(JSON.stringify({
     assert "@keyframes sessionItemActivate {" in components_base_css
 
 
+def test_projects_sidebar_renders_normal_mode_subagents_as_child_sessions(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+globalThis.__sessionSubagentSessionsMap = {
+    "session-1": [
+        {
+            sessionId: "session-1",
+            instanceId: "inst-sub-1",
+            roleId: "Explorer",
+            runId: "subagent_run_1",
+            title: "Explore history",
+            updatedAt: "2026-03-14T10:12:00Z",
+        },
+        {
+            sessionId: "session-1",
+            instanceId: "inst-sub-2",
+            roleId: "Crafter",
+            runId: "subagent_run_2",
+            title: "Draft summary",
+            updatedAt: "2026-03-14T10:13:00Z",
+        },
+    ],
+};
+globalThis.__expandedSubagentSessionIds.add("session-1");
+globalThis.__activeSubagentSession = {
+    sessionId: "session-1",
+    instanceId: "inst-sub-2",
+};
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const toggle = firstProject.querySelector(".session-subagents-toggle");
+toggle.onclick({ preventDefault() {}, stopPropagation() {} });
+const childItems = firstProject.querySelectorAll(".session-subagent-item");
+childItems[1].onclick({ preventDefault() {}, stopPropagation() {} });
+
+console.log(JSON.stringify({
+    toggleCalls: globalThis.__toggleSubagentSessionListCalls,
+    childCount: childItems.length,
+    firstChildLabel: childItems[0].textContent,
+    secondChildActive: childItems[1].className.includes("active"),
+    dispatchedEvents: globalThis.__documentDispatches,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        session_mode: "normal",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        metadata: { title: "Root session" },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    repo_root = Path(__file__).resolve().parents[3]
+    sidebar_script = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
+    ).read_text(encoding="utf-8")
+    components_css = (
+        repo_root / "frontend" / "dist" / "css" / "components.css"
+    ).read_text(encoding="utf-8")
+
+    assert payload["toggleCalls"] == ["session-1"]
+    assert payload["childCount"] == 2
+    assert payload["firstChildLabel"] == "Explorer - inst-sub"
+    assert payload["secondChildActive"] is True
+    assert "session-subagent-tree" not in sidebar_script
+    assert ".projects-list .session-subagent-list::before {" in components_css
+    dispatched_events = cast(list[object], payload["dispatchedEvents"])
+    assert dispatched_events[-1] == {
+        "type": "agent-teams-select-subagent-session",
+        "detail": {
+            "sessionId": "session-1",
+            "subagent": {
+                "instanceId": "inst-sub-2",
+                "roleId": "Crafter",
+                "runId": "subagent_run_2",
+                "title": "Draft summary",
+            },
+        },
+    }
+
+
+def test_projects_sidebar_prefetches_visible_normal_session_subagent_counts_and_hides_zero_toggle(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+globalThis.__sessionSubagentFetchResults = {
+    "session-1": [
+        {
+            sessionId: "session-1",
+            instanceId: "inst-sub-1",
+            roleId: "Explorer",
+            runId: "subagent_run_1",
+            title: "Explore history",
+            updatedAt: "2026-03-14T10:12:00Z",
+        },
+    ],
+    "session-2": [],
+};
+
+await loadProjects();
+await flushTasks();
+await loadProjects();
+
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const toggles = firstProject.querySelectorAll(".session-subagents-toggle");
+
+console.log(JSON.stringify({
+    ensureCalls: globalThis.__ensureSessionSubagentsCalls,
+    toggleCount: toggles.length,
+    firstToggleSessionId: toggles[0]?.getAttribute("data-session-id") || null,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        session_mode: "normal",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        metadata: { title: "Root session 1" },
+    },
+    {
+        session_id: "session-2",
+        workspace_id: "alpha-project",
+        session_mode: "normal",
+        updated_at: "2026-03-14T10:10:00Z",
+        pending_tool_approval_count: 0,
+        metadata: { title: "Root session 2" },
+    },
+    {
+        session_id: "session-3",
+        workspace_id: "alpha-project",
+        session_mode: "orchestration",
+        updated_at: "2026-03-14T10:09:00Z",
+        pending_tool_approval_count: 0,
+        metadata: { title: "Coordinator session" },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    repo_root = Path(__file__).resolve().parents[3]
+    sidebar_script = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
+    ).read_text(encoding="utf-8")
+
+    ensure_calls = cast(list[str], payload["ensureCalls"])
+    assert sorted(set(ensure_calls)) == ["session-1", "session-2"]
+    assert payload["toggleCount"] == 1
+    assert payload["firstToggleSessionId"] == "session-1"
+    assert (
+        "${renderSubagentToggle(session)}\n"
+        '                                            <span class="session-id">'
+    ) in sidebar_script
+
+
+def test_projects_sidebar_deletes_subagent_child_session_and_returns_to_parent(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+    setSelectSessionHandler,
+} from "./sidebar.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.__sessionSubagentSessionsMap = {
+    "session-1": [
+        {
+            sessionId: "session-1",
+            instanceId: "inst-sub-1",
+            roleId: "Explorer",
+            runId: "subagent_run_1",
+            title: "Explore history",
+            updatedAt: "2026-03-14T10:12:00Z",
+        },
+    ],
+};
+globalThis.__expandedSubagentSessionIds.add("session-1");
+globalThis.__activeSubagentSession = {
+    sessionId: "session-1",
+    instanceId: "inst-sub-1",
+};
+state.currentSessionId = "session-1";
+
+setSelectSessionHandler(async (sessionId) => {
+    globalThis.__selectedSessionIds.push(sessionId);
+});
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const deleteButton = firstProject.querySelector(".session-subagent-delete-btn");
+deleteButton.onclick({ stopPropagation() {} });
+await flushTasks();
+await new Promise(resolve => setTimeout(resolve, 220));
+await flushTasks();
+
+console.log(JSON.stringify({
+    deleteCalls: globalThis.__deleteSubagentCalls,
+    closedRunIds: globalThis.__closedSubagentRunIds,
+    selectedSessionIds: globalThis.__selectedSessionIds,
+    remainingChildCount: (globalThis.__sessionSubagentSessionsMap["session-1"] || []).length,
+    activeSubagentSession: globalThis.__activeSubagentSession,
+    confirmCalls: globalThis.__confirmDialogCalls,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        session_mode: "normal",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        metadata: { title: "Root session" },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteSessionSubagent(sessionId, instanceId) {
+    globalThis.__deleteSubagentCalls.push({ sessionId, instanceId });
+    return { status: "ok" };
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    assert payload["deleteCalls"] == [
+        {
+            "sessionId": "session-1",
+            "instanceId": "inst-sub-1",
+        }
+    ]
+    assert payload["closedRunIds"] == ["subagent_run_1"]
+    assert payload["selectedSessionIds"] == ["session-1"]
+    assert payload["remainingChildCount"] == 0
+    assert payload["activeSubagentSession"] is None
+    confirm_calls = cast(list[dict[str, object]], payload["confirmCalls"])
+    assert confirm_calls[0]["tone"] == "warning"
+
+
 def test_projects_sidebar_renames_session_from_sidebar_action(tmp_path: Path) -> None:
     payload = _run_sidebar_script(
         tmp_path=tmp_path,
@@ -1314,6 +1797,7 @@ def _run_sidebar_script(
     mock_agent_panel_path = tmp_path / "mockAgentPanel.mjs"
     mock_context_indicators_path = tmp_path / "mockContextIndicators.mjs"
     mock_project_view_path = tmp_path / "mockProjectView.mjs"
+    mock_subagent_sessions_path = tmp_path / "mockSubagentSessions.mjs"
     runner_path = tmp_path / "runner.mjs"
 
     mock_dom_path.write_text(
@@ -1341,12 +1825,16 @@ function parseElements(source, selector) {
             ".project-fork-btn": /class="[^"]*project-fork-btn[^"]*"[^>]*>/g,
             ".project-remove-btn": /class="[^"]*project-remove-btn[^"]*"[^>]*>/g,
         ".project-session-visibility-btn": /class="project-session-visibility-btn"[^>]*>([\s\S]*?)<\/button>/g,
+        ".session-subagents-toggle": /class="session-subagents-toggle"[^>]*data-session-id="([^"]+)"[^>]*aria-expanded="([^"]+)"[^>]*>/g,
+        ".session-subagent-item": /class="([^"]*session-subagent-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-subagent-instance-id="([^"]+)"[^>]*data-subagent-role-id="([^"]+)"[^>]*data-subagent-run-id="([^"]+)"[^>]*data-subagent-title="([^"]*)"[^>]*>[\s\S]*?<span class="session-label-text">([\s\S]*?)<\/span>/g,
+        ".session-subagent-delete-btn": /class="([^"]*session-subagent-delete-btn[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-subagent-instance-id="([^"]+)"[^>]*data-subagent-run-id="([^"]+)"[^>]*data-subagent-label="([^"]*)"[^>]*>/g,
+        ".session-subagent-empty": /class="session-subagent-empty"[^>]*>([\s\S]*?)<\/div>/g,
         ".session-rename-btn": /class="session-rename-btn"[^>]*data-session-id="([^"]+)"[^>]*data-session-metadata="([^"]*)"[^>]*>/g,
         ".session-delete-btn": /class="session-delete-btn"[^>]*data-session-id="([^"]+)"[^>]*>/g,
         ".session-item": /class="([^"]*session-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-workspace-id="([^"]+)"[^>]*>/g,
         ".session-source-icon": /class="[^"]*session-source-icon[^"]*"[^>]*>/g,
         ".project-title": /class="project-title"[^>]*>([\s\S]*?)<\/span>/g,
-        ".session-id": /class="session-id"[^>]*>([\s\S]*?)<\/span>\s*<span class="session-meta"/g,
+        ".session-id": /class="session-id"[^>]*>([\s\S]*?)<\/span>\s*<\/span>\s*<span class="session-meta"/g,
     };
     const pattern = patterns[selector];
     if (!pattern) {
@@ -1382,6 +1870,37 @@ function parseElements(source, selector) {
             results.push(createNode());
         } else if (selector === ".project-session-visibility-btn") {
             results.push(createNode({ textContent: match[1].replace(/<[^>]+>/g, "").trim() }));
+        } else if (selector === ".session-subagents-toggle") {
+            results.push(createNode({
+                attributes: {
+                    "data-session-id": match[1],
+                    "aria-expanded": match[2],
+                },
+            }));
+        } else if (selector === ".session-subagent-item") {
+            results.push(createNode({
+                className: match[1],
+                textContent: match[7].replace(/<[^>]+>/g, "").trim(),
+                attributes: {
+                    "data-session-id": match[2],
+                    "data-subagent-instance-id": match[3],
+                    "data-subagent-role-id": match[4],
+                    "data-subagent-run-id": match[5],
+                    "data-subagent-title": decodeHtmlAttribute(match[6]),
+                },
+            }));
+        } else if (selector === ".session-subagent-delete-btn") {
+            results.push(createNode({
+                className: match[1],
+                attributes: {
+                    "data-session-id": match[2],
+                    "data-subagent-instance-id": match[3],
+                    "data-subagent-run-id": match[4],
+                    "data-subagent-label": decodeHtmlAttribute(match[5]),
+                },
+            }));
+        } else if (selector === ".session-subagent-empty") {
+            results.push(createNode({ textContent: match[1].replace(/<[^>]+>/g, "").trim() }));
         } else if (selector === ".session-rename-btn") {
             results.push(createNode({
                 attributes: {
@@ -1415,6 +1934,24 @@ function createNode({ className = "", textContent = "", attributes = {} } = {}) 
     const attributeStore = new Map(Object.entries(attributes));
     return {
         className,
+        classList: {
+            contains(name) {
+                return String(className || "").split(/\s+/).includes(name);
+            },
+            toggle(name, force) {
+                const current = new Set(String(className || "").split(/\s+/).filter(Boolean));
+                const shouldAdd = force ?? !current.has(name);
+                if (shouldAdd) {
+                    current.add(name);
+                } else {
+                    current.delete(name);
+                }
+                className = Array.from(current).join(" ");
+                this.value = className;
+                return shouldAdd;
+            },
+            value: className,
+        },
         textContent,
         onclick: null,
         onkeydown: null,
@@ -1510,6 +2047,7 @@ function createBasicElement() {
 }
 
 export function createDomEnvironment() {
+    const listeners = new Map();
     const elements = new Map([
         ["projects-list", createContainerElement()],
         ["rounds-list", createBasicElement()],
@@ -1527,6 +2065,24 @@ export function createDomEnvironment() {
         },
         createElement() {
             return createCardElement();
+        },
+        addEventListener(name, handler) {
+            if (!listeners.has(name)) {
+                listeners.set(name, []);
+            }
+            listeners.get(name).push(handler);
+        },
+        dispatchEvent(event) {
+            const handlers = listeners.get(event.type) || [];
+            for (const handler of handlers) {
+                handler(event);
+            }
+            globalThis.__documentDispatches = globalThis.__documentDispatches || [];
+            globalThis.__documentDispatches.push({
+                type: event.type,
+                detail: event.detail,
+            });
+            return true;
         },
         querySelector(selector) {
             if (selector === ".session-item") {
@@ -1614,6 +2170,7 @@ const translations = {
     "sidebar.remove_project_worktree_message": "Delete the git worktree for {workspace} too? Choose Cancel to keep the worktree on disk.",
     "sidebar.delete_worktree": "Delete Worktree",
     "sidebar.keep_worktree": "Keep Worktree",
+    "sidebar.error.loading_projects": "Failed to load projects: {error}",
     "sidebar.rename_session_title": "Rename Session",
     "sidebar.rename_session_message": "Enter a new name for this session.",
     "sidebar.session_name_placeholder": "Session name",
@@ -1621,11 +2178,14 @@ const translations = {
     "sidebar.no_projects_title": "No projects yet",
     "sidebar.no_projects_copy": "Add a project below to attach a workspace and start sessions.",
     "sidebar.workspace": "Workspace",
-    "sidebar.project_options": "Project options",
-    "sidebar.new_session": "New session",
-    "sidebar.no_sessions": "No sessions yet",
-    "settings.action.cancel": "Cancel",
-};
+        "sidebar.project_options": "Project options",
+        "sidebar.new_session": "New session",
+        "sidebar.no_sessions": "No sessions yet",
+        "sidebar.subagent_sessions_toggle": "Toggle subagent sessions",
+        "sidebar.subagent_sessions_loading": "Loading subagent sessions...",
+        "sidebar.subagent_sessions_empty": "No subagent sessions",
+        "settings.action.cancel": "Cancel",
+    };
 
 export function t(key) {
     return translations[key] || key;
@@ -1804,6 +2364,14 @@ export async function runAutomationProject() {
             "    return [];\n"
             "}\n"
         )
+    if "export async function deleteSessionSubagent(" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function deleteSessionSubagent(sessionId, instanceId) {\n"
+            "    globalThis.__deleteSubagentCalls.push({ sessionId, instanceId });\n"
+            '    return { status: "ok" };\n'
+            "}\n"
+        )
     mock_api_path.write_text(
         resolved_mock_api_source,
         encoding="utf-8",
@@ -1816,6 +2384,7 @@ export const state = {
     currentWorkspaceId: "alpha-project",
     currentMainView: "session",
     currentProjectViewWorkspaceId: null,
+    activeSubagentSession: null,
     activeEventSource: null,
 };
 """.strip(),
@@ -1825,6 +2394,15 @@ export const state = {
         """
 export function detachActiveStreamForSessionSwitch() {
     globalThis.__detachStreamCalls = (globalThis.__detachStreamCalls || 0) + 1;
+}
+
+export function detachNormalModeSubagentStreamsForSessionSwitch() {
+    globalThis.__detachSubagentStreamCalls = (globalThis.__detachSubagentStreamCalls || 0) + 1;
+}
+
+export function closeNormalModeSubagentStream(runId) {
+    globalThis.__closedSubagentRunIds = globalThis.__closedSubagentRunIds || [];
+    globalThis.__closedSubagentRunIds.push(runId);
 }
 """.strip(),
         encoding="utf-8",
@@ -1906,6 +2484,81 @@ export function hideProjectView() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_subagent_sessions_path.write_text(
+        """
+function readRows(sessionId) {
+    const rows = globalThis.__sessionSubagentSessionsMap?.[sessionId];
+    return Array.isArray(rows) ? rows : [];
+}
+
+export function buildSubagentSessionLabel(record) {
+    const roleId = String(record?.roleId || record?.role_id || "Agent").trim();
+    const instanceId = String(record?.instanceId || record?.instance_id || "unknown").trim();
+    return `${roleId} - ${instanceId.slice(0, 8) || 'unknown'}`;
+}
+
+export function getActiveSubagentSession() {
+    return globalThis.__activeSubagentSession || null;
+}
+
+export function getSessionSubagentSessions(sessionId) {
+    return readRows(String(sessionId || "").trim());
+}
+
+export async function ensureSessionSubagents(sessionId) {
+    const safeSessionId = String(sessionId || "").trim();
+    if (!safeSessionId) {
+        return [];
+    }
+    globalThis.__ensureSessionSubagentsCalls.push(safeSessionId);
+    const nextRows = globalThis.__sessionSubagentFetchResults?.[safeSessionId];
+    if (Array.isArray(nextRows)) {
+        globalThis.__sessionSubagentSessionsMap[safeSessionId] = nextRows;
+    }
+    return readRows(safeSessionId);
+}
+
+export function isSubagentSessionListExpanded(sessionId) {
+    return !!globalThis.__expandedSubagentSessionIds?.has(String(sessionId || "").trim());
+}
+
+export function isSubagentSessionListLoading(sessionId) {
+    return !!globalThis.__loadingSubagentSessionIds?.has(String(sessionId || "").trim());
+}
+
+export function toggleSubagentSessionList(sessionId) {
+    const safeSessionId = String(sessionId || "").trim();
+    if (!safeSessionId) {
+        return;
+    }
+    globalThis.__toggleSubagentSessionListCalls.push(safeSessionId);
+    if (globalThis.__expandedSubagentSessionIds.has(safeSessionId)) {
+        globalThis.__expandedSubagentSessionIds.delete(safeSessionId);
+    } else {
+        globalThis.__expandedSubagentSessionIds.add(safeSessionId);
+    }
+}
+
+export function removeSessionSubagent(sessionId, instanceId) {
+    const safeSessionId = String(sessionId || "").trim();
+    const safeInstanceId = String(instanceId || "").trim();
+    const rows = readRows(safeSessionId);
+    const removed = rows.find(item => item.instanceId === safeInstanceId) || null;
+    globalThis.__sessionSubagentSessionsMap[safeSessionId] = rows.filter(
+        item => item.instanceId !== safeInstanceId,
+    );
+    if (
+        globalThis.__activeSubagentSession
+        && globalThis.__activeSubagentSession.sessionId === safeSessionId
+        && globalThis.__activeSubagentSession.instanceId === safeInstanceId
+    ) {
+        globalThis.__activeSubagentSession = null;
+    }
+    return removed;
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
     source_text = (
         source_path.read_text(encoding="utf-8")
@@ -1921,6 +2574,7 @@ export function hideProjectView() {
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
         .replace("./contextIndicators.js", "./mockContextIndicators.mjs")
         .replace("./projectView.js", "./mockProjectView.mjs")
+        .replace("./subagentSessions.js", "./mockSubagentSessions.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 
@@ -1932,6 +2586,7 @@ globalThis.__logs = [];
 globalThis.__confirmDialogCalls = [];
 globalThis.__confirmDialogResponses = [];
 globalThis.__createdSessionWorkspaceIds = [];
+globalThis.__deleteSubagentCalls = [];
 globalThis.__deleteWorkspaceCalls = [];
 globalThis.__forkCalls = [];
 globalThis.__renameCalls = [];
@@ -1943,6 +2598,15 @@ globalThis.__showFormDialogResult = null;
 globalThis.__showFormDialogCalls = [];
 globalThis.__requestAutomationProjectInputResult = null;
 globalThis.__requestAutomationProjectInputCalls = [];
+globalThis.__toggleSubagentSessionListCalls = [];
+globalThis.__sessionSubagentSessionsMap = {{}};
+globalThis.__sessionSubagentFetchResults = {{}};
+globalThis.__ensureSessionSubagentsCalls = [];
+globalThis.__expandedSubagentSessionIds = new Set();
+globalThis.__loadingSubagentSessionIds = new Set();
+globalThis.__activeSubagentSession = null;
+globalThis.__closedSubagentRunIds = [];
+globalThis.__documentDispatches = [];
 installGlobals(createDomEnvironment());
 
 {runner_source}

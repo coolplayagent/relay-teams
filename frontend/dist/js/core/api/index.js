@@ -3,6 +3,7 @@
  * Public API facade composed from domain-specific modules.
  */
 export {
+    deleteSessionSubagent,
     deleteSession,
     fetchAgentMessages,
     fetchAgentReflection,
@@ -10,6 +11,7 @@ export {
     fetchSessionHistory,
     fetchSessionRecovery,
     fetchSessionRounds,
+    fetchSessionSubagents,
     fetchSessions,
     fetchSessionTasks,
     updateSessionTopology,

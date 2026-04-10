@@ -306,6 +306,19 @@ class AgentInstanceRepository:
             operation_name="delete_by_session",
         )
 
+    def delete_instance(self, instance_id: str) -> None:
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM agent_instances WHERE instance_id=?",
+                (instance_id,),
+            ),
+            lock=self._lock,
+            repository_name="AgentInstanceRepository",
+            operation_name="delete_instance",
+        )
+
     def _to_record(self, row: sqlite3.Row) -> AgentRuntimeRecord:
         return AgentRuntimeRecord(
             run_id=str(row["run_id"]),

@@ -17,6 +17,7 @@ from relay_teams.providers.model_config import (
     ProviderType,
 )
 from relay_teams.providers.openai_support import build_openai_provider_for_endpoint
+from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.tools.runtime import ToolDeps
@@ -39,6 +40,7 @@ def build_coordination_agent(
     allowed_mcp_servers: tuple[str, ...] = (),
     allowed_skills: tuple[str, ...] = (),
     tool_registry: ToolRegistry,
+    role_registry: RoleRegistry | None = None,
     mcp_registry: McpRegistry | None = None,
     skill_registry: SkillRegistry | None = None,
 ) -> Agent[ToolDeps, str]:
@@ -93,6 +95,8 @@ def build_coordination_agent(
         tools=skill_tools,
         retries=5,
     )
+    if role_registry is not None:
+        setattr(agent, "_agent_teams_role_registry", role_registry)
     tool_registers = tool_registry.require(
         tool_registry.resolve_known(
             allowed_tools,

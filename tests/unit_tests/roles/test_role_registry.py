@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from relay_teams.builtin import get_builtin_roles_dir
-from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.role_registry import RoleLoader, RoleRegistry
 
 
@@ -114,13 +114,64 @@ def test_role_registry_lists_normal_mode_roles_with_main_agent_first() -> None:
             description="Implements requested changes.",
             version="1.0.0",
             tools=("read",),
+            mode=RoleMode.SUBAGENT,
             system_prompt="Implement tasks.",
         )
     )
 
     roles = registry.list_normal_mode_roles()
 
-    assert [role.role_id for role in roles] == ["MainAgent", "Crafter"]
+    assert [role.role_id for role in roles] == ["MainAgent"]
+
+
+def test_role_registry_lists_subagent_roles_only_for_subagent_modes() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates delegated work.",
+            version="1.0.0",
+            tools=("create_tasks", "update_task", "dispatch_task"),
+            system_prompt="Coordinate tasks.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Handles direct runs.",
+            version="1.0.0",
+            tools=("read",),
+            system_prompt="Handle tasks.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="Crafter",
+            name="Crafter",
+            description="Implements requested changes.",
+            version="1.0.0",
+            tools=("read",),
+            mode=RoleMode.SUBAGENT,
+            system_prompt="Implement tasks.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="Writer",
+            name="Writer",
+            description="Can do both.",
+            version="1.0.0",
+            tools=("read",),
+            mode=RoleMode.ALL,
+            system_prompt="Write tasks.",
+        )
+    )
+
+    roles = registry.list_subagent_roles()
+
+    assert [role.role_id for role in roles] == ["Crafter", "Writer"]
 
 
 def test_role_registry_rejects_coordinator_in_normal_mode() -> None:
@@ -148,3 +199,78 @@ def test_role_registry_rejects_coordinator_in_normal_mode() -> None:
 
     with pytest.raises(ValueError, match="Coordinator role cannot be used"):
         _ = registry.resolve_normal_mode_role_id("Coordinator")
+
+
+def test_role_registry_rejects_subagent_only_role_in_normal_mode() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates delegated work.",
+            version="1.0.0",
+            tools=("create_tasks", "update_task", "dispatch_task"),
+            system_prompt="Coordinate tasks.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Handles direct runs.",
+            version="1.0.0",
+            tools=("read",),
+            system_prompt="Handle tasks.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="Crafter",
+            name="Crafter",
+            description="Implements requested changes.",
+            version="1.0.0",
+            tools=("read",),
+            mode=RoleMode.SUBAGENT,
+            system_prompt="Implement tasks.",
+        )
+    )
+
+    with pytest.raises(ValueError, match="Role cannot be used in normal mode"):
+        _ = registry.resolve_normal_mode_role_id("Crafter")
+
+
+def test_role_registry_resolves_subagent_only_role_for_subagent_use() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates delegated work.",
+            version="1.0.0",
+            tools=("create_tasks", "update_task", "dispatch_task"),
+            system_prompt="Coordinate tasks.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Handles direct runs.",
+            version="1.0.0",
+            tools=("read",),
+            system_prompt="Handle tasks.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="Crafter",
+            name="Crafter",
+            description="Implements requested changes.",
+            version="1.0.0",
+            tools=("read",),
+            mode=RoleMode.SUBAGENT,
+            system_prompt="Implement tasks.",
+        )
+    )
+
+    assert registry.resolve_subagent_role_id("Crafter") == "Crafter"

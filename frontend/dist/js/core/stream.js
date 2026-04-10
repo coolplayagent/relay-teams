@@ -4,6 +4,7 @@
  */
 import {
     fetchSessionRecovery,
+    fetchSessionSubagents,
     fetchSessions,
     sendUserPrompt,
     stopRun,
@@ -36,15 +37,20 @@ let creatingRun = false;
 let activeStreamSessionId = '';
 let activeConnection = null;
 const backgroundStreams = new Map();
+const normalModeSubagentStreams = new Map();
 let backgroundDiscoveryTimer = null;
 let backgroundDiscoveryPromise = null;
 let backgroundDiscoveryQueued = false;
+let normalModeSubagentDiscoveryTimer = null;
+let normalModeSubagentDiscoveryPromise = null;
+let normalModeSubagentDiscoveryQueued = false;
 const unavailableSessionCooldownUntil = new Map();
 const SESSION_NOT_FOUND_COOLDOWN_MS = 30000;
 const unavailableRunCooldownUntil = new Map();
 const RUN_NOT_FOUND_COOLDOWN_MS = 30000;
 // Keep some room in the browser connection pool for control actions like stop.
 const MAX_BACKGROUND_STREAMS = 2;
+const NORMAL_MODE_SUBAGENT_DISCOVERY_DELAY_MS = 500;
 
 function setStreamUiBusy(isBusy, { focusPrompt = true } = {}) {
     state.isGenerating = isBusy;
@@ -172,6 +178,33 @@ export function detachActiveStreamForSessionSwitch(options = {}) {
     return true;
 }
 
+export function detachNormalModeSubagentStreamsForSessionSwitch(sessionId = '') {
+    const safeSessionId = String(sessionId || '').trim();
+    Array.from(normalModeSubagentStreams.values()).forEach(connection => {
+        if (!connection) {
+            return;
+        }
+        if (safeSessionId && connection.sessionId !== safeSessionId) {
+            return;
+        }
+        finishNormalModeSubagentConnection(connection);
+    });
+    clearNormalModeSubagentDiscoveryTimer();
+}
+
+export function closeNormalModeSubagentStream(runId = '') {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return false;
+    }
+    const connection = normalModeSubagentStreams.get(safeRunId) || null;
+    if (!connection) {
+        return false;
+    }
+    finishNormalModeSubagentConnection(connection);
+    return true;
+}
+
 export function attachRunStream(runId, sessionId = state.currentSessionId, onCompleted = null, options = {}) {
     const safeRunId = typeof runId === 'string' ? runId.trim() : '';
     if (!safeRunId) return;
@@ -236,6 +269,58 @@ export function attachRunStream(runId, sessionId = state.currentSessionId, onCom
 
 export function syncBackgroundStreamsForSessions(sessionRecords = []) {
     void reconcileBackgroundStreams(sessionRecords);
+}
+
+export function syncNormalModeSubagentStreams(sessionId, subagentRecords = []) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId || safeSessionId !== String(state.currentSessionId || '').trim()) {
+        return;
+    }
+    if (String(state.currentSessionMode || '').trim().toLowerCase() !== 'normal') {
+        detachNormalModeSubagentStreamsForSessionSwitch(safeSessionId);
+        return;
+    }
+    const rows = Array.isArray(subagentRecords) ? subagentRecords : [];
+    const desiredRunIds = new Set();
+    for (const record of rows) {
+        const safeRunId = String(record?.runId || record?.run_id || '').trim();
+        if (!shouldAttachNormalModeSubagentStream(record)) {
+            continue;
+        }
+        if (!safeRunId || isRunUnavailable(safeRunId)) {
+            continue;
+        }
+        desiredRunIds.add(safeRunId);
+        if (normalModeSubagentStreams.has(safeRunId)) {
+            continue;
+        }
+        openNormalModeSubagentRunStream(record, safeSessionId);
+    }
+    Array.from(normalModeSubagentStreams.values()).forEach(connection => {
+        if (!connection || connection.sessionId !== safeSessionId) {
+            return;
+        }
+        if (desiredRunIds.has(connection.runId)) {
+            return;
+        }
+        finishNormalModeSubagentConnection(connection);
+    });
+    ensureNormalModeSubagentDiscoveryLoop();
+}
+
+export function scheduleCurrentSessionSubagentDiscovery(options = {}) {
+    const delayMs = Number(options?.delayMs ?? NORMAL_MODE_SUBAGENT_DISCOVERY_DELAY_MS);
+    if (normalModeSubagentDiscoveryPromise) {
+        normalModeSubagentDiscoveryQueued = true;
+        return;
+    }
+    if (normalModeSubagentDiscoveryTimer) {
+        return;
+    }
+    normalModeSubagentDiscoveryTimer = setTimeout(() => {
+        normalModeSubagentDiscoveryTimer = null;
+        void runNormalModeSubagentDiscovery();
+    }, Math.max(0, delayMs));
 }
 
 export function resumeRunStream(runId, sessionId = state.currentSessionId, onCompleted = null, options = {}) {
@@ -510,6 +595,81 @@ function ensureBackgroundDiscoveryLoop() {
     }, 2500);
 }
 
+function ensureNormalModeSubagentDiscoveryLoop() {
+    if (!shouldRunNormalModeSubagentDiscovery()) {
+        clearNormalModeSubagentDiscoveryTimer();
+        return;
+    }
+    if (normalModeSubagentDiscoveryTimer || normalModeSubagentDiscoveryPromise) {
+        return;
+    }
+    scheduleCurrentSessionSubagentDiscovery({
+        delayMs: NORMAL_MODE_SUBAGENT_DISCOVERY_DELAY_MS,
+    });
+}
+
+function clearNormalModeSubagentDiscoveryTimer() {
+    if (!normalModeSubagentDiscoveryTimer) {
+        return;
+    }
+    clearTimeout(normalModeSubagentDiscoveryTimer);
+    normalModeSubagentDiscoveryTimer = null;
+}
+
+function shouldRunNormalModeSubagentDiscovery() {
+    return !!(
+        String(state.currentSessionId || '').trim()
+        && String(state.currentSessionMode || '').trim().toLowerCase() === 'normal'
+        && (
+            activeConnection
+            || normalModeSubagentStreams.size > 0
+            || state.activeSubagentSession
+        )
+    );
+}
+
+async function runNormalModeSubagentDiscovery() {
+    const sessionId = String(state.currentSessionId || '').trim();
+    if (!sessionId) {
+        clearNormalModeSubagentDiscoveryTimer();
+        return;
+    }
+    if (normalModeSubagentDiscoveryPromise) {
+        normalModeSubagentDiscoveryQueued = true;
+        return;
+    }
+    normalModeSubagentDiscoveryPromise = (async () => {
+        try {
+            const payload = await fetchSessionSubagents(sessionId);
+            if (String(state.currentSessionId || '').trim() !== sessionId) {
+                return;
+            }
+            const subagentSessions = await import('../components/subagentSessions.js');
+            if (typeof subagentSessions.replaceSessionSubagents === 'function') {
+                subagentSessions.replaceSessionSubagents(sessionId, payload, {
+                    emitChange: true,
+                });
+            } else {
+                syncNormalModeSubagentStreams(sessionId, payload);
+            }
+        } catch (e) {
+            logWarn('frontend.subagent.discovery_failed', 'Failed to discover normal-mode subagent streams', {
+                session_id: sessionId,
+                error: e?.message || String(e),
+            });
+        } finally {
+            normalModeSubagentDiscoveryPromise = null;
+            if (normalModeSubagentDiscoveryQueued) {
+                normalModeSubagentDiscoveryQueued = false;
+                scheduleCurrentSessionSubagentDiscovery({ delayMs: 0 });
+                return;
+            }
+            ensureNormalModeSubagentDiscoveryLoop();
+        }
+    })();
+    await normalModeSubagentDiscoveryPromise;
+}
+
 function shouldRunBackgroundDiscovery() {
     return !!(
         activeConnection
@@ -693,6 +853,160 @@ async function attachBackgroundStreamForSession(record) {
         });
         return false;
     }
+}
+
+function shouldAttachNormalModeSubagentStream(record) {
+    const runStatus = String(record?.runStatus || record?.run_status || '').trim().toLowerCase();
+    const instanceStatus = String(record?.status || '').trim().toLowerCase();
+    const effectiveStatus = runStatus || instanceStatus;
+    return effectiveStatus === 'queued' || effectiveStatus === 'running' || effectiveStatus === 'stopping';
+}
+
+function resolveSubagentAfterEventId(record) {
+    const lastEventId = Number(record?.lastEventId || record?.last_event_id || 0);
+    if (lastEventId > 0) {
+        return lastEventId;
+    }
+    const checkpointEventId = Number(
+        record?.checkpointEventId || record?.checkpoint_event_id || 0,
+    );
+    if (checkpointEventId > 0) {
+        return checkpointEventId;
+    }
+    return 0;
+}
+
+function openNormalModeSubagentRunStream(record, sessionId) {
+    const runId = String(record?.runId || record?.run_id || '').trim();
+    const safeSessionId = String(sessionId || '').trim();
+    if (!runId || !safeSessionId || normalModeSubagentStreams.has(runId)) {
+        return;
+    }
+    const connection = {
+        runId,
+        sessionId: safeSessionId,
+        instanceId: String(record?.instanceId || record?.instance_id || '').trim(),
+        roleId: String(record?.roleId || record?.role_id || '').trim(),
+        eventSource: null,
+        closed: false,
+        terminal: false,
+        reconnectTimer: null,
+        lastEventId: resolveSubagentAfterEventId(record),
+    };
+    openNormalModeSubagentRunStreamConnection(connection, {
+        afterEventId: connection.lastEventId > 0 ? connection.lastEventId : null,
+        reason: 'subagent-discovery',
+    });
+}
+
+function openNormalModeSubagentRunStreamConnection(connection, { afterEventId = null, reason } = {}) {
+    const urlParams = afterEventId !== null ? `?after_event_id=${afterEventId}` : '';
+    const url = `/api/runs/${connection.runId}/events${urlParams}`;
+    logInfo('frontend.subagent_sse.opened', 'Normal-mode subagent run stream opened', {
+        run_id: connection.runId,
+        session_id: connection.sessionId,
+        reason: reason || 'subagent',
+        url,
+    });
+    const es = new EventSource(url);
+    connection.eventSource = es;
+    connection.closed = false;
+    connection.terminal = false;
+    clearReconnectTimer(connection);
+    normalModeSubagentStreams.set(connection.runId, connection);
+
+    es.onopen = () => {
+        markBackendOnline();
+    };
+
+    es.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            if (data.error) {
+                if (isRunNotFoundError(data.error)) {
+                    markRunUnavailable(connection.runId);
+                }
+                logError('frontend.subagent_sse.payload_error', 'Normal-mode subagent stream returned error', {
+                    run_id: connection.runId,
+                    error: data.error,
+                });
+                finishNormalModeSubagentConnection(connection);
+                return;
+            }
+            const eventId = Number(data.event_id || 0);
+            if (eventId > 0) {
+                connection.lastEventId = Math.max(connection.lastEventId, eventId);
+            }
+            const evType = data.event_type;
+            const payload = JSON.parse(data.payload_json || '{}');
+            routeEvent(evType, payload, data);
+            if (isTerminalRunEvent(evType)) {
+                connection.terminal = true;
+                finishNormalModeSubagentConnection(connection);
+                scheduleSessionsRefresh();
+            }
+        } catch (e) {
+            logError(
+                'frontend.subagent_sse.parse_error',
+                'Normal-mode subagent SSE parse error',
+                errorToPayload(e, { run_id: connection.runId, raw: event.data }),
+            );
+        }
+    };
+
+    es.onerror = () => {
+        if (connection.closed || connection.terminal) {
+            return;
+        }
+        void refreshBackendStatus({ force: true });
+        logWarn('frontend.subagent_sse.closed', 'Normal-mode subagent stream closed', {
+            run_id: connection.runId,
+            session_id: connection.sessionId,
+        });
+        if (connection.eventSource) {
+            connection.eventSource.close();
+            connection.eventSource = null;
+        }
+        scheduleSubagentReconnect(connection);
+    };
+}
+
+function scheduleSubagentReconnect(connection) {
+    if (!connection || connection.closed || connection.terminal) {
+        return;
+    }
+    clearReconnectTimer(connection);
+    connection.reconnectTimer = setTimeout(() => {
+        connection.reconnectTimer = null;
+        if (connection.closed || connection.terminal) {
+            return;
+        }
+        if (
+            connection.sessionId !== String(state.currentSessionId || '').trim()
+            || String(state.currentSessionMode || '').trim().toLowerCase() !== 'normal'
+        ) {
+            finishNormalModeSubagentConnection(connection);
+            return;
+        }
+        openNormalModeSubagentRunStreamConnection(connection, {
+            afterEventId: connection.lastEventId > 0 ? connection.lastEventId : null,
+            reason: 'subagent-reconnect',
+        });
+    }, 1000);
+}
+
+function finishNormalModeSubagentConnection(connection) {
+    if (!connection || connection.closed) {
+        return;
+    }
+    connection.closed = true;
+    clearReconnectTimer(connection);
+    if (connection.eventSource) {
+        connection.eventSource.close();
+        connection.eventSource = null;
+    }
+    normalModeSubagentStreams.delete(connection.runId);
+    ensureNormalModeSubagentDiscoveryLoop();
 }
 
 function resolveBackgroundAfterEventId(activeRun) {

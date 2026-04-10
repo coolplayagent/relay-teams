@@ -98,7 +98,15 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
         "endStream({ preserveRunStreamState: true, focusPrompt: false });"
         in recovery_script
     )
-    assert "await loadSessionRounds(safeSessionId);" in recovery_script
+    assert (
+        "function shouldPreserveActiveSubagentView(sessionId = state.currentSessionId)"
+        in recovery_script
+    )
+    assert "await loadSessionRounds(safeSessionId, {" in recovery_script
+    assert "render: !preserveActiveSubagentView," in recovery_script
+    assert (
+        "render: !shouldPreserveActiveSubagentView(safeSessionId)," in recovery_script
+    )
     assert "clearRunStreamState(safePreviousActiveRunId);" in recovery_script
     assert "clearRunPrimaryRole(safePreviousActiveRunId);" in recovery_script
     assert (
@@ -234,13 +242,25 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "function findLastReusableTextElement(contentEl) {" in renderer_stream_script
     assert "function resolveReusableRawText(overlayEntry) {" in renderer_stream_script
     assert "let lastRenderedMessage = null;" in history_script
-    assert (
-        "renderStreamOverlayEntry(container, streamOverlayEntry, pendingToolBlocks, lastRenderedMessage, runId);"
-        in history_script
-    )
+    assert "renderStreamOverlayEntry(" in history_script
+    assert "pendingToolBlocks," in history_script
+    assert "lastRenderedMessage," in history_script
+    assert "runId," in history_script
+    assert "options," in history_script
     assert (
         "const isLatestRound = index === roundsState.currentRounds.length - 1;"
         in timeline_script
+    )
+    assert (
+        "export async function loadSessionRounds(sessionId, options = {}) {"
+        in timeline_script
+    )
+    assert (
+        "if (options.render !== false && !shouldPreserveSubagentView(sessionId)) {"
+        in timeline_script
+    )
+    assert (
+        "if (!shouldPreserveSubagentView(state.currentSessionId)) {" in timeline_script
     )
     assert "runStatus: round.run_status," in timeline_script
     assert "runPhase: round.run_phase," in timeline_script

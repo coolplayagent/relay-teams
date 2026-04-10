@@ -711,6 +711,7 @@ class TaskExecutionService(BaseModel):
             allowed_mcp_servers=(),
             allowed_skills=resolved_skills,
             tool_registry=tool_registry,
+            role_registry=self.role_registry,
             mcp_registry=None,
             skill_registry=skill_registry,
         )

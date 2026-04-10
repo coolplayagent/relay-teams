@@ -358,6 +358,19 @@ class ApprovalTicketRepository:
             operation_name="delete_by_session",
         )
 
+    def delete_by_run(self, run_id: str) -> None:
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=lambda: self._conn.execute(
+                "DELETE FROM approval_tickets WHERE run_id=?",
+                (run_id,),
+            ),
+            lock=self._lock,
+            repository_name="ApprovalTicketRepository",
+            operation_name="delete_by_run",
+        )
+
     def _to_record(
         self,
         row: sqlite3.Row,

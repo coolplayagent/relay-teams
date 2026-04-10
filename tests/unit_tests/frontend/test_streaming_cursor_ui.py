@@ -60,7 +60,7 @@ def test_streaming_messages_render_a_terminal_cursor_until_finalize() -> None:
         in stream_script
     )
     assert (
-        "updateMessageText(st.activeTextEl, st.activeRaw, { streaming: false });"
+        "updateMessageText(entry.activeTextEl, entry.activeRaw, { streaming: false });"
         in stream_script
     )
     assert "syncStreamingCursor(entry.activeTextEl, false);" in stream_script

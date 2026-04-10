@@ -1,25 +1,45 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
+import html
+import json
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Literal, cast
 
 import pytest
 
+from relay_teams.agents.tasks.models import TaskEnvelope
+from relay_teams.agents.orchestration.task_execution_service import TaskExecutionResult
 from relay_teams.sessions.runs.background_tasks.command_runtime import (
     normalize_timeout,
 )
 from relay_teams.sessions.runs.background_tasks.service import (
     BackgroundTaskService,
+    SynchronousSubagentResult,
 )
 from relay_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
 from relay_teams.sessions.runs.background_tasks.models import (
+    BackgroundTaskKind,
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
+from relay_teams.sessions.runs.background_tasks.projection import (
+    build_background_task_result_payload,
+)
+from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
+from relay_teams.sessions.runs.enums import ExecutionMode
+from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
+from relay_teams.sessions.session_models import SessionMode
 from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
+)
+from relay_teams.sessions.runs.run_runtime_repo import (
+    RunRuntimePhase,
+    RunRuntimeRepository,
+    RunRuntimeStatus,
 )
 from relay_teams.workspace import WorkspaceHandle
 
@@ -126,9 +146,8 @@ class _FakeBackgroundTaskManager:
         *,
         run_id: str,
         background_task_id: str,
-        wait_ms: int,
     ) -> tuple[BackgroundTaskRecord, bool]:
-        _ = (run_id, background_task_id, wait_ms)
+        _ = (run_id, background_task_id)
         if self.wait_result is None:
             raise AssertionError("wait_result not configured")
         return self.wait_result
@@ -165,6 +184,127 @@ class _FailingThenCapturingCompletionSink:
         self.calls.append((record, message))
 
 
+class _FakeTaskExecutionService:
+    def __init__(
+        self,
+        *,
+        result: TaskExecutionResult,
+        gate: asyncio.Event | None = None,
+    ) -> None:
+        self._result = result
+        self._gate = gate
+        self.calls: list[dict[str, object]] = []
+
+    async def execute(
+        self,
+        *,
+        instance_id: str,
+        role_id: str,
+        task: TaskEnvelope,
+        user_prompt_override: str | None = None,
+    ) -> TaskExecutionResult:
+        self.calls.append(
+            {
+                "instance_id": instance_id,
+                "role_id": role_id,
+                "task": task,
+                "user_prompt_override": user_prompt_override,
+            }
+        )
+        if self._gate is not None:
+            await self._gate.wait()
+        return self._result
+
+
+class _FakeAgentRepo:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def upsert_instance(self, **kwargs: object) -> None:
+        self.calls.append(dict(kwargs))
+
+
+class _FakeTaskRepo:
+    def __init__(self) -> None:
+        self.created: list[object] = []
+        self.status_updates: list[dict[str, object]] = []
+
+    def create(self, envelope: object) -> object:
+        self.created.append(envelope)
+        return envelope
+
+    def update_status(
+        self,
+        task_id: str,
+        status: object,
+        assigned_instance_id: str | None = None,
+        result: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        self.status_updates.append(
+            {
+                "task_id": task_id,
+                "status": status,
+                "assigned_instance_id": assigned_instance_id,
+                "result": result,
+                "error_message": error_message,
+            }
+        )
+
+
+class _FakeRunIntentRepo:
+    def __init__(self, parent_intent: IntentInput) -> None:
+        self._records: dict[str, IntentInput] = {"run-1": parent_intent}
+
+    def get(
+        self,
+        run_id: str,
+        *,
+        fallback_session_id: str | None = None,
+    ) -> IntentInput:
+        _ = fallback_session_id
+        if run_id not in self._records:
+            raise KeyError(run_id)
+        return self._records[run_id]
+
+    def upsert(self, *, run_id: str, session_id: str, intent: IntentInput) -> None:
+        _ = session_id
+        self._records[run_id] = intent
+
+
+class _FakeRunControlManager:
+    def __init__(self) -> None:
+        self.registered_run_ids: list[str] = []
+        self.unregistered_run_ids: list[str] = []
+        self._worker_tasks: dict[str, asyncio.Task[None]] = {}
+        self._stopped_run_ids: set[str] = set()
+
+    def register_run_task(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        task: asyncio.Task[None],
+    ) -> None:
+        _ = session_id
+        self.registered_run_ids.append(run_id)
+        self._worker_tasks[run_id] = task
+
+    def unregister_run_task(self, run_id: str) -> None:
+        self.unregistered_run_ids.append(run_id)
+        self._worker_tasks.pop(run_id, None)
+
+    def request_run_stop(self, run_id: str) -> bool:
+        self._stopped_run_ids.add(run_id)
+        task = self._worker_tasks.get(run_id)
+        if task is not None and not task.done():
+            task.cancel()
+        return task is not None
+
+    def is_run_stop_requested(self, run_id: str) -> bool:
+        return run_id in self._stopped_run_ids
+
+
 def _build_record(
     *,
     background_task_id: str = "exec-1",
@@ -188,6 +328,15 @@ def _build_record(
         recent_output=recent_output,
         output_excerpt=output_excerpt,
         log_path="tmp/background_tasks/exec-1.log",
+    )
+
+
+def _parent_intent() -> IntentInput:
+    return IntentInput(
+        session_id="session-1",
+        execution_mode=ExecutionMode.AI,
+        thinking=RunThinkingConfig(enabled=True, effort="medium"),
+        session_mode=SessionMode.NORMAL,
     )
 
 
@@ -216,11 +365,24 @@ async def test_background_task_service_notifies_sink_and_persists_completion_mar
     assert len(sink.calls) == 1
     _, message = sink.calls[0]
     assert message.startswith(
-        "A managed background task finished. Respond to the user with one short status update"
+        "A managed background task finished. The notification below includes the same result payload returned by wait_background_task"
     )
     assert "<background-task-id>exec-1</background-task-id>" in message
     assert "<status>completed</status>" in message
     assert "done &amp; &lt;ok&gt;" in message
+    payload_match = re.search(
+        r"<result-payload>\n(.*?)\n</result-payload>",
+        message,
+        re.DOTALL,
+    )
+    assert payload_match is not None
+    assert json.loads(html.unescape(payload_match.group(1))) == (
+        build_background_task_result_payload(
+            record,
+            completed=True,
+            include_task_id=True,
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -258,7 +420,8 @@ def test_background_task_service_lists_only_background_records(tmp_path: Path) -
         execution_mode="foreground",
     )
     background = _build_record(background_task_id="exec-background")
-    manager.records = (foreground, background)
+    repo.upsert(foreground)
+    repo.upsert(background)
 
     records = service.list_for_run("run-1")
 
@@ -380,7 +543,6 @@ async def test_wait_for_run_marks_completed_background_task_as_consumed(
     updated, done = await service.wait_for_run(
         run_id="run-1",
         background_task_id="exec-1",
-        wait_ms=1,
     )
 
     persisted = repo.get("exec-1")
@@ -499,3 +661,178 @@ def test_background_task_service_bind_completion_sink_flushes_pending_without_ru
     assert persisted is not None
     assert persisted.completion_notified_at is not None
     assert len(sink.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_start_subagent_completes_and_persists_result(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-subagent.db")
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent.db"
+    )
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    agent_repo = _FakeAgentRepo()
+    task_repo = _FakeTaskRepo()
+    intent_repo = _FakeRunIntentRepo(_parent_intent())
+    run_control_manager = _FakeRunControlManager()
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        run_intent_repo=intent_repo,
+        run_control_manager=run_control_manager,
+        run_runtime_repo=runtime_repo,
+    )
+
+    started = await service.start_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="MainAgent",
+        tool_call_id="call-1",
+        workspace_id="workspace-1",
+        cwd=Path("C:/workspace"),
+        subagent_role_id="Crafter",
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+    updated, completed = await service.wait_for_run(
+        run_id="run-1",
+        background_task_id=started.background_task_id,
+    )
+
+    persisted = repo.get(started.background_task_id)
+    assert completed is True
+    assert updated.kind == BackgroundTaskKind.SUBAGENT
+    assert updated.status == BackgroundTaskStatus.COMPLETED
+    assert updated.subagent_role_id == "Crafter"
+    assert updated.subagent_run_id is not None
+    assert updated.subagent_instance_id is not None
+    assert updated.output_excerpt == "analysis complete"
+    assert persisted is not None
+    assert persisted.status == BackgroundTaskStatus.COMPLETED
+    assert persisted.output_excerpt == "analysis complete"
+    assert agent_repo.calls[0]["run_id"] == updated.subagent_run_id
+    assert executor.calls[0]["role_id"] == "Crafter"
+    assert updated.subagent_run_id in intent_repo._records
+    assert run_control_manager.unregistered_run_ids == [updated.subagent_run_id]
+    runtime = runtime_repo.get(updated.subagent_run_id or "")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.COMPLETED
+    assert runtime.phase == RunRuntimePhase.TERMINAL
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_run_subagent_returns_synchronous_result(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-sync.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-sync.db"
+    )
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    agent_repo = _FakeAgentRepo()
+    task_repo = _FakeTaskRepo()
+    intent_repo = _FakeRunIntentRepo(_parent_intent())
+    run_control_manager = _FakeRunControlManager()
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        run_intent_repo=intent_repo,
+        run_control_manager=run_control_manager,
+        run_runtime_repo=runtime_repo,
+    )
+
+    result = await service.run_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        workspace_id="workspace-1",
+        subagent_role_id="Crafter",
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+
+    assert isinstance(result, SynchronousSubagentResult)
+    assert result.output == "analysis complete"
+    assert result.role_id == "Crafter"
+    assert agent_repo.calls[0]["run_id"] == result.run_id
+    assert executor.calls[0]["role_id"] == "Crafter"
+    assert result.run_id in intent_repo._records
+    assert run_control_manager.registered_run_ids == [result.run_id]
+    assert run_control_manager.unregistered_run_ids == [result.run_id]
+    runtime = runtime_repo.get(result.run_id)
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.COMPLETED
+    assert runtime.phase == RunRuntimePhase.TERMINAL
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_stop_for_run_stops_subagent(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-stop.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-stop.db"
+    )
+    gate = asyncio.Event()
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(output="should not finish"),
+        gate=gate,
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+    )
+
+    started = await service.start_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="MainAgent",
+        tool_call_id="call-1",
+        workspace_id="workspace-1",
+        cwd=Path("C:/workspace"),
+        subagent_role_id="Crafter",
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+    stopped = await service.stop_for_run(
+        run_id="run-1",
+        background_task_id=started.background_task_id,
+    )
+
+    persisted = repo.get(started.background_task_id)
+    assert stopped.status == BackgroundTaskStatus.STOPPED
+    assert stopped.kind == BackgroundTaskKind.SUBAGENT
+    assert persisted is not None
+    assert persisted.status == BackgroundTaskStatus.STOPPED
+    runtime = runtime_repo.get(stopped.subagent_run_id or "")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.STOPPED
+    assert runtime.phase == RunRuntimePhase.IDLE

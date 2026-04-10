@@ -10,6 +10,7 @@ from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles import (
     RoleDocumentDraft,
     RoleConfigSource,
+    RoleMode,
     RoleRegistry,
     default_memory_profile,
 )
@@ -60,6 +61,7 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
             skills=(),
             model_profile="default",
             execution_surface=ExecutionSurface.HYBRID,
+            mode=RoleMode.SUBAGENT,
             memory_profile=default_memory_profile(),
             system_prompt="Write with more detail.",
         ),
@@ -68,9 +70,11 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
     assert saved.role_id == "writer_v2"
     assert saved.file_name == "writer_v2.md"
     assert saved.execution_surface == ExecutionSurface.HYBRID
+    assert saved.mode == RoleMode.SUBAGENT
     assert not (roles_dir / "writer.md").exists()
     assert (roles_dir / "writer_v2.md").exists()
     assert "execution_surface: hybrid" in saved.content
+    assert "mode: subagent" in saved.content
     assert captured_registry[-1].get("writer_v2").name == "Writer V2"
 
 
@@ -144,8 +148,43 @@ def test_get_role_document_returns_rendered_markdown_content(tmp_path: Path) -> 
     assert record.file_name == "reviewer.md"
     assert record.role_id == "reviewer"
     assert record.execution_surface == ExecutionSurface.API
+    assert record.mode == RoleMode.PRIMARY
     assert "role_id: reviewer" in record.content
     assert "Review carefully." in record.content
+
+
+def test_list_role_documents_preserves_role_mode(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    _write_role(
+        roles_dir / "reviewer.md",
+        role_id="reviewer",
+        name="Reviewer",
+        description="Reviews delivered work.",
+        version="1.1.0",
+        tools=("dispatch_task",),
+        mode=RoleMode.SUBAGENT,
+        system_prompt="Review carefully.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    summaries = service.list_role_documents()
+
+    assert len(summaries) == 1
+    assert summaries[0].role_id == "reviewer"
+    assert summaries[0].mode == RoleMode.SUBAGENT
 
 
 def test_get_role_document_canonicalizes_unique_skill_names(tmp_path: Path) -> None:
@@ -936,6 +975,7 @@ def _write_role(
     description: str,
     version: str,
     tools: tuple[str, ...],
+    mode: RoleMode = RoleMode.PRIMARY,
     mcp_servers: tuple[str, ...] = (),
     skills: tuple[str, ...] = (),
     system_prompt: str,
@@ -947,6 +987,7 @@ def _write_role(
         f"description: {description}\n",
         "model_profile: default\n",
         f"version: {version}\n",
+        f"mode: {mode.value}\n",
         "tools:\n",
         *[f"  - {tool}\n" for tool in tools],
     ]

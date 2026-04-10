@@ -4,6 +4,7 @@ name: Main Agent
 description: Executes the full user request directly in normal mode.
 model_profile: default
 version: 1.0.0
+mode: primary
 skills:
   - skill-installer
   - pptx-craft
@@ -15,6 +16,7 @@ tools:
   - edit
   - write
   - shell
+  - spawn_subagent
   - list_background_tasks
   - wait_background_task
   - stop_background_task

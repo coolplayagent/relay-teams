@@ -740,17 +740,13 @@ class AgentLlmSession:
                                 break
                         seen_count += len(new_batch)
 
-                        # Drain pending user injections at this boundary (already handled in previous version, check if needed here)
+                        # Only restart for injections at a safe persistence boundary.
+                        if self._has_pending_tool_calls(buffered_messages):
+                            continue
                         injections = self._injection_manager.drain_at_boundary(
                             request.run_id, request.instance_id
                         )
                         if injections:
-                            extra = [
-                                ModelRequest(
-                                    parts=[UserPromptPart(content=msg.content)]
-                                )
-                                for msg in injections
-                            ]
                             for msg in injections:
                                 self._run_event_hub.publish(
                                     RunEvent(
@@ -764,16 +760,16 @@ class AgentLlmSession:
                                         payload_json=msg.model_dump_json(),
                                     )
                                 )
-                            self._message_repo.append(
-                                session_id=request.session_id,
-                                workspace_id=resolved_workspace_id,
-                                conversation_id=resolved_conversation_id,
-                                agent_role_id=request.role_id,
-                                instance_id=request.instance_id,
-                                task_id=request.task_id,
-                                trace_id=request.trace_id,
-                                messages=extra,
-                            )
+                                self._message_repo.append_user_prompt_if_missing(
+                                    session_id=request.session_id,
+                                    workspace_id=resolved_workspace_id,
+                                    conversation_id=resolved_conversation_id,
+                                    agent_role_id=request.role_id,
+                                    instance_id=request.instance_id,
+                                    task_id=request.task_id,
+                                    trace_id=request.trace_id,
+                                    content=msg.content,
+                                )
                             attempt_messages_committed = True
                             # Restart iter() with injected messages appended to committed history
                             (
@@ -2216,6 +2212,7 @@ class AgentLlmSession:
                 allowed_mcp_servers=allowed_mcp_servers,
                 allowed_skills=allowed_skills,
                 tool_registry=self._tool_registry,
+                role_registry=self._role_registry,
                 mcp_registry=self._mcp_registry,
                 skill_registry=self._skill_registry,
             ),
@@ -2810,6 +2807,12 @@ class AgentLlmSession:
             tool_events_published,
             tool_validation_failures_committed,
         )
+
+    def _has_pending_tool_calls(
+        self,
+        messages: Sequence[ModelRequest | ModelResponse],
+    ) -> bool:
+        return self._last_committable_index(messages) < len(messages)
 
     @staticmethod
     def _has_tool_input_validation_failures(

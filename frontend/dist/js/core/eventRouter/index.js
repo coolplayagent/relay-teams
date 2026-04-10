@@ -17,6 +17,7 @@ import {
     handleRunFailed,
     handleRunStopped,
     handleRunStarted,
+    handleSubagentRunTerminal,
     handleThinkingDelta,
     handleThinkingFinished,
     handleThinkingStarted,
@@ -42,10 +43,16 @@ import { handleNotificationRequested } from './notificationEvents.js';
 const BACKGROUND_TASK_UPDATE_REFRESH_DELAY_MS = 250;
 
 export function routeEvent(evType, payload, eventMeta) {
-    if (eventMeta?.run_id) state.activeRunId = eventMeta.run_id;
-    if (eventMeta?.trace_id && !state.activeRunId) state.activeRunId = eventMeta.trace_id;
-
-    scheduleContinuityRefreshForEvent(evType);
+    const eventRunId = String(eventMeta?.run_id || eventMeta?.trace_id || '').trim();
+    const isSubagentRun = eventRunId.startsWith('subagent_run_');
+    if (isSubagentRun && evType === 'token_usage') {
+        scheduleSessionTokenUsageRefresh({ immediate: true });
+    }
+    if (!isSubagentRun) {
+        if (eventMeta?.run_id) state.activeRunId = eventMeta.run_id;
+        if (eventMeta?.trace_id && !state.activeRunId) state.activeRunId = eventMeta.trace_id;
+        scheduleContinuityRefreshForEvent(evType);
+    }
 
     const instanceId = payload?.instance_id || eventMeta?.instance_id || null;
     const taskId = payload?.task_id || eventMeta?.task_id || null;
@@ -64,6 +71,40 @@ export function routeEvent(evType, payload, eventMeta) {
         } else if (evType === 'model_step_finished' && state.taskStatusMap[taskId] === 'running') {
             state.taskStatusMap[taskId] = 'completed';
         }
+    }
+    if (isSubagentRun) {
+        if (evType === 'model_step_started') {
+            handleModelStepStarted(eventMeta, instanceId, roleId);
+        } else if (evType === 'text_delta') {
+            handleTextDelta(payload, eventMeta, instanceId, roleId);
+        } else if (evType === 'output_delta') {
+            handleOutputDelta(payload, eventMeta, instanceId, roleId);
+        } else if (evType === 'thinking_started') {
+            handleThinkingStarted(payload, eventMeta, instanceId, roleId);
+        } else if (evType === 'thinking_delta') {
+            handleThinkingDelta(payload, eventMeta, instanceId, roleId);
+        } else if (evType === 'thinking_finished') {
+            handleThinkingFinished(payload, eventMeta, instanceId, roleId);
+        } else if (evType === 'model_step_finished') {
+            handleModelStepFinished(eventMeta, instanceId);
+        } else if (evType === 'tool_call') {
+            handleToolCall(payload, eventMeta, instanceId, roleId);
+        } else if (evType === 'tool_input_validation_failed') {
+            handleToolInputValidationFailed(payload, instanceId, eventMeta, roleId);
+        } else if (evType === 'tool_result') {
+            handleToolResult(payload, instanceId, eventMeta, roleId);
+        } else if (evType === 'tool_approval_requested') {
+            handleToolApprovalRequested(payload, eventMeta, instanceId);
+        } else if (evType === 'tool_approval_resolved') {
+            handleToolApprovalResolved(payload, instanceId, eventMeta, roleId);
+        } else if (evType === 'run_completed') {
+            handleSubagentRunTerminal(instanceId, 'completed', eventMeta, roleId);
+        } else if (evType === 'run_failed') {
+            handleSubagentRunTerminal(instanceId, 'failed', eventMeta, roleId);
+        } else if (evType === 'run_stopped') {
+            handleSubagentRunTerminal(instanceId, 'stopped', eventMeta, roleId);
+        }
+        return;
     }
     if (evType === 'run_started') {
         handleRunStarted(eventMeta);

@@ -125,25 +125,83 @@ export function appendStreamOutputParts(
     scrollBottom(st.container || container);
 }
 
-export function finalizeStream(instanceId, roleId = '') {
-    const streamKey = resolveStreamKey(instanceId, roleId);
-    const st = streamState.get(streamKey);
-    if (st && st.activeTextEl) {
-        updateMessageText(st.activeTextEl, st.activeRaw, { streaming: false });
-    }
-    if (st?.thinkingParts instanceof Map) {
-        st.thinkingParts.forEach(entry => {
-            updateThinkingText(entry.textEl, entry.raw, { streaming: false });
-            entry.finished = true;
+export function finalizeStream(instanceId, roleId = '', options = {}) {
+    const runId = String(options.runId || '').trim();
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
+    const matchedEntries = [];
+    const direct = streamState.get(streamKey);
+    if (direct) {
+        matchedEntries.push([streamKey, direct]);
+    } else if (runId) {
+        Array.from(streamState.entries()).forEach(([key, entry]) => {
+            if (!entry || String(entry.runId || '').trim() !== runId) {
+                return;
+            }
+            if (
+                matchesFinalizeTarget(entry, {
+                    instanceId,
+                    roleId,
+                    streamKey,
+                })
+            ) {
+                matchedEntries.push([key, entry]);
+            }
         });
-        if (st.thinkingActiveByPart) {
-            st.thinkingActiveByPart.clear();
-        }
     }
-    if (st?.runId) {
-        clearOverlayEntry(st.runId, st.instanceId, st.roleId);
+
+    matchedEntries.forEach(([key, entry]) => {
+        finalizeStreamEntry(entry);
+        streamState.delete(key);
+    });
+
+    const overlayRunId = String(
+        matchedEntries[0]?.[1]?.runId || runId || '',
+    ).trim();
+    const overlayInstanceId = String(
+        matchedEntries[0]?.[1]?.instanceId || instanceId || '',
+    ).trim();
+    const overlayRoleId = String(
+        matchedEntries[0]?.[1]?.roleId || roleId || '',
+    ).trim();
+    if (overlayRunId) {
+        clearOverlayEntry(overlayRunId, overlayInstanceId, overlayRoleId);
     }
-    streamState.delete(streamKey);
+}
+
+export function bindStreamOverlayToContainer(
+    container,
+    {
+        instanceId = '',
+        roleId = '',
+        label = '',
+        runId = '',
+    } = {},
+) {
+    const safeRunId = String(runId || '').trim();
+    if (!container || !safeRunId) {
+        return null;
+    }
+    const streamKey = resolveStreamKey(instanceId, roleId, safeRunId);
+    const existing = streamState.get(streamKey);
+    if (existing && existing.container === container) {
+        return existing;
+    }
+    const overlayEntry = resolveOverlayEntry(safeRunId, instanceId, roleId, label);
+    if (!overlayEntry) {
+        return null;
+    }
+    const reused = findReusableStreamState({
+        container,
+        instanceId,
+        roleId,
+        label: String(label || overlayEntry.label || '').trim(),
+        runId: safeRunId,
+    });
+    if (!reused) {
+        return null;
+    }
+    streamState.set(streamKey, reused);
+    return reused;
 }
 
 export function clearStreamState(instanceId, roleId = '') {
@@ -575,6 +633,43 @@ function ensureApprovalState(toolBlock) {
         card.appendChild(approvalEl);
     }
     return approvalEl;
+}
+
+function finalizeStreamEntry(entry) {
+    if (!entry) {
+        return;
+    }
+    if (entry.activeTextEl) {
+        updateMessageText(entry.activeTextEl, entry.activeRaw, { streaming: false });
+    }
+    if (entry.thinkingParts instanceof Map) {
+        entry.thinkingParts.forEach(thinkingEntry => {
+            updateThinkingText(thinkingEntry.textEl, thinkingEntry.raw, { streaming: false });
+            thinkingEntry.finished = true;
+        });
+    }
+    if (entry.thinkingActiveByPart) {
+        entry.thinkingActiveByPart.clear();
+    }
+}
+
+function matchesFinalizeTarget(entry, target) {
+    const safeInstanceId = String(target?.instanceId || '').trim();
+    const safeRoleId = String(target?.roleId || '').trim();
+    const safeStreamKey = String(target?.streamKey || '').trim();
+    const entryInstanceId = String(entry?.instanceId || '').trim();
+    const entryRoleId = String(entry?.roleId || '').trim();
+    const entryStreamKey = String(entry?.streamKey || '').trim();
+    if (safeStreamKey && entryStreamKey && entryStreamKey === safeStreamKey) {
+        return true;
+    }
+    if (safeInstanceId && entryInstanceId && entryInstanceId === safeInstanceId) {
+        return true;
+    }
+    if (safeRoleId && entryRoleId && entryRoleId === safeRoleId) {
+        return true;
+    }
+    return false;
 }
 
 function resolveStreamKey(instanceId, roleId, runId = '') {

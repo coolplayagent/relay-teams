@@ -223,6 +223,7 @@ class ExternalAcpHostToolBridge:
             allowed_mcp_servers=(),
             allowed_skills=(),
             tool_registry=self._tool_registry,
+            role_registry=self._get_role_registry(),
             mcp_registry=None,
             skill_registry=None,
         ).model
@@ -378,6 +379,7 @@ class ExternalAcpHostToolBridge:
             allowed_mcp_servers=(),
             allowed_skills=resolved_skills,
             tool_registry=self._tool_registry,
+            role_registry=self._get_role_registry(),
             mcp_registry=None,
             skill_registry=skill_registry,
         )

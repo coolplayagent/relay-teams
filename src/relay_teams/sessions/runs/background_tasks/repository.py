@@ -10,6 +10,7 @@ from typing import Literal
 
 from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from relay_teams.sessions.runs.background_tasks.models import (
+    BackgroundTaskKind,
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
@@ -36,9 +37,11 @@ class BackgroundTaskRepository:
                     background_task_id  TEXT PRIMARY KEY,
                     run_id           TEXT NOT NULL,
                     session_id       TEXT NOT NULL,
+                    kind             TEXT NOT NULL DEFAULT 'command',
                     instance_id      TEXT,
                     role_id          TEXT,
                     tool_call_id     TEXT,
+                    title            TEXT NOT NULL DEFAULT '',
                     command          TEXT NOT NULL,
                     cwd              TEXT NOT NULL,
                     execution_mode   TEXT NOT NULL,
@@ -50,6 +53,10 @@ class BackgroundTaskRepository:
                     recent_output_json TEXT NOT NULL,
                     output_excerpt   TEXT NOT NULL,
                     log_path         TEXT NOT NULL,
+                    subagent_role_id TEXT,
+                    subagent_run_id TEXT,
+                    subagent_task_id TEXT,
+                    subagent_instance_id TEXT,
                     created_at       TEXT NOT NULL,
                     updated_at       TEXT NOT NULL,
                     completed_at     TEXT,
@@ -70,6 +77,30 @@ class BackgroundTaskRepository:
             if "completion_notified_at" not in columns:
                 self._conn.execute(
                     "ALTER TABLE background_tasks ADD COLUMN completion_notified_at TEXT"
+                )
+            if "kind" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE background_tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'command'"
+                )
+            if "title" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE background_tasks ADD COLUMN title TEXT NOT NULL DEFAULT ''"
+                )
+            if "subagent_role_id" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE background_tasks ADD COLUMN subagent_role_id TEXT"
+                )
+            if "subagent_run_id" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE background_tasks ADD COLUMN subagent_run_id TEXT"
+                )
+            if "subagent_task_id" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE background_tasks ADD COLUMN subagent_task_id TEXT"
+                )
+            if "subagent_instance_id" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE background_tasks ADD COLUMN subagent_instance_id TEXT"
                 )
             self._conn.execute(
                 """
@@ -101,9 +132,11 @@ class BackgroundTaskRepository:
                     background_task_id,
                     run_id,
                     session_id,
+                    kind,
                     instance_id,
                     role_id,
                     tool_call_id,
+                    title,
                     command,
                     cwd,
                     execution_mode,
@@ -115,19 +148,25 @@ class BackgroundTaskRepository:
                     recent_output_json,
                     output_excerpt,
                     log_path,
+                    subagent_role_id,
+                    subagent_run_id,
+                    subagent_task_id,
+                    subagent_instance_id,
                     created_at,
                     updated_at,
                     completed_at,
                     completion_notified_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(background_task_id)
                 DO UPDATE SET
                     run_id=excluded.run_id,
                     session_id=excluded.session_id,
+                    kind=excluded.kind,
                     instance_id=excluded.instance_id,
                     role_id=excluded.role_id,
                     tool_call_id=excluded.tool_call_id,
+                    title=excluded.title,
                     command=excluded.command,
                     cwd=excluded.cwd,
                     execution_mode=excluded.execution_mode,
@@ -139,6 +178,10 @@ class BackgroundTaskRepository:
                     recent_output_json=excluded.recent_output_json,
                     output_excerpt=excluded.output_excerpt,
                     log_path=excluded.log_path,
+                    subagent_role_id=excluded.subagent_role_id,
+                    subagent_run_id=excluded.subagent_run_id,
+                    subagent_task_id=excluded.subagent_task_id,
+                    subagent_instance_id=excluded.subagent_instance_id,
                     created_at=excluded.created_at,
                     updated_at=excluded.updated_at,
                     completed_at=excluded.completed_at,
@@ -318,9 +361,11 @@ def _record_params(record: BackgroundTaskRecord) -> tuple[object, ...]:
         record.background_task_id,
         record.run_id,
         record.session_id,
+        record.kind.value,
         record.instance_id,
         record.role_id,
         record.tool_call_id,
+        record.title,
         record.command,
         record.cwd,
         record.execution_mode,
@@ -332,6 +377,10 @@ def _record_params(record: BackgroundTaskRecord) -> tuple[object, ...]:
         json.dumps(record.recent_output, ensure_ascii=False),
         record.output_excerpt,
         record.log_path,
+        record.subagent_role_id,
+        record.subagent_run_id,
+        record.subagent_task_id,
+        record.subagent_instance_id,
         record.created_at.isoformat(),
         record.updated_at.isoformat(),
         record.completed_at.isoformat() if record.completed_at is not None else None,
@@ -356,9 +405,11 @@ def _row_to_record(row: sqlite3.Row) -> BackgroundTaskRecord:
         session_id=require_persisted_identifier(
             row["session_id"], field_name="session_id"
         ),
+        kind=BackgroundTaskKind(str(row["kind"] or BackgroundTaskKind.COMMAND.value)),
         instance_id=normalize_persisted_text(row["instance_id"]),
         role_id=normalize_persisted_text(row["role_id"]),
         tool_call_id=normalize_persisted_text(row["tool_call_id"]),
+        title=str(row["title"] or ""),
         command=str(row["command"]),
         cwd=str(row["cwd"]),
         execution_mode=_decode_execution_mode(row["execution_mode"]),
@@ -370,6 +421,10 @@ def _row_to_record(row: sqlite3.Row) -> BackgroundTaskRecord:
         recent_output=_decode_lines(row["recent_output_json"]),
         output_excerpt=str(row["output_excerpt"]),
         log_path=str(row["log_path"]),
+        subagent_role_id=normalize_persisted_text(row["subagent_role_id"]),
+        subagent_run_id=normalize_persisted_text(row["subagent_run_id"]),
+        subagent_task_id=normalize_persisted_text(row["subagent_task_id"]),
+        subagent_instance_id=normalize_persisted_text(row["subagent_instance_id"]),
         created_at=created_at,
         updated_at=updated_at,
         completed_at=parse_persisted_datetime_or_none(row["completed_at"]),

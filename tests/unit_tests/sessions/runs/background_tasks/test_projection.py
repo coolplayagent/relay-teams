@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import html
+import json
+import re
+
 from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
@@ -59,9 +63,21 @@ def test_build_background_task_completion_message_starts_with_followup_instructi
     record = _build_record(output_excerpt="done")
 
     message = build_background_task_completion_message(record)
+    payload = build_background_task_result_payload(
+        record,
+        completed=True,
+        include_task_id=True,
+    )
+    payload_match = re.search(
+        r"<result-payload>\n(.*?)\n</result-payload>",
+        message,
+        re.DOTALL,
+    )
 
     assert message.startswith(
-        "A managed background task finished. Respond to the user with one short status update"
+        "A managed background task finished. The notification below includes the same result payload returned by wait_background_task"
     )
     assert "<background-task-notification>" in message
     assert "<status>completed</status>" in message
+    assert payload_match is not None
+    assert json.loads(html.unescape(payload_match.group(1))) == payload

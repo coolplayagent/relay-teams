@@ -20,6 +20,7 @@ from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.background_tasks.models import (
+    BackgroundTaskKind,
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
@@ -27,6 +28,11 @@ from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
+from relay_teams.sessions.runs.run_state_models import (
+    RunStatePhase,
+    RunStateRecord,
+    RunStateStatus,
+)
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
@@ -495,13 +501,19 @@ def test_get_recovery_snapshot_includes_background_tasks(tmp_path: Path) -> None
             instance_id="inst-2",
             role_id="coordinator_agent",
             tool_call_id="call-2",
-            command="sleep 1",
+            kind=BackgroundTaskKind.SUBAGENT,
+            title="Investigate failures",
+            command="subagent:Explorer",
             cwd="/tmp/project",
             execution_mode="background",
             status=BackgroundTaskStatus.COMPLETED,
             recent_output=("done",),
             output_excerpt="done",
             log_path="tmp/background_tasks/exec-2.log",
+            subagent_role_id="Explorer",
+            subagent_run_id="subagent-run-1",
+            subagent_task_id="task-2",
+            subagent_instance_id="inst-sub-2",
         )
     )
     terminal_repo.upsert(
@@ -535,6 +547,10 @@ def test_get_recovery_snapshot_includes_background_tasks(tmp_path: Path) -> None
         "exec-1",
     ]
     assert all("output_excerpt" not in item for item in background_tasks)
+    assert background_tasks[0]["kind"] == "subagent"
+    assert background_tasks[0]["title"] == "Investigate failures"
+    assert background_tasks[0]["subagent_role_id"] == "Explorer"
+    assert background_tasks[0]["subagent_run_id"] == "subagent-run-1"
     round_snapshot = snapshot.get("round_snapshot")
     assert isinstance(round_snapshot, dict)
     assert round_snapshot.get("background_task_count") == 2
@@ -586,6 +602,66 @@ def test_get_recovery_snapshot_keeps_completed_run_visible_while_active_backgrou
     assert len(background_tasks) == 1
 
 
+def test_get_recovery_snapshot_prefers_parent_run_over_background_subagent_runtime(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "recovery_background_subagent_parent.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(
+        db_path, run_id="run-parent", session_id="session-1", role_id="MainAgent"
+    )
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-parent",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+    )
+    runtime_repo.ensure(
+        run_id="subagent-run-1",
+        session_id="session-1",
+        root_task_id="task-bg-root",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.IDLE,
+    )
+    BackgroundTaskRepository(db_path).upsert(
+        BackgroundTaskRecord(
+            background_task_id="bg-1",
+            run_id="run-parent",
+            session_id="session-1",
+            kind=BackgroundTaskKind.SUBAGENT,
+            instance_id="inst-main",
+            role_id="MainAgent",
+            tool_call_id="call-1",
+            title="Background explorer",
+            command="subagent:Explorer",
+            cwd="/tmp/project",
+            execution_mode="background",
+            status=BackgroundTaskStatus.RUNNING,
+            recent_output=("ok",),
+            output_excerpt="ok",
+            log_path="tmp/background_tasks/bg-1.log",
+            subagent_role_id="Explorer",
+            subagent_run_id="subagent-run-1",
+            subagent_task_id="task-bg-root",
+            subagent_instance_id="inst-bg",
+        )
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    active_run = snapshot.get("active_run")
+    assert isinstance(active_run, dict)
+    assert active_run.get("run_id") == "run-parent"
+    assert active_run.get("background_task_count") == 1
+    round_snapshot = snapshot.get("round_snapshot")
+    assert isinstance(round_snapshot, dict)
+    assert round_snapshot.get("run_id") == "run-parent"
+
+
 def test_get_recovery_snapshot_ignores_finished_background_tasks_for_completed_runs(
     tmp_path: Path,
 ) -> None:
@@ -624,7 +700,185 @@ def test_get_recovery_snapshot_ignores_finished_background_tasks_for_completed_r
 
     assert snapshot.get("active_run") is None
     assert snapshot.get("background_tasks") == []
-    assert snapshot.get("round_snapshot") is None
+
+
+def test_list_agents_in_session_hides_normal_mode_subagent_instances(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_agents_background_subagent.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-real",
+        role_id="Explorer",
+        workspace_id="default",
+        status=InstanceStatus.COMPLETED,
+    )
+    agent_repo.upsert_instance(
+        run_id="subagent_run_bg123",
+        trace_id="subagent_run_bg123",
+        session_id="session-1",
+        instance_id="inst-bg",
+        role_id="Explorer",
+        workspace_id="default",
+        status=InstanceStatus.COMPLETED,
+    )
+    BackgroundTaskRepository(db_path).upsert(
+        BackgroundTaskRecord(
+            background_task_id="bg-1",
+            run_id="run-1",
+            session_id="session-1",
+            kind=BackgroundTaskKind.SUBAGENT,
+            instance_id="inst-main",
+            role_id="MainAgent",
+            tool_call_id="call-1",
+            title="Background explorer",
+            command="subagent:Explorer",
+            cwd="/tmp/project",
+            execution_mode="background",
+            status=BackgroundTaskStatus.COMPLETED,
+            recent_output=("ok",),
+            output_excerpt="ok",
+            log_path="tmp/background_tasks/bg-1.log",
+            subagent_role_id="Explorer",
+            subagent_run_id="subagent_run_bg123",
+            subagent_task_id="task-bg-root",
+            subagent_instance_id="inst-bg",
+        )
+    )
+
+    agents = service.list_agents_in_session("session-1")
+
+    assert [
+        item["instance_id"] for item in agents if item["role_id"] == "Explorer"
+    ] == ["inst-real"]
+
+
+def test_list_normal_mode_subagents_returns_instance_level_projection(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_subagent_projection.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    task_repo = TaskRepository(db_path)
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root-subagent",
+            session_id="session-1",
+            parent_task_id=None,
+            trace_id="subagent_run_proj123",
+            role_id="Explorer",
+            title="Inspect bug",
+            objective="inspect bug history",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="subagent_run_proj123",
+        trace_id="subagent_run_proj123",
+        session_id="session-1",
+        instance_id="inst-proj",
+        role_id="Explorer",
+        workspace_id="default",
+        conversation_id="conv_session_1_explorer_inst_proj",
+        status=InstanceStatus.COMPLETED,
+    )
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="subagent_run_proj123",
+        session_id="session-1",
+        root_task_id="task-root-subagent",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.SUBAGENT_RUNNING,
+    )
+    runtime_record = runtime_repo.get("subagent_run_proj123")
+    assert runtime_record is not None
+    run_state_repo = RunStateRepository(db_path)
+    run_state_repo.upsert(
+        RunStateRecord(
+            run_id="subagent_run_proj123",
+            session_id="session-1",
+            status=RunStateStatus.RUNNING,
+            phase=RunStatePhase.STREAMING,
+            recoverable=True,
+            last_event_id=7,
+            checkpoint_event_id=7,
+            updated_at=runtime_record.updated_at,
+        )
+    )
+
+    subagents = service.list_normal_mode_subagents("session-1")
+
+    assert len(subagents) == 1
+    assert subagents[0]["run_id"] == "subagent_run_proj123"
+    assert subagents[0]["instance_id"] == "inst-proj"
+    assert subagents[0]["role_id"] == "Explorer"
+    assert subagents[0]["conversation_id"] == "conv_session_1_explorer_inst_proj"
+    assert subagents[0]["status"] == "completed"
+    assert subagents[0]["run_status"] == "running"
+    assert subagents[0]["run_phase"] == "running"
+    assert subagents[0]["last_event_id"] == 7
+    assert subagents[0]["checkpoint_event_id"] == 7
+    assert subagents[0]["stream_connected"] is False
+    assert subagents[0]["title"] == "Inspect bug"
+
+
+def test_build_session_rounds_excludes_synchronous_subagent_runs(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_rounds_sync_subagent.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    task_repo = TaskRepository(db_path)
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root-main",
+            session_id="session-1",
+            parent_task_id=None,
+            trace_id="run-main",
+            role_id="MainAgent",
+            objective="main work",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root-subagent",
+            session_id="session-1",
+            parent_task_id=None,
+            trace_id="subagent_run_sync123",
+            role_id="Explorer",
+            objective="subagent work",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-main",
+        session_id="session-1",
+        root_task_id="task-root-main",
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+    )
+    runtime_repo.ensure(
+        run_id="subagent_run_sync123",
+        session_id="session-1",
+        root_task_id="task-root-subagent",
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+    )
+
+    rounds = service.build_session_rounds("session-1")
+
+    assert [round_item["run_id"] for round_item in rounds] == ["run-main"]
 
 
 def test_get_recovery_snapshot_marks_started_main_agent_stop_as_recoverable(

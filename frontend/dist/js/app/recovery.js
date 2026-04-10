@@ -89,6 +89,7 @@ export async function hydrateSessionView(
     }
 
     startSessionContinuity(safeSessionId);
+    const preserveActiveSubagentView = shouldPreserveActiveSubagentView(safeSessionId);
     const shouldSkipRoundsReload = !!(
         includeRounds
         && state.currentSessionId === safeSessionId
@@ -96,7 +97,9 @@ export async function hydrateSessionView(
         && state.isGenerating
     );
     if (includeRounds && !shouldSkipRoundsReload) {
-        await loadSessionRounds(safeSessionId);
+        await loadSessionRounds(safeSessionId, {
+            render: !preserveActiveSubagentView,
+        });
         if (state.currentSessionId !== safeSessionId) return null;
     }
     const snapshot = await refreshSessionRecovery(safeSessionId, { quiet });
@@ -763,7 +766,9 @@ async function runScheduledContinuityRefresh(request) {
 
     const canRefreshRounds = request.includeRounds && !state.isGenerating && !state.activeEventSource;
     if (canRefreshRounds) {
-        await loadSessionRounds(safeSessionId);
+        await loadSessionRounds(safeSessionId, {
+            render: !shouldPreserveActiveSubagentView(safeSessionId),
+        });
         if (state.currentSessionId !== safeSessionId) return null;
     }
     const snapshot = await refreshSessionRecovery(safeSessionId, { quiet: request.quiet !== false });
@@ -823,7 +828,9 @@ async function reconcileMissingActiveRun(
     if (String(state.activeRunId || '').trim() !== safePreviousActiveRunId) return false;
 
     endStream({ preserveRunStreamState: true, focusPrompt: false });
-    await loadSessionRounds(safeSessionId);
+    await loadSessionRounds(safeSessionId, {
+        render: !shouldPreserveActiveSubagentView(safeSessionId),
+    });
     if (state.currentSessionId !== safeSessionId) return false;
 
     clearRunStreamState(safePreviousActiveRunId);
@@ -834,6 +841,17 @@ async function reconcileMissingActiveRun(
     scheduleSessionsRefresh();
     renderRecoveryBanner();
     return true;
+}
+
+function shouldPreserveActiveSubagentView(sessionId = state.currentSessionId) {
+    const active = state.activeSubagentSession;
+    const safeSessionId = String(sessionId || '').trim();
+    return !!(
+        active
+        && typeof active === 'object'
+        && safeSessionId
+        && String(active.sessionId || '').trim() === safeSessionId
+    );
 }
 
 function resolveRecoveryAfterEventId(activeRun) {
