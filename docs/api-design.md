@@ -1046,6 +1046,7 @@ Notes:
 - `tty=true` background tasks use a platform TTY backend: POSIX PTY on Linux/macOS and ConPTY via `pywinpty` on supported Windows hosts. When Windows TTY support is unavailable, only non-TTY background tasks remain available.
 - Unlike Codex's stricter unified-exec contract, Agent Teams keeps non-TTY `write_stdin` enabled for compatibility with existing pipe-style workflows.
 - `create_monitor` is also exposed as a tool for run-local `background_task` subscriptions; REST keeps the generic `source_kind/source_key` contract so future event sources reuse the same substrate.
+- System/module boundary guidance for this substrate lives in `docs/system-module-boundaries.md`.
 
 ### `POST /triggers/github/deliveries`
 

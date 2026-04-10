@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict
 from relay_teams.env import build_github_cli_env, build_subprocess_env, get_env_var
 from relay_teams.env.clawhub_cli import resolve_existing_clawhub_path
 from relay_teams.env.github_config_service import GitHubConfigService
-from relay_teams.env.runtime_env import get_app_config_dir
+from relay_teams.paths import get_app_config_dir
 from relay_teams.sessions.runs.background_tasks.github_cli import (
     resolve_existing_gh_path,
 )
