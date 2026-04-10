@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import json
+from pathlib import Path
 from urllib.request import Request, urlopen
 
 import typer
@@ -16,14 +17,14 @@ type RequestJsonCallable = Callable[
 type AutoStartCallable = Callable[[str, bool], None]
 type StreamEventsCallable = Callable[[str, str, bool], None]
 type RunSinglePromptCallable = Callable[
-    [str, bool, SessionMode, str | None, str | None], None
+    [str, bool, SessionMode, str | None, str | None, Path | None], None
 ]
 type ExecutePromptCallable = Callable[..., None]
 
 QUICK_PROMPT_OPTIONS_HINT = (
     "Available quick prompt options: --message <text>, "
     "--mode <normal|orchestration>, --role <role_id>, "
-    "--orchestration <id>, --yolo/--no-yolo."
+    "--orchestration <id>, --workspace <path>, --yolo/--no-yolo."
 )
 
 
@@ -34,18 +35,24 @@ def root_command(
     mode: SessionMode,
     role: str | None,
     orchestration: str | None,
+    workspace: Path | None,
     *,
     run_single_prompt: RunSinglePromptCallable,
 ) -> None:
     if message is not None:
         if ctx.invoked_subcommand is not None:
             raise typer.BadParameter("Cannot combine --message with subcommands")
-        run_single_prompt(message, yolo, mode, role, orchestration)
+        run_single_prompt(message, yolo, mode, role, orchestration, workspace)
         return
 
-    if mode != SessionMode.NORMAL or role is not None or orchestration is not None:
+    if (
+        mode != SessionMode.NORMAL
+        or role is not None
+        or orchestration is not None
+        or workspace is not None
+    ):
         raise typer.BadParameter(
-            "--mode, --role, and --orchestration require --message. "
+            "--mode, --role, --orchestration, and --workspace require --message. "
             f"{QUICK_PROMPT_OPTIONS_HINT}"
         )
 
@@ -59,6 +66,7 @@ def run_single_prompt(
     session_mode: SessionMode,
     role_id: str | None,
     orchestration_id: str | None,
+    workspace: Path | None,
     *,
     default_base_url: str,
     execute_prompt: ExecutePromptCallable,
@@ -99,6 +107,7 @@ def run_single_prompt(
         session_mode=session_mode,
         normal_root_role_id=normalized_role_id,
         orchestration_id=normalized_orchestration_id,
+        workspace=workspace,
         autostart=True,
         debug=False,
     )
@@ -113,6 +122,7 @@ def execute_prompt(
     session_mode: SessionMode,
     normal_root_role_id: str | None,
     orchestration_id: str | None,
+    workspace: Path | None,
     autostart: bool,
     debug: bool,
     *,
@@ -122,13 +132,18 @@ def execute_prompt(
 ) -> None:
     auto_start_if_needed(base_url, autostart)
 
+    workspace_id = _resolve_workspace_id(
+        base_url=base_url,
+        workspace=workspace,
+        request_json=request_json,
+    )
     resolved_session_id = session_id
     if not resolved_session_id:
         created_response = request_json(
             base_url,
             "POST",
             "/api/sessions",
-            {"workspace_id": "default"},
+            {"workspace_id": workspace_id},
         )
         created = _require_object_response(created_response, "/api/sessions")
         resolved_session_id = _require_str_field(created, "session_id")
@@ -203,6 +218,29 @@ def stream_events(base_url: str, run_id: str, debug: bool) -> None:
                 RunEventType.RUN_FAILED.value,
             }:
                 break
+
+
+def _resolve_workspace_id(
+    *,
+    base_url: str,
+    workspace: Path | None,
+    request_json: RequestJsonCallable,
+) -> str:
+    if workspace is None:
+        return "default"
+
+    resolved_workspace = workspace.expanduser().resolve()
+    response = request_json(
+        base_url,
+        "POST",
+        "/api/workspaces/pick",
+        {"root_path": str(resolved_workspace)},
+    )
+    payload = _require_object_response(response, "/api/workspaces/pick")
+    workspace_payload = payload.get("workspace")
+    if not isinstance(workspace_payload, dict):
+        raise RuntimeError("Expected workspace details from /api/workspaces/pick")
+    return _require_str_field(workspace_payload, "workspace_id")
 
 
 def _require_str_field(payload: dict[str, object], key: str) -> str:

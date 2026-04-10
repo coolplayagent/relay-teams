@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
 import re
 
 from typer.testing import CliRunner
@@ -70,6 +71,67 @@ def test_root_message_runs_single_prompt(monkeypatch) -> None:
         "run_id": "run-1",
         "debug": False,
     }
+
+
+def test_root_message_supports_workspace_selection(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+    streamed: dict[str, object] = {}
+
+    def fake_autostart(base_url: str, autostart: bool) -> None:
+        _ = (base_url, autostart)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object] | list[object]:
+        _ = (base_url, timeout_seconds)
+        calls.append((method, path, payload))
+        if path == "/api/workspaces/pick":
+            return {
+                "workspace": {
+                    "workspace_id": "workspace-1",
+                    "root_path": str(tmp_path.resolve()),
+                }
+            }
+        if path == "/api/sessions":
+            return {"session_id": "session-1"}
+        if path == "/api/runs":
+            return {"run_id": "run-1"}
+        raise AssertionError(f"unexpected path: {path}")
+
+    def fake_stream(base_url: str, run_id: str, debug: bool) -> None:
+        streamed["run_id"] = run_id
+        streamed["debug"] = debug
+
+    monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
+    monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+    monkeypatch.setattr(cli_app, "_stream_events", fake_stream)
+
+    result = runner.invoke(cli_app.app, ["-m", "hello", "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert calls == [
+        (
+            "POST",
+            "/api/workspaces/pick",
+            {"root_path": str(tmp_path.resolve())},
+        ),
+        ("POST", "/api/sessions", {"workspace_id": "workspace-1"}),
+        (
+            "POST",
+            "/api/runs",
+            {
+                "session_id": "session-1",
+                "input": [{"kind": "text", "text": "hello"}],
+                "execution_mode": "ai",
+                "yolo": True,
+            },
+        ),
+    ]
+    assert streamed == {"run_id": "run-1", "debug": False}
 
 
 def test_root_message_supports_normal_role_selection(monkeypatch) -> None:
@@ -412,6 +474,7 @@ def test_root_help_lists_env_module() -> None:
     assert "--mode" in normalized_output
     assert "--role" in normalized_output
     assert "--orchestration" in normalized_output
+    assert "--workspace" in normalized_output
     assert "env" in normalized_output
     assert "mcp" in normalized_output
     assert "agents" in normalized_output
