@@ -217,7 +217,7 @@ class GitHubTriggerService:
             self._secret_store.set_token(
                 self._config_dir, account_id=account_id, token=token
             )
-        if "webhook_secret" in payload.model_fields_set and webhook_secret is not None:
+        if "webhook_secret" in payload.model_fields_set:
             self._secret_store.set_webhook_secret(
                 self._config_dir,
                 account_id=account_id,
@@ -242,6 +242,13 @@ class GitHubTriggerService:
     ) -> GitHubRepoSubscriptionRecord:
         account = self._repository.get_account(payload.account_id)
         token = self._require_account_token(account.account_id)
+        callback_url = (
+            _normalize_optional_text(payload.callback_url)
+            if payload.register_webhook
+            else None
+        )
+        if payload.register_webhook and callback_url is None:
+            raise ValueError("callback_url is required when register_webhook=true")
         owner = _normalize_required_text(payload.owner, field_name="owner")
         repo_name = _normalize_required_text(payload.repo_name, field_name="repo_name")
         repo_payload = self._github_client.get_repository(
@@ -266,9 +273,7 @@ class GitHubTriggerService:
         )
         created = self._repository.create_repo_subscription(record)
         if payload.register_webhook:
-            callback_url = _normalize_optional_text(payload.callback_url)
-            if callback_url is None:
-                raise ValueError("callback_url is required when register_webhook=true")
+            assert callback_url is not None
             return self.register_repo_webhook(
                 created.repo_subscription_id,
                 GitHubRepoWebhookRegistrationInput(callback_url=callback_url),
@@ -562,7 +567,8 @@ class GitHubTriggerService:
                 "dispatch_count": 0,
             }
         subscriptions = self._repository.list_repo_subscriptions_by_full_name(
-            repository_full_name
+            repository_full_name,
+            enabled_only=True,
         )
         matched_subscription = self._select_subscription_for_signature(
             subscriptions=subscriptions,

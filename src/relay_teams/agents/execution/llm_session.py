@@ -497,7 +497,10 @@ class AgentLlmSession:
             media_asset_service=self._media_asset_service,
             computer_runtime=self._computer_runtime,
             background_task_service=self._background_task_service,
-            monitor_service=self._monitor_service,
+            monitor_service=cast(
+                MonitorService | None,
+                getattr(self, "_monitor_service", None),
+            ),
             run_id=request.run_id,
             trace_id=request.trace_id,
             task_id=request.task_id,

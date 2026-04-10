@@ -483,14 +483,19 @@ class TriggerRepository(SharedSqliteRepository):
     def list_repo_subscriptions_by_full_name(
         self,
         full_name: str,
+        *,
+        enabled_only: bool = False,
     ) -> tuple[GitHubRepoSubscriptionRecord, ...]:
-        rows = self._run_read(
-            lambda: self._conn.execute(
-                """
+        query = """
                 SELECT * FROM github_repo_subscriptions
                 WHERE full_name=?
-                ORDER BY created_at DESC
-                """,
+                """
+        if enabled_only:
+            query += "\n                AND enabled=1"
+        query += "\n                ORDER BY created_at DESC\n                "
+        rows = self._run_read(
+            lambda: self._conn.execute(
+                query,
                 (full_name,),
             ).fetchall()
         )
