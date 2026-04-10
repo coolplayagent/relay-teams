@@ -630,13 +630,28 @@ def _render_transcript(
         rendered = _render_message(message)
         if not rendered:
             continue
-        clipped = rendered[:remaining].strip()
+        clipped, truncated = _clip_rendered_message(rendered, max_chars=remaining)
         if clipped:
             lines.append(clipped)
             remaining -= len(clipped)
-        if remaining <= 0:
+        if truncated or remaining <= 0:
             break
     return "\n\n".join(lines).strip()
+
+
+def _clip_rendered_message(text: str, *, max_chars: int) -> tuple[str, bool]:
+    stripped = text.strip()
+    if not stripped:
+        return ("", False)
+    if max_chars <= 0:
+        return ("", True)
+    if len(stripped) <= max_chars:
+        return (stripped, False)
+    prefix = stripped[:max_chars]
+    last_newline = prefix.rfind("\n")
+    if last_newline <= 0:
+        return ("", True)
+    return (prefix[:last_newline].rstrip(), True)
 
 
 def _render_message(message: ModelRequest | ModelResponse) -> str:

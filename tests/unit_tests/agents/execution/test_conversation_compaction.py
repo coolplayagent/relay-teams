@@ -226,6 +226,31 @@ def test_default_conversation_compaction_strategy_precomputes_replayable_suffixe
     assert plan.compacted_message_count > 0
 
 
+def test_render_transcript_does_not_clip_mid_line_fact() -> None:
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="preserve the exact facts")]),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="shell",
+                    tool_call_id="call-1",
+                    content=(
+                        "line-a\n"
+                        "- phase-4 anchor: lunar-mint-407\n"
+                        "- phase-4 checksum: CHK-P4-DQ7"
+                    ),
+                )
+            ]
+        ),
+    ]
+
+    transcript = compaction_module._render_transcript(history, max_chars=80)
+
+    assert "lunar-min" not in transcript
+    assert "phase-4 anchor" not in transcript
+    assert transcript.splitlines()[-1] == "Tool result [shell]: line-a"
+
+
 @pytest.mark.asyncio
 async def test_conversation_compaction_service_hides_messages_and_creates_marker(
     monkeypatch: pytest.MonkeyPatch,
