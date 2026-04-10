@@ -225,6 +225,10 @@ def test_clawhub_settings_markup_lives_in_skills_feature_and_keeps_actions_inlin
     assert 'id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.saveButtonId)}"' in source
     assert 'class="settings-inline-action-row"' in source
     assert 'id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.statusId)}"' in source
+    assert 'id="feature-clawhub-token-link"' in source
+    assert 'href="https://clawhub.ai/settings"' in source
+    assert 'target="_blank"' in source
+    assert 'rel="noreferrer"' in source
     assert 'id="clawhub-token"' not in project_view_source
 
 
