@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .css_helpers import load_components_css
+
 
 def test_round_history_clear_ui_renders_segment_dividers_and_collapsed_history() -> (
     None
@@ -11,9 +13,7 @@ def test_round_history_clear_ui_renders_segment_dividers_and_collapsed_history()
     timeline_script = (
         repo_root / "frontend" / "dist" / "js" / "components" / "rounds" / "timeline.js"
     ).read_text(encoding="utf-8")
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
     i18n_script = (
         repo_root / "frontend" / "dist" / "js" / "utils" / "i18n.js"
     ).read_text(encoding="utf-8")

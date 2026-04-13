@@ -771,3 +771,27 @@
 .typing-dot:nth-child(2) {
     animation-delay: -0.16s;
 }
+
+.tool-header {
+    padding: 0.7rem 0.85rem;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.tool-header:hover {
+    background: var(--bg-hover);
+}
+
+.tool-body {
+    background: var(--bg-surface);
+}
+
+body.light-theme .tool-header {
+    background: var(--bg-tool-header);
+    border-bottom-color: var(--border-color);
+}
+
+body.light-theme .tool-header:hover {
+    background: var(--bg-tool-header-hover);
+}
+

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .css_helpers import load_components_css
+
 
 def test_workspace_shell_hides_execution_mode_selector() -> None:
     repo_root = Path(__file__).resolve().parents[3]
@@ -87,9 +89,7 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     markdown_script = (
         repo_root / "frontend" / "dist" / "js" / "utils" / "markdown.js"
     ).read_text(encoding="utf-8")
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     assert "execution-mode-select" not in index_html
     assert "Execution mode" not in index_html
@@ -230,9 +230,7 @@ def test_button_theme_tokens_are_distinct_between_dark_and_light_modes() -> None
     base_css = (repo_root / "frontend" / "dist" / "css" / "base.css").read_text(
         encoding="utf-8"
     )
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     assert "--button-primary-bg: #494641;" in base_css
     assert "--button-primary-bg: #4d6259;" in base_css
@@ -245,9 +243,7 @@ def test_button_theme_tokens_are_distinct_between_dark_and_light_modes() -> None
 
 def test_light_theme_workspace_avoids_legacy_beige_overrides() -> None:
     repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
     layout_css = (repo_root / "frontend" / "dist" / "css" / "layout.css").read_text(
         encoding="utf-8"
     )
@@ -264,9 +260,7 @@ def test_light_theme_workspace_avoids_legacy_beige_overrides() -> None:
 
 def test_light_theme_workspace_uses_shared_surface_hierarchy() -> None:
     repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
     layout_css = (repo_root / "frontend" / "dist" / "css" / "layout.css").read_text(
         encoding="utf-8"
     )

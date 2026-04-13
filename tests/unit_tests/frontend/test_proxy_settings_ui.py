@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 from typing import cast
 
+from .css_helpers import load_components_css
+
 
 def test_proxy_settings_panel_loads_saved_values_into_form(tmp_path: Path) -> None:
     payload = _run_proxy_settings_script(
@@ -266,10 +268,7 @@ console.log(JSON.stringify({
 
 
 def test_proxy_settings_styles_keep_a_single_editor_surface() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     panel_start = components_css.index(".proxy-panel-body {")
     panel_end = components_css.index(".proxy-editor-form {", panel_start)

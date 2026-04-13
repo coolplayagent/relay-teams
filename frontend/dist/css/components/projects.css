@@ -1,0 +1,1521 @@
+.project-card {
+    margin: 0 0.75rem 0.55rem;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-surface);
+    overflow: hidden;
+}
+
+.project-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.45rem;
+    padding: 0.4rem;
+}
+
+.project-toggle {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    padding: 0.35rem 0.4rem;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.project-toggle:hover {
+    background: var(--bg-hover);
+}
+
+.project-toggle-icon {
+    flex: 0 0 auto;
+    width: 0.8rem;
+    margin-top: 0.05rem;
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+}
+
+.project-summary {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+}
+
+.project-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+}
+
+.project-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.84rem;
+    font-weight: 600;
+}
+
+.project-count {
+    flex: 0 0 auto;
+    padding: 0.08rem 0.38rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+}
+
+
+.project-path {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+}
+
+.project-new-session-btn {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.project-new-session-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.project-body {
+    padding: 0 0.45rem 0.45rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.project-body.is-collapsed {
+    display: none;
+}
+
+.project-session-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding-top: 0.45rem;
+}
+
+.session-item {
+    padding: 0.75rem 1rem;
+    margin: 0 0.5rem 0.25rem 0.5rem;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    transition: background-color 0.2s ease;
+}
+
+.session-item:hover {
+    background-color: var(--bg-hover);
+}
+
+.session-item.active {
+    background-color: color-mix(in srgb, var(--primary) 14%, transparent);
+    border-left: 3px solid var(--primary);
+}
+
+.session-id {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.session-main-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.session-sub-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+}
+
+.back-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: calc(100% - 2rem);
+    margin: 0.35rem 1rem 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: none;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.back-btn:hover {
+    background-color: var(--bg-hover);
+}
+
+.back-btn .icon {
+    width: 16px;
+    height: 16px;
+}
+
+.rounds-list {
+    padding: 0.5rem 0;
+}
+
+.rounds-header {
+    padding: 0.5rem 1rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.round-item {
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: background-color 0.2s ease;
+}
+
+.round-item:hover {
+    background-color: var(--bg-hover);
+}
+
+.round-item.active {
+    background-color: color-mix(in srgb, var(--primary) 14%, transparent);
+    border-left: 3px solid var(--primary);
+}
+
+.round-item-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--text-secondary);
+}
+
+.round-item.active .round-item-dot {
+    background-color: var(--primary);
+}
+
+.round-item-text {
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.session-time {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.session-status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.2rem;
+    padding: 0.08rem 0.42rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 0.64rem;
+    font-weight: 700;
+    white-space: nowrap;
+    flex: 0 0 auto;
+}
+
+.session-status-running {
+    color: var(--primary-hover);
+    border-color: color-mix(in srgb, var(--primary) 34%, transparent);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.session-status-warning {
+    color: var(--warning);
+    border-color: rgba(245, 158, 11, 0.32);
+    background: rgba(245, 158, 11, 0.12);
+}
+
+.session-status-stopped {
+    color: var(--text-secondary);
+    border-color: rgba(148, 163, 184, 0.3);
+    background: rgba(148, 163, 184, 0.1);
+}
+
+.session-status-idle {
+    color: var(--text-secondary);
+    border-color: rgba(148, 163, 184, 0.22);
+    background: rgba(148, 163, 184, 0.08);
+}
+
+.session-side-note {
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.session-item {
+    position: relative;
+}
+
+.session-delete-btn {
+    position: absolute;
+    right: 0.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    padding: 0.25rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s ease, color 0.2s ease;
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+}
+
+.session-item:hover .session-delete-btn {
+    opacity: 1;
+}
+
+.session-delete-btn:hover {
+    color: var(--danger);
+    background-color: var(--bg-hover);
+}
+
+.project-session-toggle-btn {
+    margin-top: 0.15rem;
+    padding: 0.35rem 0.45rem 0.15rem;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.project-session-toggle-btn:hover {
+    color: var(--text-primary);
+}
+
+.project-empty-sessions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.35rem;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+
+.project-new-session-inline {
+    width: auto;
+    padding: 0 0.7rem;
+}
+
+
+.projects-list {
+    padding-top: 0.2rem;
+}
+
+.projects-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    min-height: 30px;
+    margin-bottom: 0.1rem;
+    padding: 0.08rem 0.65rem 0.18rem 0.78rem;
+}
+
+.projects-toolbar-title {
+    min-width: 0;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: color-mix(in srgb, var(--text-secondary) 84%, transparent);
+}
+
+.projects-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.1rem;
+}
+
+.projects-list .project-card {
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    overflow: visible;
+    position: relative;
+}
+
+.projects-list .project-row {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    border-radius: 6px;
+    min-width: 0;
+}
+
+.projects-list .project-toggle {
+    flex: 0 0 1.75rem;
+    width: 1.75rem;
+    min-width: 1.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 30px;
+    padding: 0.28rem 0.2rem;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.projects-list .project-toggle:hover {
+    background: var(--bg-hover);
+}
+
+.projects-list .project-icon-stack,
+.projects-list .project-folder-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.projects-list .project-icon-stack {
+    position: relative;
+    width: 0.95rem;
+    height: 0.95rem;
+    flex: 0 0 0.95rem;
+    color: var(--text-secondary);
+}
+
+.projects-list .project-folder-icon,
+.projects-list .project-toggle-icon {
+    position: absolute;
+    inset: 0;
+    transition: opacity 0.12s ease;
+}
+
+.projects-list .project-folder-icon {
+    transform: translateY(0.5px);
+}
+
+.projects-list .project-toggle-icon {
+    color: var(--text-secondary);
+    font-size: 0.64rem;
+    text-align: center;
+    opacity: 0;
+}
+
+.projects-list .project-row:hover .project-toggle-icon,
+.projects-list .project-row:focus-within .project-toggle-icon {
+    opacity: 1;
+}
+
+.projects-list .project-row:hover .project-folder-icon,
+.projects-list .project-row:focus-within .project-folder-icon {
+    opacity: 0;
+}
+
+.projects-list .project-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.82rem;
+    font-weight: 450;
+}
+
+.projects-list .project-actions {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 0.1rem;
+    opacity: 0;
+    pointer-events: none;
+    position: relative;
+    z-index: 8;
+    transition: opacity 0.14s ease;
+}
+
+.projects-list .project-row:hover .project-actions,
+.projects-list .project-row:focus-within .project-actions {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.projects-list .project-action-btn {
+    width: 24px;
+    height: 24px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.projects-list .project-action-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.projects-list .project-path-hint {
+    position: absolute;
+    left: 1.72rem;
+    right: 3.15rem;
+    top: 0.16rem;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    padding: 0.14rem 0.38rem;
+    display: block;
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    line-height: 1.35;
+    opacity: 0;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    pointer-events: none;
+    border: 1px solid color-mix(in srgb, var(--border-color) 74%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+    box-shadow: 0 3px 10px rgba(17, 19, 18, 0.045);
+    transform: translateY(calc(-100% - 4px));
+    z-index: 6;
+    transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.projects-list .project-row:hover + .project-path-hint,
+.projects-list .project-row:focus-within + .project-path-hint {
+    opacity: 1;
+    transform: translateY(calc(-100% - 2px));
+}
+
+.projects-list .project-menu {
+    position: absolute;
+    top: 2rem;
+    right: 0.35rem;
+    min-width: 8rem;
+    padding: 0.28rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    box-shadow: 0 8px 20px rgba(17, 19, 18, 0.08);
+    z-index: 8;
+}
+
+.projects-list .project-fork-btn,
+.projects-list .project-remove-btn {
+    width: 100%;
+    min-height: 28px;
+    padding: 0.35rem 0.45rem;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.projects-list .project-fork-btn:hover {
+    background: var(--bg-hover);
+}
+
+.projects-list .project-remove-btn:hover {
+    background: var(--bg-hover);
+    color: var(--danger);
+}
+
+.projects-list .project-menu-workspace,
+.projects-list .project-menu-automation {
+    min-width: 13.5rem;
+    padding: 0.45rem;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+    box-shadow: 0 14px 30px rgba(17, 19, 18, 0.14);
+    backdrop-filter: blur(10px);
+}
+
+.projects-list .project-workspace-menu-btn,
+
+.projects-list .project-workspace-menu-btn,
+.projects-list .project-run-automation-btn,
+.projects-list .project-toggle-automation-btn,
+.projects-list .project-remove-automation-btn {
+    width: 100%;
+    min-height: 36px;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.12s ease;
+}
+
+.projects-list .project-workspace-menu-btn:hover,
+.projects-list .project-run-automation-btn:hover,
+.projects-list .project-toggle-automation-btn:hover,
+.projects-list .project-remove-automation-btn:hover {
+    background: color-mix(in srgb, var(--primary) 10%, var(--bg-hover));
+    border-color: color-mix(in srgb, var(--primary) 20%, transparent);
+    transform: translateY(-1px);
+}
+
+.projects-list .project-remove-automation-btn:hover {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, var(--bg-hover));
+    border-color: color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+.projects-list .project-menu-icon {
+    width: 1.65rem;
+    height: 1.65rem;
+    flex: 0 0 1.65rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-hover) 86%, transparent);
+    color: inherit;
+}
+
+.projects-list .project-menu-automation .icon-sm {
+    width: 0.95rem;
+    height: 0.95rem;
+}
+
+.projects-list .project-body {
+    padding: 0;
+    border-top: none;
+}
+
+.projects-list .project-body.is-collapsed {
+    display: none;
+}
+
+.projects-list .project-session-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.04rem;
+    margin-left: 1.52rem;
+    padding: 0.02rem 0 0.04rem;
+}
+
+.projects-list .session-item {
+    width: 100%;
+    margin: 0;
+    min-height: 26px;
+    padding: 0.18rem 0.4rem 0.18rem 0.56rem;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    min-width: 0;
+    flex-wrap: nowrap;
+    text-align: left;
+}
+
+.projects-list .session-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.projects-list .session-item:hover {
+    background: var(--bg-hover);
+}
+
+.projects-list .session-item:focus-visible {
+    outline: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+    outline-offset: 0;
+}
+
+.projects-list .session-item.active {
+    background: color-mix(in srgb, var(--primary) 5%, transparent);
+    border: none;
+    box-shadow: inset 1.5px 0 0 var(--primary);
+}
+
+.projects-list .session-item.session-item-im {
+    background: color-mix(in srgb, var(--success) 4%, transparent);
+    box-shadow: inset 1.5px 0 0 color-mix(in srgb, var(--success) 34%, transparent);
+}
+
+.projects-list .session-item.session-item-im:hover,
+.projects-list .session-item.session-item-im:focus-visible {
+    background: color-mix(in srgb, var(--success) 8%, var(--bg-hover));
+}
+
+.projects-list .session-item.session-item-im.active {
+    background: color-mix(in srgb, var(--primary) 5%, var(--success) 6%);
+    box-shadow:
+        inset 1.5px 0 0 var(--primary),
+        inset 3px 0 0 color-mix(in srgb, var(--success) 22%, transparent);
+}
+
+.projects-list .session-item.session-item-automation {
+    background: color-mix(in srgb, #c97a1d 5%, transparent);
+    box-shadow: inset 1.5px 0 0 color-mix(in srgb, #c97a1d 40%, transparent);
+}
+
+.projects-list .session-item.session-item-automation:hover,
+.projects-list .session-item.session-item-automation:focus-visible {
+    background: color-mix(in srgb, #c97a1d 10%, var(--bg-hover));
+}
+
+.projects-list .session-item.session-item-automation.active {
+    background: color-mix(in srgb, var(--primary) 5%, #c97a1d 8%);
+    box-shadow:
+        inset 1.5px 0 0 var(--primary),
+        inset 3px 0 0 color-mix(in srgb, #c97a1d 26%, transparent);
+}
+
+.projects-list .session-id {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.38rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.77rem;
+    font-weight: 400;
+    line-height: 1.25;
+    text-align: left;
+}
+
+.projects-list .session-source-icon {
+    flex: 0 0 auto;
+    width: 0.95rem;
+    height: 0.95rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.project-view {
+    display: block;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 1rem 1.25rem 1.25rem;
+    background: var(--bg-base);
+}
+
+.project-view-toolbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.9rem;
+}
+
+.project-view-toolbar-copy h3 {
+    margin: 0;
+    font-size: 1.14rem;
+}
+
+.project-view-toolbar-copy p {
+    margin: 0.2rem 0 0;
+    color: var(--text-secondary);
+}
+
+.project-view-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+
+.project-view-toolbar-btn {
+    width: auto;
+    min-width: 0;
+}
+
+.project-view-content {
+    min-height: 0;
+}
+
+.workspace-view-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.5fr);
+    gap: 1rem;
+    min-height: calc(100vh - 180px);
+}
+
+.workspace-view-panel {
+    min-width: 0;
+    border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+    border-radius: 16px;
+    background: var(--bg-surface);
+    box-shadow: 0 10px 26px -24px rgba(15, 23, 42, 0.28);
+    overflow: hidden;
+}
+
+.workspace-view-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.82rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-surface) 98%, transparent);
+}
+
+.workspace-view-panel-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+}
+
+.workspace-view-panel-meta {
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-family: var(--font-mono);
+}
+
+.workspace-tree-shell,
+.workspace-diff-list,
+.workspace-view-empty-state {
+    padding: 1rem;
+}
+
+.workspace-tree-root,
+.workspace-tree-children {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.workspace-tree-node {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.workspace-tree-children {
+    margin-left: 0.85rem;
+    padding-left: 0.75rem;
+    border-left: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+}
+
+.workspace-tree-toggle,
+.workspace-tree-entry {
+    display: grid;
+    grid-template-columns: 0.9rem 1rem minmax(0, 1fr);
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    padding: 0.32rem 0.45rem;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+}
+
+.workspace-tree-toggle {
+    cursor: pointer;
+}
+
+.workspace-tree-toggle:hover,
+.workspace-tree-toggle:focus-visible,
+.workspace-tree-entry:hover,
+.workspace-tree-entry:focus-visible {
+    background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+    outline: none;
+}
+
+.workspace-tree-entry.is-selected,
+.workspace-tree-entry.is-selected:hover,
+.workspace-tree-entry.is-selected:focus-visible {
+    background: color-mix(in srgb, var(--primary) 14%, var(--surface-2));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 34%, transparent);
+}
+
+.workspace-tree-entry.is-selected .workspace-tree-label {
+    color: var(--primary);
+}
+
+.workspace-tree-chevron {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    line-height: 1;
+}
+
+.workspace-tree-chevron.is-placeholder {
+    display: inline-block;
+}
+
+.workspace-tree-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
+    height: 1rem;
+    color: color-mix(in srgb, var(--text-primary) 82%, transparent);
+}
+
+.workspace-tree-icon svg {
+    width: 1rem;
+    height: 1rem;
+}
+
+.workspace-tree-icon.is-folder,
+.workspace-tree-icon.is-folder-open {
+    color: #d08a20;
+}
+
+.workspace-tree-icon.is-file {
+    color: color-mix(in srgb, var(--text-secondary) 82%, var(--text-primary));
+}
+
+.workspace-tree-icon.is-folder-open svg,
+.workspace-tree-icon.is-file svg,
+.workspace-tree-icon.is-folder svg {
+    fill: currentColor;
+}
+
+.workspace-tree-label {
+    min-width: 0;
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.workspace-tree-placeholder {
+    padding: 0.3rem 0.45rem 0.3rem 1.95rem;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+.workspace-tree-placeholder.is-error {
+    color: var(--danger);
+}
+
+.workspace-diff-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+.workspace-diff-card {
+    border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--bg-base) 92%, transparent);
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.workspace-diff-card:hover {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--primary) 18%, var(--border-color));
+}
+
+.workspace-diff-card.is-selected {
+    border-color: color-mix(in srgb, var(--primary) 34%, var(--border-color));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.workspace-diff-card:not(.has-body) .workspace-diff-header {
+    border-bottom: 0;
+}
+
+.workspace-diff-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.75rem 0.9rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+    background: color-mix(in srgb, var(--bg-surface-glass) 72%, transparent);
+}
+
+.workspace-diff-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.45rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.workspace-diff-status.is-modified,
+.workspace-diff-status.is-renamed {
+    color: var(--primary);
+    border-color: color-mix(in srgb, var(--primary) 30%, var(--border-color));
+}
+
+.workspace-diff-status.is-added,
+.workspace-diff-status.is-untracked,
+.workspace-diff-status.is-copied {
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 30%, var(--border-color));
+}
+
+.workspace-diff-status.is-deleted,
+.workspace-diff-status.is-conflicted,
+.workspace-diff-status.is-type_changed {
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 30%, var(--border-color));
+}
+
+.workspace-diff-path,
+.workspace-diff-previous {
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+}
+
+.workspace-diff-path {
+    color: var(--text-primary);
+}
+
+.workspace-diff-previous {
+    color: var(--text-secondary);
+}
+
+.workspace-diff-pre {
+    margin: 0;
+    padding: 0.9rem;
+    overflow: auto;
+    color: var(--text-primary);
+    font-size: 0.74rem;
+    line-height: 1.5;
+    font-family: var(--font-mono);
+}
+
+.workspace-diff-view {
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+    background: color-mix(in srgb, var(--bg-base) 96%, #0b1220 4%);
+}
+
+.workspace-diff-hunk + .workspace-diff-hunk {
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent);
+}
+
+.workspace-diff-hunk-header {
+    padding: 0.45rem 0.9rem;
+    background: color-mix(in srgb, var(--primary) 8%, var(--bg-surface));
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    line-height: 1.5;
+}
+
+.workspace-diff-grid {
+    overflow: auto;
+}
+
+.workspace-diff-row {
+    display: grid;
+    grid-template-columns: 3.4rem 3.4rem 1.5rem minmax(0, 1fr);
+    align-items: stretch;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 0.73rem;
+    line-height: 1.5;
+}
+
+.workspace-diff-row:hover {
+    background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+}
+
+.workspace-diff-row.is-added {
+    background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.workspace-diff-row.is-deleted {
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.workspace-diff-row.is-meta {
+    background: color-mix(in srgb, var(--surface-2) 76%, transparent);
+}
+
+.workspace-diff-row.is-note {
+    background: color-mix(in srgb, var(--warning, #b7791f) 10%, transparent);
+}
+
+.workspace-diff-line-number,
+.workspace-diff-line-marker,
+.workspace-diff-line-text {
+    padding: 0.14rem 0.45rem;
+    white-space: pre;
+}
+
+.workspace-diff-line-number,
+.workspace-diff-line-marker {
+    user-select: none;
+}
+
+.workspace-diff-line-number {
+    text-align: right;
+    color: var(--text-secondary);
+    border-right: 1px solid color-mix(in srgb, var(--border-color) 58%, transparent);
+}
+
+.workspace-diff-line-marker {
+    text-align: center;
+    color: var(--text-secondary);
+    border-right: 1px solid color-mix(in srgb, var(--border-color) 58%, transparent);
+}
+
+.workspace-diff-row.is-added .workspace-diff-line-number,
+.workspace-diff-row.is-added .workspace-diff-line-marker {
+    background: color-mix(in srgb, var(--success) 18%, transparent);
+}
+
+.workspace-diff-row.is-deleted .workspace-diff-line-number,
+.workspace-diff-row.is-deleted .workspace-diff-line-marker {
+    background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+.workspace-diff-row.is-added .workspace-diff-line-marker {
+    color: var(--success);
+}
+
+.workspace-diff-row.is-deleted .workspace-diff-line-marker {
+    color: var(--danger);
+}
+
+.workspace-diff-row.is-meta .workspace-diff-line-text,
+.workspace-diff-row.is-note .workspace-diff-line-text {
+    color: var(--text-secondary);
+}
+
+.workspace-diff-line-text {
+    overflow: auto hidden;
+    color: var(--text-primary);
+}
+
+.workspace-diff-body-state {
+    padding: 0.9rem;
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+}
+
+.workspace-diff-body-state p {
+    margin: 0;
+}
+
+.workspace-diff-body-state.is-error {
+    color: var(--danger);
+}
+
+.workspace-view-empty-state {
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.workspace-view-empty-state.is-error {
+    color: var(--danger);
+}
+
+.project-title-group {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.project-title-btn {
+    min-width: 0;
+    flex: 1 1 auto;
+    border: none;
+    background: transparent;
+    text-align: left;
+    color: inherit;
+    padding: 0.32rem 0.45rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.14s ease, box-shadow 0.14s ease, color 0.14s ease;
+}
+
+.project-title-btn:hover {
+    background: color-mix(in srgb, var(--bg-hover) 82%, transparent);
+}
+
+.project-title-btn:focus-visible {
+    outline: none;
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 50%, transparent);
+}
+
+.project-title-btn.is-active {
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.project-title-btn:hover .project-title,
+.project-title-btn:focus-visible .project-title,
+.project-title-btn.is-active .project-title {
+    color: var(--primary);
+}
+
+@media (max-width: 960px) {
+    .project-view {
+        padding: 1rem;
+    }
+
+    .workspace-view-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .project-view-toolbar {
+        flex-direction: column;
+    }
+
+    .project-view-toolbar-actions {
+        width: 100%;
+        justify-content: flex-end;
+    }
+}
+
+
+.automation-detail-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.automation-hero-panel {
+    padding: 1.15rem;
+    background:
+        radial-gradient(circle at top right, rgba(37, 99, 235, 0.12), transparent 30%),
+        linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 94%, transparent), color-mix(in srgb, var(--bg-base) 96%, transparent));
+}
+
+.automation-hero-grid {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.3fr);
+    gap: 1rem;
+    align-items: stretch;
+}
+
+.automation-hero-copy h3 {
+    margin: 0.55rem 0 0;
+    font-size: 1.12rem;
+}
+
+.automation-hero-copy p {
+    margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.automation-status-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.7rem;
+    padding: 0.16rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+}
+
+.automation-status-pill.is-enabled {
+    color: var(--success);
+    background: color-mix(in srgb, var(--success) 12%, transparent);
+    border-color: color-mix(in srgb, var(--success) 28%, transparent);
+}
+
+.automation-status-pill.is-disabled,
+.automation-status-pill.is-unknown {
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+    border-color: color-mix(in srgb, var(--border-color) 82%, transparent);
+}
+
+.automation-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem;
+}
+
+.automation-stat-card,
+.automation-run-card {
+    border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+    padding: 0.95rem 1rem;
+}
+
+.automation-stat-card span,
+.automation-detail-label,
+.automation-run-card-meta span {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+.automation-stat-card strong,
+.automation-run-card-meta strong {
+    display: block;
+    margin-top: 0.35rem;
+    color: var(--text-primary);
+    font-size: 0.92rem;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.automation-detail-grid {
+    display: grid;
+    grid-template-columns: minmax(300px, 1fr) minmax(280px, 0.95fr);
+    gap: 1rem;
+}
+
+.automation-prompt-panel {
+    padding: 0.95rem 1rem;
+}
+
+.automation-prompt-content {
+    color: var(--text-primary);
+    font-size: 0.92rem;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.automation-detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 1rem;
+}
+
+.automation-detail-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    min-width: 0;
+}
+
+.automation-detail-row-block {
+    gap: 0.6rem;
+}
+
+.automation-detail-grid-compact {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.9rem 1rem;
+}
+
+.automation-detail-value {
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    line-height: 1.6;
+    word-break: break-word;
+}
+
+.automation-detail-value.is-error {
+    color: var(--danger);
+}
+
+.automation-run-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 0 0.95rem 0.95rem;
+    max-height: 240px;
+    overflow: auto;
+}
+
+.automation-run-card {
+    cursor: pointer;
+    padding: 0.75rem 0.85rem;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--bg-surface-muted) 86%, var(--bg-surface));
+    transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.automation-run-card:hover {
+    transform: none;
+    border-color: color-mix(in srgb, var(--primary) 24%, var(--border-color));
+    box-shadow: none;
+    background: color-mix(in srgb, var(--bg-surface-muted) 94%, var(--bg-surface));
+}
+
+.automation-run-card-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.automation-run-card-meta {
+    margin-top: 0.65rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.28rem;
+}
+
+@media (max-width: 960px) {
+    .automation-hero-grid,
+    .automation-detail-grid,
+    .automation-stat-grid,
+    .automation-detail-grid-compact {
+        grid-template-columns: 1fr;
+    }
+}
+
+
+.automation-stat-card-wide {
+    grid-column: span 2;
+}
+
+.automation-stat-note {
+    margin: 0.55rem 0 0;
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    line-height: 1.55;
+}
+
+.automation-stat-hint {
+    margin: 0.35rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+    line-height: 1.5;
+}
+
+@media (max-width: 960px) {
+    .automation-stat-card-wide {
+        grid-column: span 1;
+    }
+}
+
+
+.feedback-dialog-input-wrap {
+    padding: 0.95rem 1.15rem 0;
+}
+
+.feedback-dialog-header {
+    padding: 1.15rem 1.15rem 0;
+}
+
+.feedback-dialog-body {
+    padding: 0.6rem 1.15rem 0;
+}
+
+.feedback-dialog-actions {
+    padding: 1.15rem;
+}
+
+.automation-detail-grid {
+    grid-template-columns: minmax(320px, 1.08fr) minmax(320px, 0.92fr);
+    align-items: start;
+}
+
+.automation-binding-panel {
+    padding-bottom: 0.2rem;
+    min-width: 0;
+}
+
+.automation-binding-list {
+    display: grid;
+    gap: 0.85rem;
+    padding: 1rem;
+}
+
+.automation-binding-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    min-width: 0;
+}
+
+.automation-binding-item span {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+.automation-binding-item strong,
+.automation-binding-item code {
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    line-height: 1.55;
+    word-break: break-word;
+}
+
+.automation-binding-item code {
+    padding: 0;
+    border-radius: 0;
+    border: none;
+    background: transparent;
+    font-family: var(--font-mono);
+    overflow-wrap: anywhere;
+}
+
+.projects-list .project-remove-workspace-btn:hover {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 10%, var(--bg-hover));
+    border-color: color-mix(in srgb, var(--danger) 22%, transparent);
+}
