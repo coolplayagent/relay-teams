@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from relay_teams.gateway.feishu import (
     FeishuAccountNameConflictError,
@@ -17,6 +17,8 @@ from relay_teams.interfaces.server.deps import (
     get_feishu_gateway_service,
     get_feishu_subscription_service,
 )
+from relay_teams.interfaces.server.router_error_mapping import http_exception_for
+from relay_teams.interfaces.server.write_models import DeleteRequest
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/gateway/feishu", tags=["Gateway"])
@@ -42,10 +44,11 @@ def create_feishu_account(
         created = service.create_account(req)
         subscription_service.reload()
         return created
-    except FeishuAccountNameConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (FeishuAccountNameConflictError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((FeishuAccountNameConflictError, 409), (ValueError, 422)),
+        ) from exc
 
 
 @router.patch("/accounts/{account_id}", response_model=FeishuGatewayAccountRecord)
@@ -69,12 +72,11 @@ def update_feishu_account(
         if reload_required:
             subscription_service.reload()
         return updated
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except FeishuAccountNameConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (KeyError, FeishuAccountNameConflictError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((FeishuAccountNameConflictError, 409), (ValueError, 422)),
+        ) from exc
 
 
 @router.post("/accounts/{account_id}:enable", response_model=FeishuGatewayAccountRecord)
@@ -90,10 +92,11 @@ def enable_feishu_account(
         updated = service.set_account_enabled(account_id, True)
         subscription_service.reload()
         return updated
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 422),),
+        ) from exc
 
 
 @router.post(
@@ -123,13 +126,19 @@ def delete_feishu_account(
         FeishuSubscriptionService,
         Depends(get_feishu_subscription_service),
     ],
+    req: DeleteRequest | None = Body(default=None),
 ) -> dict[str, str]:
     try:
-        service.delete_account(account_id)
+        service.delete_account(
+            account_id, force=req.force if req is not None else False
+        )
         subscription_service.reload()
         return {"status": "ok"}
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (KeyError, RuntimeError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((RuntimeError, 409),),
+        ) from exc
 
 
 @router.post("/reload")

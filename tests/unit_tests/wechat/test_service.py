@@ -11,6 +11,7 @@ from threading import Lock
 from typing import cast
 
 import pytest
+from pydantic import ValidationError
 
 from pydantic import JsonValue
 
@@ -24,6 +25,7 @@ from relay_teams.gateway.wechat.inbound_queue_repository import (
 )
 from relay_teams.gateway.wechat.models import (
     WeChatAccountRecord,
+    WeChatAccountUpdateInput,
     WeChatInboundMessage,
     WeChatInboundQueueRecord,
     WeChatInboundQueueStatus,
@@ -1081,3 +1083,65 @@ def _event(
         payload_json=json.dumps(payload, ensure_ascii=False),
         occurred_at=datetime.now(tz=timezone.utc),
     )
+
+
+def test_wechat_account_update_input_rejects_empty_patch() -> None:
+    with pytest.raises(ValidationError, match="update must include at least one field"):
+        WeChatAccountUpdateInput()
+
+
+def test_wechat_account_update_input_trims_route_tag() -> None:
+    req = WeChatAccountUpdateInput(route_tag="  route-a  ")
+
+    assert req.route_tag == "route-a"
+
+
+def test_wechat_account_update_input_allows_blank_route_tag_to_clear_value() -> None:
+    req = WeChatAccountUpdateInput(route_tag="   ")
+
+    assert req.route_tag is None
+    assert "route_tag" in req.model_fields_set
+
+
+class _DeleteAccountRepository:
+    def __init__(self, account: WeChatAccountRecord) -> None:
+        self.account = account
+        self.deleted_account_ids: list[str] = []
+
+    def get_account(self, account_id: str) -> WeChatAccountRecord:
+        if account_id != self.account.account_id:
+            raise KeyError(account_id)
+        return self.account
+
+    def delete_account(self, account_id: str) -> None:
+        self.deleted_account_ids.append(account_id)
+
+
+class _DeleteSecretStore:
+    def __init__(self) -> None:
+        self.deleted_account_ids: list[str] = []
+
+    def delete_bot_token(self, config_dir: Path, account_id: str) -> None:
+        _ = config_dir
+        self.deleted_account_ids.append(account_id)
+
+
+def test_delete_account_rejects_enabled_account_without_force() -> None:
+    repository = _DeleteAccountRepository(_account())
+    secret_store = _DeleteSecretStore()
+    service = object.__new__(WeChatGatewayService)
+    service._repository = cast(WeChatAccountRepository, repository)
+    service._secret_store = cast(WeChatSecretStore, secret_store)
+    service._config_dir = Path("C:/config")
+    service._stop_account_worker = lambda account_id: None
+
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot delete enabled WeChat account without force",
+    ):
+        service.delete_account("wx-account-1")
+
+    service.delete_account("wx-account-1", force=True)
+
+    assert repository.deleted_account_ids == ["wx-account-1"]
+    assert secret_store.deleted_account_ids == ["wx-account-1"]

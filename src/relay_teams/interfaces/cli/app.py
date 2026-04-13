@@ -275,7 +275,10 @@ def root_command(
     workspace: Path | None = typer.Option(
         None,
         "--workspace",
-        help="Create or reuse a workspace for the given workspace root path. Requires --message.",
+        help=(
+            "Create or reuse a workspace for the given workspace root path. "
+            "Defaults to the current directory. Requires --message."
+        ),
     ),
     yolo: bool = typer.Option(
         True,

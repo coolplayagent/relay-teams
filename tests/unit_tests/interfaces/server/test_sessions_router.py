@@ -7,13 +7,18 @@ from relay_teams.interfaces.server.deps import get_session_service
 from relay_teams.interfaces.server.routers import sessions
 from relay_teams.providers import AgentTokenSummary, RunTokenUsage, SessionTokenUsage
 from relay_teams.roles import SystemRolesUnavailableError
-from relay_teams.sessions.session_models import SessionMode, SessionRecord
+from relay_teams.sessions.session_models import (
+    SessionCreateMetadata,
+    SessionMetadataPatch,
+    SessionMode,
+    SessionRecord,
+)
 
 
 class _FakeSessionService:
     def __init__(self) -> None:
         self.created_calls: list[tuple[str | None, str, dict[str, str] | None]] = []
-        self.updated_calls: list[tuple[str, dict[str, str]]] = []
+        self.updated_calls: list[tuple[str, SessionMetadataPatch]] = []
         self.topology_update_calls: list[tuple[str, str, str | None, str | None]] = []
         self.delete_subagent_calls: list[tuple[str, str]] = []
         self.reflection_refresh_calls: list[tuple[str, str]] = []
@@ -21,6 +26,9 @@ class _FakeSessionService:
         self.reflection_delete_calls: list[tuple[str, str]] = []
         self.create_session_error: Exception | None = None
         self.raise_missing = False
+        self.raise_missing = False
+        self.deleted_calls: list[tuple[str, bool, bool]] = []
+        self.delete_error: Exception | None = None
         self.raise_missing_list_agents = False
         self.raise_missing_list_subagents = False
         self.delete_subagent_error: Exception | None = None
@@ -41,10 +49,10 @@ class _FakeSessionService:
             metadata={} if metadata is None else dict(metadata),
         )
 
-    def update_session(self, session_id: str, metadata: dict[str, str]) -> None:
+    def update_session(self, session_id: str, patch: SessionMetadataPatch) -> None:
         if self.raise_missing:
             raise KeyError(session_id)
-        self.updated_calls.append((session_id, metadata))
+        self.updated_calls.append((session_id, patch))
 
     def list_sessions(self) -> tuple[SessionRecord, ...]:  # pragma: no cover
         raise AssertionError("not used")
@@ -86,8 +94,16 @@ class _FakeSessionService:
     def get_session(self, session_id: str) -> SessionRecord:  # pragma: no cover
         raise AssertionError(f"not used: {session_id}")
 
-    def delete_session(self, session_id: str) -> None:  # pragma: no cover
-        raise AssertionError(f"not used: {session_id}")
+    def delete_session(
+        self,
+        session_id: str,
+        *,
+        force: bool = False,
+        cascade: bool = False,
+    ) -> None:
+        if self.delete_error is not None:
+            raise self.delete_error
+        self.deleted_calls.append((session_id, force, cascade))
 
     def delete_normal_mode_subagent(
         self,
@@ -241,12 +257,19 @@ def test_update_session_route_accepts_metadata_payload() -> None:
 
     response = client.patch(
         "/api/sessions/session-1",
-        json={"metadata": {"title": "Renamed Session"}},
+        json={"title": "Renamed Session", "custom_metadata": {"label": "visible-name"}},
     )
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-    assert fake_service.updated_calls == [("session-1", {"title": "Renamed Session"})]
+    assert fake_service.updated_calls == [
+        (
+            "session-1",
+            SessionMetadataPatch(
+                title="Renamed Session", custom_metadata={"label": "visible-name"}
+            ),
+        )
+    ]
 
 
 def test_create_session_route_returns_created_session() -> None:
@@ -261,6 +284,135 @@ def test_create_session_route_returns_created_session() -> None:
     assert response.status_code == 200
     assert response.json()["session_id"] == "session-1"
     assert fake_service.created_calls == [("session-1", "default", None)]
+
+
+def test_create_session_route_accepts_explicit_metadata_payload() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "session-1",
+            "workspace_id": "default",
+            "metadata": {
+                "title": "Customer Support",
+                "source_label": "Group Chat",
+                "custom_metadata": {"project": "demo"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_service.created_calls == [
+        (
+            "session-1",
+            "default",
+            SessionCreateMetadata(
+                title="Customer Support",
+                source_label="Group Chat",
+                custom_metadata={"project": "demo"},
+            ).to_metadata_dict(),
+        )
+    ]
+
+
+def test_create_session_route_accepts_legacy_flat_metadata_payload() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "session-1",
+            "workspace_id": "default",
+            "metadata": {
+                "title": "Customer Support",
+                "project": "demo",
+                "channel": "feishu",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_service.created_calls == [
+        (
+            "session-1",
+            "default",
+            {
+                "title": "Customer Support",
+                "title_source": "manual",
+                "project": "demo",
+                "channel": "feishu",
+            },
+        )
+    ]
+
+
+def test_create_session_route_ignores_reserved_keys_in_legacy_flat_metadata_payload() -> (
+    None
+):
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/sessions",
+        json={
+            "session_id": "session-1",
+            "workspace_id": "default",
+            "metadata": {
+                "title": "Customer Support",
+                "project": "demo",
+                "source_provider": "feishu",
+                "feishu_chat_id": "chat-1",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_service.created_calls == [
+        (
+            "session-1",
+            "default",
+            {
+                "title": "Customer Support",
+                "title_source": "manual",
+                "project": "demo",
+            },
+        )
+    ]
+
+
+def test_create_session_route_rejects_reserved_custom_metadata_key() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/sessions",
+        json={
+            "workspace_id": "default",
+            "metadata": {"custom_metadata": {"source_label": "bad"}},
+        },
+    )
+
+    assert response.status_code == 422
+    assert fake_service.created_calls == []
+
+
+def test_create_session_route_rejects_title_source_without_title() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/sessions",
+        json={
+            "workspace_id": "default",
+            "metadata": {"title_source": "manual"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert fake_service.created_calls == []
 
 
 def test_create_session_route_rejects_none_like_session_id() -> None:
@@ -296,11 +448,110 @@ def test_update_session_route_returns_not_found_for_missing_session() -> None:
 
     response = client.patch(
         "/api/sessions/missing-session",
-        json={"metadata": {"title": "Renamed Session"}},
+        json={"title": "Renamed Session", "custom_metadata": {"label": "visible-name"}},
     )
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Session not found"}
+
+
+def test_update_session_route_accepts_legacy_flat_metadata_snapshot() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.patch(
+        "/api/sessions/session-1",
+        json={
+            "title": "Renamed Session",
+            "title_source": "manual",
+            "source_label": "Feishu",
+            "source_icon": "message",
+            "source_provider": "feishu",
+            "feishu_chat_id": "chat-1",
+            "project": "demo",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert fake_service.updated_calls == [
+        (
+            "session-1",
+            SessionMetadataPatch(
+                title="Renamed Session",
+                title_source="manual",
+                source_label="Feishu",
+                source_icon="message",
+                custom_metadata={"project": "demo"},
+            ),
+        )
+    ]
+
+
+def test_update_session_route_accepts_legacy_wrapped_metadata_snapshot() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.patch(
+        "/api/sessions/session-1",
+        json={
+            "metadata": {
+                "title": "Renamed Session",
+                "source_provider": "feishu",
+                "project": "demo",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_service.updated_calls == [
+        (
+            "session-1",
+            SessionMetadataPatch(
+                title="Renamed Session",
+                custom_metadata={"project": "demo"},
+            ),
+        )
+    ]
+
+
+def test_update_session_route_clears_title_for_legacy_snapshot_without_title() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.patch(
+        "/api/sessions/session-1",
+        json={
+            "title_source": "manual",
+            "source_provider": "feishu",
+            "feishu_chat_id": "chat-1",
+            "project": "demo",
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_service.updated_calls == [
+        (
+            "session-1",
+            SessionMetadataPatch(
+                title=None,
+                custom_metadata={"project": "demo"},
+            ),
+        )
+    ]
+
+
+def test_update_session_route_rejects_reserved_custom_metadata_key() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.patch(
+        "/api/sessions/session-1",
+        json={"custom_metadata": {"source_label": "bad"}},
+    )
+
+    assert response.status_code == 422
+    assert fake_service.updated_calls == []
 
 
 def test_list_session_subagents_route_returns_projected_subagents() -> None:
@@ -390,7 +641,7 @@ def test_update_session_route_rejects_none_like_path_identifier() -> None:
 
     response = client.patch(
         "/api/sessions/None",
-        json={"metadata": {"title": "Renamed Session"}},
+        json={"title": "Renamed Session", "custom_metadata": {"label": "visible-name"}},
     )
 
     assert response.status_code == 422
@@ -550,3 +801,42 @@ def test_delete_agent_reflection_route_returns_projection() -> None:
     assert response.status_code == 200
     assert response.json()["source"] == "manual_delete"
     assert fake_service.reflection_delete_calls == [("session-1", "inst-1")]
+
+
+def test_delete_session_route_forwards_force_and_cascade() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.request(
+        "DELETE",
+        "/api/sessions/session-1",
+        json={"force": True, "cascade": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert fake_service.deleted_calls == [("session-1", True, True)]
+
+
+def test_delete_session_route_returns_conflict_for_missing_cascade() -> None:
+    fake_service = _FakeSessionService()
+    fake_service.delete_error = RuntimeError(
+        "Cannot delete session without cascade while related session data exists"
+    )
+    client = _create_client(fake_service)
+
+    response = client.request("DELETE", "/api/sessions/session-1")
+
+    assert response.status_code == 409
+    assert "without cascade" in response.json()["detail"]
+
+
+def test_delete_session_route_returns_not_found() -> None:
+    fake_service = _FakeSessionService()
+    fake_service.delete_error = KeyError("session-1")
+    client = _create_client(fake_service)
+
+    response = client.request("DELETE", "/api/sessions/session-1")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Session not found"}

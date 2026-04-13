@@ -6,13 +6,17 @@ from pydantic import JsonValue
 from collections.abc import Callable
 from pathlib import Path
 
-from relay_teams.providers.model_config import ProviderModelInfo, ProviderType
+from relay_teams.providers.model_config import (
+    ModelConfigPayload,
+    ProviderModelInfo,
+    ProviderType,
+)
 from relay_teams.providers.model_connectivity import (
-    ModelDiscoveryRequest,
-    ModelDiscoveryResult,
     ModelConnectivityProbeRequest,
     ModelConnectivityProbeResult,
     ModelConnectivityProbeService,
+    ModelDiscoveryRequest,
+    ModelDiscoveryResult,
 )
 from relay_teams.providers.model_config_manager import ModelConfigManager
 from relay_teams.providers.provider_registry import list_provider_models
@@ -75,8 +79,10 @@ class ModelConfigService:
         self._model_config_manager.delete_model_profile(name)
         self.reload_model_config()
 
-    def save_model_config(self, config: dict[str, JsonValue]) -> None:
-        self._model_config_manager.save_model_config(config)
+    def save_model_config(self, config: ModelConfigPayload) -> None:
+        self._model_config_manager.save_model_config(
+            config.model_dump(mode="json", exclude_unset=True)
+        )
         self.reload_model_config()
 
     def probe_connectivity(

@@ -51,7 +51,11 @@ export async function updateAutomationProject(automationProjectId, payload) {
 export async function deleteAutomationProject(automationProjectId) {
     return requestJson(
         `/api/automation/projects/${encodeURIComponent(automationProjectId)}`,
-        { method: 'DELETE' },
+        {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force: true, cascade: true }),
+        },
         'Failed to delete automation project',
     );
 }

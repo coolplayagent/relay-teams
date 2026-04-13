@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from relay_teams.interfaces.server.api_write_validation import require_non_empty_patch
 from relay_teams.sessions.runs.enums import ExecutionMode
 from relay_teams.sessions.runs.run_models import RunThinkingConfig
 from relay_teams.sessions.session_models import SessionMode
@@ -138,6 +139,22 @@ class AutomationProjectUpdateInput(BaseModel):
     delivery_binding: AutomationFeishuBinding | None = None
     delivery_events: tuple[AutomationDeliveryEvent, ...] | None = None
     enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def _validate_patch(self) -> AutomationProjectUpdateInput:
+        require_non_empty_patch(self)
+        if (
+            self.schedule_mode == AutomationScheduleMode.CRON
+            and self.run_at is not None
+        ):
+            raise ValueError("run_at is not supported for cron schedules")
+        if (
+            self.schedule_mode == AutomationScheduleMode.ONE_SHOT
+            and self.cron_expression is not None
+            and self.cron_expression.strip()
+        ):
+            raise ValueError("cron_expression is not supported for one-shot schedules")
+        return self
 
 
 class AutomationProjectRecord(BaseModel):

@@ -299,7 +299,8 @@ def _create_client(
 
 
 def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
-    client = _create_client()
+    skill_runtime_service = _FakeSkillRuntimeService()
+    client = _create_client(skill_runtime_service=skill_runtime_service)
 
     response = client.post(
         "/api/prompts:preview",
@@ -353,6 +354,41 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     assert payload["skill_routing"]["mode"] == "passthrough"
     assert payload["skill_routing"]["visible_skills"] == ["time"]
     assert "## Available Roles" in payload["provider_system_prompt"]
+    assert skill_runtime_service.calls[0]["shared_state_snapshot"] == (
+        ("priority", "1"),
+    )
+
+
+def test_prompts_preview_trims_shared_state_keys() -> None:
+    skill_runtime_service = _FakeSkillRuntimeService()
+    client = _create_client(skill_runtime_service=skill_runtime_service)
+
+    response = client.post(
+        "/api/prompts:preview",
+        json={
+            "role_id": "Coordinator",
+            "shared_state": {"  priority  ": 1},
+        },
+    )
+
+    assert response.status_code == 200
+    assert skill_runtime_service.calls[0]["shared_state_snapshot"] == (
+        ("priority", "1"),
+    )
+
+
+def test_prompts_preview_rejects_blank_shared_state_key() -> None:
+    client = _create_client()
+
+    response = client.post(
+        "/api/prompts:preview",
+        json={
+            "role_id": "Coordinator",
+            "shared_state": {"   ": 1},
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_prompts_preview_uses_workspace_execution_root_when_workspace_is_provided(

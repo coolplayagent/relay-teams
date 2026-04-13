@@ -82,11 +82,16 @@ export async function forkWorkspace(workspaceId, name) {
 export async function deleteWorkspace(workspaceId, options = {}) {
     const removeWorktree = options?.removeWorktree === true;
     const query = removeWorktree ? '?remove_worktree=true' : '';
+    const requestOptions = {
+        method: 'DELETE',
+    };
+    if (removeWorktree) {
+        requestOptions.headers = { 'Content-Type': 'application/json' };
+        requestOptions.body = JSON.stringify({ force: true });
+    }
     return requestJson(
         `/api/workspaces/${encodeURIComponent(workspaceId)}${query}`,
-        {
-            method: 'DELETE',
-        },
+        requestOptions,
         'Failed to remove project',
     );
 }

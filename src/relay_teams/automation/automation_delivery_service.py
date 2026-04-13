@@ -189,6 +189,9 @@ class AutomationDeliveryService:
             progress = self._attempt_started_cleanup(record) or progress
         return progress
 
+    def has_project_deliveries(self, automation_project_id: str) -> bool:
+        return self._repository.has_project_records(automation_project_id)
+
     def delete_project_deliveries(self, automation_project_id: str) -> None:
         self._repository.delete_by_project(automation_project_id)
 

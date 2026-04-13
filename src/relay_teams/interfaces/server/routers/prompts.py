@@ -5,7 +5,7 @@ import json
 from typing import Annotated, ClassVar
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, model_validator
 
 from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from relay_teams.interfaces.server.deps import (
@@ -43,13 +43,35 @@ from relay_teams.workspace import WorkspaceManager, WorkspaceService
 router = APIRouter(prefix="/prompts", tags=["Prompts"])
 
 
+class PromptSharedState(RootModel[dict[str, JsonValue]]):
+    @model_validator(mode="after")
+    def _normalize_keys(self) -> "PromptSharedState":
+        normalized: dict[str, JsonValue] = {}
+        for key, value in self.root.items():
+            normalized_key = str(key).strip()
+            if not normalized_key:
+                raise ValueError("shared_state keys must not be blank")
+            normalized[normalized_key] = value
+        self.root = normalized
+        return self
+
+    def to_snapshot(self) -> tuple[tuple[str, str], ...]:
+        normalized_items = [
+            (str(key), _json_value_to_text(value)) for key, value in self.root.items()
+        ]
+        normalized_items.sort(key=lambda item: item[0])
+        return tuple(normalized_items)
+
+
 class PromptPreviewRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     role_id: RequiredIdentifierStr
     workspace_id: OptionalIdentifierStr = None
     objective: str | None = None
-    shared_state: dict[str, JsonValue] = Field(default_factory=dict)
+    shared_state: PromptSharedState = Field(
+        default_factory=lambda: PromptSharedState({})
+    )
     tools: tuple[str, ...] | None = None
     skills: tuple[str, ...] | None = None
     conversation_context: RuntimePromptConversationContext | None = None
@@ -116,7 +138,7 @@ async def preview_prompts(
             consumer="interfaces.server.routers.prompts.preview",
         )
     objective = req.objective.strip() if req.objective else ""
-    shared_state_snapshot = _to_shared_state_snapshot(req.shared_state)
+    shared_state_snapshot = req.shared_state.to_snapshot()
 
     working_directory = None
     worktree_root = None
@@ -187,16 +209,6 @@ async def preview_prompts(
         user_prompt=user_prompt,
         skill_routing=skill_prompt_result.routing.diagnostics,
     )
-
-
-def _to_shared_state_snapshot(
-    shared_state: dict[str, JsonValue],
-) -> tuple[tuple[str, str], ...]:
-    normalized_items = [
-        (str(key), _json_value_to_text(value)) for key, value in shared_state.items()
-    ]
-    normalized_items.sort(key=lambda item: item[0])
-    return tuple(normalized_items)
 
 
 def _json_value_to_text(value: JsonValue) -> str:

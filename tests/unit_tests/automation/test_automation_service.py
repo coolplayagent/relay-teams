@@ -6,12 +6,14 @@ import sqlite3
 from typing import cast
 
 import pytest
+from pydantic import ValidationError
 
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.automation import (
     AutomationBoundSessionQueueService,
+    AutomationDeliveryService,
     AutomationExecutionHandle,
     AutomationEventRepository,
     AutomationFeishuBinding,
@@ -47,8 +49,14 @@ class _FakeRunManager:
 
 
 class _FakeBoundSessionQueueService:
-    def __init__(self, handle: AutomationExecutionHandle | None = None) -> None:
+    def __init__(
+        self,
+        handle: AutomationExecutionHandle | None = None,
+        *,
+        has_project_queue: bool = False,
+    ) -> None:
         self._handle = handle
+        self._has_project_queue = has_project_queue
         self.materialize_calls: list[tuple[str, str]] = []
         self.deleted_project_ids: list[str] = []
 
@@ -62,6 +70,9 @@ class _FakeBoundSessionQueueService:
         self.materialize_calls.append((cast(str, automation_project_id), reason))
         return self._handle
 
+    def has_project_queue(self, automation_project_id: str) -> bool:
+        return self._has_project_queue
+
     def delete_project_queue(self, automation_project_id: str) -> None:
         self.deleted_project_ids.append(automation_project_id)
 
@@ -69,6 +80,18 @@ class _FakeBoundSessionQueueService:
 class _FakeFeishuBindingService:
     def validate_binding(self, binding: object) -> object:
         return binding
+
+
+class _FakeDeliveryService:
+    def __init__(self, *, has_project_deliveries: bool = False) -> None:
+        self._has_project_deliveries = has_project_deliveries
+        self.deleted_project_ids: list[str] = []
+
+    def has_project_deliveries(self, automation_project_id: str) -> bool:
+        return self._has_project_deliveries
+
+    def delete_project_deliveries(self, automation_project_id: str) -> None:
+        self.deleted_project_ids.append(automation_project_id)
 
 
 def _build_session_service(db_path: Path) -> SessionService:
@@ -87,6 +110,7 @@ def _build_service(
     tmp_path: Path,
     *,
     bound_session_queue_service: _FakeBoundSessionQueueService | None = None,
+    delivery_service: _FakeDeliveryService | None = None,
     feishu_binding_service: object | None = None,
 ) -> tuple[AutomationService, _FakeRunManager, SessionService]:
     db_path = tmp_path / "automation.db"
@@ -106,6 +130,7 @@ def _build_service(
             AutomationFeishuBindingService | None,
             feishu_binding_service,
         ),
+        delivery_service=cast(AutomationDeliveryService | None, delivery_service),
         bound_session_queue_service=cast(
             AutomationBoundSessionQueueService | None,
             bound_session_queue_service,
@@ -443,3 +468,99 @@ def test_enable_project_rejects_unknown_workspace_on_persisted_record(
             created.automation_project_id,
             status=AutomationProjectStatus.ENABLED,
         )
+
+
+def test_update_project_input_rejects_empty_patch() -> None:
+    with pytest.raises(ValidationError, match="update must include at least one field"):
+        AutomationProjectUpdateInput()
+
+
+def test_update_project_input_rejects_cron_run_at_combo() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="run_at is not supported for cron schedules",
+    ):
+        AutomationProjectUpdateInput(
+            schedule_mode=AutomationScheduleMode.CRON,
+            run_at=datetime.now(tz=UTC),
+        )
+
+
+def test_delete_enabled_project_requires_force(tmp_path: Path) -> None:
+    service, _, _ = _build_service(tmp_path)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="daily-briefing",
+            workspace_id="default",
+            prompt="Summarize the day.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * * 1-5",
+            timezone="UTC",
+        )
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot delete enabled automation project without force",
+    ):
+        service.delete_project(created.automation_project_id)
+
+    service.delete_project(created.automation_project_id, force=True)
+
+    with pytest.raises(KeyError):
+        service.get_project(created.automation_project_id)
+
+
+def test_delete_project_rejects_related_records_without_cascade(tmp_path: Path) -> None:
+    delivery_service = _FakeDeliveryService(has_project_deliveries=True)
+    bound_queue_service = _FakeBoundSessionQueueService(has_project_queue=True)
+    service, _, _ = _build_service(
+        tmp_path,
+        delivery_service=delivery_service,
+        bound_session_queue_service=bound_queue_service,
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="daily-briefing",
+            workspace_id="default",
+            prompt="Summarize the day.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * * 1-5",
+            timezone="UTC",
+            enabled=False,
+        )
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot delete automation project without cascade while deliveries or queue records exist",
+    ):
+        service.delete_project(created.automation_project_id)
+
+
+def test_delete_project_cascade_cleans_related_records(tmp_path: Path) -> None:
+    delivery_service = _FakeDeliveryService(has_project_deliveries=True)
+    bound_queue_service = _FakeBoundSessionQueueService(has_project_queue=True)
+    service, _, _ = _build_service(
+        tmp_path,
+        delivery_service=delivery_service,
+        bound_session_queue_service=bound_queue_service,
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="daily-briefing",
+            workspace_id="default",
+            prompt="Summarize the day.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * * 1-5",
+            timezone="UTC",
+            enabled=False,
+        )
+    )
+
+    service.delete_project(created.automation_project_id, cascade=True)
+
+    assert delivery_service.deleted_project_ids == [created.automation_project_id]
+    assert bound_queue_service.deleted_project_ids == [created.automation_project_id]
+    with pytest.raises(KeyError):
+        service.get_project(created.automation_project_id)

@@ -8,7 +8,11 @@ from relay_teams.gateway.feishu.inbound_runtime import FeishuInboundRuntime
 from relay_teams.gateway.feishu.message_pool_repository import (
     FeishuMessagePoolRepository,
 )
-from relay_teams.gateway.feishu.message_pool_service import FeishuMessagePoolService
+from relay_teams.gateway.feishu.message_pool_service import (
+    FeishuMessagePoolService,
+    _build_pause_reply,
+    _build_queue_reply_text,
+)
 from relay_teams.gateway.feishu.models import (
     FeishuEnvironment,
     FeishuMessageDeliveryStatus,
@@ -70,7 +74,7 @@ class _FakeSessionService:
             raise KeyError(session_id)
         return self.sessions[session_id]
 
-    def update_session(self, session_id: str, metadata: dict[str, str]) -> None:
+    def sync_session_metadata(self, session_id: str, metadata: dict[str, str]) -> None:
         record = self.get_session(session_id)
         self.sessions[session_id] = record.model_copy(update={"metadata": metadata})
 
@@ -279,11 +283,10 @@ def test_enqueue_message_uses_queue_aware_ack(tmp_path: Path) -> None:
         headers={},
         remote_addr=None,
     )
-
     assert first.status == "accepted"
     assert second.status == "accepted"
     assert feishu_client.reactions == [("om_1", "OK"), ("om_2", "OK")]
-    assert feishu_client.reply_messages == [("om_2", "已进入队列，前面还有 1 条消息。")]
+    assert feishu_client.reply_messages == [("om_2", _build_queue_reply_text(1))]
     assert feishu_client.sent_messages == []
     first_record = repo.get_by_message_key(
         trigger_id="trg_feishu",
@@ -333,13 +336,10 @@ def test_enqueue_p2p_message_uses_reaction_and_queue_text(tmp_path: Path) -> Non
         headers={},
         remote_addr=None,
     )
-
     assert first.status == "accepted"
     assert second.status == "accepted"
     assert feishu_client.reactions == [("om_p2p_1", "OK"), ("om_p2p_2", "OK")]
-    assert feishu_client.reply_messages == [
-        ("om_p2p_2", "已进入队列，前面还有 1 条消息。")
-    ]
+    assert feishu_client.reply_messages == [("om_p2p_2", _build_queue_reply_text(1))]
     assert feishu_client.sent_messages == []
     first_record = repo.get_by_message_key(
         trigger_id="trg_feishu",
@@ -596,7 +596,7 @@ def test_finalize_waiting_result_sends_recovery_pause_notice_once(
     assert record.processing_status == FeishuMessageProcessingStatus.WAITING_RESULT
     assert feishu_client.reply_messages[-1] == (
         "om_1",
-        "运行已暂停：stream interrupted\n发送 resume 继续。",
+        _build_pause_reply(run_id="run-1", error_message="stream interrupted"),
     )
     assert service._finalize_waiting_results() is False
 
