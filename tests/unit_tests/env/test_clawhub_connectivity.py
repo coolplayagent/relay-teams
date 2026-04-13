@@ -62,7 +62,9 @@ def test_clawhub_probe_reports_missing_binary(monkeypatch) -> None:
     assert result.diagnostics.installed_during_probe is False
 
 
-def test_clawhub_probe_logs_in_before_reporting_success(monkeypatch) -> None:
+def test_clawhub_probe_validates_token_without_passing_it_on_cli(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
@@ -87,20 +89,12 @@ def test_clawhub_probe_logs_in_before_reporting_success(monkeypatch) -> None:
                 stdout="0.4.2\n",
                 stderr="",
             )
-        if command[1] == "login":
-            assert command[2:] == ["--token", "ch_secret", "--no-browser"]
-            return subprocess.CompletedProcess(
-                args=command,
-                returncode=0,
-                stdout="Logged in.\n",
-                stderr="",
-            )
         assert command[1] == "whoami"
         return subprocess.CompletedProcess(
             args=command,
             returncode=0,
-            stdout="steven\n",
-            stderr="",
+            stdout="",
+            stderr="- Checking token\n✔ steven",
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -118,15 +112,9 @@ def test_clawhub_probe_logs_in_before_reporting_success(monkeypatch) -> None:
     assert result.diagnostics.token_configured is True
     assert result.diagnostics.installation_attempted is False
     assert result.diagnostics.installed_during_probe is False
+    assert all("ch_secret" not in command for command in observed_commands)
     assert observed_commands == [
         ["/usr/bin/clawhub", "--cli-version"],
-        [
-            "/usr/bin/clawhub",
-            "login",
-            "--token",
-            "ch_secret",
-            "--no-browser",
-        ],
         ["/usr/bin/clawhub", "whoami"],
     ]
 
@@ -160,19 +148,12 @@ def test_clawhub_probe_uses_remaining_timeout_budget_for_each_step(
                 stdout="0.4.2\n",
                 stderr="",
             )
-        if command[1] == "login":
-            return subprocess.CompletedProcess(
-                args=command,
-                returncode=0,
-                stdout="Logged in.\n",
-                stderr="",
-            )
         assert command[1] == "whoami"
         return subprocess.CompletedProcess(
             args=command,
             returncode=0,
-            stdout="steven\n",
-            stderr="",
+            stdout="",
+            stderr="- Checking token\n✔ steven",
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -186,10 +167,12 @@ def test_clawhub_probe_uses_remaining_timeout_budget_for_each_step(
     )
 
     assert result.ok is True
-    assert observed_timeouts == [9.0, 6.0, 3.5]
+    assert observed_timeouts == [9.0, 6.0]
 
 
-def test_clawhub_probe_rejects_invalid_token_when_login_fails(monkeypatch) -> None:
+def test_clawhub_probe_rejects_invalid_token_when_auth_validation_fails(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
@@ -210,12 +193,12 @@ def test_clawhub_probe_rejects_invalid_token_when_login_fails(monkeypatch) -> No
                 stdout="0.4.2\n",
                 stderr="",
             )
-        assert command[1] == "login"
+        assert command[1] == "whoami"
         return subprocess.CompletedProcess(
             args=command,
             returncode=1,
             stdout="",
-            stderr="- Verifying token\nError: Invalid token",
+            stderr="- Checking token\nError: Invalid token",
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -268,19 +251,12 @@ def test_clawhub_probe_installs_missing_binary(monkeypatch) -> None:
                 stdout="0.9.0\n",
                 stderr="",
             )
-        if command[1] == "login":
-            return subprocess.CompletedProcess(
-                args=command,
-                returncode=0,
-                stdout="Logged in.\n",
-                stderr="",
-            )
         assert command[1] == "whoami"
         return subprocess.CompletedProcess(
             args=command,
             returncode=0,
-            stdout="steven\n",
-            stderr="",
+            stdout="",
+            stderr="- Checking token\n✔ steven",
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
