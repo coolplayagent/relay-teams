@@ -279,7 +279,6 @@ def test_browser_shell_settings_and_session_management(
         "orchestration",
         "notifications",
         "web",
-        "github",
         "proxy",
         "environment",
     ):
@@ -695,10 +694,6 @@ def test_browser_settings_save_role_and_agent_configs(
         web_response.json().get("searxng_instance_url") or ""
     )
 
-    github_response = api_client.get("/api/system/configs/github")
-    github_response.raise_for_status()
-    initial_github_token = str(github_response.json().get("token") or "")
-
     proxy_response = api_client.get("/api/system/configs/proxy")
     proxy_response.raise_for_status()
     initial_proxy_payload = proxy_response.json()
@@ -708,7 +703,6 @@ def test_browser_settings_save_role_and_agent_configs(
     notification_browser_id = "notif-run_stopped-browser"
     web_exa_api_key = f"browser-web-exa-{uuid4().hex[:8]}"
     web_searxng_instance_url = "https://search.example.test/"
-    github_token = f"ghp_browser_{uuid4().hex[:12]}"
     proxy_url = "http://127.0.0.1:7890"
     agent_id = f"browser_agent_{uuid4().hex[:8]}"
     role_id = f"browser_role_{uuid4().hex[:8]}"
@@ -853,51 +847,6 @@ def test_browser_settings_save_role_and_agent_configs(
     )
     expect(page.locator("#web-searxng-instance-url")).to_have_value(
         web_searxng_instance_url,
-        timeout=_WAIT_TIMEOUT_MS,
-    )
-
-    with page.expect_response(
-        lambda response: (
-            response.request.method == "GET"
-            and response.url
-            == f"{integration_env.api_base_url}/api/system/configs/github"
-            and response.ok
-        )
-    ):
-        page.locator('.settings-tab[data-tab="github"]').click()
-    expect(page.locator("#github-panel")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
-    if initial_github_token:
-        expect(page.locator("#github-token")).to_have_value(
-            "", timeout=_WAIT_TIMEOUT_MS
-        )
-        expect(page.locator("#github-token")).to_have_attribute(
-            "placeholder",
-            "************",
-            timeout=_WAIT_TIMEOUT_MS,
-        )
-    else:
-        expect(page.locator("#github-token")).to_have_value(
-            "",
-            timeout=_WAIT_TIMEOUT_MS,
-        )
-    page.locator("#github-token").fill(github_token)
-    with page.expect_request(
-        lambda request: (
-            request.method == "PUT"
-            and request.url
-            == f"{integration_env.api_base_url}/api/system/configs/github"
-        )
-    ) as save_github_request_info:
-        page.locator("#save-github-btn").click()
-    github_payload = json.loads(save_github_request_info.value.post_data or "{}")
-    assert github_payload == {"token": github_token}
-    expect(page.locator("#github-token")).to_have_value(
-        "",
-        timeout=_WAIT_TIMEOUT_MS,
-    )
-    expect(page.locator("#github-token")).to_have_attribute(
-        "placeholder",
-        "************",
         timeout=_WAIT_TIMEOUT_MS,
     )
 

@@ -60,7 +60,10 @@ def test_system_config_roundtrips_and_prompt_preview(
     )
     github_response.raise_for_status()
     github_payload = api_client.get("/api/system/configs/github").json()
-    assert github_payload == {"token": github_token}
+    assert github_payload == {
+        "token_configured": True,
+        "webhook_base_url": None,
+    }
 
     proxy_response = api_client.put(
         "/api/system/configs/proxy",

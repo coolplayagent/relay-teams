@@ -6,6 +6,7 @@ from relay_teams.triggers.github_client import GitHubApiClient, GitHubApiError
 from relay_teams.triggers.models import (
     GitHubActionSpec,
     GitHubActionType,
+    GitHubAvailableRepositoryRecord,
     GitHubRepoSubscriptionCreateInput,
     GitHubRepoSubscriptionRecord,
     GitHubRepoSubscriptionUpdateInput,
@@ -50,6 +51,7 @@ __all__ = [
     "GitHubActionType",
     "GitHubApiClient",
     "GitHubApiError",
+    "GitHubAvailableRepositoryRecord",
     "GitHubRepoSubscriptionConflictError",
     "GitHubRepoSubscriptionCreateInput",
     "GitHubRepoSubscriptionRecord",

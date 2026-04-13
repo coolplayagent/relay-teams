@@ -19,11 +19,13 @@ from relay_teams.env.environment_variable_models import (
     EnvironmentVariableScope,
 )
 from relay_teams.env.environment_variable_service import EnvironmentVariableService
-from relay_teams.env.github_config_models import GitHubConfig
+from relay_teams.env.github_config_models import GitHubConfigUpdate, GitHubConfigView
 from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.env.github_connectivity import (
     GitHubConnectivityProbeRequest,
     GitHubConnectivityProbeResult,
+    GitHubWebhookConnectivityProbeRequest,
+    GitHubWebhookConnectivityProbeResult,
 )
 from relay_teams.external_agents import (
     ExternalAgentConfig,
@@ -49,6 +51,7 @@ from relay_teams.interfaces.server.deps import (
     get_environment_variable_service,
     get_external_agent_config_service,
     get_github_config_service,
+    get_github_trigger_service,
     get_mcp_config_reload_service,
     get_model_config_service,
     get_notification_settings_service,
@@ -100,6 +103,7 @@ from relay_teams.skills.clawhub_models import (
 )
 from relay_teams.skills.clawhub_search_service import ClawHubSkillSearchService
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
+from relay_teams.triggers import GitHubTriggerService
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/system", tags=["System"])
@@ -473,17 +477,22 @@ async def test_external_agent(
 @router.get("/configs/github")
 def get_github_config(
     service: GitHubConfigService = Depends(get_github_config_service),
-) -> GitHubConfig:
-    return service.get_github_config()
+) -> GitHubConfigView:
+    return service.get_github_config_view()
 
 
 @router.put("/configs/github")
 def save_github_config(
-    req: GitHubConfig,
+    req: GitHubConfigUpdate,
     service: GitHubConfigService = Depends(get_github_config_service),
+    trigger_service: GitHubTriggerService = Depends(get_github_trigger_service),
 ) -> dict[str, str]:
     try:
-        service.save_github_config(req)
+        previous_config = service.get_github_config()
+        service.update_github_config(req)
+        trigger_service.refresh_repo_callback_urls_from_system_config(
+            previous_webhook_base_url=previous_config.webhook_base_url
+        )
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -691,6 +700,17 @@ def probe_github_connectivity(
 ) -> GitHubConnectivityProbeResult:
     try:
         return service.probe_connectivity(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/configs/github/webhook:probe")
+def probe_github_webhook_connectivity(
+    req: GitHubWebhookConnectivityProbeRequest,
+    service: GitHubConfigService = Depends(get_github_config_service),
+) -> GitHubWebhookConnectivityProbeResult:
+    try:
+        return service.probe_webhook_connectivity(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

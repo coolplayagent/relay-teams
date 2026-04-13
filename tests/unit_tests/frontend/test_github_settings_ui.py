@@ -47,7 +47,7 @@ console.log(JSON.stringify({
     assert payload["tokenValue"] == ""
     assert payload["tokenPlaceholder"] == "************"
     assert payload["tokenType"] == "password"
-    assert payload["toggleDisplay"] == "inline-flex"
+    assert payload["toggleDisplay"] == "none"
     assert payload["savePayload"] == {"token": "ghp_secret"}
     assert payload["probePayload"] == {"token": "ghp_secret"}
     assert payload["probeStatusDisplay"] == "block"
@@ -67,7 +67,10 @@ def test_github_settings_panel_preserves_saved_token_for_probe_and_save(
 ) -> None:
     payload = _run_github_settings_script(
         tmp_path=tmp_path,
-        fetch_config={"token": "ghp_saved"},
+        fetch_config={
+            "token_configured": True,
+            "webhook_base_url": "https://agent-teams.example.com/app",
+        },
         runner_source="""
 import { bindGitHubSettingsHandlers, loadGitHubSettingsPanel } from "./githubSettings.mjs";
 
@@ -78,19 +81,10 @@ installGlobals(elements, notifications);
 bindGitHubSettingsHandlers();
 await loadGitHubSettingsPanel();
 
-document.getElementById("toggle-github-token-btn").onclick();
-const revealedValue = document.getElementById("github-token").value;
-const revealedType = document.getElementById("github-token").type;
-const toggleTitle = document.getElementById("toggle-github-token-btn").title;
-document.getElementById("toggle-github-token-btn").onclick();
-
 await document.getElementById("test-github-btn").onclick();
 await document.getElementById("save-github-btn").onclick();
 
 console.log(JSON.stringify({
-    revealedValue,
-    revealedType,
-    toggleTitle,
     tokenValue: document.getElementById("github-token").value,
     tokenPlaceholder: document.getElementById("github-token").placeholder,
     toggleDisplay: document.getElementById("toggle-github-token-btn").style.display,
@@ -100,66 +94,11 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    assert payload["revealedValue"] == "ghp_saved"
-    assert payload["revealedType"] == "text"
-    assert payload["toggleTitle"] == "Hide GitHub token"
     assert payload["tokenValue"] == ""
     assert payload["tokenPlaceholder"] == "************"
-    assert payload["toggleDisplay"] == "inline-flex"
-    assert payload["savePayload"] == {"token": "ghp_saved"}
-    assert payload["probePayload"] == {"token": "ghp_saved"}
-
-
-def test_github_settings_panel_allows_clearing_saved_token(tmp_path: Path) -> None:
-    payload = _run_github_settings_script(
-        tmp_path=tmp_path,
-        fetch_config={"token": "ghp_saved"},
-        runner_source="""
-import { bindGitHubSettingsHandlers, loadGitHubSettingsPanel } from "./githubSettings.mjs";
-
-const notifications = [];
-const elements = createElements();
-installGlobals(elements, notifications);
-
-bindGitHubSettingsHandlers();
-await loadGitHubSettingsPanel();
-
-document.getElementById("toggle-github-token-btn").onclick();
-document.getElementById("github-token").value = "";
-document.getElementById("github-token").oninput();
-
-await document.getElementById("test-github-btn").onclick();
-await document.getElementById("save-github-btn").onclick();
-
-console.log(JSON.stringify({
-    notifications,
-    tokenValue: document.getElementById("github-token").value,
-    tokenPlaceholder: document.getElementById("github-token").placeholder,
-    toggleDisplay: document.getElementById("toggle-github-token-btn").style.display,
-    savePayload: globalThis.__saveGitHubPayload,
-    probePayload: globalThis.__probeGitHubPayload,
-    probeStatusText: document.getElementById("github-probe-status").textContent,
-}));
-""".strip(),
-    )
-
-    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
-    assert payload["tokenValue"] == ""
-    assert payload["tokenPlaceholder"] == "ghp_..."
     assert payload["toggleDisplay"] == "none"
-    assert payload["savePayload"] == {"token": None}
-    assert payload["probePayload"] is None
-    assert (
-        payload["probeStatusText"]
-        == "Enter a GitHub token before testing the connection."
-    )
-    assert notifications == [
-        {
-            "title": "GitHub Settings Saved",
-            "message": "GitHub settings saved.",
-            "tone": "success",
-        }
-    ]
+    assert payload["savePayload"] == {}
+    assert payload["probePayload"] == {}
 
 
 def test_github_settings_markup_includes_token_link_card() -> None:
@@ -168,10 +107,29 @@ def test_github_settings_markup_includes_token_link_card() -> None:
         repo_root / "frontend" / "dist" / "js" / "components" / "settings" / "index.js"
     ).read_text(encoding="utf-8")
 
-    assert 'id="github-token-link"' in source
-    assert 'href="https://github.com/settings/tokens"' in source
-    assert 'target="_blank"' in source
-    assert 'rel="noreferrer"' in source
+    assert 'data-tab="github"' not in source
+
+    github_source = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "settings"
+        / "githubSettings.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="github-token-link"' in github_source
+    assert 'href="https://github.com/settings/tokens"' in github_source
+    assert 'target="_blank"' in github_source
+    assert 'rel="noreferrer"' in github_source
+    assert 'id="${escapeHtml(ids.webhookBaseUrlInputId)}"' not in github_source
+    assert 'id="${escapeHtml(ids.callbackPreviewId)}"' not in github_source
+    assert 'id="${escapeHtml(ids.clearTokenCheckboxId)}"' not in github_source
+    assert 'id="${escapeHtml(ids.clearTokenRowId)}"' not in github_source
+    assert "proxy-inline-field-actions" in github_source
+    assert "settings-inline-action-row" in github_source
+    assert "proxy-form-section-test" not in github_source
 
 
 def _run_github_settings_script(
@@ -198,10 +156,10 @@ def _run_github_settings_script(
     module_under_test_path = tmp_path / "githubSettings.mjs"
     runner_path = tmp_path / "runner.mjs"
     fetch_github_config = fetch_config or {
-        "token": None,
+        "token_configured": False,
+        "webhook_base_url": None,
     }
     fetch_github_config_json = json.dumps(fetch_github_config)
-
     mock_api_path.write_text(
         """
 let currentConfig = __FETCH_GITHUB_CONFIG__;
@@ -212,7 +170,12 @@ export async function fetchGitHubConfig() {
 
 export async function saveGitHubConfig(payload) {
     globalThis.__saveGitHubPayload = payload;
-    currentConfig = payload;
+    currentConfig = {
+        token_configured: Boolean(payload.token) || currentConfig.token_configured === true,
+        webhook_base_url: Object.prototype.hasOwnProperty.call(payload, "webhook_base_url")
+            ? payload.webhook_base_url
+            : currentConfig.webhook_base_url,
+    };
     return { status: "ok" };
 }
 
@@ -301,11 +264,13 @@ function createElement(initialDisplay = "block") {{
     return {{
         style: {{ display: initialDisplay }},
         value: "",
+        checked: false,
         disabled: false,
         textContent: "",
         innerHTML: "",
         className: "",
         onclick: null,
+        onchange: null,
     }};
 }}
 

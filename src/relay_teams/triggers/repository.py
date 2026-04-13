@@ -27,6 +27,7 @@ from relay_teams.triggers.models import (
     TriggerDeliverySignatureStatus,
     TriggerEvaluationRecord,
     TriggerProvider,
+    TriggerRuleMatchConfig,
     TriggerRuleRecord,
     TriggerTargetType,
 )
@@ -39,6 +40,15 @@ from relay_teams.validation import (
 LOGGER = get_logger(__name__)
 _JSON_VALUE_ADAPTER = TypeAdapter(JsonValue)
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
+_ALLOWED_RULE_MATCH_CONFIG_KEYS = frozenset(
+    {
+        "event_name",
+        "actions",
+        "base_branches",
+        "draft_pr",
+        "check_conclusions",
+    }
+)
 
 
 class GitHubTriggerAccountNameConflictError(ValueError):
@@ -89,6 +99,7 @@ class TriggerRepository(SharedSqliteRepository):
                     full_name TEXT NOT NULL,
                     external_repo_id TEXT,
                     default_branch TEXT,
+                    callback_url TEXT,
                     provider_webhook_id TEXT,
                     subscribed_events_json TEXT NOT NULL DEFAULT '[]',
                     webhook_status TEXT NOT NULL,
@@ -230,6 +241,17 @@ class TriggerRepository(SharedSqliteRepository):
                 ON trigger_action_attempts(status, updated_at ASC)
                 """
             )
+            if not _column_exists(
+                self._conn,
+                table_name="github_repo_subscriptions",
+                column_name="callback_url",
+            ):
+                self._conn.execute(
+                    """
+                    ALTER TABLE github_repo_subscriptions
+                    ADD COLUMN callback_url TEXT
+                    """
+                )
 
         self._run_write(operation_name="init_tables", operation=operation)
 
@@ -373,11 +395,11 @@ class TriggerRepository(SharedSqliteRepository):
                     """
                     INSERT INTO github_repo_subscriptions(
                         repo_subscription_id, account_id, owner, repo_name, full_name,
-                        external_repo_id, default_branch, provider_webhook_id,
+                        external_repo_id, default_branch, callback_url, provider_webhook_id,
                         subscribed_events_json, webhook_status, enabled,
                         last_webhook_sync_at, last_error, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.repo_subscription_id,
@@ -387,6 +409,7 @@ class TriggerRepository(SharedSqliteRepository):
                         record.full_name,
                         record.external_repo_id,
                         record.default_branch,
+                        record.callback_url,
                         record.provider_webhook_id,
                         _json_dumps(record.subscribed_events),
                         record.webhook_status.value,
@@ -422,6 +445,7 @@ class TriggerRepository(SharedSqliteRepository):
                         full_name=?,
                         external_repo_id=?,
                         default_branch=?,
+                        callback_url=?,
                         provider_webhook_id=?,
                         subscribed_events_json=?,
                         webhook_status=?,
@@ -438,6 +462,7 @@ class TriggerRepository(SharedSqliteRepository):
                         record.full_name,
                         record.external_repo_id,
                         record.default_branch,
+                        record.callback_url,
                         record.provider_webhook_id,
                         _json_dumps(record.subscribed_events),
                         record.webhook_status.value,
@@ -1108,6 +1133,7 @@ class TriggerRepository(SharedSqliteRepository):
             full_name=_require_identifier(row["full_name"], field_name="full_name"),
             external_repo_id=normalize_persisted_text(row["external_repo_id"]),
             default_branch=normalize_persisted_text(row["default_branch"]),
+            callback_url=normalize_persisted_text(row["callback_url"]),
             provider_webhook_id=normalize_persisted_text(row["provider_webhook_id"]),
             subscribed_events=tuple(_load_json_list(row["subscribed_events_json"])),
             webhook_status=GitHubWebhookStatus(str(row["webhook_status"])),
@@ -1121,6 +1147,17 @@ class TriggerRepository(SharedSqliteRepository):
         )
 
     def _to_rule_record(self, row: sqlite3.Row) -> TriggerRuleRecord:
+        raw_match_config = _load_json_dict(row["match_config_json"])
+        match_config = {
+            key: value
+            for key, value in raw_match_config.items()
+            if key in _ALLOWED_RULE_MATCH_CONFIG_KEYS
+        }
+        if len(match_config) != len(raw_match_config):
+            LOGGER.warning(
+                "Dropped deprecated GitHub trigger rule match_config fields for %s",
+                row["trigger_rule_id"],
+            )
         return TriggerRuleRecord(
             trigger_rule_id=_require_identifier(
                 row["trigger_rule_id"], field_name="trigger_rule_id"
@@ -1132,7 +1169,7 @@ class TriggerRepository(SharedSqliteRepository):
             ),
             name=_require_identifier(row["name"], field_name="name"),
             enabled=bool(row["enabled"]),
-            match_config=json.loads(str(row["match_config_json"])),
+            match_config=TriggerRuleMatchConfig.model_validate(match_config),
             dispatch_config=json.loads(str(row["dispatch_config_json"])),
             version=int(row["version"]),
             last_error=normalize_persisted_text(row["last_error"]),
@@ -1236,6 +1273,16 @@ class TriggerRepository(SharedSqliteRepository):
 
 def _json_dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+
+
+def _column_exists(
+    conn: sqlite3.Connection,
+    *,
+    table_name: str,
+    column_name: str,
+) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return any(str(row["name"]) == column_name for row in rows)
 
 
 def _to_iso(value: datetime | None) -> str | None:

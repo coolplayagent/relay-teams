@@ -20,6 +20,12 @@ from relay_teams.builtin import ensure_app_config_bootstrap
 from relay_teams.env.runtime_env import sync_app_env_to_process_env
 from relay_teams.interfaces.server.config_paths import get_frontend_dist_dir
 from relay_teams.interfaces.server.container import ServerContainer
+from relay_teams.interfaces.server.public_access import (
+    is_public_access_guard_enabled,
+    is_public_host_allowed_request,
+    public_access_denied_detail,
+    request_uses_public_host,
+)
 from relay_teams.interfaces.server.runtime_identity import (
     SERVER_VERSION,
     build_server_health_payload,
@@ -182,6 +188,32 @@ app.include_router(roles.router, prefix="/api")
 app.include_router(prompts.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
 app.include_router(workspaces.router, prefix="/api")
+
+
+@app.middleware("http")
+async def public_host_guard_middleware(
+    request: Request,
+    call_next: RequestHandler,
+) -> Response:
+    if (
+        not is_public_access_guard_enabled()
+        or not request_uses_public_host(request)
+        or is_public_host_allowed_request(request)
+    ):
+        return await call_next(request)
+    detail = public_access_denied_detail()
+    log_event(
+        logger,
+        logging.WARNING,
+        event="http.request.public_host_blocked",
+        message="Blocked public-host access to non-public route",
+        payload={
+            "method": request.method,
+            "path": request.url.path,
+            "host": request.url.hostname,
+        },
+    )
+    return JSONResponse(status_code=403, content={"detail": detail})
 
 
 @app.middleware("http")

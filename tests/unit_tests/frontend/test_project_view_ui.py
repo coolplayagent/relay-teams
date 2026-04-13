@@ -273,6 +273,22 @@ export async function fetchWeChatGatewayAccounts() {
     return [];
 }
 
+export async function fetchGitHubTriggerAccounts() {
+    return globalThis.__mockGitHubAccounts || [];
+}
+
+export async function fetchGitHubRepoSubscriptions() {
+    return globalThis.__mockGitHubRepos || [];
+}
+
+export async function fetchGitHubAccountRepositories() {
+    return globalThis.__mockGitHubAvailableRepos || [];
+}
+
+export async function fetchGitHubTriggerRules() {
+    return globalThis.__mockGitHubRules || [];
+}
+
 export async function reloadSkillsConfig() {
     return { status: "ok" };
 }
@@ -344,6 +360,296 @@ export async function updateAutomationProject(_automationProjectId, payload) {
     assert update_payload["timezone"] == "Asia/Shanghai"
     assert "automation-editor-modal-title" in str(payload["modalHtml"])
     assert "feishu_main - Release Updates" in str(payload["contentHtml"])
+
+
+def test_project_view_renders_github_automation_section_and_access_panel(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationGitHubView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockGitHubAccounts = [
+    {
+        account_id: "ghta_1",
+        name: "github-main",
+        display_name: "GitHub Main",
+        status: "enabled",
+        token_configured: true,
+        webhook_secret_configured: true,
+    },
+];
+globalThis.__mockGitHubRepos = [
+    {
+        repo_subscription_id: "ghrs_1",
+        account_id: "ghta_1",
+        owner: "octocat",
+        repo_name: "Hello-World",
+        full_name: "octocat/Hello-World",
+        callback_url: "https://example.com/github/webhook",
+        webhook_status: "registered",
+        enabled: true,
+        subscribed_events: ["pull_request"],
+    },
+];
+globalThis.__mockGitHubRules = [
+    {
+        trigger_rule_id: "trg_1",
+        repo_subscription_id: "ghrs_1",
+        name: "pr-opened",
+        enabled: true,
+        match_config: {
+            event_name: "pull_request",
+            actions: ["opened"],
+        },
+    },
+];
+
+initializeProjectView();
+await openAutomationGitHubView("access");
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    contentHtml: els.projectViewContent.innerHTML,
+    toolbarHtml: els.projectViewToolbarActions.innerHTML,
+    summary: els.projectViewSummary.textContent,
+    bindCalls: globalThis.__githubSettingsBindCalls || 0,
+    loadCalls: globalThis.__githubSettingsLoadCalls || 0,
+}));
+""".strip(),
+    )
+
+    assert "GitHub access panel" in str(payload["contentHtml"])
+    assert "octocat/Hello-World" in str(payload["contentHtml"])
+    assert "Subscribed Events: pull_request" in str(payload["contentHtml"])
+    assert 'data-automation-section="github"' in str(payload["toolbarHtml"])
+    assert payload["summary"] == "1 accounts · 1 repos · 1 rules"
+    assert payload["bindCalls"] == 1
+    assert payload["loadCalls"] == 1
+
+
+def test_project_view_creates_github_repo_from_repository_dropdown(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationGitHubView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockGitHubAccounts = [
+    {
+        account_id: "ghta_1",
+        name: "github-main",
+        display_name: "GitHub Main",
+        status: "enabled",
+        token_configured: true,
+        webhook_secret_configured: true,
+    },
+];
+globalThis.__mockGitHubRepos = [];
+globalThis.__mockGitHubRules = [];
+globalThis.__mockGitHubAvailableRepos = [
+    {
+        owner: "octocat",
+        repo_name: "Hello-World",
+        full_name: "octocat/Hello-World",
+        default_branch: "main",
+        private: false,
+    },
+];
+
+initializeProjectView();
+await openAutomationGitHubView("account:ghta_1");
+await flushTasks();
+await flushTasks();
+
+globalThis.__showFormDialogResult = {
+    full_name: "octocat/Hello-World",
+    enabled: true,
+};
+
+const button = document.querySelector('[data-github-repo-create]');
+button?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(button),
+    buttonValue: button?.getAttribute?.("data-github-repo-create") || "",
+    createdPayload: globalThis.__createdGitHubRepoPayload || null,
+    fieldIds: fields.map(field => field.id),
+    fieldTypes: fields.map(field => field.type || "text"),
+    firstFieldOptions: fields[0]?.options || [],
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["buttonValue"] == "ghta_1"
+    assert payload["createdPayload"] == {
+        "account_id": "ghta_1",
+        "owner": "octocat",
+        "repo_name": "Hello-World",
+        "enabled": True,
+    }
+    assert payload["fieldIds"] == ["full_name", "enabled"]
+    assert payload["fieldTypes"] == ["select", "checkbox"]
+    assert payload["firstFieldOptions"] == [
+        {"value": "", "label": "Select a repository"},
+        {"value": "octocat/Hello-World", "label": "octocat/Hello-World"},
+    ]
+
+
+def test_project_view_github_rule_dialog_exposes_subscribed_event_field() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "projectView.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function getGitHubRuleEventOptions()" in source
+    assert "id: 'workspace_id'" in source
+    assert "description: t('feature.automation.github_rule_workspace_copy')" in source
+    assert "id: 'event_name'" in source
+    assert "label: t('feature.automation.github_event_subscription')" in source
+    assert "description: t('feature.automation.github_event_copy')" in source
+    assert "options: getGitHubRuleEventOptions()" in source
+    assert "label: t('feature.automation.github_rule_name')" in source
+    assert "id: 'actions'" in source
+    assert "type: 'multiselect'" in source
+    assert "options: getGitHubRuleActionOptions()" in source
+    assert "placeholder: t('feature.automation.github_actions_placeholder')" in source
+    assert "description: t('feature.automation.github_actions_copy')" in source
+    assert "id: 'draft_pr'" in source
+    assert "options: getGitHubDraftPrOptions()" in source
+    assert "description: t('feature.automation.github_draft_pr_copy')" in source
+    assert "id: 'head_branches'" not in source
+    assert "id: 'comment_on_completion'" not in source
+    assert "id: 'completion_comment_template'" not in source
+    assert "id: 'labels_any'" not in source
+    assert "id: 'labels_all'" not in source
+    assert "id: 'label_match_mode'" not in source
+    assert "id: 'labels'" not in source
+    assert "id: 'sender_allow'" not in source
+    assert "id: 'sender_deny'" not in source
+    assert "id: 'paths_any'" not in source
+    assert "id: 'paths_ignore'" not in source
+
+
+def test_project_view_github_rule_edit_dialog_preserves_event_selection_controls() -> (
+    None
+):
+    repo_root = Path(__file__).resolve().parents[3]
+    i18n_source = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "i18n.js"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "'feature.automation.github_event_subscription': 'Subscribed Event'"
+        in i18n_source
+    )
+    assert (
+        "'feature.automation.github_event_copy': 'Select the GitHub webhook event for this rule. The repository subscribed events are derived automatically from enabled rules.'"
+        in i18n_source
+    )
+    assert (
+        "'feature.automation.github_event_pull_request': 'Pull Request'" in i18n_source
+    )
+    assert "'feature.automation.github_event_issues': 'Issues'" in i18n_source
+    assert "'feature.automation.github_rule_name': 'Rule Name'" in i18n_source
+    assert (
+        "'feature.automation.github_actions_copy': 'Select one or more GitHub actions."
+        in i18n_source
+    )
+    assert "'feature.automation.github_draft_pr': 'Draft Pull Request'" in i18n_source
+    assert (
+        "'feature.automation.github_rule_workspace_summary': 'Workspace: {workspace}'"
+        in i18n_source
+    )
+    assert "review_requested" in i18n_source
+
+
+def test_project_view_github_rule_payload_clears_pr_only_filters_for_issue_rules() -> (
+    None
+):
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "projectView.js"
+    ).read_text(encoding="utf-8")
+
+    assert "draft_pr: normalizeGitHubDraftPrValue(values.draft_pr)," in source
+    assert (
+        "base_branches: normalizeCommaSeparatedValues(values.base_branches)," in source
+    )
+    assert (
+        "const selectedActions = normalizeCommaSeparatedValues(values.actions);"
+        in source
+    )
+    assert "actions: selectedActions," in source
+    assert (
+        "head_branches: normalizeCommaSeparatedValues(values.head_branches),"
+        not in source
+    )
+    assert "comment_on_completion" not in source
+    assert "completion_comment_template" not in source
+    assert "labels_any:" not in source
+    assert "labels_all:" not in source
+    assert "sender_allow:" not in source
+    assert "sender_deny:" not in source
+    assert "paths_any:" not in source
+    assert "paths_ignore:" not in source
+
+
+def test_feedback_form_dialog_supports_multiselect_fields() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "feedback.js"
+    ).read_text(encoding="utf-8")
+
+    assert "fieldType === 'multiselect'" in source
+    assert 'data-feedback-form-type="multiselect"' in source
+    assert "data-feedback-multiselect-option" in source
+    assert "bindMultiselectControls(hosts.dialogRoot);" in source
+
+
+def test_feedback_form_dialog_supports_inline_submit_errors() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "feedback.js"
+    ).read_text(encoding="utf-8")
+
+    assert "submitHandler = null" in source
+    assert "typeof activeDialog?.submitHandler === 'function'" in source
+    assert "feedback-dialog-submit-error" in source
+    assert "setDialogSubmittingState({" in source
+    assert "submitError.hidden = false;" in source
+
+
+def test_project_view_updates_local_github_rule_state_after_mutations() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "projectView.js"
+    ).read_text(encoding="utf-8")
+
+    assert "function upsertGitHubRuleInState(rule)" in source
+    assert "function removeGitHubRuleFromState(triggerRuleId)" in source
+    assert "upsertGitHubRuleInState(created);" in source
+    assert "upsertGitHubRuleInState(updated);" in source
+    assert "removeGitHubRuleFromState(rule.trigger_rule_id);" in source
+    assert "renderAutomationHomeView();" in source
 
 
 def test_project_view_preserves_disabled_one_shot_automation_on_edit(
@@ -1369,7 +1675,7 @@ export async function fetchAutomationProjects() {
 }
 
 export async function fetchWorkspaces() {
-    return [];
+    return globalThis.__mockWorkspaces || [];
 }
 
 export async function fetchWorkspaceSnapshot() {
@@ -1838,6 +2144,7 @@ def _run_project_view_script(
     mock_navigator_path = tmp_path / "mockNavigator.mjs"
     mock_subagent_rail_path = tmp_path / "mockSubagentRail.mjs"
     mock_clawhub_settings_path = tmp_path / "settings" / "clawhubSettings.js"
+    mock_github_settings_path = tmp_path / "settings" / "githubSettings.js"
     runner_path = tmp_path / "runner.mjs"
 
     mock_dom_path.write_text(
@@ -1931,6 +2238,28 @@ function parseNodes(source, selector) {
     };
     const pattern = patterns[selector];
     const results = [];
+    if (!pattern) {
+        const dataSelectorMatch = /^\[(data-[a-z0-9_-]+)(?:="([^"]*)")?\]$/i.exec(selector);
+        if (dataSelectorMatch) {
+            const attrName = dataSelectorMatch[1];
+            const attrValue = dataSelectorMatch[2];
+            const escapedAttrName = attrName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const escapedAttrValue = String(attrValue || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const dataPattern = attrValue === undefined
+                ? new RegExp(`${escapedAttrName}(?:="([^"]*)")?`, "g")
+                : new RegExp(`${escapedAttrName}="${escapedAttrValue}"`, "g");
+            let dataMatch = dataPattern.exec(source);
+            while (dataMatch) {
+                const attributes = {};
+                attributes[attrName] = decodeHtmlAttribute(
+                    attrValue === undefined ? (dataMatch[1] || "") : attrValue,
+                );
+                results.push(createTreeNode(attributes));
+                dataMatch = dataPattern.exec(source);
+            }
+            return results;
+        }
+    }
     if (!pattern) {
         return results;
     }
@@ -2342,9 +2671,218 @@ export async function deleteWeChatGatewayAccount() {
 export async function updateAutomationProject() {
     return { status: "ok" };
 }
+
+export async function createGitHubTriggerAccount(payload) {
+    globalThis.__createdGitHubAccountPayload = payload;
+    return { account_id: "ghta_new", name: payload?.name || "github-main", display_name: payload?.display_name || "GitHub Main", status: payload?.enabled === false ? "disabled" : "enabled" };
+}
+
+export async function updateGitHubTriggerAccount(accountId, payload) {
+    globalThis.__updatedGitHubAccountPayload = { accountId, payload };
+    return { account_id: accountId, name: payload?.name || "github-main", display_name: payload?.display_name || "GitHub Main", status: payload?.enabled === false ? "disabled" : "enabled" };
+}
+
+export async function deleteGitHubTriggerAccount(accountId) {
+    globalThis.__deletedGitHubAccountId = accountId;
+    return { status: "ok" };
+}
+
+export async function enableGitHubTriggerAccount(accountId) {
+    globalThis.__enabledGitHubAccountId = accountId;
+    return { account_id: accountId, status: "enabled" };
+}
+
+export async function disableGitHubTriggerAccount(accountId) {
+    globalThis.__disabledGitHubAccountId = accountId;
+    return { account_id: accountId, status: "disabled" };
+}
+
+export async function createGitHubRepoSubscription(payload) {
+    globalThis.__createdGitHubRepoPayload = payload;
+    return { repo_subscription_id: "ghrs_new", account_id: payload?.account_id || "ghta_1", full_name: `${payload?.owner || "octocat"}/${payload?.repo_name || "Hello-World"}` };
+}
+
+export async function updateGitHubRepoSubscription(repoSubscriptionId, payload) {
+    globalThis.__updatedGitHubRepoPayload = { repoSubscriptionId, payload };
+    return { repo_subscription_id: repoSubscriptionId, account_id: "ghta_1", full_name: `${payload?.owner || "octocat"}/${payload?.repo_name || "Hello-World"}` };
+}
+
+export async function deleteGitHubRepoSubscription(repoSubscriptionId) {
+    globalThis.__deletedGitHubRepoId = repoSubscriptionId;
+    return { status: "ok" };
+}
+
+export async function enableGitHubRepoSubscription(repoSubscriptionId) {
+    globalThis.__enabledGitHubRepoId = repoSubscriptionId;
+    return { repo_subscription_id: repoSubscriptionId, enabled: true };
+}
+
+export async function disableGitHubRepoSubscription(repoSubscriptionId) {
+    globalThis.__disabledGitHubRepoId = repoSubscriptionId;
+    return { repo_subscription_id: repoSubscriptionId, enabled: false };
+}
+
+export async function createGitHubTriggerRule(payload) {
+    globalThis.__createdGitHubRulePayload = payload;
+    return {
+        trigger_rule_id: "trg_new",
+        provider: payload?.provider || "github",
+        account_id: payload?.account_id || "ghta_1",
+        repo_subscription_id: payload?.repo_subscription_id || "ghrs_1",
+        name: payload?.name || "rule",
+        enabled: payload?.enabled !== false,
+        match_config: payload?.match_config || {},
+        dispatch_config: payload?.dispatch_config || {},
+    };
+}
+
+export async function updateGitHubTriggerRule(triggerRuleId, payload) {
+    globalThis.__updatedGitHubRulePayload = { triggerRuleId, payload };
+    return {
+        trigger_rule_id: triggerRuleId,
+        provider: "github",
+        account_id: payload?.account_id || "ghta_1",
+        repo_subscription_id: payload?.repo_subscription_id || "ghrs_1",
+        name: payload?.name || "rule",
+        enabled: payload?.enabled !== false,
+        match_config: payload?.match_config || {},
+        dispatch_config: payload?.dispatch_config || {},
+    };
+}
+
+export async function deleteGitHubTriggerRule(triggerRuleId) {
+    globalThis.__deletedGitHubRuleId = triggerRuleId;
+    return { status: "ok" };
+}
+
+export async function enableGitHubTriggerRule(triggerRuleId) {
+    globalThis.__enabledGitHubRuleId = triggerRuleId;
+    return { trigger_rule_id: triggerRuleId, enabled: true };
+}
+
+export async function disableGitHubTriggerRule(triggerRuleId) {
+    globalThis.__disabledGitHubRuleId = triggerRuleId;
+    return { trigger_rule_id: triggerRuleId, enabled: false };
+}
 """.strip()
+    resolved_mock_api_source = mock_api_source or default_mock_api_source
+    github_api_fallbacks = {
+        "fetchGitHubTriggerAccounts": """
+export async function fetchGitHubTriggerAccounts() {
+    return globalThis.__mockGitHubAccounts || [];
+}
+""".strip(),
+        "fetchGitHubRepoSubscriptions": """
+export async function fetchGitHubRepoSubscriptions() {
+    return globalThis.__mockGitHubRepos || [];
+}
+""".strip(),
+        "fetchGitHubAccountRepositories": """
+export async function fetchGitHubAccountRepositories() {
+    return globalThis.__mockGitHubAvailableRepos || [];
+}
+""".strip(),
+        "fetchGitHubTriggerRules": """
+export async function fetchGitHubTriggerRules() {
+    return globalThis.__mockGitHubRules || [];
+}
+""".strip(),
+        "createGitHubTriggerAccount": """
+export async function createGitHubTriggerAccount(payload) {
+    globalThis.__createdGitHubAccountPayload = payload;
+    return { account_id: "ghta_new", name: payload?.name || "github-main", display_name: payload?.display_name || "GitHub Main", status: payload?.enabled === false ? "disabled" : "enabled" };
+}
+""".strip(),
+        "updateGitHubTriggerAccount": """
+export async function updateGitHubTriggerAccount(accountId, payload) {
+    globalThis.__updatedGitHubAccountPayload = { accountId, payload };
+    return { account_id: accountId, name: payload?.name || "github-main", display_name: payload?.display_name || "GitHub Main", status: payload?.enabled === false ? "disabled" : "enabled" };
+}
+""".strip(),
+        "deleteGitHubTriggerAccount": """
+export async function deleteGitHubTriggerAccount(accountId) {
+    globalThis.__deletedGitHubAccountId = accountId;
+    return { status: "ok" };
+}
+""".strip(),
+        "enableGitHubTriggerAccount": """
+export async function enableGitHubTriggerAccount(accountId) {
+    globalThis.__enabledGitHubAccountId = accountId;
+    return { account_id: accountId, status: "enabled" };
+}
+""".strip(),
+        "disableGitHubTriggerAccount": """
+export async function disableGitHubTriggerAccount(accountId) {
+    globalThis.__disabledGitHubAccountId = accountId;
+    return { account_id: accountId, status: "disabled" };
+}
+""".strip(),
+        "createGitHubRepoSubscription": """
+export async function createGitHubRepoSubscription(payload) {
+    globalThis.__createdGitHubRepoPayload = payload;
+    return { repo_subscription_id: "ghrs_new", account_id: payload?.account_id || "ghta_1", full_name: `${payload?.owner || "octocat"}/${payload?.repo_name || "Hello-World"}` };
+}
+""".strip(),
+        "updateGitHubRepoSubscription": """
+export async function updateGitHubRepoSubscription(repoSubscriptionId, payload) {
+    globalThis.__updatedGitHubRepoPayload = { repoSubscriptionId, payload };
+    return { repo_subscription_id: repoSubscriptionId, account_id: "ghta_1", full_name: `${payload?.owner || "octocat"}/${payload?.repo_name || "Hello-World"}` };
+}
+""".strip(),
+        "deleteGitHubRepoSubscription": """
+export async function deleteGitHubRepoSubscription(repoSubscriptionId) {
+    globalThis.__deletedGitHubRepoId = repoSubscriptionId;
+    return { status: "ok" };
+}
+""".strip(),
+        "enableGitHubRepoSubscription": """
+export async function enableGitHubRepoSubscription(repoSubscriptionId) {
+    globalThis.__enabledGitHubRepoId = repoSubscriptionId;
+    return { repo_subscription_id: repoSubscriptionId, enabled: true };
+}
+""".strip(),
+        "disableGitHubRepoSubscription": """
+export async function disableGitHubRepoSubscription(repoSubscriptionId) {
+    globalThis.__disabledGitHubRepoId = repoSubscriptionId;
+    return { repo_subscription_id: repoSubscriptionId, enabled: false };
+}
+""".strip(),
+        "createGitHubTriggerRule": """
+export async function createGitHubTriggerRule(payload) {
+    globalThis.__createdGitHubRulePayload = payload;
+    return { trigger_rule_id: "trg_new", repo_subscription_id: payload?.repo_subscription_id || "ghrs_1", name: payload?.name || "rule" };
+}
+""".strip(),
+        "updateGitHubTriggerRule": """
+export async function updateGitHubTriggerRule(triggerRuleId, payload) {
+    globalThis.__updatedGitHubRulePayload = { triggerRuleId, payload };
+    return { trigger_rule_id: triggerRuleId, repo_subscription_id: "ghrs_1", name: payload?.name || "rule", enabled: payload?.enabled !== false };
+}
+""".strip(),
+        "deleteGitHubTriggerRule": """
+export async function deleteGitHubTriggerRule(triggerRuleId) {
+    globalThis.__deletedGitHubRuleId = triggerRuleId;
+    return { status: "ok" };
+}
+""".strip(),
+        "enableGitHubTriggerRule": """
+export async function enableGitHubTriggerRule(triggerRuleId) {
+    globalThis.__enabledGitHubRuleId = triggerRuleId;
+    return { trigger_rule_id: triggerRuleId, enabled: true };
+}
+""".strip(),
+        "disableGitHubTriggerRule": """
+export async function disableGitHubTriggerRule(triggerRuleId) {
+    globalThis.__disabledGitHubRuleId = triggerRuleId;
+    return { trigger_rule_id: triggerRuleId, enabled: false };
+}
+""".strip(),
+    }
+    for export_name, export_source in github_api_fallbacks.items():
+        if f"export async function {export_name}" not in resolved_mock_api_source:
+            resolved_mock_api_source = f"{resolved_mock_api_source}\n\n{export_source}"
     mock_api_path.write_text(
-        mock_api_source or default_mock_api_source,
+        resolved_mock_api_source,
         encoding="utf-8",
     )
 
@@ -2461,6 +2999,54 @@ export const state = {
         "feature.automation.create": "New Automation",
         "feature.automation.select": "Select an automation project from the list.",
         "feature.automation.create_first": "Create Automation",
+        "feature.automation.section_schedules": "Schedules",
+        "feature.automation.section_github": "GitHub",
+        "feature.automation.github_summary": "{accounts} accounts · {repos} repos · {rules} rules",
+        "feature.automation.github_access": "GitHub Access",
+        "feature.automation.github_access_copy": "Shared token and connectivity checks for GitHub-triggered automation.",
+        "feature.automation.github_access_status": "Shared",
+        "feature.automation.github_access_detail_copy": "Shared token is reused when an account does not define its own override.",
+        "feature.automation.github_summary_accounts": "Accounts",
+        "feature.automation.github_summary_repos": "Repositories",
+        "feature.automation.github_summary_rules": "Rules",
+        "feature.automation.github_new_account": "New Account",
+        "feature.automation.github_new_repo": "New Repo",
+        "feature.automation.github_new_rule": "New Rule",
+        "feature.automation.github_repo_copy": "Choose a repository visible to this account token. The webhook callback URL is generated automatically.",
+        "feature.automation.github_rule_name": "Rule Name",
+        "feature.automation.github_account": "Account",
+        "feature.automation.github_repo_name": "Repository",
+        "feature.automation.github_repo_select_copy": "Repository choices are fetched with the effective GitHub token for this account.",
+        "feature.automation.github_repo_select_placeholder": "Select a repository",
+        "feature.automation.github_repo_section": "Repositories",
+        "feature.automation.github_rule_section": "Rules",
+        "feature.automation.github_event_subscription": "Subscribed Event",
+        "feature.automation.github_event_copy": "Select the GitHub webhook event for this rule. The repository subscribed events are derived automatically from enabled rules.",
+        "feature.automation.github_event_pull_request": "Pull Request",
+        "feature.automation.github_event_issues": "Issues",
+        "feature.automation.github_actions": "Actions",
+        "feature.automation.github_actions_placeholder": "Select actions",
+        "feature.automation.github_actions_copy": "Select one or more GitHub actions. Pull Request options include opened, reopened, edited, synchronize, and review_requested. Issues typically use opened, reopened, and edited.",
+        "feature.automation.github_webhook_registered": "Registered",
+        "feature.automation.github_webhook_unregistered": "Unregistered",
+        "feature.automation.github_webhook_error": "Error",
+        "feature.automation.github_no_accounts": "No GitHub accounts",
+        "feature.automation.github_no_accounts_copy": "Create an account to start binding repositories.",
+        "feature.automation.github_no_repos": "No repositories",
+        "feature.automation.github_no_repos_copy": "Create a repository subscription under this account.",
+        "feature.automation.github_no_rules": "No rules",
+        "feature.automation.github_no_rules_copy": "Create a rule for this repository.",
+        "feature.automation.github_callback_url": "Callback URL",
+        "feature.automation.github_webhook_status": "Webhook Status",
+        "feature.automation.github_default_branch": "Default Branch",
+        "feature.automation.github_events": "Subscribed Events",
+        "feature.automation.github_account_token": "Account Token",
+        "feature.automation.github_account_secret": "Webhook Secret",
+        "feature.automation.github_configured": "Configured",
+        "feature.automation.github_not_configured": "Not configured",
+        "feature.automation.github_account_required": "Account name is required.",
+        "feature.automation.github_repo_required": "Repository name is required.",
+        "feature.automation.github_repo_options_empty": "No repositories are available for this account token.",
         "feature.gateway.title": "IM Gateway",
         "feature.gateway.summary": "{feishu} Feishu · {wechat} WeChat",
         "feature.gateway.add_feishu": "Add Robot",
@@ -2515,7 +3101,11 @@ export function sysLog() {
         """
 export async function showFormDialog(options = {}) {
     globalThis.__showFormDialogCalls.push(options);
-    return globalThis.__showFormDialogResult ?? null;
+    const result = globalThis.__showFormDialogResult ?? null;
+    if (result && typeof options.submitHandler === "function") {
+        return await options.submitHandler(result);
+    }
+    return result;
 }
 
 export async function showConfirmDialog() {
@@ -2568,6 +3158,24 @@ export async function loadClawHubSettingsPanel() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_github_settings_path.write_text(
+        """
+export function bindGitHubSettingsHandlers() {
+    globalThis.__githubSettingsBindCalls =
+        (globalThis.__githubSettingsBindCalls || 0) + 1;
+}
+
+export async function loadGitHubSettingsPanel() {
+    globalThis.__githubSettingsLoadCalls =
+        (globalThis.__githubSettingsLoadCalls || 0) + 1;
+}
+
+export function renderGitHubAccessPanelMarkup() {
+    return '<div id="feature-github-access-panel">GitHub access panel</div>';
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
     source_text = (
         source_path.read_text(encoding="utf-8")
@@ -2580,6 +3188,7 @@ export async function loadClawHubSettingsPanel() {
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
         .replace("./rounds/navigator.js", "./mockNavigator.mjs")
         .replace("./subagentRail.js", "./mockSubagentRail.mjs")
+        .replace("./settings/githubSettings.js", "./settings/githubSettings.js")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 

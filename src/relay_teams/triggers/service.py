@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 import hmac
 import json
@@ -12,10 +11,16 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
+from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
 from relay_teams.automation import AutomationService
+from relay_teams.env.github_config_models import GitHubConfig
+from relay_teams.env.public_webhook_url import (
+    build_public_base_url_path,
+    is_public_http_url,
+)
 from relay_teams.env.github_secret_store import get_github_secret_store
 from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressBusyPolicy,
@@ -42,6 +47,7 @@ from relay_teams.triggers.github_client import GitHubApiClient, GitHubApiError
 from relay_teams.triggers.models import (
     GitHubActionSpec,
     GitHubActionType,
+    GitHubAvailableRepositoryRecord,
     GitHubRepoSubscriptionCreateInput,
     GitHubRepoSubscriptionRecord,
     GitHubRepoSubscriptionUpdateInput,
@@ -82,29 +88,6 @@ _GITHUB_EVENT_HEADER = "x-github-event"
 _GITHUB_SIGNATURE_HEADER = "x-hub-signature-256"
 
 
-class _ChangedFilesResolutionCache:
-    def __init__(self) -> None:
-        self._resolved = False
-        self._changed_files: tuple[str, ...] = ()
-        self._error: str | None = None
-
-    def get_or_resolve(
-        self,
-        resolver: Callable[[], tuple[str, ...]],
-    ) -> tuple[tuple[str, ...] | None, str | None]:
-        if not self._resolved:
-            self._resolved = True
-            try:
-                self._changed_files = resolver()
-                self._error = None
-            except (GitHubApiError, ValueError) as exc:
-                message = str(exc)
-                self._error = message or "failed to resolve pull request files"
-        if self._error is not None:
-            return None, self._error
-        return self._changed_files, None
-
-
 class EventLogLike(Protocol):
     def list_by_trace_with_ids(
         self, trace_id: str
@@ -126,6 +109,7 @@ class GitHubTriggerService:
         event_log: EventLogLike,
         monitor_service: MonitorService | None = None,
         session_ingress_service: GatewaySessionIngressService | None = None,
+        get_github_config: Callable[[], GitHubConfig] | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._repository = repository
@@ -139,12 +123,18 @@ class GitHubTriggerService:
         self._monitor_service = monitor_service
         self._session_ingress_service = session_ingress_service
         self._system_github_secret_store = get_github_secret_store()
+        self._get_github_config = (
+            (lambda: GitHubConfig()) if get_github_config is None else get_github_config
+        )
 
     def list_accounts(self) -> tuple[GitHubTriggerAccountRecord, ...]:
         return tuple(
             self._resolve_account_record(record)
             for record in self._repository.list_accounts()
         )
+
+    def get_account(self, account_id: str) -> GitHubTriggerAccountRecord:
+        return self._resolve_account_record(self._repository.get_account(account_id))
 
     def create_account(
         self,
@@ -195,18 +185,32 @@ class GitHubTriggerService:
         payload: GitHubTriggerAccountUpdateInput,
     ) -> GitHubTriggerAccountRecord:
         existing = self._repository.get_account(account_id)
-        token = (
-            _normalize_optional_text(payload.token)
-            if "token" in payload.model_fields_set
-            else self._secret_store.get_token(self._config_dir, account_id=account_id)
+        existing_token = self._secret_store.get_token(
+            self._config_dir, account_id=account_id
         )
-        webhook_secret = (
-            _normalize_optional_text(payload.webhook_secret)
-            if "webhook_secret" in payload.model_fields_set
-            else self._secret_store.get_webhook_secret(
-                self._config_dir, account_id=account_id
-            )
+        existing_webhook_secret = self._secret_store.get_webhook_secret(
+            self._config_dir, account_id=account_id
         )
+        token = existing_token
+        webhook_secret = existing_webhook_secret
+        token_updated = False
+        webhook_secret_updated = False
+        if payload.clear_token:
+            token = None
+            token_updated = True
+        elif "token" in payload.model_fields_set:
+            provided_token = _normalize_optional_text(payload.token)
+            if provided_token is not None:
+                token = provided_token
+                token_updated = True
+        if payload.clear_webhook_secret:
+            webhook_secret = None
+            webhook_secret_updated = True
+        elif "webhook_secret" in payload.model_fields_set:
+            provided_webhook_secret = _normalize_optional_text(payload.webhook_secret)
+            if provided_webhook_secret is not None:
+                webhook_secret = provided_webhook_secret
+                webhook_secret_updated = True
         updated = existing.model_copy(
             update={
                 "name": (
@@ -228,26 +232,42 @@ class GitHubTriggerService:
                     )
                 ),
                 "token_configured": (
-                    existing.token_configured
-                    if "token" not in payload.model_fields_set
-                    else token is not None
+                    token is not None if token_updated else existing.token_configured
                 ),
-                "webhook_secret_configured": webhook_secret is not None,
+                "webhook_secret_configured": (
+                    webhook_secret is not None
+                    if webhook_secret_updated
+                    else existing.webhook_secret_configured
+                ),
                 "updated_at": _utc_now(),
             }
         )
-        persisted = self._repository.update_account(updated)
-        if "token" in payload.model_fields_set:
+        _ = self._repository.update_account(updated)
+        if token_updated:
             self._secret_store.set_token(
                 self._config_dir, account_id=account_id, token=token
             )
-        if "webhook_secret" in payload.model_fields_set:
+        if webhook_secret_updated:
             self._secret_store.set_webhook_secret(
                 self._config_dir,
                 account_id=account_id,
                 webhook_secret=webhook_secret,
             )
-        return self._resolve_account_record(persisted)
+        if token_updated or webhook_secret_updated or updated.status != existing.status:
+            self._reconcile_account_repos(account_id)
+        return self._resolve_account_record(self._repository.get_account(account_id))
+
+    def enable_account(self, account_id: str) -> GitHubTriggerAccountRecord:
+        return self.update_account(
+            account_id,
+            GitHubTriggerAccountUpdateInput(enabled=True),
+        )
+
+    def disable_account(self, account_id: str) -> GitHubTriggerAccountRecord:
+        return self.update_account(
+            account_id,
+            GitHubTriggerAccountUpdateInput(enabled=False),
+        )
 
     def delete_account(self, account_id: str) -> None:
         _ = self._repository.get_account(account_id)
@@ -264,19 +284,57 @@ class GitHubTriggerService:
     def list_repo_subscriptions(self) -> tuple[GitHubRepoSubscriptionRecord, ...]:
         return self._repository.list_repo_subscriptions()
 
+    def get_repo_subscription(
+        self,
+        repo_subscription_id: str,
+    ) -> GitHubRepoSubscriptionRecord:
+        return self._repository.get_repo_subscription(repo_subscription_id)
+
+    def list_available_repositories(
+        self,
+        account_id: str,
+        *,
+        query: str | None = None,
+    ) -> tuple[GitHubAvailableRepositoryRecord, ...]:
+        _ = self._repository.get_account(account_id)
+        token = self._require_account_token(account_id)
+        payloads = self._github_client.list_repositories(
+            token=token,
+            query=_normalize_optional_text(query),
+        )
+        repositories: list[GitHubAvailableRepositoryRecord] = []
+        for payload in payloads:
+            owner = _resolve_repository_owner(payload)
+            repo_name = _json_text(payload.get("name"))
+            if owner is None or repo_name is None:
+                continue
+            _, _, full_name = _resolve_repository_identity(
+                payload,
+                owner=owner,
+                repo_name=repo_name,
+            )
+            repositories.append(
+                GitHubAvailableRepositoryRecord(
+                    owner=owner,
+                    repo_name=repo_name,
+                    full_name=full_name,
+                    default_branch=_json_text(payload.get("default_branch")),
+                    private=_json_bool(payload.get("private")) is True,
+                )
+            )
+        return tuple(repositories)
+
     def create_repo_subscription(
         self,
         payload: GitHubRepoSubscriptionCreateInput,
     ) -> GitHubRepoSubscriptionRecord:
         account = self._repository.get_account(payload.account_id)
         token = self._require_account_token(account.account_id)
-        callback_url = (
-            _normalize_optional_text(payload.callback_url)
-            if payload.register_webhook
-            else None
-        )
-        if payload.register_webhook and callback_url is None:
-            raise ValueError("callback_url is required when register_webhook=true")
+        callback_url = _normalize_callback_url(payload.callback_url)
+        if callback_url is None:
+            callback_url = _build_system_callback_url(
+                self._get_github_config().webhook_base_url
+            )
         owner = _normalize_required_text(payload.owner, field_name="owner")
         repo_name = _normalize_required_text(payload.repo_name, field_name="repo_name")
         repo_payload = self._github_client.get_repository(
@@ -300,20 +358,15 @@ class GitHubTriggerService:
             full_name=resolved_full_name,
             external_repo_id=_json_identifier(repo_payload.get("id")),
             default_branch=_json_text(repo_payload.get("default_branch")),
-            subscribed_events=_normalize_events(payload.subscribed_events),
+            callback_url=callback_url,
+            subscribed_events=(),
             webhook_status=GitHubWebhookStatus.UNREGISTERED,
-            enabled=True,
+            enabled=payload.enabled,
             created_at=now,
             updated_at=now,
         )
         created = self._repository.create_repo_subscription(record)
-        if payload.register_webhook:
-            assert callback_url is not None
-            return self.register_repo_webhook(
-                created.repo_subscription_id,
-                GitHubRepoWebhookRegistrationInput(callback_url=callback_url),
-            )
-        return created
+        return self._reconcile_repo_webhook(created.repo_subscription_id)
 
     def update_repo_subscription(
         self,
@@ -321,20 +374,85 @@ class GitHubTriggerService:
         payload: GitHubRepoSubscriptionUpdateInput,
     ) -> GitHubRepoSubscriptionRecord:
         existing = self._repository.get_repo_subscription(repo_subscription_id)
+        owner = (
+            _normalize_required_text(payload.owner, field_name="owner")
+            if payload.owner is not None
+            else existing.owner
+        )
+        repo_name = (
+            _normalize_required_text(payload.repo_name, field_name="repo_name")
+            if payload.repo_name is not None
+            else existing.repo_name
+        )
+        callback_url = existing.callback_url
+        if "callback_url" in payload.model_fields_set:
+            normalized_callback_url = _normalize_callback_url(payload.callback_url)
+            if normalized_callback_url is not None:
+                callback_url = normalized_callback_url
+        identity_changed = owner != existing.owner or repo_name != existing.repo_name
+        external_repo_id = existing.external_repo_id
+        default_branch = existing.default_branch
+        full_name = existing.full_name
+        provider_webhook_id = existing.provider_webhook_id
+        webhook_status = existing.webhook_status
+        last_error = existing.last_error
+        if identity_changed:
+            token = self._require_account_token(existing.account_id)
+            repo_payload = self._github_client.get_repository(
+                token=token,
+                owner=owner,
+                repo=repo_name,
+            )
+            owner, repo_name, full_name = _resolve_repository_identity(
+                repo_payload,
+                owner=owner,
+                repo_name=repo_name,
+            )
+            external_repo_id = _json_identifier(repo_payload.get("id"))
+            default_branch = _json_text(repo_payload.get("default_branch"))
+            if _normalize_optional_text(existing.provider_webhook_id) is not None:
+                self._best_effort_unregister_repo_webhook(existing)
+            provider_webhook_id = None
+            webhook_status = GitHubWebhookStatus.UNREGISTERED
+            last_error = None
         updated = existing.model_copy(
             update={
-                "subscribed_events": (
-                    _normalize_events(payload.subscribed_events)
-                    if payload.subscribed_events is not None
-                    else existing.subscribed_events
-                ),
+                "owner": owner,
+                "repo_name": repo_name,
+                "full_name": full_name,
+                "external_repo_id": external_repo_id,
+                "default_branch": default_branch,
+                "callback_url": callback_url,
+                "provider_webhook_id": provider_webhook_id,
+                "subscribed_events": existing.subscribed_events,
+                "webhook_status": webhook_status,
                 "enabled": existing.enabled
                 if payload.enabled is None
                 else payload.enabled,
+                "last_error": last_error,
                 "updated_at": _utc_now(),
             }
         )
-        return self._repository.update_repo_subscription(updated)
+        persisted = self._repository.update_repo_subscription(updated)
+        return self._reconcile_repo_webhook(persisted.repo_subscription_id)
+
+    def enable_repo_subscription(
+        self,
+        repo_subscription_id: str,
+    ) -> GitHubRepoSubscriptionRecord:
+        return self.update_repo_subscription(
+            repo_subscription_id,
+            GitHubRepoSubscriptionUpdateInput(enabled=True),
+        )
+
+    def disable_repo_subscription(
+        self,
+        repo_subscription_id: str,
+    ) -> GitHubRepoSubscriptionRecord:
+        return self.update_repo_subscription(
+            repo_subscription_id,
+            GitHubRepoSubscriptionUpdateInput(enabled=False),
+        )
 
     def register_repo_webhook(
         self,
@@ -342,80 +460,43 @@ class GitHubTriggerService:
         payload: GitHubRepoWebhookRegistrationInput,
     ) -> GitHubRepoSubscriptionRecord:
         existing = self._repository.get_repo_subscription(repo_subscription_id)
-        token = self._require_account_token(existing.account_id)
-        webhook_secret = self._require_account_webhook_secret(existing.account_id)
-        try:
-            response_payload = self._github_client.register_repository_webhook(
-                token=token,
-                owner=existing.owner,
-                repo=existing.repo_name,
-                callback_url=_normalize_required_text(
-                    payload.callback_url, field_name="callback_url"
-                ),
-                webhook_secret=webhook_secret,
-                events=existing.subscribed_events,
-            )
-            updated = existing.model_copy(
+        updated = self._repository.update_repo_subscription(
+            existing.model_copy(
                 update={
-                    "provider_webhook_id": _json_identifier(response_payload.get("id")),
-                    "webhook_status": GitHubWebhookStatus.REGISTERED,
-                    "last_webhook_sync_at": _utc_now(),
-                    "last_error": None,
+                    "callback_url": _normalize_required_text(
+                        payload.callback_url,
+                        field_name="callback_url",
+                    ),
                     "updated_at": _utc_now(),
                 }
             )
-        except GitHubApiError as exc:
-            updated = existing.model_copy(
-                update={
-                    "webhook_status": GitHubWebhookStatus.ERROR,
-                    "last_error": str(exc),
-                    "last_webhook_sync_at": _utc_now(),
-                    "updated_at": _utc_now(),
-                }
-            )
-        return self._repository.update_repo_subscription(updated)
+        )
+        return self._reconcile_repo_webhook(updated.repo_subscription_id)
 
     def unregister_repo_webhook(
         self, repo_subscription_id: str
     ) -> GitHubRepoSubscriptionRecord:
         existing = self._repository.get_repo_subscription(repo_subscription_id)
-        webhook_id = _normalize_optional_text(existing.provider_webhook_id)
-        if webhook_id is None:
-            return self._repository.update_repo_subscription(
-                existing.model_copy(
-                    update={
-                        "webhook_status": GitHubWebhookStatus.UNREGISTERED,
-                        "last_webhook_sync_at": _utc_now(),
-                        "updated_at": _utc_now(),
-                    }
-                )
-            )
-        token = self._require_account_token(existing.account_id)
-        try:
+        if _normalize_optional_text(existing.provider_webhook_id) is not None:
+            token = self._require_account_token(existing.account_id)
             self._github_client.delete_repository_webhook(
                 token=token,
                 owner=existing.owner,
                 repo=existing.repo_name,
-                webhook_id=webhook_id,
+                webhook_id=_normalize_required_text(
+                    existing.provider_webhook_id,
+                    field_name="provider_webhook_id",
+                ),
             )
-            updated = existing.model_copy(
-                update={
-                    "provider_webhook_id": None,
-                    "webhook_status": GitHubWebhookStatus.UNREGISTERED,
-                    "last_webhook_sync_at": _utc_now(),
-                    "last_error": None,
-                    "updated_at": _utc_now(),
-                }
-            )
-        except GitHubApiError as exc:
-            updated = existing.model_copy(
-                update={
-                    "webhook_status": GitHubWebhookStatus.ERROR,
-                    "last_error": str(exc),
-                    "last_webhook_sync_at": _utc_now(),
-                    "updated_at": _utc_now(),
-                }
-            )
+        updated = existing.model_copy(
+            update={
+                "provider_webhook_id": None,
+                "webhook_status": GitHubWebhookStatus.UNREGISTERED,
+                "last_webhook_sync_at": _utc_now(),
+                "last_error": None,
+                "updated_at": _utc_now(),
+            }
+        )
         return self._repository.update_repo_subscription(updated)
 
     def delete_repo_subscription(self, repo_subscription_id: str) -> None:
@@ -423,8 +504,45 @@ class GitHubTriggerService:
         self._best_effort_unregister_repo_webhook(existing)
         self._repository.delete_repo_subscription(repo_subscription_id)
 
+    def refresh_repo_callback_urls_from_system_config(
+        self,
+        *,
+        previous_webhook_base_url: str | None = None,
+    ) -> tuple[GitHubRepoSubscriptionRecord, ...]:
+        current_webhook_base_url = self._get_github_config().webhook_base_url
+        previous_callback_url = _build_system_callback_url(previous_webhook_base_url)
+        current_callback_url = _build_system_callback_url(current_webhook_base_url)
+        updated_records: list[GitHubRepoSubscriptionRecord] = []
+        for repo in self._repository.list_repo_subscriptions():
+            normalized_callback_url = _normalize_callback_url(repo.callback_url)
+            should_replace = (
+                normalized_callback_url is None
+                or not is_public_http_url(normalized_callback_url)
+                or (
+                    previous_callback_url is not None
+                    and normalized_callback_url == previous_callback_url
+                )
+            )
+            if not should_replace or normalized_callback_url == current_callback_url:
+                continue
+            updated = self._repository.update_repo_subscription(
+                repo.model_copy(
+                    update={
+                        "callback_url": current_callback_url,
+                        "updated_at": _utc_now(),
+                    }
+                )
+            )
+            updated_records.append(
+                self._reconcile_repo_webhook(updated.repo_subscription_id)
+            )
+        return tuple(updated_records)
+
     def list_rules(self) -> tuple[TriggerRuleRecord, ...]:
         return self._repository.list_rules()
+
+    def get_rule(self, trigger_rule_id: str) -> TriggerRuleRecord:
+        return self._repository.get_rule(trigger_rule_id)
 
     def create_rule(self, payload: TriggerRuleCreateInput) -> TriggerRuleRecord:
         account = self._repository.get_account(payload.account_id)
@@ -444,7 +562,9 @@ class GitHubTriggerService:
             created_at=now,
             updated_at=now,
         )
-        return self._repository.create_rule(record)
+        created = self._repository.create_rule(record)
+        self._reconcile_repo_webhook(repo.repo_subscription_id)
+        return created
 
     def update_rule(
         self,
@@ -476,11 +596,26 @@ class GitHubTriggerService:
                 "updated_at": _utc_now(),
             }
         )
-        return self._repository.update_rule(updated)
+        persisted = self._repository.update_rule(updated)
+        self._reconcile_repo_webhook(existing.repo_subscription_id)
+        return persisted
+
+    def enable_rule(self, trigger_rule_id: str) -> TriggerRuleRecord:
+        return self.update_rule(
+            trigger_rule_id,
+            TriggerRuleUpdateInput(enabled=True),
+        )
+
+    def disable_rule(self, trigger_rule_id: str) -> TriggerRuleRecord:
+        return self.update_rule(
+            trigger_rule_id,
+            TriggerRuleUpdateInput(enabled=False),
+        )
 
     def delete_rule(self, trigger_rule_id: str) -> None:
-        _ = self._repository.get_rule(trigger_rule_id)
+        existing = self._repository.get_rule(trigger_rule_id)
         self._repository.delete_rule(trigger_rule_id)
+        self._reconcile_repo_webhook(existing.repo_subscription_id)
 
     def list_deliveries(self) -> tuple[TriggerDeliveryRecord, ...]:
         return self._repository.list_deliveries()
@@ -723,13 +858,10 @@ class GitHubTriggerService:
     ) -> tuple[TriggerDispatchRecord, ...]:
         rules = self._repository.list_enabled_rules_for_repo(repo.repo_subscription_id)
         dispatches: list[TriggerDispatchRecord] = []
-        changed_files_cache = _ChangedFilesResolutionCache()
         for rule in rules:
             matched, reason_code, reason_detail = self._match_rule(
                 rule.match_config,
                 delivery=delivery,
-                repo=repo,
-                changed_files_cache=changed_files_cache,
             )
             self._repository.create_evaluation(
                 TriggerEvaluationRecord(
@@ -1261,8 +1393,6 @@ class GitHubTriggerService:
         match_config: TriggerRuleMatchConfig,
         *,
         delivery: TriggerDeliveryRecord,
-        repo: GitHubRepoSubscriptionRecord,
-        changed_files_cache: _ChangedFilesResolutionCache | None = None,
     ) -> tuple[bool, str, str | None]:
         normalized = delivery.normalized_payload
         if delivery.event_name != match_config.event_name:
@@ -1275,35 +1405,10 @@ class GitHubTriggerService:
         )
         if match_config.base_branches and base_branch not in match_config.base_branches:
             return (False, "base_branch_mismatch", "base_branch did not match")
-        head_branch = _normalize_optional_text(
-            _json_text(normalized.get("head_branch"))
-        )
-        if match_config.head_branches and head_branch not in match_config.head_branches:
-            return (False, "head_branch_mismatch", "head_branch did not match")
-        label_names = _json_string_tuple(normalized.get("label_names"))
-        if match_config.labels_any and not set(label_names).intersection(
-            set(match_config.labels_any)
-        ):
-            return (False, "labels_any_mismatch", "labels_any did not match")
-        if match_config.labels_all and not set(match_config.labels_all).issubset(
-            set(label_names)
-        ):
-            return (False, "labels_all_mismatch", "labels_all did not match")
         if match_config.draft_pr is not None:
             draft_pr = _json_bool(normalized.get("draft_pr"))
             if draft_pr is None or draft_pr != match_config.draft_pr:
                 return (False, "draft_pr_mismatch", "draft_pr did not match")
-        sender_login = _normalize_optional_text(
-            _json_text(normalized.get("sender_login"))
-        )
-        if match_config.sender_allow and sender_login not in match_config.sender_allow:
-            return (
-                False,
-                "sender_allow_mismatch",
-                "sender_login did not match allow list",
-            )
-        if match_config.sender_deny and sender_login in match_config.sender_deny:
-            return (False, "sender_deny_mismatch", "sender_login matched deny list")
         conclusion = _normalize_optional_text(
             _json_text(normalized.get("check_conclusion"))
         )
@@ -1316,74 +1421,7 @@ class GitHubTriggerService:
                 "check_conclusion_mismatch",
                 "check_conclusion did not match",
             )
-        if match_config.paths_any or match_config.paths_ignore:
-            cache = (
-                changed_files_cache
-                if changed_files_cache is not None
-                else _ChangedFilesResolutionCache()
-            )
-            changed_files, changed_files_error = cache.get_or_resolve(
-                lambda: self._resolve_changed_files(delivery=delivery, repo=repo)
-            )
-            if changed_files_error is not None:
-                return (
-                    False,
-                    "changed_files_unavailable",
-                    changed_files_error,
-                )
-            resolved_changed_files = changed_files or ()
-            if match_config.paths_any and not any(
-                any(
-                    fnmatch.fnmatchcase(path, pattern)
-                    for pattern in match_config.paths_any
-                )
-                for path in resolved_changed_files
-            ):
-                return (
-                    False,
-                    "paths_any_mismatch",
-                    "changed files did not match paths_any",
-                )
-            if (
-                match_config.paths_ignore
-                and resolved_changed_files
-                and all(
-                    any(
-                        fnmatch.fnmatchcase(path, pattern)
-                        for pattern in match_config.paths_ignore
-                    )
-                    for path in resolved_changed_files
-                )
-            ):
-                return (
-                    False,
-                    "paths_ignore_mismatch",
-                    "all changed files matched paths_ignore",
-                )
         return (True, "matched", None)
-
-    def _resolve_changed_files(
-        self,
-        *,
-        delivery: TriggerDeliveryRecord,
-        repo: GitHubRepoSubscriptionRecord,
-    ) -> tuple[str, ...]:
-        normalized_payload = delivery.normalized_payload
-        existing = _json_string_tuple(normalized_payload.get("changed_files"))
-        if existing:
-            return existing
-        pull_request_number = _parse_int(
-            _json_text(normalized_payload.get("pull_request_number"))
-        )
-        if pull_request_number is None:
-            return ()
-        token = self._require_account_token(repo.account_id)
-        return self._github_client.list_pull_request_files(
-            token=token,
-            owner=repo.owner,
-            repo=repo.repo_name,
-            pull_request_number=pull_request_number,
-        )
 
     def _best_effort_unregister_repo_webhook(
         self,
@@ -1415,6 +1453,153 @@ class GitHubTriggerService:
                     "error": str(exc),
                 },
             )
+
+    def _reconcile_account_repos(self, account_id: str) -> None:
+        for repo_subscription in self._repository.list_repo_subscriptions_by_account(
+            account_id
+        ):
+            self._reconcile_repo_webhook(repo_subscription.repo_subscription_id)
+
+    def _reconcile_repo_webhook(
+        self,
+        repo_subscription_id: str,
+    ) -> GitHubRepoSubscriptionRecord:
+        existing = self._repository.get_repo_subscription(repo_subscription_id)
+        desired_events = self._derive_subscribed_events_for_repo(repo_subscription_id)
+        account = self._repository.get_account(existing.account_id)
+        if (
+            account.status != GitHubTriggerAccountStatus.ENABLED
+            or not existing.enabled
+            or not desired_events
+        ):
+            return self._unregister_repo_webhook_for_reconcile(
+                existing,
+                desired_events=desired_events,
+            )
+
+        callback_url = _normalize_callback_url(existing.callback_url)
+        if callback_url is None:
+            return self._repository.update_repo_subscription(
+                existing.model_copy(
+                    update={
+                        "subscribed_events": desired_events,
+                        "provider_webhook_id": None,
+                        "webhook_status": GitHubWebhookStatus.ERROR,
+                        "last_webhook_sync_at": _utc_now(),
+                        "last_error": (
+                            "callback_url is required to register a GitHub webhook; "
+                            "configure a public GitHub webhook base URL or set a repo callback_url"
+                        ),
+                        "updated_at": _utc_now(),
+                    }
+                )
+            )
+        try:
+            token = self._require_account_token(existing.account_id)
+            webhook_secret = self._require_account_webhook_secret(existing.account_id)
+            webhook_id = _normalize_optional_text(existing.provider_webhook_id)
+            if webhook_id is not None:
+                self._github_client.delete_repository_webhook(
+                    token=token,
+                    owner=existing.owner,
+                    repo=existing.repo_name,
+                    webhook_id=webhook_id,
+                )
+            response_payload = self._github_client.register_repository_webhook(
+                token=token,
+                owner=existing.owner,
+                repo=existing.repo_name,
+                callback_url=callback_url,
+                webhook_secret=webhook_secret,
+                events=desired_events,
+            )
+            updated = existing.model_copy(
+                update={
+                    "callback_url": callback_url,
+                    "provider_webhook_id": _json_identifier(response_payload.get("id")),
+                    "subscribed_events": desired_events,
+                    "webhook_status": GitHubWebhookStatus.REGISTERED,
+                    "last_webhook_sync_at": _utc_now(),
+                    "last_error": None,
+                    "updated_at": _utc_now(),
+                }
+            )
+        except (GitHubApiError, KeyError, ValueError) as exc:
+            updated = existing.model_copy(
+                update={
+                    "callback_url": callback_url,
+                    "subscribed_events": desired_events,
+                    "provider_webhook_id": None,
+                    "webhook_status": GitHubWebhookStatus.ERROR,
+                    "last_webhook_sync_at": _utc_now(),
+                    "last_error": str(exc),
+                    "updated_at": _utc_now(),
+                }
+            )
+        return self._repository.update_repo_subscription(updated)
+
+    def _derive_subscribed_events_for_repo(
+        self,
+        repo_subscription_id: str,
+    ) -> tuple[str, ...]:
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for rule in self._repository.list_enabled_rules_for_repo(repo_subscription_id):
+            event_name = _normalize_optional_text(rule.match_config.event_name)
+            if event_name is None or event_name in seen:
+                continue
+            seen.add(event_name)
+            normalized.append(event_name)
+        return tuple(normalized)
+
+    def _unregister_repo_webhook_for_reconcile(
+        self,
+        repo_subscription: GitHubRepoSubscriptionRecord,
+        *,
+        desired_events: tuple[str, ...],
+    ) -> GitHubRepoSubscriptionRecord:
+        webhook_id = _normalize_optional_text(repo_subscription.provider_webhook_id)
+        if webhook_id is None:
+            return self._repository.update_repo_subscription(
+                repo_subscription.model_copy(
+                    update={
+                        "subscribed_events": desired_events,
+                        "webhook_status": GitHubWebhookStatus.UNREGISTERED,
+                        "last_webhook_sync_at": _utc_now(),
+                        "last_error": None,
+                        "updated_at": _utc_now(),
+                    }
+                )
+            )
+        try:
+            token = self._require_account_token(repo_subscription.account_id)
+            self._github_client.delete_repository_webhook(
+                token=token,
+                owner=repo_subscription.owner,
+                repo=repo_subscription.repo_name,
+                webhook_id=webhook_id,
+            )
+            updated = repo_subscription.model_copy(
+                update={
+                    "provider_webhook_id": None,
+                    "subscribed_events": desired_events,
+                    "webhook_status": GitHubWebhookStatus.UNREGISTERED,
+                    "last_webhook_sync_at": _utc_now(),
+                    "last_error": None,
+                    "updated_at": _utc_now(),
+                }
+            )
+        except (GitHubApiError, KeyError, ValueError) as exc:
+            updated = repo_subscription.model_copy(
+                update={
+                    "subscribed_events": desired_events,
+                    "webhook_status": GitHubWebhookStatus.ERROR,
+                    "last_webhook_sync_at": _utc_now(),
+                    "last_error": str(exc),
+                    "updated_at": _utc_now(),
+                }
+            )
+        return self._repository.update_repo_subscription(updated)
 
     def _build_template_context(
         self,
@@ -1647,6 +1832,26 @@ def _normalize_required_text(value: object, *, field_name: str) -> str:
     return normalized
 
 
+def _normalize_callback_url(value: object) -> str | None:
+    normalized = _normalize_optional_text(value)
+    if normalized is None:
+        return None
+    parts = urlsplit(normalized)
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        raise ValueError("callback_url must be an absolute http or https URL")
+    return normalized
+
+
+def _build_system_callback_url(webhook_base_url: str | None) -> str | None:
+    normalized_base_url = _normalize_optional_text(webhook_base_url)
+    if normalized_base_url is None:
+        return None
+    return build_public_base_url_path(
+        normalized_base_url,
+        "/api/triggers/github/deliveries",
+    )
+
+
 def _normalize_events(values: tuple[str, ...]) -> tuple[str, ...]:
     normalized: list[str] = []
     seen: set[str] = set()
@@ -1741,6 +1946,10 @@ def _resolve_repository_identity(
             f"{resolved_owner}/{resolved_repo_name}",
         )
     return (owner, repo_name, f"{owner}/{repo_name}")
+
+
+def _resolve_repository_owner(payload: dict[str, JsonValue]) -> str | None:
+    return _normalize_optional_text(_nested_text(payload, "owner", "login"))
 
 
 def _resolve_event_action(payload: dict[str, JsonValue]) -> str | None:
@@ -1950,6 +2159,12 @@ def _monitor_event_name_for_delivery(delivery: TriggerDeliveryRecord) -> str | N
             return "pr.updated"
         if action == "review_requested":
             return "pr.review_requested"
+        return None
+    if event_name == "issues":
+        if action == "opened":
+            return "issue.opened"
+        if action in {"edited", "reopened"}:
+            return "issue.updated"
         return None
     if event_name == "check_run" and action == "completed":
         return "check_run.completed"

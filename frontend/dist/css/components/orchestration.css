@@ -291,6 +291,75 @@
     display: none !important;
 }
 
+.feedback-dialog-select {
+    appearance: none;
+    cursor: pointer;
+}
+
+.feedback-dialog-multiselect {
+    position: relative;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-elevated);
+}
+
+.feedback-dialog-multiselect.is-disabled {
+    pointer-events: none;
+    opacity: 0.65;
+}
+
+.feedback-dialog-multiselect-trigger {
+    display: block;
+    padding: 0.78rem 0.9rem;
+    color: var(--text-primary);
+    cursor: pointer;
+    list-style: none;
+}
+
+.feedback-dialog-multiselect-trigger::-webkit-details-marker {
+    display: none;
+}
+
+.feedback-dialog-multiselect[open] .feedback-dialog-multiselect-trigger {
+    border-bottom: 1px solid var(--border-color);
+}
+
+.feedback-dialog-multiselect-menu {
+    display: grid;
+    gap: 0.45rem;
+    padding: 0.75rem 0.9rem 0.9rem;
+}
+
+.feedback-dialog-multiselect-option {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--text-primary);
+}
+
+.feedback-dialog-submit-error {
+    margin-top: 0.8rem;
+    color: var(--danger);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+.feedback-dialog-checkbox-wrap {
+    gap: 0.2rem;
+}
+
+.feedback-dialog-checkbox {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.7rem;
+    padding: 0.85rem 0.9rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+}
+
 .composer-preset-select {
     min-height: 32px;
     min-width: 168px;
@@ -306,4 +375,3 @@
     opacity: 0.55;
     cursor: not-allowed;
 }
-

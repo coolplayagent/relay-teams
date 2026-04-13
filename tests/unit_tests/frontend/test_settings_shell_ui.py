@@ -99,7 +99,6 @@ const rolesTab = tabs.find(tab => tab.dataset.tab === "roles");
 const agentsTab = tabs.find(tab => tab.dataset.tab === "agents");
 const notificationsTab = tabs.find(tab => tab.dataset.tab === "notifications");
 const webTab = tabs.find(tab => tab.dataset.tab === "web");
-const githubTab = tabs.find(tab => tab.dataset.tab === "github");
 const proxyTab = tabs.find(tab => tab.dataset.tab === "proxy");
 const mcpTab = tabs.find(tab => tab.dataset.tab === "mcp");
 
@@ -114,12 +113,11 @@ await notificationsTab.onclick();
 const notificationsSaveDisplay = document.getElementById("save-notifications-btn").style.display;
 await webTab.onclick();
 const webSaveDisplay = document.getElementById("save-web-btn").style.display;
-await githubTab.onclick();
-const githubSaveDisplay = document.getElementById("save-github-btn").style.display;
 await proxyTab.onclick();
 const proxySaveDisplay = document.getElementById("save-proxy-btn").style.display;
 await mcpTab.onclick();
 const mcpReloadDisplay = document.getElementById("reload-mcp-btn").style.display;
+const hasGitHubSaveButton = Boolean(document.getElementById("save-github-btn"));
 
 console.log(JSON.stringify({
     modelAddDisplay,
@@ -127,9 +125,9 @@ console.log(JSON.stringify({
     roleAddDisplay,
     notificationsSaveDisplay,
     webSaveDisplay,
-    githubSaveDisplay,
     proxySaveDisplay,
     mcpReloadDisplay,
+    hasGitHubSaveButton,
 }));
 """.strip(),
     )
@@ -139,9 +137,9 @@ console.log(JSON.stringify({
     assert payload["roleAddDisplay"] == "inline-flex"
     assert payload["notificationsSaveDisplay"] == "inline-flex"
     assert payload["webSaveDisplay"] == "inline-flex"
-    assert payload["githubSaveDisplay"] == "inline-flex"
     assert payload["proxySaveDisplay"] == "inline-flex"
     assert payload["mcpReloadDisplay"] == "inline-flex"
+    assert payload["hasGitHubSaveButton"] is False
 
 
 def test_settings_tab_order_and_labels_are_simplified() -> None:
@@ -169,8 +167,7 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     assert tabs_html.index('data-tab="notifications"') < tabs_html.index(
         'data-tab="web"'
     )
-    assert tabs_html.index('data-tab="web"') < tabs_html.index('data-tab="github"')
-    assert tabs_html.index('data-tab="github"') < tabs_html.index('data-tab="proxy"')
+    assert tabs_html.index('data-tab="web"') < tabs_html.index('data-tab="proxy"')
     assert tabs_html.index('data-tab="proxy"') < tabs_html.index(
         'data-tab="environment"'
     )
@@ -178,8 +175,8 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     assert ">MCP</span>" in tabs_html
     assert ">Agents</span>" in tabs_html
     assert ">Web</span>" in tabs_html
-    assert ">GitHub</span>" in tabs_html
     assert ">Environment</span>" in tabs_html
+    assert ">GitHub</span>" not in tabs_html
     assert ">Skills</span>" not in tabs_html
     assert ">Gateway</span>" not in tabs_html
     assert ">Model Profiles</span>" not in tabs_html
@@ -290,7 +287,7 @@ console.log(JSON.stringify({
         'id="toggle-web-api-key-btn" type="button" title="Show API key" aria-label="Show API key"'
         in modal_html
     )
-    assert 'id="toggle-github-token-btn"' in modal_html
+    assert 'id="toggle-github-token-btn"' not in modal_html
     assert 'id="toggle-proxy-password-btn"' in modal_html
     assert 'id="web-searxng-instance-url-field"' in modal_html
     assert 'id="web-searxng-builtins-field"' in modal_html

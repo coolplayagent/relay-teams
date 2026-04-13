@@ -12,47 +12,62 @@ import { formatMessage, t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const MASKED_SECRET_PLACEHOLDER = '************';
+export const DEFAULT_GITHUB_FIELD_IDS = Object.freeze({
+    saveButtonId: 'save-github-btn',
+    probeButtonId: 'test-github-btn',
+    tokenInputId: 'github-token',
+    toggleTokenButtonId: 'toggle-github-token-btn',
+    statusId: 'github-probe-status',
+});
 
 let lastProbeState = null;
 let languageBound = false;
 let githubTokenState = createGitHubTokenState();
 
-export function bindGitHubSettingsHandlers() {
-    const saveBtn = document.getElementById('save-github-btn');
+export function bindGitHubSettingsHandlers(fieldIds = DEFAULT_GITHUB_FIELD_IDS) {
+    const ids = resolveGitHubFieldIds(fieldIds);
+    const saveBtn = document.getElementById(ids.saveButtonId);
     if (saveBtn) {
-        saveBtn.onclick = handleSaveGitHub;
+        saveBtn.onclick = () => handleSaveGitHub(ids);
     }
 
-    const probeBtn = document.getElementById('test-github-btn');
+    const probeBtn = document.getElementById(ids.probeButtonId);
     if (probeBtn) {
-        probeBtn.onclick = handleProbeGitHub;
+        probeBtn.onclick = () => handleProbeGitHub(ids);
     }
 
-    const tokenInput = document.getElementById('github-token');
+    const tokenInput = document.getElementById(ids.tokenInputId);
     if (tokenInput) {
-        tokenInput.oninput = handleGitHubTokenInput;
-        tokenInput.onchange = handleGitHubTokenInput;
+        tokenInput.oninput = () => {
+            handleGitHubTokenInput(ids);
+        };
+        tokenInput.onchange = () => {
+            handleGitHubTokenInput(ids);
+        };
     }
 
-    const toggleTokenBtn = document.getElementById('toggle-github-token-btn');
+    const toggleTokenBtn = document.getElementById(ids.toggleTokenButtonId);
     if (toggleTokenBtn) {
-        toggleTokenBtn.onclick = toggleGitHubTokenVisibility;
+        toggleTokenBtn.onclick = () => {
+            toggleGitHubTokenVisibility(ids);
+        };
     }
 
     if (!languageBound && typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => {
-            renderGitHubTokenField();
-            renderGitHubProbeState();
+            renderGitHubTokenField(ids);
+            renderGitHubProbeState(ids);
         });
         languageBound = true;
     }
 }
 
-export async function loadGitHubSettingsPanel() {
+export async function loadGitHubSettingsPanel(fieldIds = DEFAULT_GITHUB_FIELD_IDS) {
+    const ids = resolveGitHubFieldIds(fieldIds);
     try {
         const config = await fetchGitHubConfig();
-        writeGitHubFormValues(config);
-        renderGitHubProbeState();
+        writeGitHubFormValues(config, ids);
+        renderGitHubProbeState(ids);
     } catch (e) {
         logError(
             'frontend.github_settings.load_failed',
@@ -67,15 +82,75 @@ export async function loadGitHubSettingsPanel() {
     }
 }
 
-async function handleSaveGitHub() {
+export function renderGitHubAccessPanelMarkup(
+    fieldIds = DEFAULT_GITHUB_FIELD_IDS,
+) {
+    const ids = resolveGitHubFieldIds(fieldIds);
+    return `
+        <div class="proxy-editor-form">
+            <section class="proxy-form-section">
+                <div class="proxy-form-section-header">
+                    <h5 data-i18n="settings.github.section">GitHub CLI</h5>
+                </div>
+                <div class="proxy-form-grid">
+                    <div class="form-group proxy-inline-field">
+                        <label for="${escapeHtml(ids.tokenInputId)}" data-i18n="settings.github.token">GitHub Token</label>
+                        <div class="secure-input-row">
+                            <input type="password" id="${escapeHtml(ids.tokenInputId)}" placeholder="ghp_..." data-i18n-placeholder="settings.github.token_placeholder" autocomplete="current-password">
+                            <button class="secure-input-btn" id="${escapeHtml(ids.toggleTokenButtonId)}" type="button" title="Show GitHub token" aria-label="Show GitHub token" style="display:none;">
+                                <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                    <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="form-group proxy-inline-field web-provider-inline-field">
+                        <span class="settings-token-source-label" data-i18n="settings.github.token_source">Get token</span>
+                        <a class="web-provider-link-card" id="github-token-link" href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" title="https://github.com/settings/tokens" aria-label="https://github.com/settings/tokens">
+                            <span class="web-provider-link-copy">
+                                <span class="web-provider-link-badge">GitHub</span>
+                                <span class="web-provider-link-url">https://github.com/settings/tokens</span>
+                                <span class="settings-token-source-note" data-i18n="settings.github.token_source_help">Open GitHub token settings to create or copy a token</span>
+                            </span>
+                            <span class="web-provider-link-arrow" aria-hidden="true">
+                                <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
+                                    <path d="M7 17L17 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                    <path d="M9 7h8v8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                </svg>
+                            </span>
+                        </a>
+                    </div>
+                    <div class="form-group proxy-inline-field proxy-inline-field-actions">
+                        <label for="${escapeHtml(ids.probeButtonId)}" data-i18n="settings.github.token_action">Token Actions</label>
+                        <div class="settings-inline-action-row">
+                            <button class="secondary-btn section-action-btn proxy-inline-test-btn" id="${escapeHtml(ids.probeButtonId)}" type="button" data-i18n="settings.github.test_connection">Test Connection</button>
+                            <button class="primary-btn section-action-btn proxy-inline-test-btn" id="${escapeHtml(ids.saveButtonId)}" type="button" data-i18n="settings.action.save">Save</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="proxy-probe-status" id="${escapeHtml(ids.statusId)}" style="display:none;"></div>
+            </section>
+        </div>
+    `;
+}
+
+function resolveGitHubFieldIds(fieldIds) {
+    return {
+        ...DEFAULT_GITHUB_FIELD_IDS,
+        ...(fieldIds && typeof fieldIds === 'object' ? fieldIds : {}),
+    };
+}
+
+async function handleSaveGitHub(fieldIds) {
     try {
-        await saveGitHubConfig(readGitHubFormValues());
+        await saveGitHubConfig(readGitHubFormValues(fieldIds));
         showToast({
             title: t('settings.github.saved'),
             message: t('settings.github.saved_message'),
             tone: 'success',
         });
-        await loadGitHubSettingsPanel();
+        await loadGitHubSettingsPanel(fieldIds);
     } catch (e) {
         showToast({
             title: t('settings.github.save_failed'),
@@ -85,61 +160,61 @@ async function handleSaveGitHub() {
     }
 }
 
-async function handleProbeGitHub() {
-    const token = readGitHubTokenValue();
-    if (!token) {
-        lastProbeState = {
-            status: 'failed',
-            message: t('settings.github.enter_token'),
-        };
-        renderGitHubProbeState();
-        return;
-    }
-
+async function handleProbeGitHub(fieldIds) {
     lastProbeState = {
         status: 'probing',
         message: t('settings.github.testing_message'),
     };
-    renderGitHubProbeState();
+    renderGitHubProbeState(fieldIds);
 
-    try {
-        const result = await probeGitHubConnectivity(readGitHubFormValues());
-        lastProbeState = buildProbeState(result);
-    } catch (e) {
-        lastProbeState = {
-            status: 'failed',
-            message: formatMessage('settings.github.probe_failed', { error: e.message }),
-        };
+    const token = readGitHubTokenValue(fieldIds);
+    const probeMessages = [];
+    let hasFailure = false;
+
+    if (!token && !hasPersistedGitHubToken()) {
+        hasFailure = true;
+        probeMessages.push(t('settings.github.enter_token'));
+    } else {
+        try {
+            const payload = token ? { token } : {};
+            const result = await probeGitHubConnectivity(payload);
+            probeMessages.push(buildGitHubTokenProbeMessage(result));
+            if (!result.ok) {
+                hasFailure = true;
+            }
+        } catch (e) {
+            hasFailure = true;
+            probeMessages.push(formatMessage('settings.github.probe_failed', { error: e.message }));
+        }
     }
 
-    renderGitHubProbeState();
+    lastProbeState = {
+        status: hasFailure ? 'failed' : 'success',
+        message: probeMessages.join(' '),
+    };
+
+    renderGitHubProbeState(fieldIds);
 }
 
-function buildProbeState(result) {
+function buildGitHubTokenProbeMessage(result) {
     if (result.ok) {
         const username = result.username || 'unknown';
         const version = result.gh_version ? `gh ${result.gh_version}` : 'gh';
-        return {
-            status: 'success',
-            message: formatMessage('settings.github.probe_success', {
-                username,
-                version,
-                latency_ms: result.latency_ms,
-            }),
-        };
+        return formatMessage('settings.github.probe_success', {
+            username,
+            version,
+            latency_ms: result.latency_ms,
+        });
     }
 
     const reason = result.error_message || result.error_code || 'Unknown error';
     const version = result.gh_version ? `gh ${result.gh_version}. ` : '';
-    return {
-        status: 'failed',
-        message: formatMessage('settings.github.probe_reason', { version, reason }),
-    };
+    return formatMessage('settings.github.probe_reason', { version, reason });
 }
 
-function renderGitHubProbeState() {
-    const statusEl = document.getElementById('github-probe-status');
-    const probeBtn = document.getElementById('test-github-btn');
+function renderGitHubProbeState(fieldIds) {
+    const statusEl = document.getElementById(fieldIds.statusId);
+    const probeBtn = document.getElementById(fieldIds.probeButtonId);
     if (!statusEl || !probeBtn) {
         return;
     }
@@ -162,88 +237,63 @@ function renderGitHubProbeState() {
         : t('settings.github.test_connection');
 }
 
-function writeGitHubFormValues(config) {
-    githubTokenState = createGitHubTokenState(config.token);
-    renderGitHubTokenField();
+function writeGitHubFormValues(config, fieldIds) {
+    githubTokenState = createGitHubTokenState(config.token_configured === true);
+    renderGitHubTokenField(fieldIds);
 }
 
-function readGitHubFormValues() {
-    return {
-        token: readGitHubTokenValue(),
-    };
-}
-
-function setInputValue(id, value) {
-    const input = document.getElementById(id);
-    if (!input) {
-        return;
+function readGitHubFormValues(fieldIds) {
+    const payload = {};
+    const token = readGitHubTokenValue(fieldIds);
+    if (token) {
+        payload.token = token;
     }
-    input.value = value || '';
+    return payload;
 }
 
-function readInputValue(id) {
-    const input = document.getElementById(id);
-    if (!input) {
-        return '';
-    }
-    return input.value.trim();
-}
-
-function createGitHubTokenState(persistedValue = null) {
-    const normalizedValue = typeof persistedValue === 'string' ? persistedValue : '';
+function createGitHubTokenState(hasPersistedValue = false) {
     return {
-        persistedValue: normalizedValue,
         draftValue: '',
-        hasPersistedValue: Boolean(normalizedValue.trim()),
+        hasPersistedValue: hasPersistedValue === true,
         isDirty: false,
         revealed: false,
     };
 }
 
-function handleGitHubTokenInput() {
-    const tokenInput = document.getElementById('github-token');
+function handleGitHubTokenInput(fieldIds) {
+    const tokenInput = document.getElementById(fieldIds.tokenInputId);
     const nextValue = tokenInput ? tokenInput.value : '';
     githubTokenState.draftValue = nextValue;
-    githubTokenState.isDirty = githubTokenState.hasPersistedValue
-        ? nextValue !== githubTokenState.persistedValue
-        : nextValue.trim().length > 0;
-    if (!readGitHubTokenValue()) {
+    githubTokenState.isDirty = nextValue.trim().length > 0;
+    if (!readGitHubTokenValue(fieldIds)) {
         githubTokenState.revealed = false;
     }
-    renderGitHubTokenField();
+    renderGitHubTokenField(fieldIds);
 }
 
-function toggleGitHubTokenVisibility() {
-    if (!hasGitHubTokenValue()) {
+function toggleGitHubTokenVisibility(fieldIds) {
+    if (!hasGitHubTokenValue(fieldIds)) {
         return;
     }
     githubTokenState.revealed = !githubTokenState.revealed;
-    renderGitHubTokenField();
+    renderGitHubTokenField(fieldIds);
 }
 
-function readGitHubTokenValue() {
-    const tokenInput = document.getElementById('github-token');
+function readGitHubTokenValue(fieldIds) {
+    const tokenInput = document.getElementById(fieldIds.tokenInputId);
     const inputValue = tokenInput ? tokenInput.value.trim() : '';
-    if (!githubTokenState.hasPersistedValue) {
-        return inputValue || null;
-    }
-    if (githubTokenState.isDirty) {
-        return inputValue || null;
-    }
-    return inputValue || githubTokenState.persistedValue || null;
+    return inputValue || null;
 }
 
-function renderGitHubTokenField() {
-    const tokenInput = document.getElementById('github-token');
+function renderGitHubTokenField(fieldIds) {
+    const tokenInput = document.getElementById(fieldIds.tokenInputId);
     if (!tokenInput) {
         return;
     }
 
     if (githubTokenState.revealed) {
         tokenInput.type = 'text';
-        tokenInput.value = githubTokenState.isDirty
-            ? githubTokenState.draftValue
-            : githubTokenState.persistedValue;
+        tokenInput.value = githubTokenState.draftValue;
         tokenInput.placeholder = '';
     } else if (githubTokenState.hasPersistedValue && !githubTokenState.isDirty) {
         tokenInput.type = 'password';
@@ -255,16 +305,16 @@ function renderGitHubTokenField() {
         tokenInput.placeholder = t('settings.github.token_placeholder');
     }
 
-    renderGitHubTokenToggle();
+    renderGitHubTokenToggle(fieldIds);
 }
 
-function renderGitHubTokenToggle() {
-    const toggleTokenBtn = document.getElementById('toggle-github-token-btn');
+function renderGitHubTokenToggle(fieldIds) {
+    const toggleTokenBtn = document.getElementById(fieldIds.toggleTokenButtonId);
     if (!toggleTokenBtn) {
         return;
     }
 
-    toggleTokenBtn.style.display = hasGitHubTokenValue() ? 'inline-flex' : 'none';
+    toggleTokenBtn.style.display = hasGitHubTokenValue(fieldIds) ? 'inline-flex' : 'none';
     toggleTokenBtn.className = githubTokenState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
     toggleTokenBtn.title = githubTokenState.revealed
         ? t('settings.github.hide_token')
@@ -276,11 +326,21 @@ function renderGitHubTokenToggle() {
     }
 }
 
-function hasGitHubTokenValue() {
-    const tokenInput = document.getElementById('github-token');
+function hasGitHubTokenValue(fieldIds) {
+    const tokenInput = document.getElementById(fieldIds.tokenInputId);
     const inputValue = tokenInput ? tokenInput.value.trim() : '';
-    if (githubTokenState.hasPersistedValue && !githubTokenState.isDirty) {
-        return Boolean(githubTokenState.persistedValue || inputValue);
-    }
     return Boolean(githubTokenState.draftValue.trim() || inputValue);
+}
+
+function hasPersistedGitHubToken() {
+    return githubTokenState.hasPersistedValue;
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
 }

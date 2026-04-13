@@ -205,15 +205,19 @@ The backend persists the Exa API key only through the unified secret store and d
 
 Returns the saved GitHub CLI configuration.
 Fields:
-- `token`: optional value rehydrated from the unified secret store
+- `token_configured`: whether a GitHub token is already stored in the unified secret store
+- `webhook_base_url`: optional public base URL used to derive `.../api/triggers/github/deliveries`
 
 The GitHub settings UI exists specifically for the bundled `gh` CLI integration used by shell subprocesses. When configured, the runtime injects the token into shell environments as both `GH_TOKEN` and `GITHUB_TOKEN`, and also disables interactive auth/update prompts for non-interactive runs.
+The backend never returns the stored GitHub token value from this read endpoint.
+`webhook_base_url` must be a publicly reachable `http/https` URL. Localhost and private RFC1918 addresses are rejected because GitHub cannot deliver webhooks to them.
 Legacy `GH_TOKEN` / `GITHUB_TOKEN` values still found in `.env` are migrated into the secret store on read and removed from `.env`.
 
 ### `PUT /system/configs/github`
 
 Saves the GitHub CLI configuration.
-`token` is optional. The backend persists it through the unified secret store and removes any managed `GH_TOKEN` / `GITHUB_TOKEN` entries from `.env`.
+`token` is optional and write-only. The backend persists it through the unified secret store and removes any managed `GH_TOKEN` / `GITHUB_TOKEN` entries from `.env`.
+`webhook_base_url` is optional. When configured, saving it also refreshes repo subscriptions that were using a previous auto-generated callback URL or a local-only callback URL.
 
 ### `POST /system/configs/github:probe`
 
@@ -234,6 +238,33 @@ The backend runs `gh api user` in a non-interactive subprocess and returns:
 The request may include:
 - optional `token`
 - optional `timeout_ms`
+
+### `POST /system/configs/github/webhook:probe`
+
+Tests the configured public GitHub webhook base URL using `${webhook_base_url}/api/system/health`.
+The request may include:
+- optional `webhook_base_url`
+- optional `timeout_ms`
+
+The response includes:
+- `ok`
+- `webhook_base_url`
+- `callback_url`
+- `health_url`
+- `final_url`
+- `status_code`
+- `latency_ms`
+- `diagnostics.endpoint_reachable`
+- `diagnostics.used_proxy`
+- `diagnostics.redirected`
+
+### Public Host Guard
+
+When the server receives a request through a non-local hostname, it only exposes:
+- `GET/HEAD /api/system/health`
+- `POST /api/triggers/github/deliveries`
+
+All other UI and API routes return `403` by default. This prevents tunnel or reverse-proxy domains from exposing the full web application and sensitive settings pages. Set `AGENT_TEAMS_UNSAFE_ALLOW_PUBLIC_ACCESS=1` only if you intentionally want to publish the full UI/API surface.
 
 ### `GET /system/configs/clawhub`
 
@@ -1154,6 +1185,145 @@ Notes:
 - `create_monitor` is also exposed as a tool for run-local `background_task` subscriptions; REST keeps the generic `source_kind/source_key` contract so future event sources reuse the same substrate.
 - System/module boundary guidance for this substrate lives in `docs/system-module-boundaries.md`.
 
+### `GET /triggers/github/accounts`
+
+Lists configured GitHub webhook accounts.
+
+### `POST /triggers/github/accounts`
+
+Creates one GitHub webhook account.
+
+Request fields:
+- `name`
+- `display_name`
+- `token`
+- `webhook_secret`
+- `enabled`
+
+Notes:
+- If `token` is omitted, the runtime falls back to `/api/system/configs/github` when that system token is configured.
+- If `webhook_secret` is omitted, the backend generates one.
+
+### `PATCH /triggers/github/accounts/{account_id}`
+
+Updates one GitHub webhook account.
+
+Request fields:
+- `name`
+- `display_name`
+- `token`
+- `webhook_secret`
+- `clear_token`
+- `clear_webhook_secret`
+- `enabled`
+
+Notes:
+- `clear_token=true` and `clear_webhook_secret=true` explicitly remove the stored per-account secret.
+- Empty strings do not clear an existing secret; omit the field or use the explicit clear flag.
+
+### `DELETE /triggers/github/accounts/{account_id}`
+
+Deletes one GitHub webhook account and its repositories/rules.
+
+### `POST /triggers/github/accounts/{account_id}:enable`
+
+Enables one GitHub webhook account and reconciles all bound repository webhooks.
+
+### `POST /triggers/github/accounts/{account_id}:disable`
+
+Disables one GitHub webhook account and unregisters bound repository webhooks when possible.
+
+### `GET /triggers/github/repos`
+
+Lists configured GitHub repository subscriptions.
+
+### `GET /triggers/github/accounts/{account_id}/repositories`
+
+Lists GitHub repositories visible to the effective token for one account.
+
+Query fields:
+- `query`
+
+Notes:
+- The backend uses the account token override when configured, otherwise it falls back to `/api/system/configs/github`.
+- Results are intended for UI repository pickers and include canonical `owner`, `repo_name`, and `full_name`.
+
+### `POST /triggers/github/repos`
+
+Creates one GitHub repository subscription.
+
+Request fields:
+- `account_id`
+- `owner`
+- `repo_name`
+- `callback_url`
+- `enabled`
+
+Notes:
+- `callback_url` is optional for clients. When omitted, the backend derives it from the current server base URL and `/api/triggers/github/deliveries`.
+- If `/api/system/configs/github.webhook_base_url` is configured, that public base URL wins over the inbound request host when deriving the callback URL.
+- The backend does not auto-fill local-only request hosts such as `127.0.0.1` or `localhost`; in that case `callback_url` remains unset until a public base URL or explicit callback is provided.
+- Public webhook base URLs should point at a host that exposes only `/api/system/health` and `/api/triggers/github/deliveries` by default.
+- The stored callback URL is reused for automatic webhook registration.
+- `subscribed_events` is derived from the union of enabled rule `event_name` values for that repository; clients do not manage it directly.
+
+### `PATCH /triggers/github/repos/{repo_subscription_id}`
+
+Updates one GitHub repository subscription.
+
+Request fields:
+- `owner`
+- `repo_name`
+- `callback_url`
+- `enabled`
+
+Notes:
+- Any repository identity, callback, or enabled-state change triggers webhook reconciliation.
+
+### `DELETE /triggers/github/repos/{repo_subscription_id}`
+
+Deletes one GitHub repository subscription and its rules.
+
+### `POST /triggers/github/repos/{repo_subscription_id}:enable`
+
+Enables one GitHub repository subscription and reconciles the remote webhook.
+
+### `POST /triggers/github/repos/{repo_subscription_id}:disable`
+
+Disables one GitHub repository subscription and unregisters its remote webhook when possible.
+
+### `GET /triggers/github/rules`
+
+Lists configured GitHub trigger rules.
+
+### `POST /triggers/github/rules`
+
+Creates one GitHub trigger rule.
+Supported `match_config` fields for the current GitHub automation UI and API are:
+- `event_name`
+- `actions`
+- `base_branches`
+- `draft_pr`
+- `check_conclusions`
+
+The API no longer accepts older GitHub-specific filters such as label, sender, or path match fields.
+
+### `PATCH /triggers/github/rules/{trigger_rule_id}`
+
+Updates one GitHub trigger rule.
+
+### `DELETE /triggers/github/rules/{trigger_rule_id}`
+
+Deletes one GitHub trigger rule.
+
+### `POST /triggers/github/rules/{trigger_rule_id}:enable`
+
+Enables one GitHub trigger rule and reconciles the repository webhook event set.
+
+### `POST /triggers/github/rules/{trigger_rule_id}:disable`
+
+Disables one GitHub trigger rule and reconciles the repository webhook event set.
+
 ### `POST /triggers/github/deliveries`
 
 Accepts one inbound GitHub webhook delivery.
@@ -1162,7 +1332,7 @@ Notes:
 - Signature validation uses the configured repository/account webhook secret.
 - A valid delivery is normalized once and then feeds both the existing GitHub trigger pipeline and the monitor substrate.
 - GitHub monitor source keys use `repository.full_name` such as `owner/repo`.
-- Current normalized monitor event names are `pr.opened`, `pr.updated`, `pr.review_requested`, `check_run.completed`, `check_suite.completed`, and `status.updated`.
+- Current normalized monitor event names are `pr.opened`, `pr.updated`, `pr.review_requested`, `issue.opened`, `issue.updated`, `check_run.completed`, `check_suite.completed`, and `status.updated`.
 
 ### `POST /runs/{run_id}/tool-approvals/{tool_call_id}/resolve`
 
