@@ -63,7 +63,11 @@ export async function disableWeChatGatewayAccount(accountId) {
 export async function deleteWeChatGatewayAccount(accountId) {
     return requestJson(
         `/api/gateway/wechat/accounts/${encodeURIComponent(accountId)}`,
-        { method: 'DELETE' },
+        {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force: true }),
+        },
         'Failed to delete WeChat account',
     );
 }

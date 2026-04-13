@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from relay_teams.computer import ExecutionSurface
 from relay_teams.interfaces.server.deps import (
@@ -28,6 +28,7 @@ from relay_teams.roles import (
     ensure_required_system_roles,
 )
 from relay_teams.external_agents import ExternalAgentConfigService
+from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.roles.settings_service import RoleSettingsService
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
 from relay_teams.skills.skill_registry import SkillRegistry
@@ -96,10 +97,11 @@ def get_role_config_options(
             ),
             execution_surfaces=tuple(surface for surface in ExecutionSurface),
         )
-    except SystemRolesUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (SystemRolesUnavailableError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((SystemRolesUnavailableError, 503), (ValueError, 503)),
+        ) from exc
 
 
 @router.get(
@@ -125,7 +127,7 @@ def get_role_config(
     try:
         return service.get_role_document(role_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise http_exception_for(exc, mappings=((ValueError, 404),)) from exc
 
 
 @router.put(
@@ -141,7 +143,7 @@ def save_role_config(
     try:
         return service.save_role_document(role_id, draft)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise http_exception_for(exc, mappings=((ValueError, 400),)) from exc
 
 
 @router.delete("/configs/{role_id}")
@@ -154,8 +156,8 @@ def delete_role_config(
         return {"status": "ok"}
     except ValueError as exc:
         if str(exc).startswith("Role not found:"):
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise http_exception_for(exc, mappings=((ValueError, 404),)) from exc
+        raise http_exception_for(exc, mappings=((ValueError, 400),)) from exc
 
 
 @router.post(":validate", response_model=dict[str, int | bool])
@@ -164,10 +166,11 @@ def validate_roles(
 ) -> dict[str, int | bool]:
     try:
         return service.validate_all_roles()
-    except SystemRolesUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (SystemRolesUnavailableError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((SystemRolesUnavailableError, 503), (ValueError, 400)),
+        ) from exc
 
 
 @router.post(
@@ -182,7 +185,7 @@ def validate_role_config(
     try:
         return service.validate_role_document(draft)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise http_exception_for(exc, mappings=((ValueError, 400),)) from exc
 
 
 def _load_role_skill_options(

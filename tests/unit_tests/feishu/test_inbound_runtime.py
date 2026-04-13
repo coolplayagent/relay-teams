@@ -58,7 +58,7 @@ class _FakeSessionService:
             raise KeyError(session_id)
         return self.sessions[session_id]
 
-    def update_session(self, session_id: str, metadata: dict[str, str]) -> None:
+    def sync_session_metadata(self, session_id: str, metadata: dict[str, str]) -> None:
         record = self.get_session(session_id)
         self.sessions[session_id] = record.model_copy(update={"metadata": metadata})
 

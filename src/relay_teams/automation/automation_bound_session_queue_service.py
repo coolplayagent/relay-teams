@@ -245,6 +245,9 @@ class AutomationBoundSessionQueueService:
         progress = self._cleanup_queue_receipts(limit=limit) or progress
         return progress
 
+    def has_project_queue(self, automation_project_id: str) -> bool:
+        return self._repository.has_project_records(automation_project_id)
+
     def delete_project_queue(self, automation_project_id: str) -> None:
         self._repository.delete_by_project(automation_project_id)
 

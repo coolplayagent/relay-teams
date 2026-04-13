@@ -5,8 +5,20 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    field_validator,
+    model_validator,
+)
 
+from relay_teams.interfaces.server.api_write_validation import (
+    normalize_optional_string,
+    reject_empty_mapping_patch,
+    require_non_empty_patch,
+)
 from relay_teams.sessions.runs.run_models import RunThinkingConfig
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
@@ -132,10 +144,17 @@ class FeishuGatewayAccountCreateInput(BaseModel):
 
     name: RequiredIdentifierStr
     display_name: str | None = None
-    source_config: dict[str, JsonValue] = Field(default_factory=dict)
-    target_config: dict[str, JsonValue] | None = None
-    secret_config: dict[str, str] | None = None
+    source_config: FeishuTriggerSourceConfig
+    target_config: FeishuTriggerTargetConfig = Field(
+        default_factory=FeishuTriggerTargetConfig
+    )
+    secret_config: FeishuTriggerSecretConfig | None = None
     enabled: bool = True
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_display_name(cls, value: str | None) -> str | None:
+        return normalize_optional_string(value, field_name="display_name")
 
 
 class FeishuGatewayAccountUpdateInput(BaseModel):
@@ -143,9 +162,25 @@ class FeishuGatewayAccountUpdateInput(BaseModel):
 
     name: OptionalIdentifierStr = None
     display_name: str | None = None
-    source_config: dict[str, JsonValue] | None = None
-    target_config: dict[str, JsonValue] | None = None
-    secret_config: dict[str, str] | None = None
+    source_config: FeishuTriggerSourceConfig | None = None
+    target_config: FeishuTriggerTargetConfig | None = None
+    secret_config: FeishuTriggerSecretConfig | None = None
+
+    @field_validator("display_name")
+    @classmethod
+    def _normalize_patch_display_name(cls, value: str | None) -> str | None:
+        return normalize_optional_string(value, field_name="display_name")
+
+    @field_validator("source_config", "target_config", "secret_config", mode="before")
+    @classmethod
+    def _reject_empty_config_patch(cls, value: object) -> object:
+        return reject_empty_mapping_patch(
+            value, message="config patch must not be empty"
+        )
+
+    @model_validator(mode="after")
+    def _validate_patch(self) -> FeishuGatewayAccountUpdateInput:
+        return require_non_empty_patch(self)
 
 
 class FeishuGatewayAccountRecord(BaseModel):

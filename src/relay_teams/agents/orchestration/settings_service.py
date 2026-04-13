@@ -33,17 +33,19 @@ class OrchestrationSettingsService:
         self._session_repo = session_repo
         self._get_role_registry = get_role_registry
 
-    def get_orchestration_config(self) -> dict[str, JsonValue]:
-        settings = self._config_manager.get_orchestration_settings()
+    def get_orchestration_config(self) -> OrchestrationSettings:
+        return self._config_manager.get_orchestration_settings()
+
+    def get_orchestration_config_payload(self) -> dict[str, JsonValue]:
+        settings = self.get_orchestration_config()
         return cast(dict[str, JsonValue], settings.model_dump(mode="json"))
 
-    def save_orchestration_config(self, config: dict[str, JsonValue]) -> None:
-        settings = OrchestrationSettings.model_validate(config)
-        self._validate_roles(settings)
-        self._config_manager.save_orchestration_settings(settings)
+    def save_orchestration_config(self, config: OrchestrationSettings) -> None:
+        self._validate_roles(config)
+        self._config_manager.save_orchestration_settings(config)
         self._session_repo.reconcile_orchestration_presets(
-            valid_preset_ids=tuple(preset.preset_id for preset in settings.presets),
-            default_preset_id=settings.default_orchestration_preset_id or None,
+            valid_preset_ids=tuple(preset.preset_id for preset in config.presets),
+            default_preset_id=config.default_orchestration_preset_id or None,
         )
 
     def default_session_mode(self) -> SessionMode:

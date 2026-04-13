@@ -534,10 +534,16 @@ class AgentTeamsClient:
             {},
         )
 
-    def delete_feishu_gateway_account(self, account_id: str) -> dict[str, JsonValue]:
+    def delete_feishu_gateway_account(
+        self,
+        account_id: str,
+        *,
+        force: bool = True,
+    ) -> dict[str, JsonValue]:
         return self._request_json(
             "DELETE",
             f"/api/gateway/feishu/accounts/{quote(account_id, safe='')}",
+            {"force": force},
         )
 
     def reload_feishu_gateway(self) -> dict[str, JsonValue]:
@@ -742,10 +748,16 @@ class AgentTeamsClient:
             {},
         )
 
-    def delete_wechat_gateway_account(self, account_id: str) -> dict[str, JsonValue]:
+    def delete_wechat_gateway_account(
+        self,
+        account_id: str,
+        *,
+        force: bool = True,
+    ) -> dict[str, JsonValue]:
         return self._request_json(
             "DELETE",
             f"/api/gateway/wechat/accounts/{account_id}",
+            {"force": force},
         )
 
     def reload_wechat_gateway(self) -> dict[str, JsonValue]:

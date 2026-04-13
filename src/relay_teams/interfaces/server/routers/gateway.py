@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
-from relay_teams.interfaces.server.deps import get_wechat_gateway_service
 from relay_teams.gateway.wechat import (
     WeChatAccountRecord,
     WeChatAccountUpdateInput,
@@ -14,6 +13,9 @@ from relay_teams.gateway.wechat import (
     WeChatLoginWaitRequest,
     WeChatLoginWaitResponse,
 )
+from relay_teams.interfaces.server.deps import get_wechat_gateway_service
+from relay_teams.interfaces.server.router_error_mapping import http_exception_for
+from relay_teams.interfaces.server.write_models import DeleteRequest
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/gateway", tags=["Gateway"])
@@ -34,7 +36,7 @@ def start_wechat_login(
     try:
         return service.start_login(req)
     except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise http_exception_for(exc, mappings=((RuntimeError, 400),)) from exc
 
 
 @router.post("/wechat/login/wait", response_model=WeChatLoginWaitResponse)
@@ -44,10 +46,11 @@ def wait_wechat_login(
 ) -> WeChatLoginWaitResponse:
     try:
         return service.wait_login(req)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (KeyError, RuntimeError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((RuntimeError, 400),),
+        ) from exc
 
 
 @router.patch("/wechat/accounts/{account_id}", response_model=WeChatAccountRecord)
@@ -58,10 +61,11 @@ def update_wechat_account(
 ) -> WeChatAccountRecord:
     try:
         return service.update_account(account_id, req)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 422),),
+        ) from exc
 
 
 @router.post("/wechat/accounts/{account_id}:enable", response_model=WeChatAccountRecord)
@@ -71,10 +75,11 @@ def enable_wechat_account(
 ) -> WeChatAccountRecord:
     try:
         return service.set_account_enabled(account_id, True)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 422),),
+        ) from exc
 
 
 @router.post(
@@ -86,22 +91,28 @@ def disable_wechat_account(
 ) -> WeChatAccountRecord:
     try:
         return service.set_account_enabled(account_id, False)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 422),),
+        ) from exc
 
 
 @router.delete("/wechat/accounts/{account_id}")
 def delete_wechat_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
+    req: DeleteRequest | None = Body(default=None),
 ) -> dict[str, str]:
     try:
-        service.delete_account(account_id)
+        service.delete_account(
+            account_id, force=req.force if req is not None else False
+        )
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise http_exception_for(exc, mappings=((RuntimeError, 409),)) from exc
 
 
 @router.post("/wechat/reload")

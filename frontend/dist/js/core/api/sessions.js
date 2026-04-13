@@ -1,4 +1,4 @@
-﻿/**
+/**
  * core/api/sessions.js
  * Session and history related API wrappers.
  */
@@ -24,13 +24,13 @@ export async function fetchSessionHistory(sessionId) {
     return requestJson(`/api/sessions/${sessionId}`, undefined, 'Failed to fetch session history');
 }
 
-export async function updateSession(sessionId, metadata) {
+export async function updateSession(sessionId, patch) {
     return requestJson(
         `/api/sessions/${sessionId}`,
         {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ metadata }),
+            body: JSON.stringify(patch),
         },
         'Failed to update session',
     );
@@ -138,7 +138,11 @@ export async function deleteAgentReflection(sessionId, instanceId) {
 export async function deleteSession(sessionId) {
     return requestJson(
         `/api/sessions/${sessionId}`,
-        { method: 'DELETE' },
+        {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force: true, cascade: true }),
+        },
         'Failed to delete session',
     );
 }

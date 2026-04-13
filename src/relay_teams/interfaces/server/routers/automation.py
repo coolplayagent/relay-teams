@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import JsonValue
 
 from relay_teams.automation import (
@@ -15,6 +15,8 @@ from relay_teams.automation import (
     AutomationService,
 )
 from relay_teams.interfaces.server.deps import get_automation_service
+from relay_teams.interfaces.server.router_error_mapping import http_exception_for
+from relay_teams.interfaces.server.write_models import DeleteRequest
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/automation", tags=["Automation"])
@@ -34,10 +36,11 @@ def create_project(
 ) -> AutomationProjectRecord:
     try:
         return service.create_project(req)
-    except AutomationProjectNameConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (AutomationProjectNameConflictError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((AutomationProjectNameConflictError, 409), (ValueError, 422)),
+        ) from exc
 
 
 @router.get("/projects", response_model=list[AutomationProjectRecord])
@@ -55,7 +58,7 @@ def get_project(
     try:
         return service.get_project(automation_project_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise http_exception_for(exc) from exc
 
 
 @router.patch(
@@ -68,24 +71,31 @@ def update_project(
 ) -> AutomationProjectRecord:
     try:
         return service.update_project(automation_project_id, req)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except AutomationProjectNameConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (KeyError, AutomationProjectNameConflictError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((AutomationProjectNameConflictError, 409), (ValueError, 422)),
+        ) from exc
 
 
 @router.delete("/projects/{automation_project_id}")
 def delete_project(
     automation_project_id: RequiredIdentifierStr,
     service: Annotated[AutomationService, Depends(get_automation_service)],
+    req: DeleteRequest | None = Body(default=None),
 ) -> dict[str, JsonValue]:
     try:
-        service.delete_project(automation_project_id)
+        service.delete_project(
+            automation_project_id,
+            force=req.force if req is not None else False,
+            cascade=req.cascade if req is not None else False,
+        )
         return {"status": "ok"}
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (KeyError, RuntimeError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((RuntimeError, 409),),
+        ) from exc
 
 
 @router.post("/projects/{automation_project_id}:run")
@@ -95,10 +105,11 @@ async def run_project(
 ) -> dict[str, JsonValue]:
     try:
         return service.run_now(automation_project_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (KeyError, RuntimeError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((RuntimeError, 409),),
+        ) from exc
 
 
 @router.post(
@@ -113,10 +124,11 @@ def enable_project(
             automation_project_id,
             AutomationProjectStatus.ENABLED,
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 422),),
+        ) from exc
 
 
 @router.post(

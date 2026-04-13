@@ -7,6 +7,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import JsonValue
 
+from relay_teams.interfaces.server.api_write_validation import (
+    require_cascade_delete,
+    require_force_delete,
+)
+
 from relay_teams.automation.automation_bound_session_queue_service import (
     AutomationBoundSessionQueueService,
 )
@@ -244,8 +249,24 @@ class AutomationService:
         )
         return self._repository.update(updated)
 
-    def delete_project(self, automation_project_id: str) -> None:
-        _ = self._repository.get(automation_project_id)
+    def delete_project(
+        self,
+        automation_project_id: str,
+        *,
+        force: bool = False,
+        cascade: bool = False,
+    ) -> None:
+        project = self._repository.get(automation_project_id)
+        if project.status == AutomationProjectStatus.ENABLED:
+            require_force_delete(
+                force,
+                message="Cannot delete enabled automation project without force",
+            )
+        if self._has_dependent_project_data(automation_project_id):
+            require_cascade_delete(
+                cascade,
+                message="Cannot delete automation project without cascade while deliveries or queue records exist",
+            )
         if self._delivery_service is not None:
             self._delivery_service.delete_project_deliveries(automation_project_id)
         if self._bound_session_queue_service is not None:
@@ -253,6 +274,21 @@ class AutomationService:
                 automation_project_id
             )
         self._repository.delete(automation_project_id)
+
+    def _has_dependent_project_data(self, automation_project_id: str) -> bool:
+        if (
+            self._delivery_service is not None
+            and self._delivery_service.has_project_deliveries(automation_project_id)
+        ):
+            return True
+        if (
+            self._bound_session_queue_service is not None
+            and self._bound_session_queue_service.has_project_queue(
+                automation_project_id
+            )
+        ):
+            return True
+        return False
 
     def run_now(self, automation_project_id: str) -> dict[str, JsonValue]:
         project = self._repository.get(automation_project_id)

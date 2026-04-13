@@ -11,6 +11,10 @@ from relay_teams.agents.instances.models import AgentRuntimeRecord
 from relay_teams.metrics import SqliteMetricAggregateStore
 from relay_teams.monitors.repository import MonitorRepository
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType
+from relay_teams.interfaces.server.api_write_validation import (
+    require_cascade_delete,
+    require_force_delete,
+)
 from relay_teams.gateway.feishu import (
     SESSION_METADATA_TITLE_SOURCE_KEY,
     SESSION_TITLE_SOURCE_MANUAL,
@@ -43,7 +47,12 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
-from relay_teams.sessions.session_models import ProjectKind, SessionMode, SessionRecord
+from relay_teams.sessions.session_models import (
+    ProjectKind,
+    SessionMetadataPatch,
+    SessionMode,
+    SessionRecord,
+)
 from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
@@ -240,20 +249,100 @@ class SessionService:
             orchestration_preset_id=resolved_orchestration_preset_id,
         )
 
-    def update_session(self, session_id: str, metadata: dict[str, str]) -> None:
+    def update_session(self, session_id: str, patch: SessionMetadataPatch) -> None:
         current = self._session_repo.get(session_id)
-        normalized_metadata = dict(metadata)
-        title_value = str(normalized_metadata.get("title") or "").strip()
-        current_title = str(current.metadata.get("title") or "").strip()
-        if title_value:
-            normalized_metadata["title"] = title_value
-            if SESSION_METADATA_TITLE_SOURCE_KEY not in normalized_metadata:
-                normalized_metadata[SESSION_METADATA_TITLE_SOURCE_KEY] = (
-                    SESSION_TITLE_SOURCE_MANUAL
-                )
-        elif current_title:
-            normalized_metadata.pop(SESSION_METADATA_TITLE_SOURCE_KEY, None)
-        self._session_repo.update_metadata(session_id, normalized_metadata)
+        next_metadata = dict(current.metadata)
+
+        if "custom_metadata" in patch.model_fields_set:
+            next_metadata = self._replace_custom_metadata(
+                next_metadata,
+                patch.custom_metadata,
+            )
+
+        if "source_label" in patch.model_fields_set:
+            self._apply_optional_metadata_value(
+                next_metadata,
+                key="source_label",
+                value=patch.source_label,
+            )
+
+        if "source_icon" in patch.model_fields_set:
+            self._apply_optional_metadata_value(
+                next_metadata,
+                key="source_icon",
+                value=patch.source_icon,
+            )
+
+        if "title" in patch.model_fields_set:
+            title_value = str(patch.title or "").strip()
+            if title_value:
+                next_metadata["title"] = title_value
+                if "title_source" not in patch.model_fields_set:
+                    next_metadata[SESSION_METADATA_TITLE_SOURCE_KEY] = (
+                        SESSION_TITLE_SOURCE_MANUAL
+                    )
+            else:
+                next_metadata.pop("title", None)
+                next_metadata.pop(SESSION_METADATA_TITLE_SOURCE_KEY, None)
+
+        if "title_source" in patch.model_fields_set:
+            title_value = str(next_metadata.get("title") or "").strip()
+            if not title_value:
+                raise ValueError("title_source requires title to be set")
+            title_source = str(patch.title_source or "").strip()
+            if not title_source:
+                next_metadata.pop(SESSION_METADATA_TITLE_SOURCE_KEY, None)
+            else:
+                next_metadata[SESSION_METADATA_TITLE_SOURCE_KEY] = title_source
+
+        self._session_repo.update_metadata(session_id, next_metadata)
+
+    def sync_session_metadata(
+        self,
+        session_id: str,
+        metadata: dict[str, str],
+    ) -> None:
+        _ = self._session_repo.get(session_id)
+        self._session_repo.update_metadata(session_id, dict(metadata))
+
+    def _replace_custom_metadata(
+        self,
+        metadata: dict[str, str],
+        custom_metadata: dict[str, str] | None,
+    ) -> dict[str, str]:
+        next_metadata = {
+            key: value
+            for key, value in metadata.items()
+            if self._is_reserved_session_metadata_key(key)
+        }
+        if custom_metadata is None:
+            return next_metadata
+        next_metadata.update(custom_metadata)
+        return next_metadata
+
+    def _apply_optional_metadata_value(
+        self,
+        metadata: dict[str, str],
+        *,
+        key: str,
+        value: str | None,
+    ) -> None:
+        normalized_value = str(value or "").strip()
+        if normalized_value:
+            metadata[key] = normalized_value
+            return
+        metadata.pop(key, None)
+
+    @staticmethod
+    def _is_reserved_session_metadata_key(key: str) -> bool:
+        return key in {
+            "title",
+            SESSION_METADATA_TITLE_SOURCE_KEY,
+            "source_label",
+            "source_icon",
+            "source_kind",
+            "source_provider",
+        } or key.startswith("feishu_")
 
     def update_session_topology(
         self,
@@ -338,10 +427,36 @@ class SessionService:
                 f"Required system roles are unavailable: main_agent: {exc}"
             ) from exc
 
-    def delete_session(self, session_id: str) -> None:
+    def delete_session(
+        self,
+        session_id: str,
+        *,
+        force: bool = False,
+        cascade: bool = False,
+    ) -> None:
         session = self._session_repo.get(session_id)
+        if self._select_active_run(session_id) is not None:
+            require_force_delete(
+                force,
+                message="Cannot delete session while it has active or recoverable run",
+            )
         task_records = self._task_repo.list_by_session(session_id)
         agent_records = self._agent_repo.list_by_session(session_id)
+        background_task_records: tuple[BackgroundTaskRecord, ...] = ()
+        if self._background_task_repository is not None:
+            background_task_records = self._background_task_repository.list_by_session(
+                session_id
+            )
+        if self._has_dependent_session_data(
+            session_id,
+            task_records=task_records,
+            agent_records=agent_records,
+            background_task_records=background_task_records,
+        ):
+            require_cascade_delete(
+                cascade,
+                message="Cannot delete session without cascade while related session data exists",
+            )
         task_ids = [record.envelope.task_id for record in task_records]
         instance_ids = [record.instance_id for record in agent_records]
         role_scope_ids = sorted(
@@ -392,11 +507,7 @@ class SessionService:
                 workspace_ids=[],
             )
         self._approval_ticket_repo.delete_by_session(session_id)
-        background_task_records: tuple[BackgroundTaskRecord, ...] = ()
         if self._background_task_repository is not None:
-            background_task_records = self._background_task_repository.list_by_session(
-                session_id
-            )
             self._background_task_repository.delete_by_session(session_id)
         self._delete_background_task_logs(
             session=session,
@@ -424,6 +535,36 @@ class SessionService:
             )
             if session_dir.exists():
                 shutil.rmtree(session_dir, ignore_errors=True)
+
+    def _has_dependent_session_data(
+        self,
+        session_id: str,
+        *,
+        task_records: tuple[object, ...],
+        agent_records: tuple[object, ...],
+        background_task_records: tuple[BackgroundTaskRecord, ...],
+    ) -> bool:
+        if task_records or agent_records or background_task_records:
+            return True
+        if self._message_repo.get_messages_by_session(session_id):
+            return True
+        if self._run_runtime_repo.list_by_session(session_id):
+            return True
+        if self._event_log is not None and self._event_log.list_by_session(session_id):
+            return True
+        if (
+            self._session_history_marker_repo is not None
+            and self._session_history_marker_repo.list_by_session(session_id)
+        ):
+            return True
+        if self._external_session_binding_repo is not None and any(
+            binding.session_id == session_id
+            for binding in self._external_session_binding_repo.list_by_platform(
+                "feishu"
+            )
+        ):
+            return True
+        return False
 
     def delete_normal_mode_subagent(self, session_id: str, instance_id: str) -> None:
         session = self._session_repo.get(session_id)

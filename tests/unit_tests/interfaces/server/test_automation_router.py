@@ -26,7 +26,8 @@ class _FakeAutomationService:
         self.created_payloads: list[AutomationProjectCreateInput] = []
         self.run_calls: list[str] = []
         self.status_calls: list[tuple[str, AutomationProjectStatus]] = []
-        self.deleted_project_ids: list[str] = []
+        self.deleted_calls: list[tuple[str, bool, bool]] = []
+        self.delete_error: Exception | None = None
         self.list_feishu_bindings_calls = 0
 
     def create_project(
@@ -116,10 +117,18 @@ class _FakeAutomationService:
     ) -> AutomationProjectRecord:  # pragma: no cover
         raise AssertionError(f"not used: {automation_project_id}")
 
-    def delete_project(self, automation_project_id: str) -> None:
+    def delete_project(
+        self,
+        automation_project_id: str,
+        *,
+        force: bool = False,
+        cascade: bool = False,
+    ) -> None:
+        if self.delete_error is not None:
+            raise self.delete_error
         if automation_project_id != "aut_1":
             raise KeyError(f"Unknown automation_project_id: {automation_project_id}")
-        self.deleted_project_ids.append(automation_project_id)
+        self.deleted_calls.append((automation_project_id, force, cascade))
 
     def run_now(self, automation_project_id: str) -> dict[str, str | bool | None]:
         self.run_calls.append(automation_project_id)
@@ -352,4 +361,32 @@ def test_delete_project_route_returns_ok() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-    assert fake_service.deleted_project_ids == ["aut_1"]
+    assert fake_service.deleted_calls == [("aut_1", False, False)]
+
+
+def test_delete_project_route_forwards_force_and_cascade() -> None:
+    fake_service = _FakeAutomationService()
+    client = _client(fake_service)
+
+    response = client.request(
+        "DELETE",
+        "/api/automation/projects/aut_1",
+        json={"force": True, "cascade": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert fake_service.deleted_calls == [("aut_1", True, True)]
+
+
+def test_delete_project_route_returns_conflict_for_missing_cascade() -> None:
+    fake_service = _FakeAutomationService()
+    fake_service.delete_error = RuntimeError(
+        "Cannot delete automation project without cascade while deliveries or queue records exist"
+    )
+    client = _client(fake_service)
+
+    response = client.delete("/api/automation/projects/aut_1")
+
+    assert response.status_code == 409
+    assert "without cascade" in response.json()["detail"]

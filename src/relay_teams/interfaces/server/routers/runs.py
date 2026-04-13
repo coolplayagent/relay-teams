@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.interfaces.server.deps import get_run_service
+from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.logger import get_logger, log_event
 from relay_teams.media import (
     ContentPart,
@@ -323,7 +324,7 @@ def inject_message(
             )
         return result.model_dump()
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise http_exception_for(exc) from exc
 
 
 @router.get("/{run_id}/tool-approvals")
@@ -351,7 +352,7 @@ def list_background_tasks(
     try:
         return {"items": list(service.list_background_tasks(run_id))}
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise http_exception_for(exc) from exc
 
 
 @router.get("/{run_id}/background-tasks/{background_task_id}")
@@ -368,7 +369,7 @@ def get_background_task(
             )
         }
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise http_exception_for(exc) from exc
 
 
 @router.post(
@@ -387,7 +388,7 @@ async def stop_background_task(
         )
         return StopBackgroundTaskResponse(background_task=result)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise http_exception_for(exc) from exc
 
 
 @router.post("/{run_id}/tool-approvals/{tool_call_id}/resolve")
@@ -416,7 +417,7 @@ def resolve_tool_approval(
             )
         return {"status": "ok", "action": req.action}
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise http_exception_for(exc) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -458,10 +459,11 @@ def stop_run(
             "scope": "subagent",
             "instance_id": payload["instance_id"],
         }
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 400),),
+        ) from exc
 
 
 @router.post("/{run_id}:resume")
@@ -480,10 +482,11 @@ async def resume_run(
                 message="Run resume requested",
             )
         return {"status": "ok", "run_id": run_id, "session_id": session_id}
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (KeyError, RuntimeError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((RuntimeError, 409),),
+        ) from exc
 
 
 @router.post("/{run_id}/subagents/{instance_id}/inject")
@@ -510,7 +513,8 @@ def inject_subagent(
                 payload={"length": len(req.content)},
             )
         return {"status": "ok", "instance_id": instance_id}
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (KeyError, RuntimeError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((RuntimeError, 409),),
+        ) from exc

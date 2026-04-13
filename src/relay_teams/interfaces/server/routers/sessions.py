@@ -1,12 +1,20 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from relay_teams.interfaces.server.deps import get_session_service
+from relay_teams.interfaces.server.router_error_mapping import http_exception_for
+from relay_teams.interfaces.server.write_models import DeleteRequest
 from relay_teams.roles import SystemRolesUnavailableError
 from relay_teams.sessions import SessionService
-from relay_teams.sessions.session_models import SessionMode, SessionRecord
+from relay_teams.sessions.session_models import (
+    SessionCreateMetadata,
+    SessionMetadataPatch,
+    SessionMode,
+    SessionRecord,
+    normalize_session_create_metadata_input,
+)
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
@@ -17,13 +25,12 @@ class CreateSessionRequest(BaseModel):
 
     session_id: OptionalIdentifierStr = None
     workspace_id: RequiredIdentifierStr
-    metadata: dict[str, str] | None = None
+    metadata: SessionCreateMetadata | None = None
 
-
-class UpdateSessionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    metadata: dict[str, str]
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _normalize_metadata(cls, value: object) -> object:
+        return normalize_session_create_metadata_input(value)
 
 
 class UpdateSessionTopologyRequest(BaseModel):
@@ -49,10 +56,15 @@ def create_session(
         return service.create_session(
             session_id=req.session_id,
             workspace_id=req.workspace_id,
-            metadata=req.metadata,
+            metadata=(
+                None if req.metadata is None else req.metadata.to_metadata_dict()
+            ),
         )
-    except SystemRolesUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (SystemRolesUnavailableError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((SystemRolesUnavailableError, 503), (ValueError, 422)),
+        ) from exc
 
 
 @router.get("", response_model=list[SessionRecord])
@@ -70,20 +82,22 @@ def get_session(
     try:
         return service.get_session(session_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Session not found") from exc
+        raise http_exception_for(exc, key_error_detail="Session not found") from exc
 
 
 @router.patch("/{session_id}")
 def update_session(
     session_id: RequiredIdentifierStr,
-    req: UpdateSessionRequest,
+    req: SessionMetadataPatch,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
     try:
-        service.update_session(session_id, req.metadata)
+        service.update_session(session_id, req)
         return {"status": "ok"}
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Session not found") from exc
+        raise http_exception_for(exc, key_error_detail="Session not found") from exc
+    except ValueError as exc:
+        raise http_exception_for(exc, mappings=((ValueError, 422),)) from exc
 
 
 @router.patch("/{session_id}/topology", response_model=SessionRecord)
@@ -100,9 +114,12 @@ def update_session_topology(
             orchestration_preset_id=req.orchestration_preset_id,
         )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Session not found") from exc
+        raise http_exception_for(exc, key_error_detail="Session not found") from exc
     except SystemRolesUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise http_exception_for(
+            exc,
+            mappings=((SystemRolesUnavailableError, 503),),
+        ) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -112,13 +129,20 @@ def update_session_topology(
 @router.delete("/{session_id}")
 def delete_session(
     session_id: RequiredIdentifierStr,
+    req: DeleteRequest | None = Body(default=None),
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
     try:
-        service.delete_session(session_id)
+        service.delete_session(
+            session_id,
+            force=req.force if req is not None else False,
+            cascade=req.cascade if req is not None else False,
+        )
         return {"status": "ok"}
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Session not found") from exc
+        raise http_exception_for(exc, key_error_detail="Session not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/{session_id}/rounds")
@@ -143,7 +167,7 @@ def get_session_recovery(
     try:
         return service.get_recovery_snapshot(session_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Session not found") from exc
+        raise http_exception_for(exc, key_error_detail="Session not found") from exc
 
 
 @router.get("/{session_id}/rounds/{run_id}")

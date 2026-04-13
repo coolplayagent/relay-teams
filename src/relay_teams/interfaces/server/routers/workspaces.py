@@ -4,12 +4,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from urllib.parse import unquote
 from pydantic import BaseModel, ConfigDict, Field
 
+from relay_teams.interfaces.server.api_write_validation import require_force_delete
 from relay_teams.interfaces.server.deps import get_workspace_service
+from relay_teams.interfaces.server.write_models import DeleteRequest
 from relay_teams.validation import RequiredIdentifierStr
 from relay_teams.workspace import (
     WorkspaceDiffFile,
@@ -194,9 +196,15 @@ def get_workspace_preview_file(
 def delete_workspace(
     workspace_id: RequiredIdentifierStr,
     remove_worktree: Annotated[bool, Query()] = False,
+    req: DeleteRequest | None = Body(default=None),
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> dict[str, str]:
     try:
+        if remove_worktree:
+            require_force_delete(
+                req.force if req is not None else False,
+                message="Cannot remove workspace git worktree without force",
+            )
         service.delete_workspace_with_options(
             workspace_id=workspace_id,
             remove_worktree=remove_worktree,
@@ -204,6 +212,8 @@ def delete_workspace(
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

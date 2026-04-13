@@ -60,6 +60,7 @@ from relay_teams.providers.model_connectivity import (
 )
 from relay_teams.providers.model_config import (
     DEFAULT_MAAS_BASE_URL,
+    ModelConfigPayload,
     ProviderModelInfo,
     ProviderType,
 )
@@ -73,21 +74,31 @@ from relay_teams.skills.clawhub_models import (
     ClawHubSkillWriteRequest,
 )
 from relay_teams.skills.skill_models import SkillScope
+from relay_teams.notifications.models import NotificationConfig
+from relay_teams.agents.orchestration.settings_models import OrchestrationSettings
 
 
 class _FakeSystemService:
     def __init__(self) -> None:
         self.saved_notification_config: dict[str, object] | None = None
         self.saved_orchestration_config: dict[str, object] | None = None
+        self.saved_model_config: dict[str, object] | None = None
         self.saved_model_profile: tuple[str, dict[str, object], str | None] | None = (
             None
         )
+        self.model_profile_error: Exception | None = None
+        self.model_profile_delete_error: Exception | None = None
+        self.model_config_error: Exception | None = None
         self.saved_proxy_config: dict[str, object] | None = None
         self.saved_web_config: dict[str, object] | None = None
         self.saved_clawhub_config: dict[str, object] | None = None
         self.saved_github_config: dict[str, object] | None = None
         self.saved_ui_language_settings: dict[str, object] | None = None
         self.proxy_save_error: RuntimeError | None = None
+        self.model_reload_error: Exception | None = None
+        self.proxy_reload_error: Exception | None = None
+        self.mcp_reload_error: Exception | None = None
+        self.skills_reload_error: Exception | None = None
         self.external_agents: dict[str, ExternalAgentConfig] = {
             "codex_local": ExternalAgentConfig(
                 agent_id="codex_local",
@@ -127,7 +138,23 @@ class _FakeSystemService:
         return settings
 
     def get_model_config(self) -> dict[str, object]:
-        return {}
+        return {
+            "default": {
+                "provider": "openai_compatible",
+                "model": "gpt-4o-mini",
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+                "headers": [],
+                "temperature": 0.2,
+                "top_p": 1.0,
+                "max_tokens": 2048,
+                "context_window": 128000,
+                "connect_timeout_seconds": 25.0,
+                "is_default": True,
+                "maas_auth": None,
+                "ssl_verify": None,
+            }
+        }
 
     def get_model_profiles(self) -> dict[str, object]:
         return {
@@ -150,18 +177,28 @@ class _FakeSystemService:
         *,
         source_name: str | None = None,
     ) -> None:
+        if self.model_profile_error is not None:
+            raise self.model_profile_error
         self.saved_model_profile = (name, profile, source_name)
 
     def delete_model_profile(self, _name: str) -> None:
+        if self.model_profile_delete_error is not None:
+            raise self.model_profile_delete_error
         return None
 
-    def save_model_config(self, _config: dict[str, object]) -> None:
-        return None
+    def save_model_config(self, config: ModelConfigPayload) -> None:
+        if self.model_config_error is not None:
+            raise self.model_config_error
+        self.saved_model_config = config.model_dump(mode="json")
 
     def reload_model_config(self) -> None:
+        if self.model_reload_error is not None:
+            raise self.model_reload_error
         return None
 
     def reload_proxy_config(self) -> None:
+        if self.proxy_reload_error is not None:
+            raise self.proxy_reload_error
         return None
 
     def get_saved_proxy_config(self) -> dict[str, object]:
@@ -340,54 +377,62 @@ class _FakeSystemService:
         self.clawhub_skills.pop(skill_id)
 
     def reload_mcp_config(self) -> None:
+        if self.mcp_reload_error is not None:
+            raise self.mcp_reload_error
         return None
 
     def reload_skills_config(self) -> None:
+        if self.skills_reload_error is not None:
+            raise self.skills_reload_error
         return None
 
-    def get_notification_config(self) -> dict[str, object]:
-        return {
-            "tool_approval_requested": {
-                "enabled": True,
-                "channels": ["browser", "toast"],
-                "feishu_format": "text",
-            },
-            "run_completed": {
-                "enabled": False,
-                "channels": ["toast"],
-                "feishu_format": "text",
-            },
-            "run_failed": {
-                "enabled": True,
-                "channels": ["browser", "toast"],
-                "feishu_format": "text",
-            },
-            "run_stopped": {
-                "enabled": False,
-                "channels": ["toast"],
-                "feishu_format": "text",
-            },
-        }
+    def get_notification_config(self) -> NotificationConfig:
+        return NotificationConfig.model_validate(
+            {
+                "tool_approval_requested": {
+                    "enabled": True,
+                    "channels": ["browser", "toast"],
+                    "feishu_format": "text",
+                },
+                "run_completed": {
+                    "enabled": False,
+                    "channels": ["toast"],
+                    "feishu_format": "text",
+                },
+                "run_failed": {
+                    "enabled": True,
+                    "channels": ["browser", "toast"],
+                    "feishu_format": "text",
+                },
+                "run_stopped": {
+                    "enabled": False,
+                    "channels": ["toast"],
+                    "feishu_format": "text",
+                },
+            }
+        )
 
-    def save_notification_config(self, config: dict[str, object]) -> None:
-        self.saved_notification_config = config
+    def save_notification_config(self, config: NotificationConfig) -> None:
+        self.saved_notification_config = config.model_dump(mode="json")
 
-    def get_orchestration_config(self) -> dict[str, object]:
-        return {
-            "default_orchestration_preset_id": "default",
-            "presets": [
-                {
-                    "preset_id": "default",
-                    "name": "Default",
-                    "description": "General delegation flow.",
-                    "role_ids": ["writer", "reviewer"],
-                    "orchestration_prompt": "Delegate by capability and keep the final answer concise.",
-                }
-            ],
-        }
+    def get_orchestration_config(self) -> OrchestrationSettings:
+        return OrchestrationSettings.model_validate(
+            {
+                "default_orchestration_preset_id": "default",
+                "presets": [
+                    {
+                        "preset_id": "default",
+                        "name": "Default",
+                        "description": "General delegation flow.",
+                        "role_ids": ["writer", "reviewer"],
+                        "orchestration_prompt": "Delegate by capability and keep the final answer concise.",
+                    }
+                ],
+            }
+        )
 
-    def save_orchestration_config(self, config: dict[str, object]) -> None:
-        self.saved_orchestration_config = config
+    def save_orchestration_config(self, config: OrchestrationSettings) -> None:
+        self.saved_orchestration_config = config.model_dump(mode="json")
 
     def get_provider_models(
         self,
@@ -641,28 +686,26 @@ def test_save_notification_config() -> None:
     service = _FakeSystemService()
     client = _create_test_client(service)
     request_payload = {
-        "config": {
-            "tool_approval_requested": {
-                "enabled": True,
-                "channels": ["browser", "toast"],
-                "feishu_format": "text",
-            },
-            "run_completed": {
-                "enabled": True,
-                "channels": ["toast", "feishu"],
-                "feishu_format": "card",
-            },
-            "run_failed": {
-                "enabled": True,
-                "channels": ["browser", "toast"],
-                "feishu_format": "text",
-            },
-            "run_stopped": {
-                "enabled": True,
-                "channels": ["toast"],
-                "feishu_format": "text",
-            },
-        }
+        "tool_approval_requested": {
+            "enabled": True,
+            "channels": ["browser", "toast"],
+            "feishu_format": "text",
+        },
+        "run_completed": {
+            "enabled": True,
+            "channels": ["toast", "feishu"],
+            "feishu_format": "card",
+        },
+        "run_failed": {
+            "enabled": True,
+            "channels": ["browser", "toast"],
+            "feishu_format": "text",
+        },
+        "run_stopped": {
+            "enabled": True,
+            "channels": ["toast"],
+            "feishu_format": "text",
+        },
     }
     response = client.put("/api/system/configs/notifications", json=request_payload)
     assert response.status_code == 200
@@ -882,6 +925,34 @@ def test_save_orchestration_config() -> None:
     response = client.put(
         "/api/system/configs/orchestration",
         json={
+            "default_orchestration_preset_id": "shipping",
+            "presets": [
+                {
+                    "preset_id": "shipping",
+                    "name": "Shipping",
+                    "description": "Release work.",
+                    "role_ids": ["writer"],
+                    "orchestration_prompt": "Use writer for outward-facing updates.",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.saved_orchestration_config is not None
+    assert service.saved_orchestration_config["default_orchestration_preset_id"] == (
+        "shipping"
+    )
+
+
+def test_save_orchestration_config_accepts_legacy_wrapper_payload() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/orchestration",
+        json={
             "config": {
                 "default_orchestration_preset_id": "shipping",
                 "presets": [
@@ -914,6 +985,120 @@ def test_get_provider_models() -> None:
     payload = response.json()
     assert len(payload) == 3
     assert payload[0]["profile"] == "default"
+
+
+def test_get_model_config() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/model")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "default": {
+            "provider": "openai_compatible",
+            "model": "gpt-4o-mini",
+            "base_url": "https://example.test/v1",
+            "api_key": "secret",
+            "headers": [],
+            "temperature": 0.2,
+            "top_p": 1.0,
+            "max_tokens": 2048,
+            "context_window": 128000,
+            "connect_timeout_seconds": 25.0,
+            "is_default": True,
+            "maas_auth": None,
+            "ssl_verify": None,
+        }
+    }
+
+
+def test_save_model_config() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model",
+        json={
+            "default": {
+                "provider": "openai_compatible",
+                "model": "gpt-4o-mini",
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+                "headers": [],
+                "temperature": 0.2,
+                "top_p": 1.0,
+                "max_tokens": 2048,
+                "context_window": 128000,
+                "connect_timeout_seconds": 25.0,
+                "is_default": True,
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.saved_model_config == {
+        "default": {
+            "provider": "openai_compatible",
+            "model": "gpt-4o-mini",
+            "base_url": "https://example.test/v1",
+            "api_key": "secret",
+            "headers": [],
+            "temperature": 0.2,
+            "top_p": 1.0,
+            "max_tokens": 2048,
+            "context_window": 128000,
+            "connect_timeout_seconds": 25.0,
+            "is_default": True,
+            "maas_auth": None,
+            "ssl_verify": None,
+        }
+    }
+
+
+def test_save_model_config_accepts_legacy_wrapper_payload() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+    response = client.put(
+        "/api/system/configs/model",
+        json={
+            "config": {
+                "default": {
+                    "provider": "openai_compatible",
+                    "model": "gpt-4o-mini",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "secret",
+                }
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.saved_model_config is not None
+    saved_default = cast(dict[str, object], service.saved_model_config["default"])
+    assert saved_default["model"] == "gpt-4o-mini"
+
+
+def test_save_model_config_rejects_unknown_profile_field() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.put(
+        "/api/system/configs/model",
+        json={
+            "default": {
+                "provider": "openai_compatible",
+                "model": "gpt-4o-mini",
+                "base_url": "https://example.test/v1",
+                "api_key": "secret",
+                "temperature": 0.2,
+                "top_p": 1.0,
+                "unexpected": True,
+            }
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_get_model_profiles_returns_api_key() -> None:
@@ -1007,6 +1192,17 @@ def test_discover_model_catalog() -> None:
     assert payload["ok"] is True
     assert payload["latency_ms"] == 37
     assert payload["models"] == ["fake-chat-model", "reasoning-model"]
+
+
+def test_reload_model_config_returns_bad_request_for_invalid_config() -> None:
+    service = _FakeSystemService()
+    service.model_reload_error = ValueError("Invalid model config")
+    client = _create_test_client(service)
+
+    response = client.post("/api/system/configs/model:reload")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid model config"}
 
 
 def test_reload_proxy_config() -> None:
@@ -1250,6 +1446,39 @@ def test_save_proxy_config_returns_user_error_for_missing_keyring() -> None:
     assert "system keyring backend" in response.json()["detail"]
 
 
+def test_reload_proxy_config_returns_bad_request_for_invalid_config() -> None:
+    service = _FakeSystemService()
+    service.proxy_reload_error = RuntimeError("Invalid proxy config")
+    client = _create_test_client(service)
+
+    response = client.post("/api/system/configs/proxy:reload")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid proxy config"}
+
+
+def test_reload_mcp_config_returns_bad_request_for_invalid_config() -> None:
+    service = _FakeSystemService()
+    service.mcp_reload_error = ValueError("Invalid MCP config")
+    client = _create_test_client(service)
+
+    response = client.post("/api/system/configs/mcp:reload")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid MCP config"}
+
+
+def test_reload_skills_config_returns_bad_request_for_invalid_config() -> None:
+    service = _FakeSystemService()
+    service.skills_reload_error = RuntimeError("Invalid skills config")
+    client = _create_test_client(service)
+
+    response = client.post("/api/system/configs/skills:reload")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Invalid skills config"}
+
+
 def test_probe_web_connectivity() -> None:
     client = _create_test_client(_FakeSystemService())
 
@@ -1284,6 +1513,84 @@ def test_probe_web_connectivity_accepts_proxy_override() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
+
+
+def test_save_model_profile_returns_not_found_for_missing_source_name() -> None:
+    service = _FakeSystemService()
+    service.model_profile_error = KeyError("Model profile not found: default")
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/renamed",
+        json={
+            "source_name": "default",
+            "provider": ProviderType.OPENAI_COMPATIBLE.value,
+            "model": "kimi-k2.5",
+            "base_url": "https://api.moonshot.cn/v1",
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "max_tokens": 4096,
+        },
+    )
+
+    assert response.status_code == 404
+    assert "Model profile not found" in response.json()["detail"]
+
+
+def test_save_model_profile_returns_bad_request_for_service_validation_error() -> None:
+    service = _FakeSystemService()
+    service.model_profile_error = ValueError("Header 'Authorization' requires a value.")
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/default",
+        json={
+            "provider": ProviderType.OPENAI_COMPATIBLE.value,
+            "model": "kimi-k2.5",
+            "base_url": "https://api.moonshot.cn/v1",
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "max_tokens": 4096,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "requires a value" in response.json()["detail"]
+
+
+def test_delete_model_profile_returns_not_found_when_missing() -> None:
+    service = _FakeSystemService()
+    service.model_profile_delete_error = KeyError("Model profile not found: default")
+    client = _create_test_client(service)
+
+    response = client.delete("/api/system/configs/model/profiles/default")
+
+    assert response.status_code == 404
+    assert "Model profile not found" in response.json()["detail"]
+
+
+def test_save_model_config_returns_bad_request_for_service_validation_error() -> None:
+    service = _FakeSystemService()
+    service.model_config_error = ValueError(
+        "MAAS model profile requires maas_auth configuration."
+    )
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model",
+        json={
+            "maas": {
+                "provider": "maas",
+                "model": "maas-chat",
+                "base_url": "https://maas.example/api/v2",
+                "temperature": 0.2,
+                "top_p": 1.0,
+            }
+        },
+    )
+
+    assert response.status_code == 400
+    assert "maas_auth" in response.json()["detail"]
 
 
 def test_save_model_profile_allows_missing_api_key_for_edit() -> None:
@@ -1631,3 +1938,86 @@ def test_delete_environment_variable_returns_forbidden_on_permission_error() -> 
 
     assert response.status_code == 403
     assert "access denied" in response.json()["detail"].lower()
+
+
+def test_save_notification_config_rejects_unknown_top_level_field() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.put(
+        "/api/system/configs/notifications",
+        json={
+            "tool_approval_requested": {
+                "enabled": True,
+                "channels": ["browser", "toast"],
+                "feishu_format": "text",
+            },
+            "run_completed": {
+                "enabled": True,
+                "channels": ["toast", "feishu"],
+                "feishu_format": "card",
+            },
+            "run_failed": {
+                "enabled": True,
+                "channels": ["browser", "toast"],
+                "feishu_format": "text",
+            },
+            "run_stopped": {
+                "enabled": True,
+                "channels": ["toast"],
+                "feishu_format": "text",
+            },
+            "unexpected": {},
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_save_orchestration_config_rejects_unknown_top_level_field() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.put(
+        "/api/system/configs/orchestration",
+        json={
+            "default_orchestration_preset_id": "shipping",
+            "presets": [
+                {
+                    "preset_id": "shipping",
+                    "name": "Shipping",
+                    "description": "Release work.",
+                    "role_ids": ["writer"],
+                    "orchestration_prompt": "Use writer for outward-facing updates.",
+                }
+            ],
+            "unexpected": True,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_get_model_config_preserves_omitted_sparse_fields() -> None:
+    class _SparseSystemService(_FakeSystemService):
+        def get_model_config(self) -> dict[str, object]:
+            return {
+                "default": {
+                    "provider": "openai_compatible",
+                    "model": "gpt-4o-mini",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "secret",
+                }
+            }
+
+    client = _create_test_client(_SparseSystemService())
+
+    response = client.get("/api/system/configs/model")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "default": {
+            "provider": "openai_compatible",
+            "model": "gpt-4o-mini",
+            "base_url": "https://example.test/v1",
+            "api_key": "secret",
+        }
+    }

@@ -5,8 +5,12 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from relay_teams.interfaces.server.api_write_validation import (
+    normalize_optional_string,
+    require_non_empty_patch,
+)
 from relay_teams.sessions.runs.run_models import RunThinkingConfig
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
@@ -83,6 +87,27 @@ class WeChatAccountUpdateInput(BaseModel):
     orchestration_preset_id: OptionalIdentifierStr = None
     yolo: bool | None = None
     thinking: RunThinkingConfig | None = None
+
+    @field_validator("display_name", "base_url", "cdn_base_url")
+    @classmethod
+    def _normalize_optional_text(cls, value: str | None, info) -> str | None:
+        return normalize_optional_string(
+            value,
+            field_name=info.field_name,
+        )
+
+    @field_validator("route_tag")
+    @classmethod
+    def _normalize_route_tag(cls, value: str | None) -> str | None:
+        return normalize_optional_string(
+            value,
+            field_name="route_tag",
+            empty_to_none=True,
+        )
+
+    @model_validator(mode="after")
+    def _validate_patch(self) -> WeChatAccountUpdateInput:
+        return require_non_empty_patch(self)
 
 
 class WeChatLoginStartRequest(BaseModel):

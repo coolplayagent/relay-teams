@@ -43,7 +43,11 @@ export async function updateTrigger(triggerId, payload) {
 export async function deleteTrigger(triggerId) {
     return requestJson(
         `/api/gateway/feishu/accounts/${encodeURIComponent(triggerId)}`,
-        { method: 'DELETE' },
+        {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force: true }),
+        },
         'Failed to delete Feishu gateway account',
     );
 }
