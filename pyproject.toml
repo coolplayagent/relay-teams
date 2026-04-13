@@ -47,6 +47,9 @@ relay-teams-evals = "relay_teams_evals.run:app"
 [tool.pytest.ini_options]
 testpaths = ["tests/unit_tests", "tests/integration_tests"]
 pythonpath = ["src", "tests", "."]
+markers = [
+  "timeout: override per-test timeout budget",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -46,7 +46,7 @@ const successState = {
     state: button.dataset.state,
 };
 
-await new Promise(resolve => setTimeout(resolve, 2600));
+globalThis.__runScheduledTimers();
 const resetState = {
     text: button.textContent,
     disabled: button.disabled,
@@ -571,6 +571,18 @@ class FakeElement {{
 }}
 
 globalThis.window = globalThis;
+const __timers = [];
+globalThis.setTimeout = (fn) => {{
+    __timers.push(fn);
+    return __timers.length;
+}};
+globalThis.clearTimeout = () => undefined;
+globalThis.__runScheduledTimers = () => {{
+    while (__timers.length > 0) {{
+        const fn = __timers.shift();
+        if (typeof fn === 'function') fn();
+    }}
+}};
 globalThis.document = {{
     createElement() {{
         return new FakeElement();

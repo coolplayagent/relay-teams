@@ -148,6 +148,7 @@ def test_wait_qr_login_retries_read_timeout(monkeypatch: pytest.MonkeyPatch) -> 
         "relay_teams.gateway.wechat.client.create_sync_http_client",
         lambda **_: fake_client,
     )
+    monkeypatch.setattr("relay_teams.gateway.wechat.client.time.sleep", lambda _: None)
 
     result = WeChatClient().wait_qr_login(
         login_session=WeChatLoginSession(

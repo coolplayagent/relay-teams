@@ -584,21 +584,46 @@ def test_import_lark_module_suppresses_dispatcher_handler_deprecations(
         pass
 
 
-def test_parse_ws_conn_exception_reads_invalid_status_response_headers() -> None:
+def test_parse_ws_conn_exception_reads_invalid_status_response_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     headers = Headers()
     headers["handshake-status"] = "403"
     headers["handshake-msg"] = "forbidden"
 
-    loop = asyncio.new_event_loop()
-    try:
-        asyncio.set_event_loop(loop)
-        import_lark_ws_client_module()
-        with pytest.raises(Exception, match="forbidden") as caught:
-            _parse_ws_conn_exception(InvalidStatus(Response(403, "Forbidden", headers)))
-        assert caught.type.__name__ == "ClientException"
-    finally:
-        loop.close()
-        asyncio.set_event_loop(None)
+    fake_const = SimpleNamespace(
+        AUTH_FAILED=401,
+        EXCEED_CONN_LIMIT=99991672,
+        FORBIDDEN=403,
+        HEADER_HANDSHAKE_AUTH_ERRCODE="handshake-auth-errcode",
+        HEADER_HANDSHAKE_MSG="handshake-msg",
+        HEADER_HANDSHAKE_STATUS="handshake-status",
+    )
+
+    class _ClientException(Exception):
+        pass
+
+    class _ServerException(Exception):
+        pass
+
+    fake_exception = SimpleNamespace(
+        ClientException=_ClientException,
+        ServerException=_ServerException,
+    )
+
+    original_import = __import__
+
+    def _fake_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
+        if name == "lark_oapi.ws.const":
+            return fake_const
+        if name == "lark_oapi.ws.exception":
+            return fake_exception
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr("builtins.__import__", _fake_import)
+
+    with pytest.raises(_ClientException, match="forbidden"):
+        _parse_ws_conn_exception(InvalidStatus(Response(403, "Forbidden", headers)))
 
 
 def test_feishu_ws_controller_receive_loop_ignores_normal_close_after_stop() -> None:

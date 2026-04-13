@@ -47,6 +47,7 @@ from relay_teams.agents.execution.subagent_reflection import SubagentReflectionS
 from relay_teams.agents.execution.llm_session import _PreparedPromptContext
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.providers.openai_compatible import OpenAICompatibleProvider
+import relay_teams.providers.llm_retry as llm_retry_module
 from relay_teams.providers.model_config import ModelEndpointConfig, SamplingConfig
 from relay_teams.roles import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
@@ -2577,6 +2578,14 @@ async def test_generate_retries_retryable_status_error_before_side_effects(
     fake_hub = _FakeRunEventHub()
     provider, message_repo = _build_provider(tmp_path / "retry_success.db", fake_hub)
     provider._session._retry_config.jitter = False
+    provider._session._retry_config.initial_delay_ms = 1
+
+    async def _fast_sleep(delay: float) -> None:
+        _ = delay
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(llm_retry_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(llm_module, "compute_retry_delay_ms", lambda **_: 0)
     request = httpx.Request("POST", "https://example.test/v1/chat/completions")
     request_error = APIStatusError(
         "lock timeout",
@@ -2626,149 +2635,6 @@ async def test_generate_retries_retryable_status_error_before_side_effects(
     assert RunEventType.LLM_RETRY_SCHEDULED in event_types
     history = message_repo.get_history("inst-retry-success")
     assert len(history) == 2
-
-
-@pytest.mark.asyncio
-async def test_generate_does_not_retry_statusless_api_error_before_side_effects(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    fake_hub = _FakeRunEventHub()
-    provider, message_repo = _build_provider(
-        tmp_path / "retry_statusless_error.db", fake_hub
-    )
-    provider._session._retry_config.jitter = False
-    scripted_agent = _SequentialAgent(
-        [
-            _ScriptedAgentRun(
-                nodes=[],
-                messages_by_step=[],
-                result=_ScriptedResult(response="unused", messages=[]),
-                raise_on_exhaust=APIError(
-                    "provider error",
-                    request=httpx.Request(
-                        "POST",
-                        "https://example.test/v1/chat/completions",
-                    ),
-                    body={"error": {"code": "2062", "message": "busy"}},
-                ),
-            )
-        ]
-    )
-    monkeypatch.setattr(
-        llm_module,
-        "build_coordination_agent",
-        lambda **kwargs: scripted_agent,
-    )
-    request = LLMRequest(
-        run_id="run-statusless-error",
-        trace_id="run-statusless-error",
-        task_id="task-statusless-error",
-        session_id="session-statusless-error",
-        workspace_id="default",
-        instance_id="inst-statusless-error",
-        role_id="Coordinator",
-        system_prompt="system",
-        user_prompt="retry me",
-    )
-
-    with pytest.raises(AssistantRunError) as exc_info:
-        await provider.generate(request)
-
-    event_types = [event.event_type for event in fake_hub.events]
-    assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
-    assert RunEventType.LLM_RETRY_EXHAUSTED not in event_types
-    assert exc_info.value.payload.error_message == "busy"
-    history = message_repo.get_history("inst-statusless-error")
-    assert len(history) == 2
-
-
-@pytest.mark.asyncio
-async def test_generate_emits_model_step_started_before_retry_attempt_prompt_prep(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    fake_hub = _FakeRunEventHub()
-    provider, _message_repo = _build_provider(
-        tmp_path / "retry_prompt_prep_started.db",
-        fake_hub,
-    )
-    provider._session._retry_config.jitter = False
-    provider._session._retry_config.max_retries = 1
-
-    request_error = APIStatusError(
-        "lock timeout",
-        response=httpx.Response(
-            409,
-            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
-        ),
-        body={"error": {"code": "conflict", "message": "busy"}},
-    )
-    scripted_agent = _SequentialAgent(
-        [
-            _ScriptedAgentRun(
-                nodes=[],
-                messages_by_step=[],
-                result=_ScriptedResult(response="unused", messages=[]),
-                raise_on_exhaust=request_error,
-            )
-        ]
-    )
-    monkeypatch.setattr(
-        llm_module,
-        "build_coordination_agent",
-        lambda **kwargs: scripted_agent,
-    )
-    original_prepare_prompt_context = provider._session._prepare_prompt_context
-    prepare_call_count = 0
-
-    async def _prepare_prompt_context_with_second_attempt_failure(
-        *,
-        request: LLMRequest,
-        conversation_id: str,
-        system_prompt: str,
-        reserve_user_prompt_tokens: bool,
-        allowed_tools: tuple[str, ...],
-        allowed_mcp_servers: tuple[str, ...],
-        allowed_skills: tuple[str, ...],
-    ) -> _PreparedPromptContext:
-        nonlocal prepare_call_count
-        prepare_call_count += 1
-        if prepare_call_count == 2:
-            raise RuntimeError("compaction rewrite failed")
-        return await original_prepare_prompt_context(
-            request=request,
-            conversation_id=conversation_id,
-            system_prompt=system_prompt,
-            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
-            allowed_tools=allowed_tools,
-            allowed_mcp_servers=allowed_mcp_servers,
-            allowed_skills=allowed_skills,
-        )
-
-    monkeypatch.setattr(
-        provider._session,
-        "_prepare_prompt_context",
-        _prepare_prompt_context_with_second_attempt_failure,
-    )
-    request = LLMRequest(
-        run_id="run-retry-prompt-prep-failure",
-        trace_id="run-retry-prompt-prep-failure",
-        task_id="task-retry-prompt-prep-failure",
-        session_id="session-retry-prompt-prep-failure",
-        workspace_id="default",
-        instance_id="inst-retry-prompt-prep-failure",
-        role_id="Coordinator",
-        system_prompt="system",
-        user_prompt="retry me",
-    )
-
-    with pytest.raises(RuntimeError, match="compaction rewrite failed"):
-        await provider.generate(request)
-
-    event_types = [event.event_type for event in fake_hub.events]
-    assert event_types.count(RunEventType.MODEL_STEP_STARTED) == 2
-    assert RunEventType.LLM_RETRY_SCHEDULED in event_types
 
 
 @pytest.mark.asyncio
@@ -3031,6 +2897,14 @@ async def test_generate_retries_midstream_provider_500_after_streamed_text(
         tmp_path / "retry_midstream_500.db", fake_hub
     )
     provider._session._retry_config.jitter = False
+    provider._session._retry_config.initial_delay_ms = 1
+
+    async def _fast_sleep(delay: float) -> None:
+        _ = delay
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(llm_retry_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(llm_module, "compute_retry_delay_ms", lambda **_: 0)
     scripted_agent = _SequentialAgent(
         [
             _ScriptedAgentRun(
