@@ -57,7 +57,9 @@ class SessionServiceLike(Protocol):
 
     def get_session(self, session_id: str) -> SessionRecord: ...
 
-    def update_session(self, session_id: str, metadata: dict[str, str]) -> None: ...
+    def sync_session_metadata(
+        self, session_id: str, metadata: dict[str, str]
+    ) -> None: ...
 
     def get_session_messages(self, session_id: str) -> list[dict[str, object]]: ...
 
@@ -174,7 +176,9 @@ class FeishuInboundRuntime:
                 current_metadata=session.metadata,
                 next_metadata=metadata,
             )
-            self._session_service.update_session(session.session_id, merged_metadata)
+            self._session_service.sync_session_metadata(
+                session.session_id, merged_metadata
+            )
             return session.session_id
 
         session = self._create_session(runtime_config=runtime_config, metadata=metadata)

@@ -78,7 +78,7 @@ class _FakeSessionService:
     def get_session(self, session_id: str) -> SessionRecord:
         return self.sessions[session_id]
 
-    def update_session(self, session_id: str, metadata: dict[str, str]) -> None:
+    def sync_session_metadata(self, session_id: str, metadata: dict[str, str]) -> None:
         self.sessions[session_id] = self.sessions[session_id].model_copy(
             update={"metadata": metadata}
         )

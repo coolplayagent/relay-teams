@@ -20,6 +20,7 @@ import qrcode
 import qrcode.image.svg
 
 from relay_teams.gateway.gateway_models import GatewayChannelType
+from relay_teams.interfaces.server.api_write_validation import require_force_delete
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
 from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressBusyPolicy,
@@ -294,11 +295,8 @@ class WeChatGatewayService:
             if not preset_id:
                 raise ValueError("orchestration_preset_id is required")
             settings = self._orchestration_settings_service.get_orchestration_config()
-            presets = settings.get("presets")
-            if not isinstance(presets, list) or not any(
-                isinstance(item, dict) and item.get("preset_id") == preset_id
-                for item in presets
-            ):
+            presets = settings.presets
+            if not any(item.preset_id == preset_id for item in presets):
                 raise ValueError(f"Unknown orchestration preset: {preset_id}")
             orchestration_preset_id = preset_id
         updated = existing.model_copy(
@@ -307,7 +305,7 @@ class WeChatGatewayService:
                 "base_url": request.base_url or existing.base_url,
                 "cdn_base_url": request.cdn_base_url or existing.cdn_base_url,
                 "route_tag": request.route_tag
-                if request.route_tag is not None
+                if "route_tag" in request.model_fields_set
                 else existing.route_tag,
                 "status": (
                     WeChatAccountStatus.ENABLED
@@ -337,7 +335,13 @@ class WeChatGatewayService:
             WeChatAccountUpdateInput(enabled=enabled),
         )
 
-    def delete_account(self, account_id: str) -> None:
+    def delete_account(self, account_id: str, *, force: bool = False) -> None:
+        account = self._repository.get_account(account_id)
+        if account.status == WeChatAccountStatus.ENABLED:
+            require_force_delete(
+                force,
+                message="Cannot delete enabled WeChat account without force",
+            )
         self._stop_account_worker(account_id)
         self._secret_store.delete_bot_token(self._config_dir, account_id)
         self._repository.delete_account(account_id)

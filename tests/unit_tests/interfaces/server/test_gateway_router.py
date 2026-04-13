@@ -166,6 +166,20 @@ def test_update_wechat_account_route_maps_validation_error_to_422() -> None:
     assert response.json()["detail"] == "orchestration_preset_id is required"
 
 
+def test_update_wechat_account_route_allows_blank_route_tag_to_clear_value() -> None:
+    fake_service = _FakeWeChatGatewayService()
+    client = _client(fake_service)
+
+    response = client.patch(
+        "/api/gateway/wechat/accounts/wx_123",
+        json={"route_tag": "   "},
+    )
+
+    assert response.status_code == 200
+    assert fake_service.updated_payloads[0][1].route_tag is None
+    assert "route_tag" in fake_service.updated_payloads[0][1].model_fields_set
+
+
 def test_reload_wechat_gateway_route_calls_service() -> None:
     fake_service = _FakeWeChatGatewayService()
     client = _client(fake_service)

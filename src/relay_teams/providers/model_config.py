@@ -3,9 +3,17 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    field_validator,
+    model_validator,
+)
 
 from relay_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
+from relay_teams.validation import RequiredIdentifierStr
 
 DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS = DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 DEFAULT_LLM_RETRY_MAX_RETRIES = 5
@@ -155,6 +163,42 @@ class ModelEndpointConfig(BaseModel):
         raise ValueError(
             "Model endpoint config requires api_key or at least one configured header."
         )
+
+
+class ModelProfileConfigPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: ProviderType = ProviderType.OPENAI_COMPATIBLE
+    is_default: bool | None = None
+    model: str = Field(min_length=1)
+    base_url: str = Field(min_length=1)
+    api_key: str | None = Field(default=None, min_length=1)
+    headers: tuple[ModelRequestHeader, ...] | None = None
+    maas_auth: MaaSAuthConfig | None = None
+    ssl_verify: bool | None = None
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
+    max_tokens: int | None = Field(default=None, ge=1)
+    context_window: int | None = Field(default=None, ge=1)
+    connect_timeout_seconds: float = Field(
+        default=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+        gt=0.0,
+        le=300.0,
+    )
+
+    @field_validator("model", "base_url", "api_key", mode="before")
+    @classmethod
+    def _normalize_string_fields(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
+
+class ModelConfigPayload(
+    RootModel[dict[RequiredIdentifierStr, ModelProfileConfigPayload]]
+):
+    root: dict[RequiredIdentifierStr, ModelProfileConfigPayload]
 
 
 class ProviderModelInfo(BaseModel):

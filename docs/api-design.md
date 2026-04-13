@@ -98,6 +98,7 @@ Request field:
 
 Returns the persisted model config with secret-backed profile API keys rehydrated for UI editing.
 Literal profile `api_key` values and secret header values are migrated out of `model.json` into the unified secret store on read.
+The response body is a root object whose keys are profile ids and whose values use the same typed profile schema as `PUT /system/configs/model`, without any legacy top-level `config` wrapper.
 
 ### `GET /system/configs/model/profiles`
 
@@ -110,6 +111,7 @@ When no profile is explicitly marked default, the backend resolves the default i
 
 Upserts a model profile.
 Request body may include optional `source_name` to rename an existing profile while preserving its stored API key and secret headers when `api_key` and `headers` are omitted.
+If `source_name` does not exist, the backend returns `404`. Profile-level semantic validation failures that occur after request parsing, such as invalid secret-header state or missing MAAS password on first configuration, return `400`.
 `provider` accepts `openai_compatible`, `bigmodel`, `minimax`, `maas`, and `echo`.
 Profiles may also include optional `ssl_verify` to override the global outbound TLS verification default for that model only.
 Profiles may include `is_default` to promote that profile to the runtime default; saving one default clears the flag from all others.
@@ -121,12 +123,15 @@ When `provider = "maas"`, `maas_auth` must include `username`; `password` is acc
 ### `DELETE /system/configs/model/profiles/{name}`
 
 Deletes a model profile.
+If the profile does not exist, the backend returns `404`.
 If the deleted profile was the current default and other profiles remain, the backend promotes the first remaining profile by name to stay default.
 
 ### `PUT /system/configs/model`
 
 Replaces the full model config object.
+The request body must be a root object keyed by profile id. Each profile value uses the explicit model-profile schema (`provider`, `model`, `base_url`, optional `api_key`, optional `headers[]`, optional `maas_auth`, sampling fields, and optional `is_default`/`ssl_verify`). The legacy `{ "config": { ... } }` wrapper is rejected.
 Literal profile `api_key` values and secret header values are moved into the unified secret store before `model.json` is written.
+Unknown profile fields and invalid profile ids are rejected at request validation time. Profile-level semantic validation failures that occur during save return `400`.
 
 ### `POST /system/configs/model:probe`
 
@@ -153,6 +158,7 @@ For a small set of known provider/model pairs, the backend also applies a built-
 ### `POST /system/configs/model:reload`
 
 Reloads model config into runtime.
+If persisted model config is syntactically valid JSON but semantically invalid for runtime loading, the backend returns `400`.
 
 ### `GET /system/configs/proxy`
 
@@ -461,10 +467,12 @@ This updates process-level proxy variables for future HTTP requests and shell/MC
 ### `POST /system/configs/mcp:reload`
 
 Reloads MCP config into runtime.
+If persisted MCP config is semantically invalid, the backend returns `400`.
 
 ### `POST /system/configs/skills:reload`
 
 Reloads skills config into runtime.
+If persisted skills config is semantically invalid, the backend returns `400`.
 
 ### `GET /system/configs/notifications`
 
@@ -477,6 +485,7 @@ Each rule includes:
 ### `PUT /system/configs/notifications`
 
 Replaces notification rules.
+The request body is the `NotificationConfig` object directly; the backend no longer accepts an extra top-level `config` field. Unknown top-level fields are rejected.
 Notes:
 - `feishu` delivery is best-effort and only applies when the session/run has Feishu chat context.
 - Feishu credentials are resolved from the Feishu gateway account bound to that session, not from `notifications.json`.
@@ -497,6 +506,7 @@ Response fields:
 ### `PUT /system/configs/orchestration`
 
 Replaces global orchestration settings.
+The request body is the `OrchestrationSettings` object directly; the backend no longer accepts an extra top-level `config` field. Unknown top-level fields are rejected.
 
 Rules:
 - `presets[].role_ids` may contain only normal roles; reserved system roles are rejected.
@@ -551,7 +561,12 @@ Request:
 {
   "session_id": null,
   "workspace_id": "default",
-  "metadata": {"project": "demo"}
+  "metadata": {
+    "title": "Customer Support",
+    "source_label": "Group Chat",
+    "source_icon": "im",
+    "custom_metadata": {"project": "demo"}
+  }
 }
 ```
 
@@ -560,6 +575,9 @@ Notes:
 - New sessions default to `normal_root_role_id = "MainAgent"`.
 - New sessions also store the current default orchestration preset id so they can be switched to orchestration before the first run.
 - Omitting `session_id` or sending `session_id = null` auto-generates a session id. Sending `"None"` or `"null"` as a string is rejected with `422`.
+- `metadata` uses the same explicit fields as session metadata updates: `title`, `title_source`, `source_label`, `source_icon`, and `custom_metadata`.
+- `custom_metadata` cannot overwrite reserved session keys such as `title`, `title_source`, `source_label`, `source_icon`, `source_kind`, `source_provider`, or any key with the `feishu_` prefix.
+- `title_source` requires `title`. When `title` is provided and `title_source` is omitted, the backend stores `title_source = "manual"`.
 
 ### `GET /sessions`
 
@@ -578,7 +596,30 @@ Response fields also include:
 
 ### `PATCH /sessions/{session_id}`
 
-Updates session metadata.
+Updates session metadata with an explicit patch body.
+
+Request:
+
+```json
+{
+  "title": "Renamed Session",
+  "title_source": "manual",
+  "source_label": "Customer Support",
+  "source_icon": "support-bot",
+  "custom_metadata": {
+    "project": "demo",
+    "ticket_id": "A-1024"
+  }
+}
+```
+
+Rules:
+- The request body must contain at least one field.
+- `title`, `title_source`, `source_label`, and `source_icon` are optional patch fields. Sending `null` clears that value.
+- `title_source` requires the resulting session title to be set. Sending `title_source` without a non-empty `title` returns `422`.
+- `custom_metadata` replaces only the caller-managed custom metadata subset. System-managed metadata keys remain intact.
+- `custom_metadata` keys must be non-empty and cannot overwrite reserved keys such as `title`, `title_source`, `source_label`, `source_icon`, `source_kind`, `source_provider`, or any key with the `feishu_` prefix.
+- `custom_metadata` values must be non-empty strings.
 
 ### `PATCH /sessions/{session_id}/topology`
 
@@ -605,6 +646,10 @@ Rules:
 
 Deletes a session and all persisted runtime data under that session.
 The bound workspace record is preserved.
+Request body may include:
+- optional `force`: required when the session still has an active or recoverable run
+- optional `cascade`: required when persisted session-scoped data already exists and the caller wants the backend to remove messages, tasks, agents, runtime rows, background-task logs, bindings, and other related session data
+If a session still has related data and `cascade` is omitted or `false`, the backend returns `409` instead of performing an implicit cascading delete.
 
 ### `GET /sessions/{session_id}/rounds`
 
@@ -1616,8 +1661,12 @@ Deletes one registered execution workspace.
 Query:
 - `remove_worktree`: `true|false`
 
+Request body:
+- optional `force`: required when `remove_worktree=true`
+
 Rules:
 - `remove_worktree=true` only affects workspaces with `file_scope.backend = "git_worktree"`.
+- When `remove_worktree=true` and `force` is omitted or `false`, the backend returns `409` instead of removing the worktree.
 - When `remove_worktree=true`, the backend runs `git worktree remove --force` before deleting the workspace record.
 - When `remove_worktree=false`, the backend deletes only the workspace record.
 
@@ -1651,6 +1700,7 @@ Notes:
 - `workspace_id` is optional.
 - `orchestration_prompt` is optional and participates in skill routing; coordinator preview also renders it into the prompt layers that normally receive runtime orchestration prompt context.
 - `conversation_context` is optional.
+- `shared_state` remains a free-form key/value object, but keys are trimmed and blank keys are rejected with `422`.
 - When `workspace_id` is provided, `runtime_system_prompt` resolves `Working Directory` from the workspace execution root using the same workspace path resolution as real agent execution.
 - `runtime_system_prompt` also includes any resolved instruction files loaded from the workspace/project chain, user-level prompt files, and `prompts.json` in the resolved config dir, by default `~/.relay-teams/prompts.json`.
 - When `conversation_context.source_provider = "feishu"` and `conversation_context.feishu_chat_type = "group"`, both `runtime_system_prompt` and `provider_system_prompt` append the extra Feishu-group instruction:
@@ -1722,9 +1772,20 @@ Each record includes:
 Creates a Feishu gateway account and persists its secret config.
 The request `name` and all `account_id` path parameters follow the common identifier validation rules above.
 
+Rules:
+- `source_config`, `target_config`, and `secret_config` use explicit nested Feishu models with `extra = forbid`; unknown nested fields return `422`.
+- Omitting `target_config` uses the default Feishu trigger target settings.
+- `secret_config.app_secret` is required on create.
+
 ### `PATCH /gateway/feishu/accounts/{account_id}`
 
 Updates a Feishu gateway account. If the runtime credential signature changes, the backend reloads the Feishu long-connection runtime. If the target session preset changes, the backend clears the existing external chat bindings for that account.
+
+Rules:
+- The request body must include at least one field.
+- `source_config`, `target_config`, and `secret_config` are explicit nested patch fields, not loose dictionaries.
+- Empty config objects such as `{"target_config": {}}` or `{"secret_config": {}}` are rejected with `422`.
+- Unknown nested fields return `422`.
 
 ### `POST /gateway/feishu/accounts/{account_id}:enable`
 
@@ -1911,6 +1972,9 @@ Mutable fields:
 - `thinking`
 
 Notes:
+- The request body must contain at least one field.
+- `display_name`, `base_url`, `cdn_base_url`, and `route_tag` are trimmed. Blank strings are rejected with `422`.
+- Sending `route_tag = null` clears the stored route tag.
 - `session_mode = "orchestration"` requires `orchestration_preset_id` or a configured default orchestration preset.
 - Saving account settings immediately reloads the WeChat gateway workers.
 
@@ -2057,6 +2121,10 @@ Updates automation project definition, schedule, stored run config, and optional
 ### `DELETE /automation/projects/{automation_project_id}`
 
 Deletes the automation project and its backing trigger. Historical sessions are preserved.
+Request body may include:
+- optional `force`: required when the project is still enabled
+- optional `cascade`: required when delivery records or bound-session queue records already exist and the caller wants the backend to remove them together with the project
+If related delivery or queue data exists and `cascade` is omitted or `false`, the backend returns `409` instead of performing an implicit cascading delete.
 
 ### `POST /automation/projects/{automation_project_id}:run`
 

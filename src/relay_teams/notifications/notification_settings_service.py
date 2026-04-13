@@ -21,10 +21,12 @@ class NotificationSettingsService:
             notification_config_manager
         )
 
-    def get_notification_config(self) -> dict[str, JsonValue]:
-        config = self._notification_config_manager.get_notification_config()
+    def get_notification_config(self) -> NotificationConfig:
+        return self._notification_config_manager.get_notification_config()
+
+    def get_notification_config_payload(self) -> dict[str, JsonValue]:
+        config = self.get_notification_config()
         return cast(dict[str, JsonValue], config.model_dump(mode="json"))
 
-    def save_notification_config(self, config: dict[str, JsonValue]) -> None:
-        validated = NotificationConfig.model_validate(config)
-        self._notification_config_manager.save_notification_config(validated)
+    def save_notification_config(self, config: NotificationConfig) -> None:
+        self._notification_config_manager.save_notification_config(config)

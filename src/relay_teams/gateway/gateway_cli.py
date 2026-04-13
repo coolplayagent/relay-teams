@@ -138,6 +138,7 @@ def build_gateway_app(
         @feishu_app.command("delete")
         def feishu_delete(
             account_id: str = typer.Option(..., "--account-id"),
+            force: bool = typer.Option(True, "--force/--no-force"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
         ) -> None:
@@ -146,7 +147,7 @@ def build_gateway_app(
                 base_url,
                 "DELETE",
                 f"/api/gateway/feishu/accounts/{account_id}",
-                None,
+                {"force": force},
             )
             typer.echo(json.dumps(result, ensure_ascii=False))
 
@@ -264,6 +265,7 @@ def build_gateway_app(
         @wechat_app.command("delete")
         def wechat_delete(
             account_id: str = typer.Option(..., "--account-id"),
+            force: bool = typer.Option(True, "--force/--no-force"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
         ) -> None:
@@ -272,7 +274,7 @@ def build_gateway_app(
                 base_url,
                 "DELETE",
                 f"/api/gateway/wechat/accounts/{account_id}",
-                None,
+                {"force": force},
             )
             typer.echo(json.dumps(result, ensure_ascii=False))
 

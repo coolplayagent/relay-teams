@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from typing import NoReturn
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -58,6 +60,7 @@ from relay_teams.interfaces.server.deps import (
 )
 from relay_teams.interfaces.server.ui_language_models import UiLanguageSettings
 from relay_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
+from relay_teams.agents.orchestration.settings_models import OrchestrationSettings
 from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
@@ -67,14 +70,14 @@ from relay_teams.interfaces.server.runtime_identity import (
     build_server_health_payload,
 )
 from relay_teams.mcp.config_reload_service import McpConfigReloadService
+from relay_teams.notifications.models import NotificationConfig
 from relay_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
 )
 from relay_teams.providers.model_config import (
-    DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_BASE_URL,
-    MaaSAuthConfig,
-    ModelRequestHeader,
+    ModelConfigPayload,
+    ModelProfileConfigPayload,
     ProviderType,
 )
 from relay_teams.providers.model_config_service import ModelConfigService
@@ -100,6 +103,50 @@ from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/system", tags=["System"])
+
+
+class NotificationConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    config: NotificationConfig
+
+
+class ModelConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    config: ModelConfigPayload
+
+
+class OrchestrationConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    config: OrchestrationSettings
+
+
+def _raise_system_http_error(
+    exc: Exception,
+    *,
+    key_error_status: int | None = None,
+    key_error_detail: str | None = None,
+    permission_error_status: int | None = None,
+    value_error_status: int | None = None,
+    runtime_error_status: int | None = None,
+    os_error_status: int | None = None,
+) -> NoReturn:
+    if permission_error_status is not None and isinstance(exc, PermissionError):
+        raise HTTPException(
+            status_code=permission_error_status, detail=str(exc)
+        ) from exc
+    if key_error_status is not None and isinstance(exc, KeyError):
+        detail = key_error_detail if key_error_detail is not None else str(exc)
+        raise HTTPException(status_code=key_error_status, detail=detail) from exc
+    if value_error_status is not None and isinstance(exc, ValueError):
+        raise HTTPException(status_code=value_error_status, detail=str(exc)) from exc
+    if runtime_error_status is not None and isinstance(exc, RuntimeError):
+        raise HTTPException(status_code=runtime_error_status, detail=str(exc)) from exc
+    if os_error_status is not None and isinstance(exc, OSError):
+        raise HTTPException(status_code=os_error_status, detail=str(exc)) from exc
+    raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/health")
@@ -137,7 +184,7 @@ def save_ui_language_settings(
     try:
         service.save_ui_language_settings(req)
         return {"status": "ok"}
-    except Exception as exc:
+    except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -155,23 +202,10 @@ def get_model_profiles(
     return service.get_model_profiles()
 
 
-class ModelProfileRequest(BaseModel):
+class ModelProfileRequest(ModelProfileConfigPayload):
     model_config = ConfigDict(extra="forbid")
 
     source_name: str | None = None
-    provider: ProviderType = ProviderType.OPENAI_COMPATIBLE
-    is_default: bool | None = None
-    model: str
-    base_url: str
-    api_key: str | None = None
-    headers: tuple[ModelRequestHeader, ...] | None = None
-    maas_auth: MaaSAuthConfig | None = None
-    ssl_verify: bool | None = None
-    temperature: float = 0.7
-    top_p: float = 1.0
-    max_tokens: int | None = None
-    context_window: int | None = None
-    connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
 
 
 @router.put("/configs/model/profiles/{name}")
@@ -211,7 +245,11 @@ def save_model_profile(
         service.save_model_profile(name, profile, source_name=req.source_name)
         return {"status": "ok"}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_system_http_error(
+            exc,
+            key_error_status=404,
+            value_error_status=400,
+        )
 
 
 @router.get("/configs/model/providers/models")
@@ -234,25 +272,24 @@ def delete_model_profile(
         service.delete_model_profile(name)
         return {"status": "ok"}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-class ModelConfigRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    config: dict[str, JsonValue]
+        _raise_system_http_error(
+            exc,
+            key_error_status=404,
+            value_error_status=400,
+        )
 
 
 @router.put("/configs/model")
 def save_model_config(
-    req: ModelConfigRequest,
+    req: ModelConfigPayload | ModelConfigRequest,
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, str]:
     try:
-        service.save_model_config(req.config)
+        config = req.config if isinstance(req, ModelConfigRequest) else req
+        service.save_model_config(config)
         return {"status": "ok"}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_system_http_error(exc, value_error_status=400)
 
 
 @router.post("/configs/model:probe")
@@ -280,7 +317,7 @@ def discover_model_catalog(
 @router.get("/configs/notifications")
 def get_notification_config(
     service: NotificationSettingsService = Depends(get_notification_settings_service),
-) -> dict[str, JsonValue]:
+) -> NotificationConfig:
     return service.get_notification_config()
 
 
@@ -303,12 +340,13 @@ def save_environment_variable(
 ) -> EnvironmentVariableRecord:
     try:
         return service.save_environment_variable(scope=scope, key=key, request=req)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_system_http_error(
+            exc,
+            permission_error_status=403,
+            value_error_status=400,
+            runtime_error_status=400,
+        )
 
 
 @router.delete("/configs/environment-variables/{scope}/{key}")
@@ -320,12 +358,13 @@ def delete_environment_variable(
     try:
         service.delete_environment_variable(scope=scope, key=key)
         return {"status": "ok"}
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_system_http_error(
+            exc,
+            permission_error_status=403,
+            value_error_status=400,
+            runtime_error_status=400,
+        )
 
 
 @router.get("/configs/proxy")
@@ -343,10 +382,12 @@ def save_proxy_config(
     try:
         service.save_proxy_config(req)
         return {"status": "ok"}
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_system_http_error(
+            exc,
+            value_error_status=400,
+            runtime_error_status=400,
+        )
 
 
 @router.get("/configs/web")
@@ -364,10 +405,12 @@ def save_web_config(
     try:
         service.save_web_config(req)
         return {"status": "ok"}
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_system_http_error(
+            exc,
+            value_error_status=400,
+            runtime_error_status=400,
+        )
 
 
 @router.get("/configs/agents", response_model=list[ExternalAgentSummary])
@@ -442,10 +485,12 @@ def save_github_config(
     try:
         service.save_github_config(req)
         return {"status": "ok"}
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_system_http_error(
+            exc,
+            value_error_status=400,
+            runtime_error_status=400,
+        )
 
 
 @router.get("/configs/clawhub")
@@ -463,10 +508,12 @@ def save_clawhub_config(
     try:
         service.save_clawhub_config(req)
         return {"status": "ok"}
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_system_http_error(
+            exc,
+            value_error_status=400,
+            runtime_error_status=400,
+        )
 
 
 @router.post("/configs/clawhub:probe")
@@ -563,44 +610,34 @@ def delete_clawhub_skill(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-class NotificationConfigRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    config: dict[str, JsonValue]
-
-
-class OrchestrationConfigRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    config: dict[str, JsonValue]
-
-
 @router.put("/configs/notifications")
 def save_notification_config(
-    req: NotificationConfigRequest,
+    req: NotificationConfig | NotificationConfigRequest,
     service: NotificationSettingsService = Depends(get_notification_settings_service),
 ) -> dict[str, str]:
     try:
-        service.save_notification_config(req.config)
+        config = req.config if isinstance(req, NotificationConfigRequest) else req
+        service.save_notification_config(config)
         return {"status": "ok"}
-    except Exception as exc:
+    except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/configs/orchestration")
 def get_orchestration_config(
     service: OrchestrationSettingsService = Depends(get_orchestration_settings_service),
-) -> dict[str, JsonValue]:
+) -> OrchestrationSettings:
     return service.get_orchestration_config()
 
 
 @router.put("/configs/orchestration")
 def save_orchestration_config(
-    req: OrchestrationConfigRequest,
+    req: OrchestrationSettings | OrchestrationConfigRequest,
     service: OrchestrationSettingsService = Depends(get_orchestration_settings_service),
 ) -> dict[str, str]:
     try:
-        service.save_orchestration_config(req.config)
+        config = req.config if isinstance(req, OrchestrationConfigRequest) else req
+        service.save_orchestration_config(config)
         return {"status": "ok"}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -614,7 +651,11 @@ def reload_model_config(
         service.reload_model_config()
         return {"status": "ok"}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_system_http_error(
+            exc,
+            value_error_status=400,
+            runtime_error_status=400,
+        )
 
 
 @router.post("/configs/proxy:reload")
@@ -625,7 +666,11 @@ def reload_proxy_config(
         service.reload_proxy_config()
         return {"status": "ok"}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_system_http_error(
+            exc,
+            value_error_status=400,
+            runtime_error_status=400,
+        )
 
 
 @router.post("/configs/web:probe")
@@ -657,6 +702,8 @@ def reload_mcp_config(
     try:
         service.reload_mcp_config()
         return {"status": "ok"}
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -668,5 +715,7 @@ def reload_skills_config(
     try:
         service.reload_skills_config()
         return {"status": "ok"}
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

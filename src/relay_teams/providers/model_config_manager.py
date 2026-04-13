@@ -107,6 +107,8 @@ class ModelConfigManager:
             )
         existing_profile = config.get(name)
         if source_name is not None and source_name != name:
+            if source_name not in config:
+                raise KeyError(f"Model profile not found: {source_name}")
             existing_profile = config.get(source_name, existing_profile)
         current_secret = (
             self._get_profile_secret(source_name)
@@ -176,13 +178,13 @@ class ModelConfigManager:
     def delete_model_profile(self, name: str) -> None:
         model_file = self._config_dir / "model.json"
         if not model_file.exists():
-            self._delete_profile_secret_owner(name)
-            return
+            raise KeyError(f"Model profile not found: {name}")
         config = _load_json_object(model_file)
-        if name in config:
-            del config[name]
-            _normalize_default_profile_flags(config)
-            _ = model_file.write_text(dumps(config, indent=2), encoding="utf-8")
+        if name not in config:
+            raise KeyError(f"Model profile not found: {name}")
+        del config[name]
+        _normalize_default_profile_flags(config)
+        _ = model_file.write_text(dumps(config, indent=2), encoding="utf-8")
         self._delete_profile_secret_owner(name)
 
     def save_model_config(self, config: dict[str, JsonValue]) -> None:

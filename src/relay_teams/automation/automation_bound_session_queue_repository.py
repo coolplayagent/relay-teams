@@ -473,6 +473,14 @@ class AutomationBoundSessionQueueRepository:
             return None
         return self.get(automation_queue_id)
 
+    def has_project_records(self, automation_project_id: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM automation_bound_session_queue WHERE automation_project_id=? LIMIT 1",
+                (automation_project_id,),
+            ).fetchone()
+        return row is not None
+
     def delete_by_project(self, automation_project_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,

@@ -29,6 +29,7 @@ from relay_teams.gateway.feishu.secret_store import (
     FeishuTriggerSecretStore,
     get_feishu_trigger_secret_store,
 )
+from relay_teams.interfaces.server.api_write_validation import require_force_delete
 from relay_teams.logger import get_logger, log_event
 from relay_teams.roles import RoleRegistry
 from relay_teams.sessions.external_session_binding_repository import (
@@ -38,6 +39,26 @@ from relay_teams.sessions.session_models import SessionMode, SessionRecord
 from relay_teams.workspace import WorkspaceService
 
 LOGGER = get_logger(__name__)
+
+
+def _secret_config_payload(
+    payload: FeishuTriggerSecretConfig | Mapping[str, str | None] | None,
+) -> dict[str, str | None] | None:
+    if payload is None:
+        return None
+    if isinstance(payload, FeishuTriggerSecretConfig):
+        return payload.model_dump(mode="json", exclude_unset=True)
+    return dict(payload.items())
+
+
+def _feishu_config_payload(
+    payload: (
+        Mapping[str, object] | FeishuTriggerSourceConfig | FeishuTriggerTargetConfig
+    ),
+) -> dict[str, object]:
+    if isinstance(payload, (FeishuTriggerSourceConfig, FeishuTriggerTargetConfig)):
+        return payload.model_dump(mode="json")
+    return dict(payload.items())
 
 
 class FeishuGatewayService:
@@ -89,15 +110,15 @@ class FeishuGatewayService:
                 if payload.enabled
                 else FeishuGatewayAccountStatus.DISABLED
             ),
-            source_config=payload.source_config,
-            target_config=payload.target_config,
+            source_config=payload.source_config.model_dump(mode="json"),
+            target_config=payload.target_config.model_dump(mode="json"),
             created_at=now,
             updated_at=now,
         )
         created = self._repository.create_account(record)
         self.save_secret_config(
             account_id=created.account_id,
-            secret_config_payload=payload.secret_config,
+            secret_config_payload=_secret_config_payload(payload.secret_config),
             require_app_secret=True,
         )
         return self.get_account(created.account_id)
@@ -118,12 +139,12 @@ class FeishuGatewayService:
                     else existing.display_name
                 ),
                 "source_config": (
-                    payload.source_config
+                    payload.source_config.model_dump(mode="json")
                     if payload.source_config is not None
                     else existing.source_config
                 ),
                 "target_config": (
-                    payload.target_config
+                    payload.target_config.model_dump(mode="json")
                     if payload.target_config is not None
                     else existing.target_config
                 ),
@@ -133,7 +154,7 @@ class FeishuGatewayService:
         stored = self._repository.update_account(updated)
         self.save_secret_config(
             account_id=stored.account_id,
-            secret_config_payload=payload.secret_config,
+            secret_config_payload=_secret_config_payload(payload.secret_config),
             require_app_secret=False,
         )
         if self.runtime_settings_changed(existing, stored):
@@ -161,8 +182,18 @@ class FeishuGatewayService:
         _ = self._repository.update_account(updated)
         return self.get_account(account_id)
 
-    def delete_account(self, account_id: str) -> None:
+    def delete_account(self, account_id: str, *, force: bool = False) -> None:
         _ = self._repository.get_account(account_id)
+        if any(
+            binding.trigger_id == account_id
+            for binding in self._external_session_binding_repo.list_by_platform(
+                "feishu"
+            )
+        ):
+            require_force_delete(
+                force,
+                message="Cannot delete Feishu account while external session bindings exist",
+            )
         self.clear_bindings(account_id)
         self.delete_secret_config(account_id)
         self._repository.delete_account(account_id)
@@ -211,7 +242,7 @@ class FeishuGatewayService:
         )
         _ = self._merge_secret_config(
             account_id=None,
-            secret_config_payload=request.secret_config,
+            secret_config_payload=_secret_config_payload(request.secret_config),
             require_app_secret=True,
         )
 
@@ -222,12 +253,12 @@ class FeishuGatewayService:
         request: FeishuGatewayAccountUpdateInput,
     ) -> None:
         merged_source = (
-            request.source_config
+            request.source_config.model_dump(mode="json")
             if request.source_config is not None
             else existing.source_config
         )
         merged_target = (
-            request.target_config
+            request.target_config.model_dump(mode="json")
             if request.target_config is not None
             else existing.target_config
         )
@@ -238,7 +269,7 @@ class FeishuGatewayService:
         if request.secret_config is not None:
             _ = self._merge_secret_config(
                 account_id=existing.account_id,
-                secret_config_payload=request.secret_config,
+                secret_config_payload=_secret_config_payload(request.secret_config),
                 require_app_secret=False,
             )
 
@@ -246,7 +277,7 @@ class FeishuGatewayService:
         self,
         *,
         account_id: str,
-        secret_config_payload: Mapping[str, str] | None,
+        secret_config_payload: Mapping[str, str | None] | None,
         require_app_secret: bool,
     ) -> None:
         if secret_config_payload is None:
@@ -355,11 +386,11 @@ class FeishuGatewayService:
         after_source_config = (
             existing.source_config
             if request.source_config is None
-            else request.source_config
+            else request.source_config.model_dump(mode="json")
         )
         after_secret_config = self._merge_secret_config(
             account_id=existing.account_id,
-            secret_config_payload=request.secret_config,
+            secret_config_payload=_secret_config_payload(request.secret_config),
             require_app_secret=False,
         )
         after_signature = self._subscription_runtime_signature(
@@ -381,12 +412,14 @@ class FeishuGatewayService:
     def _validate_source_and_target(
         self,
         *,
-        source_config: Mapping[str, object],
-        target_config: Mapping[str, object] | None,
+        source_config: Mapping[str, object] | FeishuTriggerSourceConfig,
+        target_config: Mapping[str, object] | FeishuTriggerTargetConfig | None,
     ) -> None:
-        source = FeishuTriggerSourceConfig.model_validate(dict(source_config.items()))
+        source = FeishuTriggerSourceConfig.model_validate(
+            _feishu_config_payload(source_config)
+        )
         target = FeishuTriggerTargetConfig.model_validate(
-            {} if target_config is None else dict(target_config.items())
+            {} if target_config is None else _feishu_config_payload(target_config)
         )
         self._require_workspace(target.workspace_id)
         normalized_root_role_id = self._resolve_normal_root_role_id(
@@ -468,7 +501,7 @@ class FeishuGatewayService:
         self,
         *,
         account_id: str | None,
-        secret_config_payload: Mapping[str, str] | None,
+        secret_config_payload: Mapping[str, str | None] | None,
         require_app_secret: bool,
     ) -> FeishuTriggerSecretConfig:
         payload = (

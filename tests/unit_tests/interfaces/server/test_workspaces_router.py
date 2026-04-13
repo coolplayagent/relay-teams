@@ -448,7 +448,7 @@ def test_fork_workspace_forwards_start_ref(tmp_path: Path) -> None:
     assert service.calls == [("project-alpha", "Alpha Project Fork", "origin/release")]
 
 
-def test_delete_workspace_supports_remove_worktree_query(tmp_path: Path) -> None:
+def test_delete_workspace_requires_force_for_remove_worktree(tmp_path: Path) -> None:
     root_path = tmp_path / "storage" / "alpha-project-fork" / "worktree"
     root_path.mkdir(parents=True)
     git_client = FakeGitWorktreeClient()
@@ -472,6 +472,42 @@ def test_delete_workspace_supports_remove_worktree_query(tmp_path: Path) -> None
     client, _ = _create_test_client(tmp_path, service=service)
 
     response = client.delete("/api/workspaces/alpha-project-fork?remove_worktree=true")
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "Cannot remove workspace git worktree without force"
+    }
+    assert git_client.remove_calls == []
+
+
+def test_delete_workspace_supports_remove_worktree_query(tmp_path: Path) -> None:
+    root_path = tmp_path / "storage" / "alpha-project-fork" / "worktree"
+    root_path.mkdir(parents=True)
+    git_client = FakeGitWorktreeClient()
+    service = StorageScopedWorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspaces_router.db"),
+        storage_root=tmp_path / "storage",
+        git_worktree_client=git_client,
+    )
+    _ = service.create_workspace(
+        workspace_id="alpha-project-fork",
+        root_path=root_path,
+        profile=WorkspaceProfile(
+            file_scope=WorkspaceFileScope(
+                backend=FileScopeBackend.GIT_WORKTREE,
+                branch_name="fork/alpha-project-fork",
+                source_root_path=str((tmp_path / "workspace-root").resolve()),
+                forked_from_workspace_id="project-alpha",
+            )
+        ),
+    )
+    client, _ = _create_test_client(tmp_path, service=service)
+
+    response = client.request(
+        "DELETE",
+        "/api/workspaces/alpha-project-fork?remove_worktree=true",
+        json={"force": True},
+    )
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}

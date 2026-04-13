@@ -9,7 +9,9 @@ if TYPE_CHECKING:
     from relay_teams.providers.model_config import (
         LlmRetryConfig,
         MaaSAuthConfig,
+        ModelConfigPayload,
         ModelEndpointConfig,
+        ModelProfileConfigPayload,
         ModelRequestHeader,
         ProviderModelInfo,
         ProviderType,
@@ -57,9 +59,11 @@ __all__ = [
     "LLMProvider",
     "LlmRetryConfig",
     "MaaSAuthConfig",
+    "ModelConfigPayload",
     "LlmRetryErrorInfo",
     "LlmRetrySchedule",
     "ModelEndpointConfig",
+    "ModelProfileConfigPayload",
     "ModelRequestHeader",
     "ModelConfigManager",
     "ModelConfigService",
@@ -97,6 +101,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "LLMProvider": ("relay_teams.providers.provider_contracts", "LLMProvider"),
     "LlmRetryConfig": ("relay_teams.providers.model_config", "LlmRetryConfig"),
     "MaaSAuthConfig": ("relay_teams.providers.model_config", "MaaSAuthConfig"),
+    "ModelConfigPayload": ("relay_teams.providers.model_config", "ModelConfigPayload"),
     "LlmRetryErrorInfo": (
         "relay_teams.providers.llm_retry",
         "LlmRetryErrorInfo",
@@ -105,6 +110,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ModelEndpointConfig": (
         "relay_teams.providers.model_config",
         "ModelEndpointConfig",
+    ),
+    "ModelProfileConfigPayload": (
+        "relay_teams.providers.model_config",
+        "ModelProfileConfigPayload",
     ),
     "ModelRequestHeader": (
         "relay_teams.providers.model_config",

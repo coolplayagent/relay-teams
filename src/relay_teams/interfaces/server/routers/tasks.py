@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from relay_teams.agents.orchestration.task_orchestration_service import (
@@ -10,6 +10,7 @@ from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskUpdate,
 )
 from relay_teams.interfaces.server.deps import get_task_repo, get_task_service
+from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.validation import RequiredIdentifierStr
 
 from relay_teams.agents.tasks.task_repository import TaskRepository
@@ -54,10 +55,11 @@ async def create_tasks_for_run(
             run_id=run_id,
             tasks=req.tasks,
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 400),),
+        ) from exc
 
 
 @router.get("/runs/{run_id}")
@@ -69,7 +71,7 @@ def list_tasks_for_run(
     try:
         return service.list_delegated_tasks(run_id=run_id, include_root=include_root)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise http_exception_for(exc) from exc
 
 
 @router.get("/{task_id}", response_model=TaskRecord)
@@ -80,7 +82,7 @@ def get_task(
     try:
         return task_repo.get(task_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Task not found") from exc
+        raise http_exception_for(exc, key_error_detail="Task not found") from exc
 
 
 @router.patch("/{task_id}")
@@ -98,10 +100,11 @@ def update_task_by_id(
                 title=req.title,
             ),
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 400),),
+        ) from exc
 
 
 @router.post("/{task_id}/dispatch")
@@ -117,7 +120,8 @@ async def dispatch_task_by_id(
             role_id=req.role_id,
             prompt=req.prompt,
         )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 400),),
+        ) from exc

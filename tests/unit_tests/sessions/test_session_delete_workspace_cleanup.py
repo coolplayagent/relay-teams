@@ -267,7 +267,7 @@ def test_delete_session_cleans_workspace_and_role_state(tmp_path: Path) -> None:
         )
     )
 
-    service.delete_session("session-1")
+    service.delete_session("session-1", cascade=True)
 
     workspace_snapshot = shared_store.snapshot(
         ScopeRef(scope_type=ScopeType.WORKSPACE, scope_id=workspace_id)

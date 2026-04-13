@@ -454,6 +454,92 @@ def test_probe_github_connectivity_passes_payload(monkeypatch) -> None:
     }
 
 
+def test_create_session_preserves_legacy_flat_metadata_payload(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"session_id": "session-1", "workspace_id": "default"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.create_session(
+        workspace_id="default",
+        session_id="session-1",
+        metadata={"project": "demo"},
+    )
+
+    assert response == {"session_id": "session-1", "workspace_id": "default"}
+    assert captured == {
+        "method": "POST",
+        "path": "/api/sessions",
+        "payload": {
+            "session_id": "session-1",
+            "workspace_id": "default",
+            "metadata": {"project": "demo"},
+        },
+    }
+
+
+def test_delete_feishu_gateway_account_forces_delete_by_default(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.delete_feishu_gateway_account("fsg_main")
+
+    assert response == {"status": "ok"}
+    assert captured == {
+        "method": "DELETE",
+        "path": "/api/gateway/feishu/accounts/fsg_main",
+        "payload": {"force": True},
+    }
+
+
+def test_delete_wechat_gateway_account_forces_delete_by_default(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.delete_wechat_gateway_account("wx-account-1")
+
+    assert response == {"status": "ok"}
+    assert captured == {
+        "method": "DELETE",
+        "path": "/api/gateway/wechat/accounts/wx-account-1",
+        "payload": {"force": True},
+    }
+
+
 def test_create_run_includes_target_role_id(monkeypatch) -> None:
     client = AgentTeamsClient()
     captured: dict[str, object] = {}
