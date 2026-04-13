@@ -16,6 +16,8 @@ from relay_teams.env.clawhub_cli import (
 )
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_env import (
+    CLAWHUB_REGISTRY_ENV_KEY,
+    CLAWHUB_SITE_ENV_KEY,
     build_clawhub_subprocess_env,
     normalize_clawhub_token,
 )
@@ -76,6 +78,7 @@ class ClawHubConnectivityProbeService:
     ) -> ClawHubConnectivityProbeResult:
         checked_at = datetime.now(timezone.utc)
         started = perf_counter()
+        probe_deadline = _resolve_probe_deadline(started, request.timeout_ms)
         token = (
             normalize_clawhub_token(request.token) or self._get_clawhub_config().token
         )
@@ -99,8 +102,26 @@ class ClawHubConnectivityProbeService:
             )
 
         if clawhub_path is None:
+            install_timeout_seconds = _resolve_install_timeout_seconds(
+                request.timeout_ms,
+                probe_deadline=probe_deadline,
+            )
+            if install_timeout_seconds is None:
+                return self._build_result(
+                    ok=False,
+                    checked_at=checked_at,
+                    started=started,
+                    binary_available=False,
+                    token_configured=True,
+                    clawhub_path=None,
+                    installation_attempted=installation_attempted,
+                    installed_during_probe=installed_during_probe,
+                    retryable=True,
+                    error_code="clawhub_install_timeout",
+                    error_message="ClawHub CLI installation timed out.",
+                )
             install_result = install_clawhub_via_npm(
-                timeout_seconds=_resolve_install_timeout_seconds(request.timeout_ms),
+                timeout_seconds=install_timeout_seconds,
                 base_env=build_clawhub_subprocess_env(
                     None,
                     config_dir=self._config_dir,
@@ -126,27 +147,48 @@ class ClawHubConnectivityProbeService:
                     or "ClawHub CLI is not available on PATH.",
                 )
 
-        timeout_seconds = (
-            _DEFAULT_TIMEOUT_SECONDS
-            if request.timeout_ms is None
-            else request.timeout_ms / 1000.0
-        )
         env = build_clawhub_subprocess_env(
             token,
             config_dir=self._config_dir,
             base_env=os.environ,
         )
+        _strip_clawhub_site_overrides(env)
         env["PATH"] = _prepend_to_path(env.get("PATH"), clawhub_path.parent)
+        version_text: str | None = None
+        version_timeout_seconds = _resolve_remaining_timeout_seconds(probe_deadline)
+        if version_timeout_seconds is not None:
+            version_text = _read_clawhub_version(
+                clawhub_path,
+                env=env,
+                timeout_seconds=version_timeout_seconds,
+            )
+
+        whoami_timeout_seconds = _resolve_remaining_timeout_seconds(probe_deadline)
+        if whoami_timeout_seconds is None:
+            return self._build_result(
+                ok=False,
+                checked_at=checked_at,
+                started=started,
+                binary_available=True,
+                token_configured=True,
+                clawhub_path=clawhub_path,
+                clawhub_version=version_text,
+                installation_attempted=installation_attempted,
+                installed_during_probe=installed_during_probe,
+                retryable=True,
+                error_code="whoami_timeout",
+                error_message="ClawHub CLI auth verification timed out.",
+            )
 
         try:
-            completed = subprocess.run(
-                [str(clawhub_path), "--cli-version"],
+            whoami_completed = subprocess.run(
+                [str(clawhub_path), "whoami"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 env=env,
-                timeout=timeout_seconds,
+                timeout=whoami_timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
@@ -157,18 +199,26 @@ class ClawHubConnectivityProbeService:
                 binary_available=True,
                 token_configured=True,
                 clawhub_path=clawhub_path,
+                clawhub_version=version_text,
                 installation_attempted=installation_attempted,
                 installed_during_probe=installed_during_probe,
                 retryable=True,
-                error_code="probe_timeout",
-                error_message=str(exc) or "ClawHub CLI probe timed out.",
+                error_code="whoami_timeout",
+                error_message=str(exc) or "ClawHub CLI auth verification timed out.",
             )
 
-        version_text = _normalize_clawhub_version_text(
-            _resolve_version_text(completed.stdout, completed.stderr)
-        )
-        if completed.returncode != 0:
-            reason = version_text or "ClawHub CLI probe failed."
+        if whoami_completed.returncode != 0:
+            reason = (
+                _resolve_command_output_text(
+                    whoami_completed.stderr,
+                    whoami_completed.stdout,
+                )
+                or "ClawHub CLI auth verification failed."
+            )
+            error_code, retryable = _classify_probe_error(
+                reason,
+                default_error_code="auth_failed",
+            )
             return self._build_result(
                 ok=False,
                 checked_at=checked_at,
@@ -177,10 +227,11 @@ class ClawHubConnectivityProbeService:
                 token_configured=True,
                 clawhub_path=clawhub_path,
                 clawhub_version=version_text,
-                exit_code=completed.returncode,
+                exit_code=whoami_completed.returncode,
                 installation_attempted=installation_attempted,
                 installed_during_probe=installed_during_probe,
-                error_code="probe_failed",
+                retryable=retryable,
+                error_code=error_code,
                 error_message=reason,
             )
 
@@ -192,7 +243,7 @@ class ClawHubConnectivityProbeService:
             token_configured=True,
             clawhub_path=clawhub_path,
             clawhub_version=version_text,
-            exit_code=completed.returncode,
+            exit_code=whoami_completed.returncode,
             installation_attempted=installation_attempted,
             installed_during_probe=installed_during_probe,
         )
@@ -240,12 +291,39 @@ def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
     return os.pathsep.join(path_parts)
 
 
-def _resolve_version_text(stdout: str, stderr: str) -> str | None:
-    for candidate in (stdout, stderr):
-        for line in candidate.splitlines():
-            normalized = line.strip()
-            if normalized:
-                return normalized
+def _read_clawhub_version(
+    clawhub_path: Path,
+    *,
+    env: dict[str, str],
+    timeout_seconds: float,
+) -> str | None:
+    try:
+        completed = subprocess.run(
+            [str(clawhub_path), "--cli-version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return _normalize_clawhub_version_text(
+        _resolve_command_output_text(completed.stdout, completed.stderr)
+    )
+
+
+def _resolve_command_output_text(*candidates: str) -> str | None:
+    for candidate in candidates:
+        non_empty_lines = [
+            line.strip() for line in candidate.splitlines() if line.strip()
+        ]
+        if non_empty_lines:
+            return non_empty_lines[-1]
     return None
 
 
@@ -259,7 +337,64 @@ def _normalize_clawhub_version_text(version_text: str | None) -> str | None:
     return version_text
 
 
-def _resolve_install_timeout_seconds(timeout_ms: int | None) -> float:
+def _resolve_probe_deadline(started: float, timeout_ms: int | None) -> float:
+    return started + _resolve_probe_timeout_seconds(timeout_ms)
+
+
+def _resolve_probe_timeout_seconds(timeout_ms: int | None) -> float:
+    if timeout_ms is None:
+        return _DEFAULT_TIMEOUT_SECONDS
+    return timeout_ms / 1000.0
+
+
+def _resolve_remaining_timeout_seconds(deadline: float) -> float | None:
+    remaining_seconds = deadline - perf_counter()
+    if remaining_seconds <= 0:
+        return None
+    return max(remaining_seconds, 0.001)
+
+
+def _resolve_install_timeout_seconds(
+    timeout_ms: int | None,
+    *,
+    probe_deadline: float | None = None,
+) -> float | None:
     if timeout_ms is None:
         return _DEFAULT_INSTALL_TIMEOUT_SECONDS
-    return max(timeout_ms / 1000.0, _DEFAULT_TIMEOUT_SECONDS)
+    if probe_deadline is None:
+        return _resolve_probe_timeout_seconds(timeout_ms)
+    return _resolve_remaining_timeout_seconds(probe_deadline)
+
+
+def _classify_probe_error(
+    error_message: str,
+    *,
+    default_error_code: str,
+) -> tuple[str, bool]:
+    lowered = error_message.lower()
+    if (
+        "not logged in" in lowered
+        or "invalid token" in lowered
+        or "unauthorized" in lowered
+        or "forbidden" in lowered
+    ):
+        return ("auth_failed", False)
+    if "timed out" in lowered or "timeout" in lowered:
+        return ("network_timeout", True)
+    if "could not resolve host" in lowered or "dns" in lowered:
+        return ("dns_error", True)
+    if "proxy" in lowered:
+        return ("proxy_error", True)
+    if "network" in lowered or "connect" in lowered:
+        return ("network_error", True)
+    return (default_error_code, False)
+
+
+def _strip_clawhub_site_overrides(env: dict[str, str]) -> None:
+    for key in (
+        CLAWHUB_SITE_ENV_KEY,
+        CLAWHUB_REGISTRY_ENV_KEY,
+        "CLAWDHUB_SITE",
+        "CLAWDHUB_REGISTRY",
+    ):
+        env.pop(key, None)
