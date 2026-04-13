@@ -131,6 +131,64 @@ def test_clawhub_probe_logs_in_before_reporting_success(monkeypatch) -> None:
     ]
 
 
+def test_clawhub_probe_uses_remaining_timeout_budget_for_each_step(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
+        lambda: Path("/usr/bin/clawhub"),
+    )
+    perf_counter_values = iter([100.0, 101.0, 104.0, 106.5, 107.0])
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.perf_counter",
+        lambda: next(perf_counter_values),
+    )
+    observed_timeouts: list[float] = []
+
+    def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = kwargs.get("args")
+        if not isinstance(command, list):
+            command = _args[0]
+        assert isinstance(command, list)
+        timeout = kwargs.get("timeout")
+        assert isinstance(timeout, float)
+        observed_timeouts.append(timeout)
+        if command[1] == "--cli-version":
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="0.4.2\n",
+                stderr="",
+            )
+        if command[1] == "login":
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="Logged in.\n",
+                stderr="",
+            )
+        assert command[1] == "whoami"
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="steven\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    service = ClawHubConnectivityProbeService(
+        config_dir=Path("/tmp/.relay-teams"),
+        get_clawhub_config=lambda: ClawHubConfig(token=None),
+    )
+
+    result = service.probe(
+        ClawHubConnectivityProbeRequest(token="ch_secret", timeout_ms=10_000)
+    )
+
+    assert result.ok is True
+    assert observed_timeouts == [9.0, 6.0, 3.5]
+
+
 def test_clawhub_probe_rejects_invalid_token_when_login_fails(monkeypatch) -> None:
     monkeypatch.setattr(
         "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",

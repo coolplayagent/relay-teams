@@ -78,6 +78,7 @@ class ClawHubConnectivityProbeService:
     ) -> ClawHubConnectivityProbeResult:
         checked_at = datetime.now(timezone.utc)
         started = perf_counter()
+        probe_deadline = _resolve_probe_deadline(started, request.timeout_ms)
         token = (
             normalize_clawhub_token(request.token) or self._get_clawhub_config().token
         )
@@ -101,8 +102,26 @@ class ClawHubConnectivityProbeService:
             )
 
         if clawhub_path is None:
+            install_timeout_seconds = _resolve_install_timeout_seconds(
+                request.timeout_ms,
+                probe_deadline=probe_deadline,
+            )
+            if install_timeout_seconds is None:
+                return self._build_result(
+                    ok=False,
+                    checked_at=checked_at,
+                    started=started,
+                    binary_available=False,
+                    token_configured=True,
+                    clawhub_path=None,
+                    installation_attempted=installation_attempted,
+                    installed_during_probe=installed_during_probe,
+                    retryable=True,
+                    error_code="clawhub_install_timeout",
+                    error_message="ClawHub CLI installation timed out.",
+                )
             install_result = install_clawhub_via_npm(
-                timeout_seconds=_resolve_install_timeout_seconds(request.timeout_ms),
+                timeout_seconds=install_timeout_seconds,
                 base_env=build_clawhub_subprocess_env(
                     None,
                     config_dir=self._config_dir,
@@ -128,11 +147,6 @@ class ClawHubConnectivityProbeService:
                     or "ClawHub CLI is not available on PATH.",
                 )
 
-        timeout_seconds = (
-            _DEFAULT_TIMEOUT_SECONDS
-            if request.timeout_ms is None
-            else request.timeout_ms / 1000.0
-        )
         env = build_clawhub_subprocess_env(
             token,
             config_dir=self._config_dir,
@@ -140,11 +154,31 @@ class ClawHubConnectivityProbeService:
         )
         _strip_clawhub_site_overrides(env)
         env["PATH"] = _prepend_to_path(env.get("PATH"), clawhub_path.parent)
-        version_text = _read_clawhub_version(
-            clawhub_path,
-            env=env,
-            timeout_seconds=timeout_seconds,
-        )
+        version_text: str | None = None
+        version_timeout_seconds = _resolve_remaining_timeout_seconds(probe_deadline)
+        if version_timeout_seconds is not None:
+            version_text = _read_clawhub_version(
+                clawhub_path,
+                env=env,
+                timeout_seconds=version_timeout_seconds,
+            )
+
+        login_timeout_seconds = _resolve_remaining_timeout_seconds(probe_deadline)
+        if login_timeout_seconds is None:
+            return self._build_result(
+                ok=False,
+                checked_at=checked_at,
+                started=started,
+                binary_available=True,
+                token_configured=True,
+                clawhub_path=clawhub_path,
+                clawhub_version=version_text,
+                installation_attempted=installation_attempted,
+                installed_during_probe=installed_during_probe,
+                retryable=True,
+                error_code="login_timeout",
+                error_message="ClawHub CLI login timed out.",
+            )
 
         try:
             login_completed = subprocess.run(
@@ -154,7 +188,7 @@ class ClawHubConnectivityProbeService:
                 encoding="utf-8",
                 errors="replace",
                 env=env,
-                timeout=timeout_seconds,
+                timeout=login_timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
@@ -201,6 +235,23 @@ class ClawHubConnectivityProbeService:
                 error_message=reason,
             )
 
+        whoami_timeout_seconds = _resolve_remaining_timeout_seconds(probe_deadline)
+        if whoami_timeout_seconds is None:
+            return self._build_result(
+                ok=False,
+                checked_at=checked_at,
+                started=started,
+                binary_available=True,
+                token_configured=True,
+                clawhub_path=clawhub_path,
+                clawhub_version=version_text,
+                installation_attempted=installation_attempted,
+                installed_during_probe=installed_during_probe,
+                retryable=True,
+                error_code="whoami_timeout",
+                error_message="ClawHub CLI auth verification timed out.",
+            )
+
         try:
             whoami_completed = subprocess.run(
                 [str(clawhub_path), "whoami"],
@@ -209,7 +260,7 @@ class ClawHubConnectivityProbeService:
                 encoding="utf-8",
                 errors="replace",
                 env=env,
-                timeout=timeout_seconds,
+                timeout=whoami_timeout_seconds,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
@@ -358,10 +409,33 @@ def _normalize_clawhub_version_text(version_text: str | None) -> str | None:
     return version_text
 
 
-def _resolve_install_timeout_seconds(timeout_ms: int | None) -> float:
+def _resolve_probe_deadline(started: float, timeout_ms: int | None) -> float:
+    return started + _resolve_probe_timeout_seconds(timeout_ms)
+
+
+def _resolve_probe_timeout_seconds(timeout_ms: int | None) -> float:
+    if timeout_ms is None:
+        return _DEFAULT_TIMEOUT_SECONDS
+    return timeout_ms / 1000.0
+
+
+def _resolve_remaining_timeout_seconds(deadline: float) -> float | None:
+    remaining_seconds = deadline - perf_counter()
+    if remaining_seconds <= 0:
+        return None
+    return max(remaining_seconds, 0.001)
+
+
+def _resolve_install_timeout_seconds(
+    timeout_ms: int | None,
+    *,
+    probe_deadline: float | None = None,
+) -> float | None:
     if timeout_ms is None:
         return _DEFAULT_INSTALL_TIMEOUT_SECONDS
-    return max(timeout_ms / 1000.0, _DEFAULT_TIMEOUT_SECONDS)
+    if probe_deadline is None:
+        return _resolve_probe_timeout_seconds(timeout_ms)
+    return _resolve_remaining_timeout_seconds(probe_deadline)
 
 
 def _classify_probe_error(
