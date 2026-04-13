@@ -515,6 +515,32 @@ def test_update_session_route_accepts_legacy_wrapped_metadata_snapshot() -> None
     ]
 
 
+def test_update_session_route_clears_title_for_legacy_snapshot_without_title() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.patch(
+        "/api/sessions/session-1",
+        json={
+            "title_source": "manual",
+            "source_provider": "feishu",
+            "feishu_chat_id": "chat-1",
+            "project": "demo",
+        },
+    )
+
+    assert response.status_code == 200
+    assert fake_service.updated_calls == [
+        (
+            "session-1",
+            SessionMetadataPatch(
+                title=None,
+                custom_metadata={"project": "demo"},
+            ),
+        )
+    ]
+
+
 def test_update_session_route_rejects_reserved_custom_metadata_key() -> None:
     fake_service = _FakeSessionService()
     client = _create_client(fake_service)

@@ -224,6 +224,44 @@ def test_update_session_clears_title_source_when_title_is_removed(
     assert updated.metadata == {}
 
 
+def test_update_session_clears_title_for_legacy_snapshot_without_title(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_update_legacy_snapshot_clear_title.db"
+    service = _build_service(db_path)
+    _ = service.create_session(
+        session_id="session-1",
+        workspace_id="default",
+        metadata={
+            "title": "Feishu Bot - Ops",
+            SESSION_METADATA_TITLE_SOURCE_KEY: SESSION_TITLE_SOURCE_AUTO,
+            "source_provider": "feishu",
+            "feishu_chat_id": "chat-1",
+            "project": "demo",
+        },
+    )
+
+    service.update_session(
+        "session-1",
+        SessionMetadataPatch.model_validate(
+            {
+                "title_source": SESSION_TITLE_SOURCE_AUTO,
+                "source_provider": "feishu",
+                "feishu_chat_id": "chat-1",
+                "project": "demo",
+            }
+        ),
+    )
+
+    updated = service.get_session("session-1")
+
+    assert updated.metadata == {
+        "source_provider": "feishu",
+        "feishu_chat_id": "chat-1",
+        "project": "demo",
+    }
+
+
 def test_update_session_replaces_only_custom_metadata_subset(tmp_path: Path) -> None:
     db_path = tmp_path / "session_update_custom_subset.db"
     service = _build_service(db_path)

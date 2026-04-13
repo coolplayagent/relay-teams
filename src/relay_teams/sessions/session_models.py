@@ -114,13 +114,22 @@ def normalize_session_metadata_patch_input(value: object) -> object:
         return payload
     normalized: dict[str, object] = {}
     legacy_custom_metadata: dict[str, object] = {}
+    saw_legacy_reserved_metadata = False
     for key, item in payload.items():
         if key in _SESSION_PATCH_METADATA_FIELDS:
             normalized[key] = item
             continue
         if key in _RESERVED_SESSION_METADATA_KEYS or key.startswith("feishu_"):
+            saw_legacy_reserved_metadata = True
             continue
         legacy_custom_metadata[key] = item
+    if "title" not in payload and (
+        "title_source" in payload or saw_legacy_reserved_metadata
+    ):
+        # Legacy sidebar snapshots clear the title by omitting it while still
+        # sending reserved metadata keys such as title_source/source_provider.
+        normalized["title"] = None
+        normalized.pop("title_source", None)
     if not legacy_custom_metadata:
         return normalized
     existing_custom_metadata = normalized.get("custom_metadata")
