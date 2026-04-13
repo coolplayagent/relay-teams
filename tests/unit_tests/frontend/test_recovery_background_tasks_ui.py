@@ -3,15 +3,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .css_helpers import load_components_css
+
 
 def test_recovery_ui_tracks_background_tasks_in_banner_and_events() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     recovery_script = (
         repo_root / "frontend" / "dist" / "js" / "app" / "recovery.js"
     ).read_text(encoding="utf-8")
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
     event_router_script = (
         repo_root / "frontend" / "dist" / "js" / "core" / "eventRouter" / "index.js"
     ).read_text(encoding="utf-8")

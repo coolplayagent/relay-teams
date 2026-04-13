@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 from typing import cast
 
+from .css_helpers import load_components_css
+
 
 def test_settings_modal_uses_flat_content_stacks_and_switches_tabs(
     tmp_path: Path,
@@ -185,10 +187,7 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
 
 
 def test_settings_content_stack_does_not_draw_duplicate_top_divider() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
     start = components_css.index(".settings-content-stack {")
     end = components_css.index(".settings-model-stack {", start)
     stack_rule = components_css[start:end]
@@ -198,10 +197,7 @@ def test_settings_content_stack_does_not_draw_duplicate_top_divider() -> None:
 
 
 def test_settings_active_tab_uses_surface_background_and_primary_accent() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     active_start = components_css.index(".settings-tab.active {")
     active_end = components_css.index(".settings-tab-label {", active_start)
@@ -213,10 +209,7 @@ def test_settings_active_tab_uses_surface_background_and_primary_accent() -> Non
 
 
 def test_settings_hover_tab_keeps_visible_feedback() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     hover_start = components_css.index(".settings-tab:hover {")
     hover_end = components_css.index(".settings-tab.active {", hover_start)
@@ -228,10 +221,7 @@ def test_settings_hover_tab_keeps_visible_feedback() -> None:
 
 
 def test_settings_layout_uses_scrolling_body_with_footer_actions() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     assert ".settings-main {" in components_css
     assert "overflow: hidden;" in components_css

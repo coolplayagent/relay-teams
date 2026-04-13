@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 from typing import cast
 
+from .css_helpers import load_components_css
+
 DEFAULT_MOCK_API_SOURCE = """
 const initialStatus = {
     mcp: {
@@ -392,10 +394,7 @@ console.log(JSON.stringify({
 
 
 def test_system_status_styles_include_mcp_tool_list_tokens() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     assert ".mcp-status-shell {" in components_css
     assert ".mcp-status-toolbar {" in components_css

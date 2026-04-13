@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .css_helpers import load_components_css
+
 
 def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
     repo_root = Path(__file__).resolve().parents[3]
@@ -31,9 +33,7 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
         / "helpers"
         / "block.js"
     ).read_text(encoding="utf-8")
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     assert "collapsibleUserPrompts: true," in timeline_script
     assert (
@@ -68,10 +68,7 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
 
 
 def test_thinking_blocks_use_compact_summary_spacing() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     assert ".thinking-block {" in components_css
     assert "margin: 0 0 0.45rem;" in components_css
