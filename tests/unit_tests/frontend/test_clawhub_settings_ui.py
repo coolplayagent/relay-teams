@@ -53,7 +53,9 @@ console.log(JSON.stringify({
     assert payload["savePayload"] == {"token": "ch_secret"}
     assert payload["probePayload"] == {"token": "ch_secret"}
     assert payload["probeStatusDisplay"] == "block"
-    assert "clawhub 0.4.2 in 37ms" in cast(str, payload["probeStatusText"])
+    assert "Logged in via clawhub 0.4.2 in 37ms" in cast(
+        str, payload["probeStatusText"]
+    )
     assert payload["probeButtonText"] == "Test Connection"
     assert notifications == [
         {
@@ -151,7 +153,7 @@ console.log(JSON.stringify({
 
     assert (
         payload["probeStatusText"]
-        == "clawhub 0.9.0 in 4200ms. Installed automatically."
+        == "Logged in via clawhub 0.9.0 in 4200ms. Installed automatically."
     )
 
 
@@ -305,10 +307,10 @@ const translations = {
     "settings.clawhub.save_failed": "Save Failed",
     "settings.clawhub.load_failed": "Load Failed",
     "settings.clawhub.enter_token": "Enter a ClawHub token before testing the connection.",
-    "settings.clawhub.testing_message": "Testing ClawHub CLI availability...",
+    "settings.clawhub.testing_message": "Logging in to ClawHub with the configured token...",
     "settings.clawhub.probe_failed": "ClawHub probe failed: {error}",
-    "settings.clawhub.probe_success": "{version} in {latency_ms}ms",
-    "settings.clawhub.probe_success_after_install": "{version} in {latency_ms}ms. Installed automatically.",
+    "settings.clawhub.probe_success": "Logged in via {version} in {latency_ms}ms",
+    "settings.clawhub.probe_success_after_install": "Logged in via {version} in {latency_ms}ms. Installed automatically.",
     "settings.clawhub.probe_reason": "{reason}",
     "settings.clawhub.test_connection": "Test Connection",
     "settings.clawhub.testing": "Testing...",

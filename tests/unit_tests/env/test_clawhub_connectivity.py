@@ -62,20 +62,44 @@ def test_clawhub_probe_reports_missing_binary(monkeypatch) -> None:
     assert result.diagnostics.installed_during_probe is False
 
 
-def test_clawhub_probe_reads_version(monkeypatch) -> None:
+def test_clawhub_probe_logs_in_before_reporting_success(monkeypatch) -> None:
     monkeypatch.setattr(
         "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
     )
+    observed_commands: list[list[str]] = []
 
     def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = kwargs.get("args")
+        if not isinstance(command, list):
+            command = _args[0]
+        assert isinstance(command, list)
+        observed_commands.append(command)
         env = kwargs.get("env")
         assert isinstance(env, dict)
         assert env["CLAWHUB_TOKEN"] == "ch_secret"
+        assert "CLAWHUB_SITE" not in env
+        assert "CLAWHUB_REGISTRY" not in env
+        if command[1] == "--cli-version":
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="0.4.2\n",
+                stderr="",
+            )
+        if command[1] == "login":
+            assert command[2:] == ["--token", "ch_secret", "--no-browser"]
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="Logged in.\n",
+                stderr="",
+            )
+        assert command[1] == "whoami"
         return subprocess.CompletedProcess(
-            args=["clawhub", "--cli-version"],
+            args=command,
             returncode=0,
-            stdout="0.4.2\n",
+            stdout="steven\n",
             stderr="",
         )
 
@@ -94,6 +118,61 @@ def test_clawhub_probe_reads_version(monkeypatch) -> None:
     assert result.diagnostics.token_configured is True
     assert result.diagnostics.installation_attempted is False
     assert result.diagnostics.installed_during_probe is False
+    assert observed_commands == [
+        ["/usr/bin/clawhub", "--cli-version"],
+        [
+            "/usr/bin/clawhub",
+            "login",
+            "--token",
+            "ch_secret",
+            "--no-browser",
+        ],
+        ["/usr/bin/clawhub", "whoami"],
+    ]
+
+
+def test_clawhub_probe_rejects_invalid_token_when_login_fails(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
+        lambda: Path("/usr/bin/clawhub"),
+    )
+
+    def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = kwargs.get("args")
+        if not isinstance(command, list):
+            command = _args[0]
+        assert isinstance(command, list)
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        assert env["CLAWHUB_TOKEN"] == "ch_secret"
+        if command[1] == "--cli-version":
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="0.4.2\n",
+                stderr="",
+            )
+        assert command[1] == "login"
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=1,
+            stdout="",
+            stderr="- Verifying token\nError: Invalid token",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    service = ClawHubConnectivityProbeService(
+        config_dir=Path("/tmp/.relay-teams"),
+        get_clawhub_config=lambda: ClawHubConfig(token=None),
+    )
+
+    result = service.probe(ClawHubConnectivityProbeRequest(token="ch_secret"))
+
+    assert result.ok is False
+    assert result.error_code == "auth_failed"
+    assert result.error_message == "Error: Invalid token"
+    assert result.clawhub_version == "clawhub 0.4.2"
+    assert result.exit_code == 1
 
 
 def test_clawhub_probe_installs_missing_binary(monkeypatch) -> None:
@@ -114,14 +193,35 @@ def test_clawhub_probe_installs_missing_binary(monkeypatch) -> None:
     )
 
     def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = kwargs.get("args")
+        if not isinstance(command, list):
+            command = _args[0]
+        assert isinstance(command, list)
         env = kwargs.get("env")
         assert isinstance(env, dict)
         assert env["CLAWHUB_TOKEN"] == "ch_secret"
         assert env["PATH"].split(os.pathsep)[0] == str(installed_clawhub_path.parent)
+        assert "CLAWHUB_SITE" not in env
+        assert "CLAWHUB_REGISTRY" not in env
+        if command[1] == "--cli-version":
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="0.9.0\n",
+                stderr="",
+            )
+        if command[1] == "login":
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="Logged in.\n",
+                stderr="",
+            )
+        assert command[1] == "whoami"
         return subprocess.CompletedProcess(
-            args=[str(installed_clawhub_path), "--cli-version"],
+            args=command,
             returncode=0,
-            stdout="0.9.0\n",
+            stdout="steven\n",
             stderr="",
         )
 
