@@ -382,6 +382,18 @@ export async function probeGitHubConnectivity(payload) {
     );
 }
 
+export async function probeGitHubWebhookConnectivity(payload) {
+    return requestJson(
+        '/api/system/configs/github/webhook:probe',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to probe GitHub webhook connectivity',
+    );
+}
+
 export async function probeClawHubConnectivity(payload) {
     return requestJson(
         '/api/system/configs/clawhub:probe',

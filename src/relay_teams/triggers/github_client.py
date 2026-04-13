@@ -14,6 +14,8 @@ _GITHUB_API_BASE_URL = "https://api.github.com"
 _DEFAULT_TIMEOUT_SECONDS = 20.0
 _API_VERSION = "2022-11-28"
 _PULL_REQUEST_FILES_PAGE_SIZE = 100
+_REPOSITORY_LIST_PAGE_SIZE = 100
+_REPOSITORY_LIST_MAX_PAGES = 10
 
 
 class GitHubApiError(RuntimeError):
@@ -49,6 +51,49 @@ class GitHubApiClient:
             method="GET",
             path=f"/repos/{owner}/{repo}",
         )
+
+    def list_repositories(
+        self,
+        *,
+        token: str,
+        query: str | None = None,
+    ) -> tuple[JsonObject, ...]:
+        normalized_query = _normalize_query(query)
+        repositories: list[JsonObject] = []
+        seen_full_names: set[str] = set()
+        for page in range(1, _REPOSITORY_LIST_MAX_PAGES + 1):
+            payload = self._request_json(
+                token=token,
+                method="GET",
+                path="/user/repos",
+                query_params={
+                    "sort": "updated",
+                    "direction": "desc",
+                    "affiliation": "owner,collaborator,organization_member",
+                    "per_page": str(_REPOSITORY_LIST_PAGE_SIZE),
+                    "page": str(page),
+                },
+            )
+            if not isinstance(payload, list):
+                raise GitHubApiError(message="Unexpected repositories response")
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                full_name = _repository_full_name(item)
+                if full_name is None:
+                    continue
+                if (
+                    normalized_query is not None
+                    and normalized_query not in full_name.lower()
+                ):
+                    continue
+                if full_name in seen_full_names:
+                    continue
+                seen_full_names.add(full_name)
+                repositories.append(item)
+            if len(payload) < _REPOSITORY_LIST_PAGE_SIZE:
+                break
+        return tuple(repositories)
 
     def register_repository_webhook(
         self,
@@ -361,6 +406,31 @@ def _extract_error_message(response: httpx.Response) -> str:
         if isinstance(message, str) and message.strip():
             return message.strip()
     return f"GitHub API request failed with status {response.status_code}"
+
+
+def _normalize_query(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+
+def _repository_full_name(payload: JsonObject) -> str | None:
+    full_name = payload.get("full_name")
+    if isinstance(full_name, str) and full_name.strip():
+        return full_name.strip()
+    owner_payload = payload.get("owner")
+    owner = None
+    if isinstance(owner_payload, dict):
+        login = owner_payload.get("login")
+        if isinstance(login, str) and login.strip():
+            owner = login.strip()
+    name = payload.get("name")
+    if owner is None or not isinstance(name, str) or not name.strip():
+        return None
+    return f"{owner}/{name.strip()}"
 
 
 __all__ = [

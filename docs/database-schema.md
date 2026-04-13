@@ -832,6 +832,70 @@ Notes:
 
 ---
 
+### 2.9.1.3 GitHub Trigger Management Tables
+
+```sql
+CREATE TABLE IF NOT EXISTS github_trigger_accounts (
+    account_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    token_configured INTEGER NOT NULL DEFAULT 0,
+    webhook_secret_configured INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS github_repo_subscriptions (
+    repo_subscription_id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    repo_name TEXT NOT NULL,
+    full_name TEXT NOT NULL,
+    external_repo_id TEXT,
+    default_branch TEXT,
+    callback_url TEXT,
+    provider_webhook_id TEXT,
+    subscribed_events_json TEXT NOT NULL DEFAULT '[]',
+    webhook_status TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_webhook_sync_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(account_id, full_name)
+);
+
+CREATE TABLE IF NOT EXISTS trigger_rules (
+    trigger_rule_id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    repo_subscription_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    match_config_json TEXT NOT NULL,
+    dispatch_config_json TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    last_error TEXT,
+    last_fired_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(repo_subscription_id, name)
+);
+```
+
+Purpose: durable GitHub webhook account, repository, and rule configuration for PR/issue-driven automation.
+
+Notes:
+- `github_trigger_accounts.token_configured` and `webhook_secret_configured` track only per-account stored secrets; runtime token lookup may still fall back to the system GitHub config.
+- `github_repo_subscriptions.callback_url` is the persisted webhook callback endpoint used during automatic registration and re-registration.
+- `github_repo_subscriptions.subscribed_events_json` is derived from the union of enabled rule `match_config.event_name` values for that repository, not a client-managed source of truth.
+- `github_repo_subscriptions.webhook_status` is `unregistered`, `registered`, or `error` based on the latest reconciliation attempt.
+- Disabling an account, disabling a repository, or leaving a repository with no enabled rules drives the repository back toward the `unregistered` state.
+
+---
+
 ### 2.9.2 `media_assets`
 
 ```sql

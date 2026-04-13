@@ -4,13 +4,25 @@
  */
 import {
     createAutomationProject,
+    createGitHubRepoSubscription,
+    createGitHubTriggerAccount,
+    createGitHubTriggerRule,
     createTrigger,
     deleteAutomationProject,
+    deleteGitHubRepoSubscription,
+    deleteGitHubTriggerAccount,
+    deleteGitHubTriggerRule,
     deleteTrigger,
     deleteWeChatGatewayAccount,
     disableAutomationProject,
+    disableGitHubRepoSubscription,
+    disableGitHubTriggerAccount,
+    disableGitHubTriggerRule,
     disableTrigger,
     disableWeChatGatewayAccount,
+    enableGitHubRepoSubscription,
+    enableGitHubTriggerAccount,
+    enableGitHubTriggerRule,
     enableTrigger,
     enableWeChatGatewayAccount,
     enableAutomationProject,
@@ -19,6 +31,10 @@ import {
     fetchAutomationProject,
     fetchAutomationProjectSessions,
     fetchConfigStatus,
+    fetchGitHubAccountRepositories,
+    fetchGitHubRepoSubscriptions,
+    fetchGitHubTriggerAccounts,
+    fetchGitHubTriggerRules,
     fetchOrchestrationConfig,
     fetchRoleConfigOptions,
     fetchTriggers,
@@ -32,6 +48,9 @@ import {
     runAutomationProject,
     startWeChatGatewayLogin,
     updateAutomationProject,
+    updateGitHubRepoSubscription,
+    updateGitHubTriggerAccount,
+    updateGitHubTriggerRule,
     updateTrigger,
     updateWeChatGatewayAccount,
     waitWeChatGatewayLogin,
@@ -43,6 +62,11 @@ import {
     bindClawHubSettingsHandlers,
     loadClawHubSettingsPanel,
 } from './settings/clawhubSettings.js';
+import {
+    bindGitHubSettingsHandlers,
+    loadGitHubSettingsPanel,
+    renderGitHubAccessPanelMarkup,
+} from './settings/githubSettings.js';
 import { state } from '../core/state.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
@@ -56,6 +80,9 @@ let currentFeatureViewId = '';
 let currentAutomationProjects = [];
 let selectedAutomationHomeProjectId = '';
 let currentAutomationHomeDetail = createInitialAutomationHomeDetail();
+let currentAutomationFeatureSection = 'schedules';
+let currentGitHubFeatureState = createInitialGitHubFeatureState();
+let currentGitHubFeatureNodeKey = 'access';
 let currentSkillsStatus = null;
 let currentGatewayFeatureState = createInitialGatewayFeatureState();
 let currentAutomationEditorState = createInitialAutomationEditorState();
@@ -83,6 +110,13 @@ const FEATURE_CLAWHUB_FIELD_IDS = Object.freeze({
     toggleTokenButtonId: 'feature-toggle-clawhub-token-btn',
     statusId: 'feature-clawhub-probe-status',
 });
+const FEATURE_GITHUB_FIELD_IDS = Object.freeze({
+    saveButtonId: 'feature-save-github-btn',
+    probeButtonId: 'feature-test-github-btn',
+    tokenInputId: 'feature-github-token',
+    toggleTokenButtonId: 'feature-toggle-github-token-btn',
+    statusId: 'feature-github-probe-status',
+});
 const FEISHU_PLATFORM = 'feishu';
 const WECHAT_PLATFORM = 'wechat';
 const DEFAULT_TRIGGER_RULE = 'mention_only';
@@ -105,6 +139,15 @@ function createInitialAutomationHomeDetail() {
         sessions: [],
         workspace: null,
         feishuBindings: [],
+    };
+}
+
+function createInitialGitHubFeatureState() {
+    return {
+        accounts: [],
+        repos: [],
+        rules: [],
+        workspaces: [],
     };
 }
 
@@ -1542,6 +1585,547 @@ async function loadAutomationHomeDetail(projectId) {
     currentAutomationProject = project;
 }
 
+async function loadGitHubFeatureState() {
+    const [accounts, repos, rules, workspaces] = await Promise.all([
+        fetchGitHubTriggerAccounts(),
+        fetchGitHubRepoSubscriptions(),
+        fetchGitHubTriggerRules(),
+        fetchWorkspaces(),
+    ]);
+    currentGitHubFeatureState = {
+        accounts: Array.isArray(accounts) ? accounts : [],
+        repos: Array.isArray(repos) ? repos : [],
+        rules: Array.isArray(rules) ? rules : [],
+        workspaces: Array.isArray(workspaces) ? workspaces : [],
+    };
+    currentGitHubFeatureNodeKey = resolveGitHubFeatureNodeKey(
+        currentGitHubFeatureNodeKey,
+    );
+}
+
+function parseGitHubFeatureNodeKey(nodeKey) {
+    const normalizedNodeKey = String(nodeKey || '').trim();
+    if (!normalizedNodeKey || normalizedNodeKey === 'access') {
+        return { kind: 'access', id: '' };
+    }
+    const [kind, id] = normalizedNodeKey.split(':', 2);
+    if ((kind === 'account' || kind === 'repo') && id) {
+        return { kind, id };
+    }
+    return { kind: 'access', id: '' };
+}
+
+function resolveGitHubFeatureNodeKey(nodeKey) {
+    const parsed = parseGitHubFeatureNodeKey(nodeKey);
+    if (parsed.kind === 'account' && findGitHubAccountById(parsed.id)) {
+        return `account:${parsed.id}`;
+    }
+    if (parsed.kind === 'repo' && findGitHubRepoById(parsed.id)) {
+        return `repo:${parsed.id}`;
+    }
+    return 'access';
+}
+
+function findGitHubAccountById(accountId) {
+    const normalizedAccountId = String(accountId || '').trim();
+    return currentGitHubFeatureState.accounts.find(
+        account => String(account?.account_id || '').trim() === normalizedAccountId,
+    ) || null;
+}
+
+function findGitHubRepoById(repoSubscriptionId) {
+    const normalizedRepoId = String(repoSubscriptionId || '').trim();
+    return currentGitHubFeatureState.repos.find(
+        repo => String(repo?.repo_subscription_id || '').trim() === normalizedRepoId,
+    ) || null;
+}
+
+function getGitHubReposForAccount(accountId) {
+    const normalizedAccountId = String(accountId || '').trim();
+    return currentGitHubFeatureState.repos.filter(
+        repo => String(repo?.account_id || '').trim() === normalizedAccountId,
+    );
+}
+
+function getGitHubRulesForRepo(repoSubscriptionId) {
+    const normalizedRepoId = String(repoSubscriptionId || '').trim();
+    return currentGitHubFeatureState.rules.filter(
+        rule => String(rule?.repo_subscription_id || '').trim() === normalizedRepoId,
+    );
+}
+
+function findGitHubRuleById(triggerRuleId) {
+    const normalizedRuleId = String(triggerRuleId || '').trim();
+    return currentGitHubFeatureState.rules.find(
+        rule => String(rule?.trigger_rule_id || '').trim() === normalizedRuleId,
+    ) || null;
+}
+
+function upsertGitHubRuleInState(rule) {
+    const normalizedRuleId = String(rule?.trigger_rule_id || '').trim();
+    if (!normalizedRuleId) {
+        return;
+    }
+    const nextRules = currentGitHubFeatureState.rules.filter(
+        item => String(item?.trigger_rule_id || '').trim() !== normalizedRuleId,
+    );
+    nextRules.push(rule);
+    currentGitHubFeatureState = {
+        ...currentGitHubFeatureState,
+        rules: nextRules,
+    };
+}
+
+function removeGitHubRuleFromState(triggerRuleId) {
+    const normalizedRuleId = String(triggerRuleId || '').trim();
+    currentGitHubFeatureState = {
+        ...currentGitHubFeatureState,
+        rules: currentGitHubFeatureState.rules.filter(
+            item => String(item?.trigger_rule_id || '').trim() !== normalizedRuleId,
+        ),
+    };
+}
+
+function resolveGitHubAccountLabel(account) {
+    return String(account?.display_name || account?.name || account?.account_id || '').trim();
+}
+
+function normalizeGitHubRepositoryChoice(choice) {
+    const owner = String(choice?.owner || '').trim();
+    const repoName = String(choice?.repo_name || '').trim();
+    const fullName = String(choice?.full_name || '').trim();
+    if (!owner || !repoName || !fullName) {
+        return null;
+    }
+    return {
+        owner,
+        repo_name: repoName,
+        full_name: fullName,
+        default_branch: String(choice?.default_branch || '').trim(),
+        private: choice?.private === true,
+    };
+}
+
+function buildGitHubRepositoryChoices(choices, repo = null) {
+    const normalizedChoices = Array.isArray(choices)
+        ? choices
+            .map(choice => normalizeGitHubRepositoryChoice(choice))
+            .filter(choice => choice)
+        : [];
+    const seenFullNames = new Set(normalizedChoices.map(choice => choice.full_name));
+    const currentFullName = String(repo?.full_name || '').trim();
+    if (currentFullName && !seenFullNames.has(currentFullName)) {
+        const owner = String(repo?.owner || '').trim();
+        const repoName = String(repo?.repo_name || '').trim();
+        if (owner && repoName) {
+            normalizedChoices.unshift({
+                owner,
+                repo_name: repoName,
+                full_name: currentFullName,
+                default_branch: String(repo?.default_branch || '').trim(),
+                private: false,
+            });
+        }
+    }
+    return normalizedChoices;
+}
+
+function formatGitHubRepoEvents(repo) {
+    return Array.isArray(repo?.subscribed_events) && repo.subscribed_events.length > 0
+        ? repo.subscribed_events.join(', ')
+        : t('automation.detail.none');
+}
+
+function formatGitHubRepoSubtitle(repo, { includeAccount = false } = {}) {
+    const parts = [];
+    if (includeAccount) {
+        const accountLabel = resolveGitHubAccountLabel(findGitHubAccountById(repo?.account_id));
+        if (accountLabel) {
+            parts.push(accountLabel);
+        }
+    }
+    parts.push(`${t('feature.automation.github_events')}: ${formatGitHubRepoEvents(repo)}`);
+    parts.push(`${t('feature.automation.github_webhook_status')}: ${formatGitHubWebhookStatusLabel(String(repo?.webhook_status || 'unregistered'))}`);
+    return parts.join(' · ');
+}
+
+function renderGitHubRepoListButton(
+    repo,
+    { child = false, includeAccount = false } = {},
+) {
+    const repoId = String(repo?.repo_subscription_id || '').trim();
+    const statusTone = repo?.enabled === false ? 'disabled' : 'enabled';
+    const nodeKey = `repo:${repoId}`;
+    return `
+        <button class="automation-record${child ? ' github-automation-record-child' : ''}${currentGitHubFeatureNodeKey === nodeKey ? ' is-active' : ''}" type="button" data-github-node-key="${escapeHtml(nodeKey)}">
+            <div class="automation-record-copy">
+                <strong>${escapeHtml(String(repo?.full_name || ''))}</strong>
+                <span>${escapeHtml(formatGitHubRepoSubtitle(repo, { includeAccount }))}</span>
+            </div>
+            ${renderFeatureStatusPill(statusTone === 'disabled' ? t('automation.status.disabled') : t('automation.status.enabled'), statusTone)}
+        </button>
+    `;
+}
+
+function normalizeCommaSeparatedValues(value) {
+    if (Array.isArray(value)) {
+        return value.map(item => String(item || '').trim()).filter(Boolean);
+    }
+    return String(value || '')
+        .split(',')
+        .map(item => String(item || '').trim())
+        .filter(Boolean);
+}
+
+async function requestGitHubAccountInput(account = null) {
+    const values = await showFormDialog({
+        title: account ? t('settings.roles.edit') : t('feature.automation.github_new_account'),
+        message: t('feature.automation.github_account_copy'),
+        tone: 'info',
+        confirmLabel: t('settings.action.save'),
+        cancelLabel: t('settings.action.cancel'),
+        fields: [
+            {
+                id: 'name',
+                label: t('feature.automation.github_account_name'),
+                value: String(account?.name || '').trim(),
+                placeholder: 'github-main',
+            },
+            {
+                id: 'display_name',
+                label: t('settings.triggers.display_name'),
+                value: String(account?.display_name || '').trim(),
+                placeholder: 'GitHub Main',
+            },
+            {
+                id: 'token',
+                label: t('settings.github.token'),
+                value: '',
+                placeholder: account
+                    ? t('feature.automation.github_secret_keep')
+                    : 'ghp_...',
+                description: account
+                    ? t('feature.automation.github_token_override_copy')
+                    : t('feature.automation.github_token_copy'),
+            },
+            {
+                id: 'clear_token',
+                label: t('feature.automation.github_clear_token'),
+                type: 'checkbox',
+                value: false,
+                description: t('feature.automation.github_clear_token_copy'),
+            },
+            {
+                id: 'webhook_secret',
+                label: t('feature.automation.github_webhook_secret'),
+                value: '',
+                placeholder: account
+                    ? t('feature.automation.github_secret_keep')
+                    : 'whsec_...',
+                description: t('feature.automation.github_webhook_secret_copy'),
+            },
+            {
+                id: 'clear_webhook_secret',
+                label: t('feature.automation.github_clear_webhook_secret'),
+                type: 'checkbox',
+                value: false,
+                description: t('feature.automation.github_clear_webhook_secret_copy'),
+            },
+            {
+                id: 'enabled',
+                label: t('automation.field.enabled'),
+                type: 'checkbox',
+                value: account ? String(account?.status || '').trim() !== 'disabled' : true,
+                description: t('feature.automation.github_enabled_copy'),
+            },
+        ],
+    });
+    if (!values) {
+        return null;
+    }
+    const name = String(values.name || '').trim();
+    if (!name) {
+        throw new Error(t('feature.automation.github_account_required'));
+    }
+    const payload = {
+        name,
+        display_name: String(values.display_name || '').trim() || null,
+        enabled: values.enabled === true,
+    };
+    const token = String(values.token || '').trim();
+    const webhookSecret = String(values.webhook_secret || '').trim();
+    if (account) {
+        if (values.clear_token === true) {
+            payload.clear_token = true;
+        } else if (token) {
+            payload.token = token;
+        }
+        if (values.clear_webhook_secret === true) {
+            payload.clear_webhook_secret = true;
+        } else if (webhookSecret) {
+            payload.webhook_secret = webhookSecret;
+        }
+    } else {
+        if (token) {
+            payload.token = token;
+        }
+        if (webhookSecret) {
+            payload.webhook_secret = webhookSecret;
+        }
+    }
+    return payload;
+}
+
+async function requestGitHubRepoInput(account, repo = null) {
+    const accountId = String(account?.account_id || '').trim();
+    if (!accountId) {
+        throw new Error(t('feature.automation.github_account_required'));
+    }
+    const repositoryChoices = buildGitHubRepositoryChoices(
+        await fetchGitHubAccountRepositories(accountId),
+        repo,
+    );
+    if (repositoryChoices.length === 0) {
+        throw new Error(t('feature.automation.github_repo_options_empty'));
+    }
+    const selectedFullName = String(repo?.full_name || '').trim();
+    const values = await showFormDialog({
+        title: repo ? t('settings.roles.edit') : t('feature.automation.github_new_repo'),
+        message: t('feature.automation.github_repo_copy'),
+        tone: 'info',
+        confirmLabel: t('settings.action.save'),
+        cancelLabel: t('settings.action.cancel'),
+        fields: [
+            {
+                id: 'full_name',
+                type: 'select',
+                label: t('feature.automation.github_repo_name'),
+                value: selectedFullName,
+                description: t('feature.automation.github_repo_select_copy'),
+                options: [
+                    {
+                        value: '',
+                        label: t('feature.automation.github_repo_select_placeholder'),
+                    },
+                    ...repositoryChoices.map(choice => ({
+                        value: choice.full_name,
+                        label: choice.full_name,
+                    })),
+                ],
+            },
+            {
+                id: 'enabled',
+                label: t('automation.field.enabled'),
+                type: 'checkbox',
+                value: repo ? repo.enabled !== false : true,
+                description: t('feature.automation.github_repo_enabled_copy'),
+            },
+        ],
+    });
+    if (!values) {
+        return null;
+    }
+    const fullName = String(values.full_name || '').trim();
+    const selectedRepository = repositoryChoices.find(
+        choice => choice.full_name === fullName,
+    );
+    if (!selectedRepository) {
+        throw new Error(t('feature.automation.github_repo_required'));
+    }
+    const payload = {
+        owner: selectedRepository.owner,
+        repo_name: selectedRepository.repo_name,
+        enabled: values.enabled === true,
+    };
+    if (!repo) {
+        payload.account_id = accountId;
+    }
+    return payload;
+}
+
+function buildGitHubRulePayloadFromDialogValues(
+    repo,
+    rule,
+    dispatchConfig,
+    existingRunTemplate,
+    values,
+) {
+    const name = String(values.name || '').trim();
+    const promptTemplate = String(values.prompt_template || '').trim();
+    if (!name) {
+        throw new Error(t('feature.automation.github_rule_required'));
+    }
+    if (!promptTemplate) {
+        throw new Error(t('automation.schedule.validation.prompt'));
+    }
+    const workspaceId = String(values.workspace_id || '').trim();
+    if (!workspaceId) {
+        throw new Error(t('automation.schedule.validation.workspace'));
+    }
+    const resolvedEventName = String(values.event_name || 'pull_request').trim() || 'pull_request';
+    const selectedActions = normalizeCommaSeparatedValues(values.actions);
+    const runTemplate = existingRunTemplate
+        ? {
+            ...existingRunTemplate,
+            workspace_id: workspaceId,
+            prompt_template: promptTemplate,
+        }
+        : {
+            workspace_id: workspaceId,
+            prompt_template: promptTemplate,
+            session_mode: DEFAULT_SESSION_MODE,
+            execution_mode: 'ai',
+            yolo: true,
+            thinking: {
+                enabled: false,
+                effort: DEFAULT_THINKING_EFFORT,
+            },
+        };
+    const actionHooks = Array.isArray(dispatchConfig?.action_hooks)
+        ? dispatchConfig.action_hooks.filter(action => !(
+            String(action?.action_type || '').trim() === 'comment'
+            && String(action?.phase || '').trim() === 'on_run_completed'
+        ))
+        : [];
+    const payload = {
+        name,
+        match_config: {
+            event_name: resolvedEventName,
+            actions: selectedActions,
+            base_branches: normalizeCommaSeparatedValues(values.base_branches),
+            draft_pr: normalizeGitHubDraftPrValue(values.draft_pr),
+        },
+        dispatch_config: {
+            target_type: 'run_template',
+            run_template: runTemplate,
+            action_hooks: actionHooks,
+        },
+        enabled: values.enabled === true,
+    };
+    if (!rule) {
+        payload.provider = 'github';
+        payload.account_id = String(repo?.account_id || '').trim();
+        payload.repo_subscription_id = String(repo?.repo_subscription_id || '').trim();
+    }
+    return payload;
+}
+
+async function requestGitHubRuleInput(repo, rule = null, submitHandler = null) {
+    const workspaces = currentGitHubFeatureState.workspaces.length > 0
+        ? currentGitHubFeatureState.workspaces
+        : await fetchWorkspaces();
+    const workspaceOptions = resolveWorkspaceOptionValues(workspaces);
+    if (workspaceOptions.length === 0) {
+        throw new Error(t('settings.triggers.no_workspaces'));
+    }
+    const dispatchConfig = rule?.dispatch_config && typeof rule.dispatch_config === 'object'
+        ? rule.dispatch_config
+        : {};
+    const existingRunTemplate = dispatchConfig?.run_template && typeof dispatchConfig.run_template === 'object'
+        ? dispatchConfig.run_template
+        : null;
+    if (rule && String(dispatchConfig?.target_type || '').trim() && String(dispatchConfig?.target_type || '').trim() !== 'run_template') {
+        throw new Error(t('feature.automation.github_rule_target_unsupported'));
+    }
+    const matchConfig = rule?.match_config && typeof rule.match_config === 'object'
+        ? rule.match_config
+        : {};
+    const eventName = String(matchConfig?.event_name || 'pull_request').trim() || 'pull_request';
+    const actionValues = Array.isArray(matchConfig?.actions) ? matchConfig.actions : [];
+    const values = await showFormDialog({
+        title: rule ? t('settings.roles.edit') : t('feature.automation.github_new_rule'),
+        message: t('feature.automation.github_rule_copy'),
+        tone: 'info',
+        confirmLabel: t('settings.action.save'),
+        cancelLabel: t('settings.action.cancel'),
+        fields: [
+            {
+                id: 'name',
+                label: t('feature.automation.github_rule_name'),
+                value: String(rule?.name || '').trim(),
+                placeholder: 'pr-opened',
+            },
+            {
+                id: 'workspace_id',
+                label: t('settings.triggers.workspace'),
+                type: 'select',
+                value: String(existingRunTemplate?.workspace_id || workspaceOptions[0]?.value || '').trim(),
+                options: workspaceOptions,
+                description: t('feature.automation.github_rule_workspace_copy'),
+            },
+            {
+                id: 'event_name',
+                label: t('feature.automation.github_event_subscription'),
+                type: 'select',
+                value: eventName,
+                options: getGitHubRuleEventOptions(),
+                description: t('feature.automation.github_event_copy'),
+            },
+            {
+                id: 'actions',
+                label: t('feature.automation.github_actions'),
+                type: 'multiselect',
+                value: actionValues,
+                options: getGitHubRuleActionOptions(),
+                placeholder: t('feature.automation.github_actions_placeholder'),
+                description: t('feature.automation.github_actions_copy'),
+            },
+            {
+                id: 'draft_pr',
+                label: t('feature.automation.github_draft_pr'),
+                type: 'select',
+                value: resolveGitHubDraftPrFieldValue(matchConfig?.draft_pr),
+                options: getGitHubDraftPrOptions(),
+                description: t('feature.automation.github_draft_pr_copy'),
+            },
+            {
+                id: 'base_branches',
+                label: t('feature.automation.github_base_branches'),
+                value: Array.isArray(matchConfig?.base_branches) ? matchConfig.base_branches.join(', ') : '',
+                placeholder: 'main, release/*',
+            },
+            {
+                id: 'prompt_template',
+                label: t('automation.detail.prompt'),
+                multiline: true,
+                value: String(existingRunTemplate?.prompt_template || '').trim(),
+                placeholder: 'Review the incoming GitHub event and summarize the next steps.',
+            },
+            {
+                id: 'enabled',
+                label: t('automation.field.enabled'),
+                type: 'checkbox',
+                value: rule ? rule.enabled !== false : true,
+                description: t('feature.automation.github_rule_enabled_copy'),
+            },
+        ],
+        submitHandler: typeof submitHandler === 'function'
+            ? async formValues => await submitHandler(
+                buildGitHubRulePayloadFromDialogValues(
+                    repo,
+                    rule,
+                    dispatchConfig,
+                    existingRunTemplate,
+                    formValues,
+                ),
+            )
+            : null,
+    });
+    if (!values) {
+        return null;
+    }
+    if (typeof submitHandler === 'function') {
+        return values;
+    }
+    return buildGitHubRulePayloadFromDialogValues(
+        repo,
+        rule,
+        dispatchConfig,
+        existingRunTemplate,
+        values,
+    );
+}
+
 async function requestFeishuTriggerInput(trigger = null) {
     const [workspaces, roleOptions, orchestrationConfig] = await Promise.all([
         fetchWorkspaces(),
@@ -1883,7 +2467,11 @@ export function initializeProjectView() {
                 if (currentFeatureViewId === FEATURE_VIEW_IDS.skills) {
                     void openSkillsFeatureView();
                 } else if (currentFeatureViewId === FEATURE_VIEW_IDS.automation) {
-                    void openAutomationHomeView(selectedAutomationHomeProjectId);
+                    if (currentAutomationFeatureSection === 'github') {
+                        void openAutomationGitHubView(currentGitHubFeatureNodeKey);
+                    } else {
+                        void openAutomationHomeView(selectedAutomationHomeProjectId);
+                    }
                 } else if (currentFeatureViewId === FEATURE_VIEW_IDS.gateway) {
                     void openImFeatureView();
                 }
@@ -1977,29 +2565,51 @@ export async function openSkillsFeatureView() {
     }
 }
 
-export async function openAutomationHomeView(projectId = '') {
+async function openAutomationFeatureView(
+    section,
+    {
+        projectId = '',
+        nodeKey = '',
+    } = {},
+) {
     openFeatureShell(FEATURE_VIEW_IDS.automation);
+    currentAutomationFeatureSection = section === 'github' ? 'github' : 'schedules';
     selectedAutomationHomeProjectId = String(projectId || '').trim();
+    if (nodeKey) {
+        currentGitHubFeatureNodeKey = String(nodeKey).trim() || 'access';
+    }
     renderFeatureLoadingState(t('feature.automation.title'), t('workspace_view.loading'));
     try {
-        const projects = await fetchAutomationProjects();
-        currentAutomationProjects = Array.isArray(projects) ? projects : [];
-        if (!selectedAutomationHomeProjectId && currentAutomationProjects.length > 0) {
-            selectedAutomationHomeProjectId = String(
-                currentAutomationProjects[0]?.automation_project_id || '',
-            ).trim();
-        }
-        if (selectedAutomationHomeProjectId) {
-            await loadAutomationHomeDetail(selectedAutomationHomeProjectId);
+        if (currentAutomationFeatureSection === 'github') {
+            await loadGitHubFeatureState();
         } else {
-            currentAutomationHomeDetail = createInitialAutomationHomeDetail();
-            currentAutomationProject = null;
+            const projects = await fetchAutomationProjects();
+            currentAutomationProjects = Array.isArray(projects) ? projects : [];
+            if (!selectedAutomationHomeProjectId && currentAutomationProjects.length > 0) {
+                selectedAutomationHomeProjectId = String(
+                    currentAutomationProjects[0]?.automation_project_id || '',
+                ).trim();
+            }
+            if (selectedAutomationHomeProjectId) {
+                await loadAutomationHomeDetail(selectedAutomationHomeProjectId);
+            } else {
+                currentAutomationHomeDetail = createInitialAutomationHomeDetail();
+                currentAutomationProject = null;
+            }
         }
         renderAutomationHomeView();
     } catch (error) {
         renderFeatureErrorState(t('feature.automation.title'), error);
         sysLog(`Failed to load automation feature: ${error?.message || error}`, 'log-error');
     }
+}
+
+export async function openAutomationHomeView(projectId = '') {
+    await openAutomationFeatureView('schedules', { projectId });
+}
+
+export async function openAutomationGitHubView(nodeKey = 'access') {
+    await openAutomationFeatureView('github', { nodeKey });
 }
 
 export async function openImFeatureView() {
@@ -2037,7 +2647,11 @@ export async function refreshProjectView() {
             return;
         }
         if (currentFeatureViewId === FEATURE_VIEW_IDS.automation) {
-            await openAutomationHomeView(selectedAutomationHomeProjectId);
+            if (currentAutomationFeatureSection === 'github') {
+                await openAutomationGitHubView(currentGitHubFeatureNodeKey);
+            } else {
+                await openAutomationHomeView(selectedAutomationHomeProjectId);
+            }
             return;
         }
         if (currentFeatureViewId === FEATURE_VIEW_IDS.gateway) {
@@ -2068,6 +2682,9 @@ export function hideProjectView() {
     currentAutomationProjects = [];
     selectedAutomationHomeProjectId = '';
     currentAutomationHomeDetail = createInitialAutomationHomeDetail();
+    currentAutomationFeatureSection = 'schedules';
+    currentGitHubFeatureState = createInitialGitHubFeatureState();
+    currentGitHubFeatureNodeKey = 'access';
     currentSkillsStatus = null;
     currentGatewayFeatureState = createInitialGatewayFeatureState();
     renderGatewayFeatureModal();
@@ -2361,15 +2978,35 @@ function renderAutomationHomeView() {
     const projects = Array.isArray(currentAutomationProjects) ? currentAutomationProjects : [];
     const detail = currentAutomationHomeDetail?.project ? currentAutomationHomeDetail : createInitialAutomationHomeDetail();
     const selectedProjectId = String(detail?.project?.automation_project_id || selectedAutomationHomeProjectId || '').trim();
+    const automationSummary = currentAutomationFeatureSection === 'github'
+        ? formatMessage('feature.automation.github_summary', {
+            accounts: currentGitHubFeatureState.accounts.length,
+            repos: currentGitHubFeatureState.repos.length,
+            rules: currentGitHubFeatureState.rules.length,
+        })
+        : resolveAutomationSummary(projects);
     renderToolbar(null, {
         title: t('feature.automation.title'),
         mode: 'feature',
-        summary: resolveAutomationSummary(projects),
+        summary: automationSummary,
         actions: `
-            <button class="secondary-btn project-view-toolbar-btn" type="button" data-feature-automation-create>${escapeHtml(t('feature.automation.create'))}</button>
+            <div class="feature-inline-actions">
+                <button class="secondary-btn project-view-toolbar-btn feature-section-tab${currentAutomationFeatureSection === 'schedules' ? ' is-active' : ''}" type="button" data-automation-section="schedules">${escapeHtml(t('feature.automation.section_schedules'))}</button>
+                <button class="secondary-btn project-view-toolbar-btn feature-section-tab${currentAutomationFeatureSection === 'github' ? ' is-active' : ''}" type="button" data-automation-section="github">${escapeHtml(t('feature.automation.section_github'))}</button>
+                ${currentAutomationFeatureSection === 'github'
+                    ? `<button class="secondary-btn project-view-toolbar-btn" type="button" data-github-account-create>${escapeHtml(t('feature.automation.github_new_account'))}</button>`
+                    : `<button class="secondary-btn project-view-toolbar-btn" type="button" data-feature-automation-create>${escapeHtml(t('feature.automation.create'))}</button>`
+                }
+            </div>
         `,
     });
     if (!els.projectViewContent) {
+        return;
+    }
+    if (currentAutomationFeatureSection === 'github') {
+        els.projectViewContent.innerHTML = renderGitHubAutomationView();
+        bindAutomationFeatureSectionButtons();
+        bindGitHubAutomationView();
         return;
     }
     els.projectViewContent.innerHTML = `
@@ -2410,6 +3047,7 @@ function renderAutomationHomeView() {
             </div>
         </div>
     `;
+    bindAutomationFeatureSectionButtons();
     els.projectViewToolbarActions?.querySelector('[data-feature-automation-create]')?.addEventListener('click', () => {
         void handleAutomationCreateFeature();
     });
@@ -2437,6 +3075,489 @@ function renderAutomationHomeView() {
                 return;
             }
             document.dispatchEvent(new CustomEvent('agent-teams-select-session', { detail: { sessionId } }));
+        });
+    });
+}
+
+function bindAutomationFeatureSectionButtons() {
+    els.projectViewToolbarActions?.querySelectorAll('[data-automation-section]').forEach(button => {
+        button.addEventListener('click', () => {
+            const section = String(button.getAttribute('data-automation-section') || '').trim();
+            if (section === 'github') {
+                void openAutomationGitHubView(currentGitHubFeatureNodeKey);
+                return;
+            }
+            void openAutomationHomeView(selectedAutomationHomeProjectId);
+        });
+    });
+}
+
+function renderGitHubAutomationView() {
+    return `
+        <div class="feature-page feature-page-neutral automation-home-page github-automation-page">
+            <div class="automation-home-shell">
+                <section class="workspace-view-panel feature-list-panel automation-list-panel">
+                    <div class="feature-panel-body">
+                        ${renderGitHubAutomationList()}
+                    </div>
+                </section>
+                <section class="workspace-view-panel feature-detail-panel automation-detail-panel-surface">
+                    <div class="feature-panel-body feature-panel-body-tight">
+                        ${renderGitHubAutomationDetail()}
+                    </div>
+                </section>
+            </div>
+        </div>
+    `;
+}
+
+function renderGitHubAutomationList() {
+    const accounts = Array.isArray(currentGitHubFeatureState.accounts)
+        ? currentGitHubFeatureState.accounts
+        : [];
+    return `
+        <div class="automation-record-list github-automation-tree">
+            <button class="automation-record${currentGitHubFeatureNodeKey === 'access' ? ' is-active' : ''}" type="button" data-github-node-key="access">
+                <div class="automation-record-copy">
+                    <strong>${escapeHtml(t('feature.automation.github_access'))}</strong>
+                    <span>${escapeHtml(t('feature.automation.github_access_copy'))}</span>
+                </div>
+                ${renderFeatureStatusPill(t('feature.automation.github_access_status'), 'neutral')}
+            </button>
+            ${accounts.length > 0 ? accounts.map(account => {
+                const accountId = String(account?.account_id || '').trim();
+                const repos = getGitHubReposForAccount(accountId);
+                const accountStatus = String(account?.status || 'disabled').trim() || 'disabled';
+                return `
+                    <div class="github-automation-group">
+                        <button class="automation-record${currentGitHubFeatureNodeKey === `account:${accountId}` ? ' is-active' : ''}" type="button" data-github-node-key="${escapeHtml(`account:${accountId}`)}">
+                            <div class="automation-record-copy">
+                                <strong>${escapeHtml(resolveGitHubAccountLabel(account))}</strong>
+                                <span>${escapeHtml(String(account?.name || accountId))}</span>
+                            </div>
+                            ${renderFeatureStatusPill(t(`automation.status.${accountStatus}`), accountStatus)}
+                        </button>
+                        ${repos.map(repo => renderGitHubRepoListButton(repo, { child: true })).join('')}
+                    </div>
+                `;
+            }).join('') : renderFeatureEmptyState(
+                t('feature.automation.github_no_accounts'),
+                t('feature.automation.github_no_accounts_copy'),
+            )}
+        </div>
+    `;
+}
+
+function renderGitHubAutomationDetail() {
+    const parsedNode = parseGitHubFeatureNodeKey(currentGitHubFeatureNodeKey);
+    if (parsedNode.kind === 'account') {
+        const account = findGitHubAccountById(parsedNode.id);
+        if (account) {
+            return renderGitHubAccountDetail(account);
+        }
+    }
+    if (parsedNode.kind === 'repo') {
+        const repo = findGitHubRepoById(parsedNode.id);
+        if (repo) {
+            return renderGitHubRepoDetail(repo);
+        }
+    }
+    return renderGitHubAccessDetail();
+}
+
+function renderGitHubAccessDetail() {
+    return `
+        <div class="automation-home-detail github-automation-detail">
+            <div class="feature-detail-head automation-detail-head">
+                <div class="automation-detail-copy">
+                    <div class="feature-detail-title-row">
+                        <h3>${escapeHtml(t('feature.automation.github_access'))}</h3>
+                        ${renderFeatureStatusPill(t('feature.automation.github_access_status'), 'neutral')}
+                    </div>
+                    <div class="automation-prompt-inline">${escapeHtml(t('feature.automation.github_access_copy'))}</div>
+                </div>
+            </div>
+            <div class="feature-card-grid">
+                <article class="feature-card">
+                    <div class="feature-card-header">
+                        <div>
+                            <h4>${escapeHtml(t('feature.automation.github_summary_accounts'))}</h4>
+                        </div>
+                    </div>
+                    <div class="feature-meta-list">
+                        <div><strong>${escapeHtml(String(currentGitHubFeatureState.accounts.length))}</strong></div>
+                    </div>
+                </article>
+                <article class="feature-card">
+                    <div class="feature-card-header">
+                        <div>
+                            <h4>${escapeHtml(t('feature.automation.github_summary_repos'))}</h4>
+                        </div>
+                    </div>
+                    <div class="feature-meta-list">
+                        <div><strong>${escapeHtml(String(currentGitHubFeatureState.repos.length))}</strong></div>
+                    </div>
+                </article>
+                <article class="feature-card">
+                    <div class="feature-card-header">
+                        <div>
+                            <h4>${escapeHtml(t('feature.automation.github_summary_rules'))}</h4>
+                        </div>
+                    </div>
+                    <div class="feature-meta-list">
+                        <div><strong>${escapeHtml(String(currentGitHubFeatureState.rules.length))}</strong></div>
+                    </div>
+                </article>
+            </div>
+            <article class="feature-card github-access-card">
+                <div class="feature-card-header">
+                    <div>
+                        <h4>${escapeHtml(t('feature.automation.github_access'))}</h4>
+                        <p>${escapeHtml(t('feature.automation.github_access_detail_copy'))}</p>
+                    </div>
+                </div>
+                ${renderGitHubAccessPanelMarkup(FEATURE_GITHUB_FIELD_IDS)}
+            </article>
+            <section class="automation-flat-section">
+                <div class="automation-section-header">
+                    <h4>${escapeHtml(t('feature.automation.github_repo_section'))}</h4>
+                    <span class="workspace-view-panel-meta">${escapeHtml(String(currentGitHubFeatureState.repos.length))}</span>
+                </div>
+                ${currentGitHubFeatureState.repos.length > 0 ? `
+                    <div class="automation-record-list github-automation-inline-list">
+                        ${currentGitHubFeatureState.repos.map(repo => renderGitHubRepoListButton(repo, { includeAccount: true })).join('')}
+                    </div>
+                ` : renderFeatureEmptyState(
+                    t('feature.automation.github_no_repos'),
+                    t('feature.automation.github_no_repos_copy'),
+                )}
+            </section>
+        </div>
+    `;
+}
+
+function renderGitHubAccountDetail(account) {
+    const accountId = String(account?.account_id || '').trim();
+    const repos = getGitHubReposForAccount(accountId);
+    const status = String(account?.status || 'disabled').trim() || 'disabled';
+    return `
+        <div class="automation-home-detail github-automation-detail">
+            <div class="feature-detail-head automation-detail-head">
+                <div class="automation-detail-copy">
+                    <div class="feature-detail-title-row">
+                        <h3>${escapeHtml(resolveGitHubAccountLabel(account))}</h3>
+                        ${renderFeatureStatusPill(t(`automation.status.${status}`), status)}
+                    </div>
+                    <div class="automation-prompt-inline">${escapeHtml(String(account?.name || accountId))}</div>
+                </div>
+                <div class="feature-action-row">
+                    <button class="secondary-btn" type="button" data-github-account-edit="${escapeHtml(accountId)}">${escapeHtml(t('automation.action.edit'))}</button>
+                    <button class="secondary-btn" type="button" data-github-account-toggle="${escapeHtml(accountId)}">${escapeHtml(status === 'enabled' ? t('automation.action.disable') : t('automation.action.enable'))}</button>
+                    <button class="secondary-btn" type="button" data-github-repo-create="${escapeHtml(accountId)}">${escapeHtml(t('feature.automation.github_new_repo'))}</button>
+                    <button class="secondary-btn danger-btn" type="button" data-github-account-delete="${escapeHtml(accountId)}">${escapeHtml(t('settings.action.delete'))}</button>
+                </div>
+            </div>
+            <div class="feature-card-grid">
+                <article class="feature-card">
+                    <div class="feature-meta-list">
+                        <div><span>${escapeHtml(t('feature.automation.github_account_token'))}</span><strong>${escapeHtml(account?.token_configured ? t('feature.automation.github_configured') : t('feature.automation.github_not_configured'))}</strong></div>
+                        <div><span>${escapeHtml(t('feature.automation.github_account_secret'))}</span><strong>${escapeHtml(account?.webhook_secret_configured ? t('feature.automation.github_configured') : t('feature.automation.github_not_configured'))}</strong></div>
+                        <div><span>${escapeHtml(t('feature.automation.github_summary_repos'))}</span><strong>${escapeHtml(String(repos.length))}</strong></div>
+                    </div>
+                </article>
+                <article class="feature-card">
+                    <div class="feature-meta-list">
+                        <div><span>${escapeHtml(t('automation.detail.last_error'))}</span><strong>${escapeHtml(String(account?.last_error || t('automation.detail.none')))}</strong></div>
+                        <div><span>${escapeHtml(t('automation.detail.updated_at'))}</span><strong>${escapeHtml(String(account?.updated_at || t('automation.detail.none')))}</strong></div>
+                    </div>
+                </article>
+            </div>
+            <section class="automation-flat-section">
+                <div class="automation-section-header">
+                    <div>
+                        <h4>${escapeHtml(t('feature.automation.github_repo_section'))}</h4>
+                    </div>
+                </div>
+                ${repos.length > 0 ? `
+                    <div class="automation-record-list github-automation-inline-list">
+                        ${repos.map(repo => renderGitHubRepoListButton(repo)).join('')}
+                    </div>
+                ` : renderFeatureEmptyState(
+                    t('feature.automation.github_no_repos'),
+                    t('feature.automation.github_no_repos_copy'),
+                )}
+            </section>
+        </div>
+    `;
+}
+
+function renderGitHubRepoDetail(repo) {
+    const repoId = String(repo?.repo_subscription_id || '').trim();
+    const rules = getGitHubRulesForRepo(repoId);
+    const account = findGitHubAccountById(repo?.account_id);
+    return `
+        <div class="automation-home-detail github-automation-detail">
+            <div class="feature-detail-head automation-detail-head">
+                <div class="automation-detail-copy">
+                    <div class="feature-detail-title-row">
+                        <h3>${escapeHtml(String(repo?.full_name || ''))}</h3>
+                        ${renderFeatureStatusPill(repo?.enabled === false ? t('automation.status.disabled') : t('automation.status.enabled'), repo?.enabled === false ? 'disabled' : 'enabled')}
+                    </div>
+                    <div class="automation-prompt-inline">${escapeHtml(String(repo?.callback_url || ''))}</div>
+                </div>
+                <div class="feature-action-row">
+                    <button class="secondary-btn" type="button" data-github-repo-edit="${escapeHtml(repoId)}">${escapeHtml(t('automation.action.edit'))}</button>
+                    <button class="secondary-btn" type="button" data-github-repo-toggle="${escapeHtml(repoId)}">${escapeHtml(repo?.enabled === false ? t('automation.action.enable') : t('automation.action.disable'))}</button>
+                    <button class="secondary-btn" type="button" data-github-rule-create="${escapeHtml(repoId)}">${escapeHtml(t('feature.automation.github_new_rule'))}</button>
+                    <button class="secondary-btn danger-btn" type="button" data-github-repo-delete="${escapeHtml(repoId)}">${escapeHtml(t('settings.action.delete'))}</button>
+                </div>
+            </div>
+            <div class="feature-card-grid">
+                <article class="feature-card">
+                    <div class="feature-meta-list">
+                        <div><span>${escapeHtml(t('feature.automation.github_account'))}</span><strong>${escapeHtml(resolveGitHubAccountLabel(account))}</strong></div>
+                        <div><span>${escapeHtml(t('feature.automation.github_callback_url'))}</span><code>${escapeHtml(String(repo?.callback_url || t('automation.detail.none')))}</code></div>
+                        <div><span>${escapeHtml(t('feature.automation.github_webhook_status'))}</span><strong>${escapeHtml(formatGitHubWebhookStatusLabel(String(repo?.webhook_status || 'unregistered')))}</strong></div>
+                    </div>
+                </article>
+                <article class="feature-card">
+                    <div class="feature-meta-list">
+                        <div><span>${escapeHtml(t('feature.automation.github_default_branch'))}</span><strong>${escapeHtml(String(repo?.default_branch || t('automation.detail.none')))}</strong></div>
+                        <div><span>${escapeHtml(t('feature.automation.github_events'))}</span><strong>${escapeHtml(formatGitHubRepoEvents(repo))}</strong></div>
+                        <div><span>${escapeHtml(t('automation.detail.last_error'))}</span><strong>${escapeHtml(String(repo?.last_error || t('automation.detail.none')))}</strong></div>
+                    </div>
+                </article>
+            </div>
+            <section class="automation-flat-section">
+                <div class="automation-section-header automation-runs-header">
+                    <h3>${escapeHtml(t('feature.automation.github_rule_section'))}</h3>
+                    <span class="workspace-view-panel-meta">${escapeHtml(String(rules.length))}</span>
+                </div>
+                ${rules.length > 0 ? `
+                    <div class="automation-run-list github-rule-list">
+                        ${rules.map(rule => {
+                            const ruleId = String(rule?.trigger_rule_id || '').trim();
+                            const status = rule?.enabled === false ? 'disabled' : 'enabled';
+                            return `
+                                <article class="automation-run-card github-rule-card">
+                                    <div class="automation-run-row">
+                                        <div class="automation-run-copy">
+                                            <strong>${escapeHtml(String(rule?.name || ruleId))}</strong>
+                                            <span>${escapeHtml(formatGitHubRuleSummary(rule))}</span>
+                                            <span>${escapeHtml(formatGitHubRuleWorkspaceSummary(rule))}</span>
+                                        </div>
+                                        ${renderFeatureStatusPill(t(`automation.status.${status}`), status)}
+                                    </div>
+                                    <div class="feature-inline-actions github-rule-actions">
+                                        <button class="secondary-btn" type="button" data-github-rule-edit="${escapeHtml(ruleId)}">${escapeHtml(t('automation.action.edit'))}</button>
+                                        <button class="secondary-btn" type="button" data-github-rule-toggle="${escapeHtml(ruleId)}">${escapeHtml(status === 'enabled' ? t('automation.action.disable') : t('automation.action.enable'))}</button>
+                                        <button class="secondary-btn danger-btn" type="button" data-github-rule-delete="${escapeHtml(ruleId)}">${escapeHtml(t('settings.action.delete'))}</button>
+                                    </div>
+                                </article>
+                            `;
+                        }).join('')}
+                    </div>
+                ` : renderFeatureEmptyState(
+                    t('feature.automation.github_no_rules'),
+                    t('feature.automation.github_no_rules_copy'),
+                )}
+            </section>
+        </div>
+    `;
+}
+
+function formatGitHubWebhookStatusLabel(status) {
+    const normalizedStatus = String(status || 'unregistered').trim() || 'unregistered';
+    if (normalizedStatus === 'registered') {
+        return t('feature.automation.github_webhook_registered');
+    }
+    if (normalizedStatus === 'error') {
+        return t('feature.automation.github_webhook_error');
+    }
+    return t('feature.automation.github_webhook_unregistered');
+}
+
+function formatGitHubRuleSummary(rule) {
+    const matchConfig = rule?.match_config && typeof rule.match_config === 'object'
+        ? rule.match_config
+        : {};
+    const eventName = String(matchConfig?.event_name || '').trim();
+    const actions = Array.isArray(matchConfig?.actions) ? matchConfig.actions.join(', ') : '';
+    return actions ? `${eventName}: ${actions}` : eventName;
+}
+
+function formatGitHubRuleWorkspaceSummary(rule) {
+    return formatMessage('feature.automation.github_rule_workspace_summary', {
+        workspace: resolveGitHubWorkspaceLabel(resolveGitHubRuleWorkspaceId(rule)),
+    });
+}
+
+function resolveGitHubRuleWorkspaceId(rule) {
+    return String(rule?.dispatch_config?.run_template?.workspace_id || '').trim();
+}
+
+function resolveGitHubWorkspaceLabel(workspaceId) {
+    const normalizedWorkspaceId = String(workspaceId || '').trim();
+    if (!normalizedWorkspaceId) {
+        return t('automation.detail.none');
+    }
+    const workspace = (Array.isArray(currentGitHubFeatureState.workspaces)
+        ? currentGitHubFeatureState.workspaces
+        : []).find(item => String(item?.workspace_id || '').trim() === normalizedWorkspaceId);
+    return formatWorkspaceOptionLabel(workspace || { workspace_id: normalizedWorkspaceId });
+}
+
+function getGitHubRuleEventOptions() {
+    return [
+        {
+            value: 'pull_request',
+            label: t('feature.automation.github_event_pull_request'),
+            description: '',
+        },
+        {
+            value: 'issues',
+            label: t('feature.automation.github_event_issues'),
+            description: '',
+        },
+    ];
+}
+
+function getGitHubRuleActionOptions() {
+    return [
+        {
+            value: 'opened',
+            label: 'opened',
+            description: '',
+        },
+        {
+            value: 'reopened',
+            label: 'reopened',
+            description: '',
+        },
+        {
+            value: 'edited',
+            label: 'edited',
+            description: '',
+        },
+        {
+            value: 'synchronize',
+            label: 'synchronize',
+            description: '',
+        },
+        {
+            value: 'review_requested',
+            label: 'review_requested',
+            description: '',
+        },
+    ];
+}
+
+function getGitHubDraftPrOptions() {
+    return [
+        {
+            value: 'any',
+            label: t('feature.automation.github_draft_pr_any'),
+            description: '',
+        },
+        {
+            value: 'false',
+            label: t('feature.automation.github_draft_pr_false'),
+            description: '',
+        },
+        {
+            value: 'true',
+            label: t('feature.automation.github_draft_pr_true'),
+            description: '',
+        },
+    ];
+}
+
+function resolveGitHubDraftPrFieldValue(value) {
+    if (value === true) {
+        return 'true';
+    }
+    if (value === false) {
+        return 'false';
+    }
+    return 'any';
+}
+
+function normalizeGitHubDraftPrValue(value) {
+    const normalizedValue = String(value || '').trim().toLowerCase();
+    if (normalizedValue === 'true') {
+        return true;
+    }
+    if (normalizedValue === 'false') {
+        return false;
+    }
+    return null;
+}
+
+function bindGitHubAutomationView() {
+    bindGitHubSettingsHandlers(FEATURE_GITHUB_FIELD_IDS);
+    void loadGitHubSettingsPanel(FEATURE_GITHUB_FIELD_IDS);
+    els.projectViewToolbarActions?.querySelector('[data-github-account-create]')?.addEventListener('click', () => {
+        void handleGitHubCreateAccountFeature();
+    });
+    els.projectViewContent.querySelectorAll('[data-github-node-key]').forEach(button => {
+        button.addEventListener('click', () => {
+            const nodeKey = String(button.getAttribute('data-github-node-key') || '').trim();
+            void openAutomationGitHubView(nodeKey || 'access');
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-github-account-edit]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleGitHubEditAccountFeature(button.getAttribute('data-github-account-edit'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-github-account-toggle]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleGitHubToggleAccountFeature(button.getAttribute('data-github-account-toggle'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-github-account-delete]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleGitHubDeleteAccountFeature(button.getAttribute('data-github-account-delete'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-github-repo-create]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleGitHubCreateRepoFeature(button.getAttribute('data-github-repo-create'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-github-repo-edit]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleGitHubEditRepoFeature(button.getAttribute('data-github-repo-edit'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-github-repo-toggle]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleGitHubToggleRepoFeature(button.getAttribute('data-github-repo-toggle'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-github-repo-delete]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleGitHubDeleteRepoFeature(button.getAttribute('data-github-repo-delete'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-github-rule-create]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleGitHubCreateRuleFeature(button.getAttribute('data-github-rule-create'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-github-rule-edit]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleGitHubEditRuleFeature(button.getAttribute('data-github-rule-edit'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-github-rule-toggle]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleGitHubToggleRuleFeature(button.getAttribute('data-github-rule-toggle'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-github-rule-delete]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleGitHubDeleteRuleFeature(button.getAttribute('data-github-rule-delete'));
         });
     });
 }
@@ -2892,6 +4013,281 @@ async function handleSkillsReloadFeature() {
             message: String(error?.message || error || ''),
             tone: 'danger',
         });
+    }
+}
+
+function notifyGitHubFeatureSaved(label) {
+    showToast({
+        title: t('feature.automation.github_saved_title'),
+        message: String(label || t('feature.automation.github_saved_message')),
+        tone: 'success',
+    });
+}
+
+function notifyGitHubFeatureDeleted(label) {
+    showToast({
+        title: t('feature.automation.github_deleted_title'),
+        message: String(label || t('feature.automation.github_deleted_message')),
+        tone: 'success',
+    });
+}
+
+function notifyGitHubFeatureError(error) {
+    showToast({
+        title: t('feature.automation.github_failed_title'),
+        message: String(error?.message || error || t('feature.automation.github_failed_message')),
+        tone: 'danger',
+    });
+}
+
+async function handleGitHubCreateAccountFeature() {
+    try {
+        const payload = await requestGitHubAccountInput();
+        if (!payload) {
+            return;
+        }
+        const account = await createGitHubTriggerAccount(payload);
+        notifyGitHubFeatureSaved(resolveGitHubAccountLabel(account));
+        await openAutomationGitHubView(`account:${String(account?.account_id || '').trim()}`);
+    } catch (error) {
+        notifyGitHubFeatureError(error);
+    }
+}
+
+async function handleGitHubEditAccountFeature(accountId) {
+    try {
+        const account = findGitHubAccountById(accountId);
+        if (!account) {
+            return;
+        }
+        const payload = await requestGitHubAccountInput(account);
+        if (!payload) {
+            return;
+        }
+        const updated = await updateGitHubTriggerAccount(String(account.account_id || '').trim(), payload);
+        notifyGitHubFeatureSaved(resolveGitHubAccountLabel(updated));
+        await openAutomationGitHubView(`account:${String(updated?.account_id || '').trim()}`);
+    } catch (error) {
+        notifyGitHubFeatureError(error);
+    }
+}
+
+async function handleGitHubToggleAccountFeature(accountId) {
+    try {
+        const account = findGitHubAccountById(accountId);
+        if (!account) {
+            return;
+        }
+        const updated = String(account?.status || '').trim() === 'enabled'
+            ? await disableGitHubTriggerAccount(String(account.account_id || '').trim())
+            : await enableGitHubTriggerAccount(String(account.account_id || '').trim());
+        notifyGitHubFeatureSaved(resolveGitHubAccountLabel(updated));
+        await openAutomationGitHubView(`account:${String(updated?.account_id || '').trim()}`);
+    } catch (error) {
+        notifyGitHubFeatureError(error);
+    }
+}
+
+async function handleGitHubDeleteAccountFeature(accountId) {
+    try {
+        const account = findGitHubAccountById(accountId);
+        if (!account) {
+            return;
+        }
+        const confirmed = await showConfirmDialog({
+            title: t('settings.action.delete'),
+            message: formatMessage('feature.automation.github_delete_account_confirm', {
+                name: resolveGitHubAccountLabel(account),
+            }),
+            tone: 'danger',
+            confirmLabel: t('settings.action.delete'),
+            cancelLabel: t('settings.action.cancel'),
+        });
+        if (!confirmed) {
+            return;
+        }
+        await deleteGitHubTriggerAccount(String(account.account_id || '').trim());
+        notifyGitHubFeatureDeleted(resolveGitHubAccountLabel(account));
+        await openAutomationGitHubView('access');
+    } catch (error) {
+        notifyGitHubFeatureError(error);
+    }
+}
+
+async function handleGitHubCreateRepoFeature(accountId) {
+    try {
+        const account = findGitHubAccountById(accountId);
+        if (!account) {
+            return;
+        }
+        const payload = await requestGitHubRepoInput(account);
+        if (!payload) {
+            return;
+        }
+        const repo = await createGitHubRepoSubscription(payload);
+        notifyGitHubFeatureSaved(String(repo?.full_name || ''));
+        await openAutomationGitHubView(`repo:${String(repo?.repo_subscription_id || '').trim()}`);
+    } catch (error) {
+        notifyGitHubFeatureError(error);
+    }
+}
+
+async function handleGitHubEditRepoFeature(repoSubscriptionId) {
+    try {
+        const repo = findGitHubRepoById(repoSubscriptionId);
+        if (!repo) {
+            return;
+        }
+        const account = findGitHubAccountById(repo.account_id);
+        if (!account) {
+            return;
+        }
+        const payload = await requestGitHubRepoInput(account, repo);
+        if (!payload) {
+            return;
+        }
+        const updated = await updateGitHubRepoSubscription(String(repo.repo_subscription_id || '').trim(), payload);
+        notifyGitHubFeatureSaved(String(updated?.full_name || ''));
+        await openAutomationGitHubView(`repo:${String(updated?.repo_subscription_id || '').trim()}`);
+    } catch (error) {
+        notifyGitHubFeatureError(error);
+    }
+}
+
+async function handleGitHubToggleRepoFeature(repoSubscriptionId) {
+    try {
+        const repo = findGitHubRepoById(repoSubscriptionId);
+        if (!repo) {
+            return;
+        }
+        const updated = repo?.enabled === false
+            ? await enableGitHubRepoSubscription(String(repo.repo_subscription_id || '').trim())
+            : await disableGitHubRepoSubscription(String(repo.repo_subscription_id || '').trim());
+        notifyGitHubFeatureSaved(String(updated?.full_name || ''));
+        await openAutomationGitHubView(`repo:${String(updated?.repo_subscription_id || '').trim()}`);
+    } catch (error) {
+        notifyGitHubFeatureError(error);
+    }
+}
+
+async function handleGitHubDeleteRepoFeature(repoSubscriptionId) {
+    try {
+        const repo = findGitHubRepoById(repoSubscriptionId);
+        if (!repo) {
+            return;
+        }
+        const confirmed = await showConfirmDialog({
+            title: t('settings.action.delete'),
+            message: formatMessage('feature.automation.github_delete_repo_confirm', {
+                name: String(repo?.full_name || ''),
+            }),
+            tone: 'danger',
+            confirmLabel: t('settings.action.delete'),
+            cancelLabel: t('settings.action.cancel'),
+        });
+        if (!confirmed) {
+            return;
+        }
+        await deleteGitHubRepoSubscription(String(repo.repo_subscription_id || '').trim());
+        notifyGitHubFeatureDeleted(String(repo?.full_name || ''));
+        await openAutomationGitHubView(`account:${String(repo?.account_id || '').trim()}`);
+    } catch (error) {
+        notifyGitHubFeatureError(error);
+    }
+}
+
+async function handleGitHubCreateRuleFeature(repoSubscriptionId) {
+    try {
+        const repo = findGitHubRepoById(repoSubscriptionId);
+        if (!repo) {
+            return;
+        }
+        const created = await requestGitHubRuleInput(
+            repo,
+            null,
+            async payload => await createGitHubTriggerRule(payload),
+        );
+        if (!created) {
+            return;
+        }
+        upsertGitHubRuleInState(created);
+        notifyGitHubFeatureSaved(String(repo?.full_name || ''));
+        renderAutomationHomeView();
+    } catch (error) {
+        notifyGitHubFeatureError(error);
+    }
+}
+
+async function handleGitHubEditRuleFeature(triggerRuleId) {
+    try {
+        const rule = findGitHubRuleById(triggerRuleId);
+        if (!rule) {
+            return;
+        }
+        const repo = findGitHubRepoById(rule.repo_subscription_id);
+        if (!repo) {
+            return;
+        }
+        const updated = await requestGitHubRuleInput(
+            repo,
+            rule,
+            async payload => await updateGitHubTriggerRule(
+                String(rule.trigger_rule_id || '').trim(),
+                payload,
+            ),
+        );
+        if (!updated) {
+            return;
+        }
+        upsertGitHubRuleInState(updated);
+        notifyGitHubFeatureSaved(String(rule?.name || ''));
+        renderAutomationHomeView();
+    } catch (error) {
+        notifyGitHubFeatureError(error);
+    }
+}
+
+async function handleGitHubToggleRuleFeature(triggerRuleId) {
+    try {
+        const rule = findGitHubRuleById(triggerRuleId);
+        if (!rule) {
+            return;
+        }
+        const updated = rule?.enabled === false
+            ? await enableGitHubTriggerRule(String(rule.trigger_rule_id || '').trim())
+            : await disableGitHubTriggerRule(String(rule.trigger_rule_id || '').trim());
+        upsertGitHubRuleInState(updated);
+        notifyGitHubFeatureSaved(String(updated?.name || ''));
+        renderAutomationHomeView();
+    } catch (error) {
+        notifyGitHubFeatureError(error);
+    }
+}
+
+async function handleGitHubDeleteRuleFeature(triggerRuleId) {
+    try {
+        const rule = findGitHubRuleById(triggerRuleId);
+        if (!rule) {
+            return;
+        }
+        const confirmed = await showConfirmDialog({
+            title: t('settings.action.delete'),
+            message: formatMessage('feature.automation.github_delete_rule_confirm', {
+                name: String(rule?.name || ''),
+            }),
+            tone: 'danger',
+            confirmLabel: t('settings.action.delete'),
+            cancelLabel: t('settings.action.cancel'),
+        });
+        if (!confirmed) {
+            return;
+        }
+        await deleteGitHubTriggerRule(String(rule.trigger_rule_id || '').trim());
+        removeGitHubRuleFromState(rule.trigger_rule_id);
+        notifyGitHubFeatureDeleted(String(rule?.name || ''));
+        renderAutomationHomeView();
+    } catch (error) {
+        notifyGitHubFeatureError(error);
     }
 }
 

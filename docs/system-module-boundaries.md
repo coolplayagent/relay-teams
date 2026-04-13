@@ -106,6 +106,66 @@ Flow:
 5. `RunManager` and `NotificationService` consume those actions without owning source
    normalization or matching rules.
 
+### Monitor Trigger to Agent Loop Sequence
+
+The runtime path below is source-agnostic. GitHub webhook ingress and background-task
+monitoring both normalize into `MonitorEventEnvelope` first, then enter the same
+monitor-to-run dispatch path.
+
+```mermaid
+sequenceDiagram
+    participant Source as Event Source
+    participant Monitor as MonitorService
+    participant Repo as MonitorRepository
+    participant Hub as RunEventHub
+    participant RunMgr as RunManager
+    participant MsgRepo as MessageRepository
+    participant Inject as RunInjectionManager
+    participant Loop as LLMSession
+    participant Notify as NotificationService
+
+    Source->>Monitor: emit(MonitorEventEnvelope)
+    Monitor->>Repo: list_active_for_source(...)
+    loop matching subscriptions
+        Monitor->>Repo: record_matching_trigger(...)
+        Monitor->>Hub: publish(MONITOR_TRIGGERED)
+
+        alt action_type == EMIT_NOTIFICATION
+            Monitor->>Notify: emit notification
+        else action sink bound to RunManager
+            Monitor->>RunMgr: handle_monitor_trigger(subscription, envelope, message)
+
+            alt action_type == START_FOLLOWUP_RUN
+                RunMgr->>RunMgr: create_run(..., source=SYSTEM)
+                RunMgr->>RunMgr: ensure_run_started(new_run_id)
+            else action_type == WAKE_INSTANCE / WAKE_COORDINATOR
+                RunMgr->>MsgRepo: append follow-up message
+                RunMgr->>Inject: enqueue(run_id, recipient_instance_id, SYSTEM, message)
+
+                Loop->>Inject: drain_at_boundary(run_id, instance_id)
+                Inject-->>Loop: injection messages
+                Loop->>Hub: publish(INJECTION_APPLIED)
+                Loop->>MsgRepo: append_user_prompt_if_missing(...)
+                Loop->>Loop: rebuild iteration context
+                Loop->>Loop: continue agent loop
+            end
+        end
+    end
+```
+
+Current source emitters that feed this path:
+
+- GitHub webhook deliveries from `triggers/service.py::_emit_monitor_event_for_delivery`
+- Background-task output/state events from
+  `sessions/runs/background_tasks/manager.py::_emit_monitor_event`
+
+Monitor matching and trigger audit stay inside `monitors/*`; resume, injection, and
+follow-up run decisions stay inside `RunManager`.
+
+Current GitHub monitor event names include `pr.opened`, `pr.updated`,
+`pr.review_requested`, `issue.opened`, `issue.updated`, `check_run.completed`,
+`check_suite.completed`, and `status.updated`.
+
 Current placement:
 
 - Local process output/state events are produced in

@@ -765,6 +765,7 @@ class ServerContainer:
             event_log=self.event_log,
             monitor_service=self.monitor_service,
             session_ingress_service=self.session_ingress_service,
+            get_github_config=self.github_config_service.get_github_config,
         )
         self.github_trigger_action_worker = GitHubTriggerActionWorker(
             trigger_service=self.github_trigger_service

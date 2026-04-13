@@ -11,15 +11,21 @@ from time import perf_counter
 import re
 import subprocess
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.env.github_config_models import GitHubConfig
+from relay_teams.env.public_webhook_url import (
+    build_public_base_url_path,
+    normalize_public_base_url,
+)
 from relay_teams.env.github_env import build_github_cli_env, normalize_github_token
 from relay_teams.env.proxy_env import (
     ProxyEnvConfig,
     build_subprocess_env,
     proxy_applies_to_url,
 )
+from relay_teams.net.clients import create_sync_http_client
 from relay_teams.tools.workspace_tools.github_cli import BIN_DIR, get_gh_path
 from relay_teams.tools.workspace_tools.github_cli_errors import GitHubCliNotFoundError
 
@@ -61,6 +67,42 @@ class GitHubConnectivityProbeResult(BaseModel):
     latency_ms: int = Field(ge=0)
     checked_at: datetime
     diagnostics: GitHubConnectivityProbeDiagnostics
+    retryable: bool = False
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class GitHubWebhookConnectivityProbeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    webhook_base_url: str | None = None
+    timeout_ms: int | None = Field(
+        default=None,
+        ge=1000,
+        le=_MAX_GITHUB_PROBE_TIMEOUT_MS,
+    )
+
+
+class GitHubWebhookConnectivityProbeDiagnostics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint_reachable: bool
+    used_proxy: bool
+    redirected: bool
+
+
+class GitHubWebhookConnectivityProbeResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool
+    webhook_base_url: str | None = None
+    callback_url: str | None = None
+    health_url: str | None = None
+    final_url: str | None = None
+    status_code: int | None = Field(default=None, ge=100, le=599)
+    latency_ms: int = Field(ge=0)
+    checked_at: datetime
+    diagnostics: GitHubWebhookConnectivityProbeDiagnostics
     retryable: bool = False
     error_code: str | None = None
     error_message: str | None = None
@@ -249,6 +291,130 @@ class GitHubConnectivityProbeService:
         )
 
 
+class GitHubWebhookConnectivityProbeService:
+    def __init__(
+        self,
+        *,
+        get_github_config: Callable[[], GitHubConfig],
+        get_proxy_config: Callable[[], ProxyEnvConfig],
+    ) -> None:
+        self._get_github_config = get_github_config
+        self._get_proxy_config = get_proxy_config
+
+    def probe(
+        self,
+        request: GitHubWebhookConnectivityProbeRequest,
+    ) -> GitHubWebhookConnectivityProbeResult:
+        checked_at = datetime.now(timezone.utc)
+        started = perf_counter()
+        configured_base_url = (
+            normalize_public_base_url(request.webhook_base_url)
+            or self._get_github_config().webhook_base_url
+        )
+        if configured_base_url is None:
+            return self._build_result(
+                ok=False,
+                checked_at=checked_at,
+                started=started,
+                used_proxy=False,
+                redirected=False,
+                endpoint_reachable=False,
+                error_code="missing_webhook_base_url",
+                error_message="Configure a public GitHub webhook base URL before testing connectivity.",
+            )
+        callback_url = build_public_base_url_path(
+            configured_base_url,
+            "/api/triggers/github/deliveries",
+        )
+        health_url = build_public_base_url_path(
+            configured_base_url,
+            "/api/system/health",
+        )
+        timeout_seconds = (
+            _DEFAULT_TIMEOUT_SECONDS
+            if request.timeout_ms is None
+            else request.timeout_ms / 1000.0
+        )
+        proxy_config = self._get_proxy_config()
+        used_proxy = proxy_applies_to_url(health_url, proxy_config)
+        with create_sync_http_client(
+            proxy_config=proxy_config,
+            timeout_seconds=timeout_seconds,
+            connect_timeout_seconds=timeout_seconds,
+            follow_redirects=True,
+        ) as client:
+            try:
+                response = client.get(health_url)
+            except Exception as exc:  # narrow below without duplicating client setup
+                return _build_github_webhook_transport_error_result(
+                    health_url=health_url,
+                    callback_url=callback_url,
+                    webhook_base_url=configured_base_url,
+                    checked_at=checked_at,
+                    started=started,
+                    used_proxy=used_proxy,
+                    error=exc,
+                )
+        redirected = bool(response.history)
+        status_code = response.status_code
+        ok = 200 <= status_code < 400
+        error_message = None if ok else f"HTTP {status_code}"
+        error_code = None if ok else "http_error"
+        return self._build_result(
+            ok=ok,
+            checked_at=checked_at,
+            started=started,
+            used_proxy=used_proxy,
+            redirected=redirected,
+            endpoint_reachable=True,
+            webhook_base_url=configured_base_url,
+            callback_url=callback_url,
+            health_url=health_url,
+            final_url=str(response.url),
+            status_code=status_code,
+            retryable=False,
+            error_code=error_code,
+            error_message=error_message,
+        )
+
+    def _build_result(
+        self,
+        *,
+        ok: bool,
+        checked_at: datetime,
+        started: float,
+        used_proxy: bool,
+        redirected: bool,
+        endpoint_reachable: bool,
+        webhook_base_url: str | None = None,
+        callback_url: str | None = None,
+        health_url: str | None = None,
+        final_url: str | None = None,
+        status_code: int | None = None,
+        retryable: bool = False,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> GitHubWebhookConnectivityProbeResult:
+        return GitHubWebhookConnectivityProbeResult(
+            ok=ok,
+            webhook_base_url=webhook_base_url,
+            callback_url=callback_url,
+            health_url=health_url,
+            final_url=final_url,
+            status_code=status_code,
+            latency_ms=max(0, int((perf_counter() - started) * 1000)),
+            checked_at=checked_at,
+            diagnostics=GitHubWebhookConnectivityProbeDiagnostics(
+                endpoint_reachable=endpoint_reachable,
+                used_proxy=used_proxy,
+                redirected=redirected,
+            ),
+            retryable=retryable,
+            error_code=error_code,
+            error_message=error_message,
+        )
+
+
 def _parse_username(stdout: str) -> str | None:
     try:
         payload = json.loads(stdout)
@@ -258,6 +424,53 @@ def _parse_username(stdout: str) -> str | None:
     if isinstance(login, str) and login.strip():
         return login.strip()
     return None
+
+
+def _build_github_webhook_transport_error_result(
+    *,
+    health_url: str,
+    callback_url: str,
+    webhook_base_url: str,
+    checked_at: datetime,
+    started: float,
+    used_proxy: bool,
+    error: Exception,
+) -> GitHubWebhookConnectivityProbeResult:
+    error_message = str(error) or "Failed to reach the GitHub webhook health URL."
+    error_code = "network_error"
+    retryable = True
+    if isinstance(error, httpx.TimeoutException):
+        error_code = "network_timeout"
+    elif isinstance(error, httpx.ProxyError):
+        error_code = "proxy_error"
+    elif isinstance(error, httpx.ConnectError):
+        lowered_error = error_message.lower()
+        error_code = (
+            "dns_error"
+            if "name or service not known" in lowered_error
+            or "temporary failure in name resolution" in lowered_error
+            else "network_error"
+        )
+    elif isinstance(error, httpx.RequestError):
+        error_code = "network_error"
+    return GitHubWebhookConnectivityProbeResult(
+        ok=False,
+        webhook_base_url=webhook_base_url,
+        callback_url=callback_url,
+        health_url=health_url,
+        final_url=health_url,
+        status_code=None,
+        latency_ms=max(0, int((perf_counter() - started) * 1000)),
+        checked_at=checked_at,
+        diagnostics=GitHubWebhookConnectivityProbeDiagnostics(
+            endpoint_reachable=False,
+            used_proxy=used_proxy,
+            redirected=False,
+        ),
+        retryable=retryable,
+        error_code=error_code,
+        error_message=error_message,
+    )
 
 
 def _read_gh_version(gh_path: Path, *, env: dict[str, str]) -> str | None:

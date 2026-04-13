@@ -19,9 +19,17 @@ from relay_teams.env.clawhub_connectivity import (
     ClawHubConnectivityProbeRequest,
     ClawHubConnectivityProbeResult,
 )
-from relay_teams.env.github_config_models import GitHubConfig
-from relay_teams.env.github_connectivity import GitHubConnectivityProbeRequest
-from relay_teams.env.github_connectivity import GitHubConnectivityProbeResult
+from relay_teams.env.github_config_models import (
+    GitHubConfig,
+    GitHubConfigUpdate,
+    GitHubConfigView,
+)
+from relay_teams.env.github_connectivity import (
+    GitHubConnectivityProbeRequest,
+    GitHubConnectivityProbeResult,
+    GitHubWebhookConnectivityProbeRequest,
+    GitHubWebhookConnectivityProbeResult,
+)
 from relay_teams.env.web_config_models import (
     DEFAULT_SEARXNG_INSTANCE_SEEDS,
     DEFAULT_SEARXNG_INSTANCE_URL,
@@ -39,6 +47,7 @@ from relay_teams.interfaces.server.deps import (
     get_environment_variable_service,
     get_external_agent_config_service,
     get_github_config_service,
+    get_github_trigger_service,
     get_mcp_config_reload_service,
     get_model_config_service,
     get_notification_settings_service,
@@ -93,6 +102,7 @@ class _FakeSystemService:
         self.saved_web_config: dict[str, object] | None = None
         self.saved_clawhub_config: dict[str, object] | None = None
         self.saved_github_config: dict[str, object] | None = None
+        self.refreshed_github_callback_previous_base_url: str | None = None
         self.saved_ui_language_settings: dict[str, object] | None = None
         self.proxy_save_error: RuntimeError | None = None
         self.model_reload_error: Exception | None = None
@@ -260,10 +270,25 @@ class _FakeSystemService:
         )
 
     def get_github_config(self) -> GitHubConfig:
-        return GitHubConfig(token=None)
+        return GitHubConfig(token=None, webhook_base_url=None)
 
-    def save_github_config(self, config: GitHubConfig) -> None:
+    def get_github_config_view(self) -> GitHubConfigView:
+        return GitHubConfigView(token_configured=False, webhook_base_url=None)
+
+    def update_github_config(self, config: GitHubConfigUpdate) -> GitHubConfig:
         self.saved_github_config = config.model_dump(mode="json")
+        return GitHubConfig(
+            token=None,
+            webhook_base_url=config.webhook_base_url,
+        )
+
+    def refresh_repo_callback_urls_from_system_config(
+        self,
+        *,
+        previous_webhook_base_url: str | None = None,
+    ) -> tuple[object, ...]:
+        self.refreshed_github_callback_previous_base_url = previous_webhook_base_url
+        return ()
 
     def get_clawhub_config(self) -> ClawHubConfig:
         return ClawHubConfig(token=None)
@@ -551,6 +576,31 @@ class _FakeSystemService:
             }
         )
 
+    def probe_webhook_connectivity(
+        self,
+        request: GitHubWebhookConnectivityProbeRequest,
+    ) -> GitHubWebhookConnectivityProbeResult:
+        return GitHubWebhookConnectivityProbeResult.model_validate(
+            {
+                "ok": True,
+                "webhook_base_url": request.webhook_base_url,
+                "callback_url": "https://agent-teams.example.com/api/triggers/github/deliveries",
+                "health_url": "https://agent-teams.example.com/api/system/health",
+                "final_url": "https://agent-teams.example.com/api/system/health",
+                "status_code": 200,
+                "latency_ms": 44,
+                "checked_at": "2026-04-13T08:00:00Z",
+                "diagnostics": {
+                    "endpoint_reachable": True,
+                    "used_proxy": False,
+                    "redirected": False,
+                },
+                "retryable": False,
+                "error_code": None,
+                "error_message": None,
+            }
+        )
+
     def probe_web_connectivity(
         self,
         _request: object,
@@ -591,6 +641,7 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_clawhub_search_service] = lambda: fake_service
     app.dependency_overrides[get_clawhub_skill_service] = lambda: fake_service
     app.dependency_overrides[get_github_config_service] = lambda: fake_service
+    app.dependency_overrides[get_github_trigger_service] = lambda: fake_service
     app.dependency_overrides[get_external_agent_config_service] = lambda: fake_service
     return TestClient(app)
 
@@ -734,12 +785,71 @@ def test_save_github_config() -> None:
 
     response = client.put(
         "/api/system/configs/github",
-        json={"token": "ghp_secret"},
+        json={
+            "token": "ghp_secret",
+            "webhook_base_url": "https://agent-teams.example.com",
+        },
     )
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-    assert service.saved_github_config == {"token": "ghp_secret"}
+    assert service.saved_github_config == {
+        "token": "ghp_secret",
+        "webhook_base_url": "https://agent-teams.example.com",
+    }
+    assert service.refreshed_github_callback_previous_base_url is None
+
+
+def test_save_github_config_rejects_removed_clear_token_field() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.put(
+        "/api/system/configs/github",
+        json={"clear_token": True},
+    )
+
+    assert response.status_code == 422
+
+
+def test_get_github_config_hides_token_value() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/github")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "token_configured": False,
+        "webhook_base_url": None,
+    }
+
+
+def test_probe_github_webhook_connectivity() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/github/webhook:probe",
+        json={"webhook_base_url": "https://agent-teams.example.com"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "webhook_base_url": "https://agent-teams.example.com",
+        "callback_url": "https://agent-teams.example.com/api/triggers/github/deliveries",
+        "health_url": "https://agent-teams.example.com/api/system/health",
+        "final_url": "https://agent-teams.example.com/api/system/health",
+        "status_code": 200,
+        "latency_ms": 44,
+        "checked_at": "2026-04-13T08:00:00Z",
+        "diagnostics": {
+            "endpoint_reachable": True,
+            "used_proxy": False,
+            "redirected": False,
+        },
+        "retryable": False,
+        "error_code": None,
+        "error_message": None,
+    }
 
 
 def test_get_clawhub_config() -> None:

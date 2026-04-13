@@ -147,14 +147,7 @@ class TriggerRuleMatchConfig(BaseModel):
     event_name: str = Field(min_length=1)
     actions: tuple[str, ...] = ()
     base_branches: tuple[str, ...] = ()
-    head_branches: tuple[str, ...] = ()
-    labels_any: tuple[str, ...] = ()
-    labels_all: tuple[str, ...] = ()
     draft_pr: bool | None = None
-    sender_allow: tuple[str, ...] = ()
-    sender_deny: tuple[str, ...] = ()
-    paths_any: tuple[str, ...] = ()
-    paths_ignore: tuple[str, ...] = ()
     check_conclusions: tuple[str, ...] = ()
 
 
@@ -197,7 +190,9 @@ class GitHubTriggerAccountUpdateInput(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     display_name: str | None = None
     token: str | None = None
+    clear_token: bool = False
     webhook_secret: str | None = None
+    clear_webhook_secret: bool = False
     enabled: bool | None = None
 
 
@@ -224,11 +219,15 @@ class GitHubRepoSubscriptionCreateInput(BaseModel):
     subscribed_events: tuple[str, ...] = ()
     register_webhook: bool = False
     callback_url: str | None = None
+    enabled: bool = True
 
 
 class GitHubRepoSubscriptionUpdateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    owner: str | None = Field(default=None, min_length=1)
+    repo_name: str | None = Field(default=None, min_length=1)
+    callback_url: str | None = None
     subscribed_events: tuple[str, ...] | None = None
     enabled: bool | None = None
 
@@ -237,6 +236,16 @@ class GitHubRepoWebhookRegistrationInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     callback_url: str = Field(min_length=1)
+
+
+class GitHubAvailableRepositoryRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    owner: str = Field(min_length=1)
+    repo_name: str = Field(min_length=1)
+    full_name: str = Field(min_length=1)
+    default_branch: str | None = None
+    private: bool = False
 
 
 class GitHubRepoSubscriptionRecord(BaseModel):
@@ -249,6 +258,7 @@ class GitHubRepoSubscriptionRecord(BaseModel):
     full_name: str = Field(min_length=1)
     external_repo_id: OptionalIdentifierStr = None
     default_branch: str | None = None
+    callback_url: str | None = None
     provider_webhook_id: str | None = None
     subscribed_events: tuple[str, ...] = ()
     webhook_status: GitHubWebhookStatus = GitHubWebhookStatus.UNREGISTERED

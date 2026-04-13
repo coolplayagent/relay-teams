@@ -111,6 +111,7 @@ export function showFormDialog({
     confirmLabel = t('feedback.confirm'),
     cancelLabel = t('feedback.cancel'),
     fields = [],
+    submitHandler = null,
 } = {}) {
     return enqueueDialog({
         kind: 'form',
@@ -120,6 +121,7 @@ export function showFormDialog({
         confirmLabel,
         cancelLabel,
         fields: Array.isArray(fields) ? fields : [],
+        submitHandler: typeof submitHandler === 'function' ? submitHandler : null,
     });
 }
 
@@ -181,6 +183,34 @@ function renderNextDialog() {
                                 const fieldCopy = field.description
                                     ? `<span class="feedback-dialog-field-copy">${escapeHtml(field.description)}</span>`
                                     : '';
+                                if (fieldType === 'multiselect') {
+                                    const options = Array.isArray(field.options) ? field.options : [];
+                                    const selectedValues = Array.isArray(fieldValue)
+                                        ? fieldValue.map(value => String(value ?? ''))
+                                        : [String(fieldValue ?? '')];
+                                    return `
+                                        <div class="feedback-dialog-input-wrap">
+                                            <span class="feedback-dialog-input-label">${inputLabel}</span>
+                                            ${fieldCopy}
+                                            <details class="feedback-dialog-multiselect" data-feedback-form-input="${escapeHtml(fieldId)}" data-feedback-form-type="multiselect" data-feedback-multiselect-placeholder="${placeholder}">
+                                                <summary class="feedback-dialog-multiselect-trigger" data-feedback-multiselect-summary>${escapeHtml(formatMultiselectSummary(selectedValues, options, placeholder))}</summary>
+                                                <div class="feedback-dialog-multiselect-menu">
+                                                    ${options.map(option => {
+                                                        const optionValue = String(option?.value ?? '');
+                                                        const optionLabel = escapeHtml(option?.label || optionValue);
+                                                        const checked = selectedValues.includes(optionValue) ? 'checked' : '';
+                                                        return `
+                                                            <label class="feedback-dialog-multiselect-option">
+                                                                <input type="checkbox" class="feedback-dialog-multiselect-checkbox" data-feedback-multiselect-option value="${escapeHtml(optionValue)}" data-feedback-multiselect-label="${optionLabel}" ${checked} />
+                                                                <span>${optionLabel}</span>
+                                                            </label>
+                                                        `;
+                                                    }).join('')}
+                                                </div>
+                                            </details>
+                                        </div>
+                                    `;
+                                }
                                 if (fieldType === 'select') {
                                     const options = Array.isArray(field.options) ? field.options : [];
                                     return `
@@ -219,6 +249,7 @@ function renderNextDialog() {
                     `
                     : ''
                 }
+                <div class="feedback-dialog-submit-error" data-feedback-submit-error hidden></div>
                 <div class="feedback-dialog-actions">
                     ${activeDialog.kind !== 'alert'
                         ? `<button type="button" class="secondary-btn feedback-action-btn" data-feedback-cancel>${escapeHtml(activeDialog.cancelLabel || t('feedback.cancel'))}</button>`
@@ -236,23 +267,48 @@ function renderNextDialog() {
     const cancelBtn = hosts.dialogRoot.querySelector('[data-feedback-cancel]');
     const input = hosts.dialogRoot.querySelector('[data-feedback-input]');
     const formInputs = Array.from(hosts.dialogRoot.querySelectorAll('[data-feedback-form-input]'));
+    const submitError = hosts.dialogRoot.querySelector('[data-feedback-submit-error]');
+    bindMultiselectControls(hosts.dialogRoot);
     if (confirmBtn) {
-        confirmBtn.onclick = () => {
+        confirmBtn.onclick = async () => {
+            if (activeDialog?.submitting === true) {
+                return;
+            }
             if (activeDialog?.kind === 'prompt') {
                 settleDialog(String(input?.value || '').trim());
                 return;
             }
             if (activeDialog?.kind === 'form') {
-                const payload = {};
-                formInputs.forEach(node => {
-                    const key = String(node.getAttribute('data-feedback-form-input') || '').trim();
-                    if (!key) return;
-                    if (node instanceof HTMLInputElement && node.type === 'checkbox') {
-                        payload[key] = node.checked;
+                const payload = collectFormDialogValues(formInputs);
+                if (submitError) {
+                    submitError.textContent = '';
+                    submitError.hidden = true;
+                }
+                if (typeof activeDialog?.submitHandler === 'function') {
+                    setDialogSubmittingState({
+                        activeDialog,
+                        confirmBtn,
+                        cancelBtn,
+                        formInputs,
+                    }, true);
+                    try {
+                        const result = await activeDialog.submitHandler(payload);
+                        settleDialog(result ?? payload);
+                        return;
+                    } catch (error) {
+                        setDialogSubmittingState({
+                            activeDialog,
+                            confirmBtn,
+                            cancelBtn,
+                            formInputs,
+                        }, false);
+                        if (submitError) {
+                            submitError.textContent = String(error?.message || error || '');
+                            submitError.hidden = false;
+                        }
                         return;
                     }
-                    payload[key] = String(node.value || '').trim();
-                });
+                }
                 settleDialog(payload);
                 return;
             }
@@ -260,11 +316,17 @@ function renderNextDialog() {
         };
     }
     if (cancelBtn) {
-        cancelBtn.onclick = () => settleDialog(activeDialog?.kind === 'prompt' || activeDialog?.kind === 'form' ? null : false);
+        cancelBtn.onclick = () => {
+            if (activeDialog?.submitting === true) {
+                return;
+            }
+            settleDialog(activeDialog?.kind === 'prompt' || activeDialog?.kind === 'form' ? null : false);
+        };
     }
     if (backdrop) {
         backdrop.onclick = event => {
             if (event.target !== backdrop) return;
+            if (activeDialog?.submitting === true) return;
             if (activeDialog?.kind === 'alert') {
                 settleDialog(true);
                 return;
@@ -285,7 +347,8 @@ function renderNextDialog() {
         formInputs.forEach(node => {
             node.onkeydown = event => {
                 const tagName = String(node.tagName || '').toUpperCase();
-                if (event.key === 'Enter' && tagName !== 'TEXTAREA' && tagName !== 'SELECT') {
+                const formType = String(node.getAttribute?.('data-feedback-form-type') || '').trim();
+                if (event.key === 'Enter' && tagName !== 'TEXTAREA' && tagName !== 'SELECT' && formType !== 'multiselect') {
                     event.preventDefault();
                     confirmBtn?.click();
                 }
@@ -339,6 +402,7 @@ function bindEscapeHandler() {
     if (escapeHandlerBound || typeof document === 'undefined') return;
     document.addEventListener('keydown', event => {
         if (event.key !== 'Escape' || !activeDialog) return;
+        if (activeDialog.submitting === true) return;
         if (activeDialog.kind === 'alert') {
             settleDialog(true);
             return;
@@ -360,4 +424,99 @@ function escapeHtml(value) {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
+}
+
+function collectFormDialogValues(formInputs) {
+    const payload = {};
+    formInputs.forEach(node => {
+        const key = String(node.getAttribute('data-feedback-form-input') || '').trim();
+        if (!key) return;
+        const formType = String(node.getAttribute('data-feedback-form-type') || '').trim();
+        if (formType === 'multiselect' && node instanceof HTMLElement) {
+            payload[key] = Array.from(node.querySelectorAll('[data-feedback-multiselect-option]:checked'))
+                .map(option => String(option.value || '').trim())
+                .filter(Boolean);
+            return;
+        }
+        if (node instanceof HTMLInputElement && node.type === 'checkbox') {
+            payload[key] = node.checked;
+            return;
+        }
+        if (node instanceof HTMLSelectElement && node.multiple) {
+            payload[key] = Array.from(node.selectedOptions)
+                .map(option => String(option.value || '').trim())
+                .filter(Boolean);
+            return;
+        }
+        payload[key] = String(node.value || '').trim();
+    });
+    return payload;
+}
+
+function formatMultiselectSummary(selectedValues, options, placeholder = '') {
+    const normalizedSelectedValues = Array.isArray(selectedValues)
+        ? selectedValues.map(value => String(value ?? '')).filter(Boolean)
+        : [];
+    if (normalizedSelectedValues.length === 0) {
+        return placeholder || t('feedback.confirm');
+    }
+    const labels = normalizedSelectedValues.map(value => {
+        const matchedOption = (Array.isArray(options) ? options : []).find(option => String(option?.value ?? '') === value);
+        return String(matchedOption?.label || value);
+    });
+    return labels.join(', ');
+}
+
+function bindMultiselectControls(dialogNode) {
+    Array.from(dialogNode.querySelectorAll('[data-feedback-form-type="multiselect"]')).forEach(node => {
+        if (!(node instanceof HTMLElement)) {
+            return;
+        }
+        const checkboxes = Array.from(node.querySelectorAll('[data-feedback-multiselect-option]'));
+        const summary = node.querySelector('[data-feedback-multiselect-summary]');
+        const updateSummary = () => {
+            if (!(summary instanceof HTMLElement)) {
+                return;
+            }
+            const selectedLabels = checkboxes
+                .filter(option => option instanceof HTMLInputElement && option.checked)
+                .map(option => String(option.getAttribute('data-feedback-multiselect-label') || option.value || '').trim())
+                .filter(Boolean);
+            const placeholder = String(node.getAttribute('data-feedback-multiselect-placeholder') || '').trim();
+            summary.textContent = selectedLabels.length > 0 ? selectedLabels.join(', ') : (placeholder || t('feedback.confirm'));
+        };
+        checkboxes.forEach(option => {
+            if (option instanceof HTMLInputElement) {
+                option.onchange = updateSummary;
+            }
+        });
+        updateSummary();
+    });
+}
+
+function setDialogSubmittingState(context, isSubmitting) {
+    const { activeDialog: dialog, confirmBtn, cancelBtn, formInputs } = context;
+    if (dialog && typeof dialog === 'object') {
+        dialog.submitting = isSubmitting;
+    }
+    if (confirmBtn) {
+        confirmBtn.disabled = isSubmitting;
+    }
+    if (cancelBtn) {
+        cancelBtn.disabled = isSubmitting;
+    }
+    formInputs.forEach(node => {
+        if (node instanceof HTMLInputElement || node instanceof HTMLSelectElement || node instanceof HTMLTextAreaElement) {
+            node.disabled = isSubmitting;
+            return;
+        }
+        if (String(node.getAttribute?.('data-feedback-form-type') || '').trim() === 'multiselect' && node instanceof HTMLElement) {
+            node.classList.toggle('is-disabled', isSubmitting);
+            Array.from(node.querySelectorAll('input')).forEach(option => {
+                if (option instanceof HTMLInputElement) {
+                    option.disabled = isSubmitting;
+                }
+            });
+        }
+    });
 }

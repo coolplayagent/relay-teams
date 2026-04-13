@@ -5,12 +5,14 @@ import hashlib
 import hmac
 import json
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 
 import pytest
 from pydantic import JsonValue
 
+from relay_teams.monitors import MonitorService
 from relay_teams.automation import AutomationService
+from relay_teams.env.github_config_models import GitHubConfig
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.session_service import SessionService
@@ -86,7 +88,18 @@ class _FakeGitHubTriggerSecretStore(GitHubTriggerSecretStore):
 class _FakeGitHubApiClient:
     def __init__(self) -> None:
         self.deleted_webhooks: list[tuple[str, str, str]] = []
+        self.registered_webhooks: list[tuple[str, str, str, tuple[str, ...], str]] = []
         self.pull_request_files: tuple[str, ...] = ()
+        self.available_repositories: tuple[dict[str, JsonValue], ...] = (
+            {
+                "id": 123456,
+                "name": "relay-teams",
+                "full_name": "coolplayagent/relay-teams",
+                "default_branch": "main",
+                "private": True,
+                "owner": {"login": "coolplayagent"},
+            },
+        )
 
     def get_repository(
         self, *, token: str, owner: str, repo: str
@@ -98,6 +111,22 @@ class _FakeGitHubApiClient:
             "full_name": f"{owner}/{repo}",
         }
 
+    def list_repositories(
+        self,
+        *,
+        token: str,
+        query: str | None = None,
+    ) -> tuple[dict[str, JsonValue], ...]:
+        assert token == "ghp_test"
+        if query is None:
+            return self.available_repositories
+        normalized_query = query.strip().lower()
+        return tuple(
+            payload
+            for payload in self.available_repositories
+            if normalized_query in str(payload.get("full_name", "")).lower()
+        )
+
     def delete_repository_webhook(
         self,
         *,
@@ -108,6 +137,22 @@ class _FakeGitHubApiClient:
     ) -> None:
         assert token == "ghp_test"
         self.deleted_webhooks.append((owner, repo, webhook_id))
+
+    def register_repository_webhook(
+        self,
+        *,
+        token: str,
+        owner: str,
+        repo: str,
+        callback_url: str,
+        webhook_secret: str,
+        events: tuple[str, ...],
+    ) -> dict[str, JsonValue]:
+        assert token == "ghp_test"
+        self.registered_webhooks.append(
+            (owner, repo, callback_url, events, webhook_secret)
+        )
+        return {"id": f"hook-{len(self.registered_webhooks)}"}
 
     def list_pull_request_files(
         self,
@@ -128,8 +173,20 @@ class _FakeEventLog:
         return ()
 
 
+class _FakeMonitorService:
+    def __init__(self) -> None:
+        self.envelopes: list[object] = []
+
+    def emit(self, envelope: object) -> tuple[object, ...]:
+        self.envelopes.append(envelope)
+        return ()
+
+
 def _build_service(
     tmp_path: Path,
+    *,
+    monitor_service: _FakeMonitorService | None = None,
+    get_github_config: Callable[[], GitHubConfig] | None = None,
 ) -> tuple[
     GitHubTriggerService,
     TriggerRepository,
@@ -151,6 +208,8 @@ def _build_service(
         run_service=cast(RunManager, object()),
         run_runtime_repo=cast(RunRuntimeRepository, object()),
         event_log=_FakeEventLog(),
+        monitor_service=cast(MonitorService | None, monitor_service),
+        get_github_config=get_github_config,
     )
     return service, repository, secret_store, github_client
 
@@ -180,27 +239,52 @@ def _build_signature(*, body: bytes, secret: str) -> str:
     return f"sha256={digest}"
 
 
-def test_create_repo_subscription_requires_callback_before_persisting(
+def test_create_repo_subscription_starts_unregistered_without_rules(
     tmp_path: Path,
 ) -> None:
     service, repository, _, _ = _build_service(tmp_path)
     account_id = _create_account(service)
-
-    with pytest.raises(
-        ValueError, match="callback_url is required when register_webhook=true"
-    ):
-        service.create_repo_subscription(
-            GitHubRepoSubscriptionCreateInput(
-                account_id=account_id,
-                owner="coolplayagent",
-                repo_name="relay-teams",
-                subscribed_events=("pull_request",),
-                register_webhook=True,
-                callback_url=None,
-            )
+    created = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            callback_url="https://example.com/api/triggers/github/deliveries",
         )
+    )
 
-    assert repository.list_repo_subscriptions() == ()
+    persisted = repository.get_repo_subscription(created.repo_subscription_id)
+    assert (
+        persisted.callback_url == "https://example.com/api/triggers/github/deliveries"
+    )
+    assert persisted.webhook_status == GitHubWebhookStatus.UNREGISTERED
+    assert persisted.subscribed_events == ()
+
+
+def test_create_repo_subscription_uses_system_webhook_base_url_when_callback_missing(
+    tmp_path: Path,
+) -> None:
+    service, repository, _, _ = _build_service(
+        tmp_path,
+        get_github_config=lambda: GitHubConfig(
+            webhook_base_url="https://agent-teams.example.com/app",
+        ),
+    )
+    account_id = _create_account(service)
+    created = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            callback_url=None,
+        )
+    )
+
+    persisted = repository.get_repo_subscription(created.repo_subscription_id)
+    assert persisted.callback_url == (
+        "https://agent-teams.example.com/app/api/triggers/github/deliveries"
+    )
+    assert persisted.webhook_status == GitHubWebhookStatus.UNREGISTERED
 
 
 def test_update_account_clears_webhook_secret_when_explicitly_null(
@@ -212,7 +296,7 @@ def test_update_account_clears_webhook_secret_when_explicitly_null(
 
     updated = service.update_account(
         account_id,
-        GitHubTriggerAccountUpdateInput(webhook_secret=None),
+        GitHubTriggerAccountUpdateInput(clear_webhook_secret=True),
     )
 
     assert updated.webhook_secret_configured is False
@@ -229,7 +313,7 @@ def test_handle_inbound_delivery_ignores_disabled_repo_subscriptions(
             account_id=account_id,
             owner="coolplayagent",
             repo_name="relay-teams",
-            subscribed_events=("pull_request",),
+            callback_url="https://example.com/api/triggers/github/deliveries",
         )
     )
     _ = service.update_repo_subscription(
@@ -275,7 +359,7 @@ def test_handle_inbound_delivery_ignores_disabled_trigger_accounts(
             account_id=account_id,
             owner="coolplayagent",
             repo_name="relay-teams",
-            subscribed_events=("pull_request",),
+            callback_url="https://example.com/api/triggers/github/deliveries",
         )
     )
     _ = created
@@ -313,6 +397,56 @@ def test_handle_inbound_delivery_ignores_disabled_trigger_accounts(
     )
 
 
+def test_handle_inbound_issue_delivery_emits_issue_monitor_event(
+    tmp_path: Path,
+) -> None:
+    monitor_service = _FakeMonitorService()
+    service, repository, _, _ = _build_service(
+        tmp_path,
+        monitor_service=monitor_service,
+    )
+    account_id = _create_account(service)
+    _ = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            callback_url="https://example.com/api/triggers/github/deliveries",
+        )
+    )
+    body = json.dumps(
+        {
+            "action": "opened",
+            "repository": {"full_name": "coolplayagent/relay-teams"},
+            "issue": {
+                "number": 19,
+                "title": "Webhook issue",
+                "body": "Issue body",
+                "html_url": "https://github.com/coolplayagent/relay-teams/issues/19",
+                "labels": [{"name": "bug"}],
+            },
+            "sender": {"login": "octocat"},
+        }
+    ).encode("utf-8")
+
+    response = service.handle_inbound_github_delivery(
+        headers={
+            "x-github-delivery": "delivery-issue-opened",
+            "x-github-event": "issues",
+            "x-hub-signature-256": _build_signature(body=body, secret="whsec_test"),
+        },
+        body=body,
+    )
+    delivery = repository.get_delivery(str(response["trigger_delivery_id"]))
+
+    assert response["ingest_status"] == TriggerDeliveryIngestStatus.UNMATCHED.value
+    assert len(monitor_service.envelopes) == 1
+    envelope = monitor_service.envelopes[0]
+    assert getattr(envelope, "event_name") == "issue.opened"
+    assert getattr(envelope, "source_key") == "coolplayagent/relay-teams"
+    assert delivery.event_name == "issues"
+
+
 def test_create_repo_subscription_uses_canonical_repository_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -337,13 +471,149 @@ def test_create_repo_subscription_uses_canonical_repository_identity(
             account_id=account_id,
             owner="coolplayagent",
             repo_name="relay-teams",
-            subscribed_events=("pull_request",),
+            callback_url="https://example.com/api/triggers/github/deliveries",
         )
     )
 
     assert created.owner == "CoolPlayAgent"
     assert created.repo_name == "Relay-Teams"
     assert created.full_name == "CoolPlayAgent/Relay-Teams"
+
+
+def test_list_available_repositories_uses_effective_account_token(
+    tmp_path: Path,
+) -> None:
+    service, _, _, _ = _build_service(tmp_path)
+    account_id = _create_account(service)
+
+    repositories = service.list_available_repositories(account_id)
+
+    assert len(repositories) == 1
+    assert repositories[0].owner == "coolplayagent"
+    assert repositories[0].repo_name == "relay-teams"
+    assert repositories[0].full_name == "coolplayagent/relay-teams"
+    assert repositories[0].default_branch == "main"
+    assert repositories[0].private is True
+
+
+def test_list_available_repositories_filters_query(
+    tmp_path: Path,
+) -> None:
+    service, _, _, github_client = _build_service(tmp_path)
+    account_id = _create_account(service)
+    github_client.available_repositories = (
+        {
+            "id": 1,
+            "name": "relay-teams",
+            "full_name": "coolplayagent/relay-teams",
+            "default_branch": "main",
+            "private": True,
+            "owner": {"login": "coolplayagent"},
+        },
+        {
+            "id": 2,
+            "name": "another-repo",
+            "full_name": "coolplayagent/another-repo",
+            "default_branch": "develop",
+            "private": False,
+            "owner": {"login": "coolplayagent"},
+        },
+    )
+
+    repositories = service.list_available_repositories(account_id, query="relay")
+
+    assert [repository.full_name for repository in repositories] == [
+        "coolplayagent/relay-teams"
+    ]
+
+
+def test_create_rule_registers_webhook_with_derived_events(
+    tmp_path: Path,
+) -> None:
+    service, repository, _, github_client = _build_service(tmp_path)
+    account_id = _create_account(service)
+    created = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            callback_url="https://example.com/api/triggers/github/deliveries",
+        )
+    )
+
+    _ = service.create_rule(
+        TriggerRuleCreateInput(
+            name="pr-opened",
+            provider=TriggerProvider.GITHUB,
+            account_id=account_id,
+            repo_subscription_id=created.repo_subscription_id,
+            match_config=TriggerRuleMatchConfig(
+                event_name="pull_request",
+                actions=("opened",),
+            ),
+            dispatch_config=TriggerDispatchConfig(
+                target_type=TriggerTargetType.RUN_TEMPLATE,
+                run_template=_run_template(),
+            ),
+        )
+    )
+
+    persisted = repository.get_repo_subscription(created.repo_subscription_id)
+
+    assert github_client.registered_webhooks == [
+        (
+            "coolplayagent",
+            "relay-teams",
+            "https://example.com/api/triggers/github/deliveries",
+            ("pull_request",),
+            "whsec_test",
+        )
+    ]
+    assert persisted.subscribed_events == ("pull_request",)
+    assert persisted.webhook_status == GitHubWebhookStatus.REGISTERED
+    assert persisted.provider_webhook_id == "hook-1"
+
+
+def test_disabling_last_rule_unregisters_repo_webhook(
+    tmp_path: Path,
+) -> None:
+    service, repository, _, github_client = _build_service(tmp_path)
+    account_id = _create_account(service)
+    created = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            callback_url="https://example.com/api/triggers/github/deliveries",
+        )
+    )
+    rule = service.create_rule(
+        TriggerRuleCreateInput(
+            name="pr-opened",
+            provider=TriggerProvider.GITHUB,
+            account_id=account_id,
+            repo_subscription_id=created.repo_subscription_id,
+            match_config=TriggerRuleMatchConfig(
+                event_name="pull_request",
+                actions=("opened",),
+            ),
+            dispatch_config=TriggerDispatchConfig(
+                target_type=TriggerTargetType.RUN_TEMPLATE,
+                run_template=_run_template(),
+            ),
+        )
+    )
+
+    _ = service.disable_rule(rule.trigger_rule_id)
+
+    persisted = repository.get_repo_subscription(created.repo_subscription_id)
+
+    assert persisted.subscribed_events == ()
+    assert persisted.webhook_status == GitHubWebhookStatus.UNREGISTERED
+    assert persisted.provider_webhook_id is None
+    assert github_client.deleted_webhooks == [
+        ("coolplayagent", "relay-teams", "hook-1")
+    ]
 
 
 def test_delete_repo_subscription_unregisters_remote_webhook(
@@ -356,7 +626,7 @@ def test_delete_repo_subscription_unregisters_remote_webhook(
             account_id=account_id,
             owner="coolplayagent",
             repo_name="relay-teams",
-            subscribed_events=("pull_request",),
+            callback_url="https://example.com/api/triggers/github/deliveries",
         )
     )
     _ = repository.update_repo_subscription(
@@ -385,7 +655,7 @@ def test_delete_account_unregisters_repo_webhooks_before_cascade_delete(
             account_id=account_id,
             owner="coolplayagent",
             repo_name="relay-teams",
-            subscribed_events=("pull_request",),
+            callback_url="https://example.com/api/triggers/github/deliveries",
         )
     )
     second = service.create_repo_subscription(
@@ -393,7 +663,7 @@ def test_delete_account_unregisters_repo_webhooks_before_cascade_delete(
             account_id=account_id,
             owner="coolplayagent",
             repo_name="relay-teams-docs",
-            subscribed_events=("pull_request",),
+            callback_url="https://example.com/api/triggers/github/deliveries",
         )
     )
     _ = repository.update_repo_subscription(
@@ -425,30 +695,28 @@ def test_delete_account_unregisters_repo_webhooks_before_cascade_delete(
     assert secret_store.get_webhook_secret(config_dir, account_id=account_id) is None
 
 
-def test_handle_inbound_delivery_records_non_match_when_paths_need_missing_token(
+def test_repository_ignores_deprecated_rule_match_fields_in_persisted_json(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, repository, _, _ = _build_service(tmp_path)
     account_id = _create_account(service)
-    created = service.create_repo_subscription(
+    repo = service.create_repo_subscription(
         GitHubRepoSubscriptionCreateInput(
             account_id=account_id,
             owner="coolplayagent",
             repo_name="relay-teams",
-            subscribed_events=("pull_request",),
+            callback_url="https://example.com/api/triggers/github/deliveries",
         )
     )
-    _ = service.create_rule(
+    rule = service.create_rule(
         TriggerRuleCreateInput(
-            name="paths-match",
+            name="compatibility-check",
             provider=TriggerProvider.GITHUB,
             account_id=account_id,
-            repo_subscription_id=created.repo_subscription_id,
+            repo_subscription_id=repo.repo_subscription_id,
             match_config=TriggerRuleMatchConfig(
                 event_name="pull_request",
                 actions=("opened",),
-                paths_any=("src/**/*.py",),
             ),
             dispatch_config=TriggerDispatchConfig(
                 target_type=TriggerTargetType.RUN_TEMPLATE,
@@ -456,37 +724,34 @@ def test_handle_inbound_delivery_records_non_match_when_paths_need_missing_token
             ),
         )
     )
-    _ = service.update_account(
-        account_id,
-        GitHubTriggerAccountUpdateInput(token=None),
+    repository._conn.execute(
+        """
+        UPDATE trigger_rules
+        SET match_config_json=?
+        WHERE trigger_rule_id=?
+        """,
+        (
+            json.dumps(
+                {
+                    "event_name": "pull_request",
+                    "actions": ["opened"],
+                    "head_branches": ["feature/demo"],
+                    "labels_any": ["bug"],
+                    "sender_allow": ["octocat"],
+                    "paths_any": ["src/**"],
+                }
+            ),
+            rule.trigger_rule_id,
+        ),
     )
-    monkeypatch.setattr(service, "_get_system_github_token", lambda: None)
-    body = json.dumps(
-        {
-            "action": "opened",
-            "number": 318,
-            "repository": {"full_name": "coolplayagent/relay-teams"},
-            "pull_request": {"number": 318},
-        }
-    ).encode("utf-8")
+    repository._conn.commit()
 
-    response = service.handle_inbound_github_delivery(
-        headers={
-            "x-github-delivery": "delivery-paths-no-token",
-            "x-github-event": "pull_request",
-            "x-hub-signature-256": _build_signature(body=body, secret="whsec_test"),
-        },
-        body=body,
-    )
+    persisted = repository.get_rule(rule.trigger_rule_id)
 
-    evaluations = repository.list_evaluations_by_delivery(
-        str(response["trigger_delivery_id"])
+    assert persisted.match_config == TriggerRuleMatchConfig(
+        event_name="pull_request",
+        actions=("opened",),
     )
-    assert response["ingest_status"] == TriggerDeliveryIngestStatus.UNMATCHED.value
-    assert response["dispatch_count"] == 0
-    assert len(evaluations) == 1
-    assert evaluations[0].matched is False
-    assert evaluations[0].reason_code == "changed_files_unavailable"
 
 
 def test_handle_inbound_delivery_returns_duplicate_on_insert_race(
@@ -500,7 +765,7 @@ def test_handle_inbound_delivery_returns_duplicate_on_insert_race(
             account_id=account_id,
             owner="coolplayagent",
             repo_name="relay-teams",
-            subscribed_events=("pull_request",),
+            callback_url="https://example.com/api/triggers/github/deliveries",
         )
     )
     body = json.dumps(
@@ -575,7 +840,7 @@ def test_handle_inbound_delivery_preserves_rule_last_error_when_dispatch_fails(
             account_id=account_id,
             owner="coolplayagent",
             repo_name="relay-teams",
-            subscribed_events=("pull_request",),
+            callback_url="https://example.com/api/triggers/github/deliveries",
         )
     )
     rule = service.create_rule(
@@ -631,88 +896,6 @@ def test_handle_inbound_delivery_preserves_rule_last_error_when_dispatch_fails(
     assert persisted_rule.last_fired_at is not None
 
 
-def test_handle_inbound_delivery_caches_changed_files_lookup_per_delivery(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service, repository, _, github_client = _build_service(tmp_path)
-    account_id = _create_account(service)
-    created = service.create_repo_subscription(
-        GitHubRepoSubscriptionCreateInput(
-            account_id=account_id,
-            owner="coolplayagent",
-            repo_name="relay-teams",
-            subscribed_events=("pull_request",),
-        )
-    )
-    for name in ("paths-one", "paths-two"):
-        _ = service.create_rule(
-            TriggerRuleCreateInput(
-                name=name,
-                provider=TriggerProvider.GITHUB,
-                account_id=account_id,
-                repo_subscription_id=created.repo_subscription_id,
-                match_config=TriggerRuleMatchConfig(
-                    event_name="pull_request",
-                    actions=("opened",),
-                    paths_any=("src/**/*.py",),
-                ),
-                dispatch_config=TriggerDispatchConfig(
-                    target_type=TriggerTargetType.RUN_TEMPLATE,
-                    run_template=_run_template(),
-                ),
-            )
-        )
-    pull_request_files_calls = 0
-
-    def _list_pull_request_files(
-        *,
-        token: str,
-        owner: str,
-        repo: str,
-        pull_request_number: int,
-    ) -> tuple[str, ...]:
-        nonlocal pull_request_files_calls
-        pull_request_files_calls += 1
-        assert token == "ghp_test"
-        _ = (owner, repo, pull_request_number)
-        return ("docs/readme.md",)
-
-    monkeypatch.setattr(
-        github_client,
-        "list_pull_request_files",
-        _list_pull_request_files,
-    )
-    body = json.dumps(
-        {
-            "action": "opened",
-            "number": 318,
-            "repository": {"full_name": "coolplayagent/relay-teams"},
-            "pull_request": {"number": 318},
-        }
-    ).encode("utf-8")
-
-    response = service.handle_inbound_github_delivery(
-        headers={
-            "x-github-delivery": "delivery-path-cache",
-            "x-github-event": "pull_request",
-            "x-hub-signature-256": _build_signature(body=body, secret="whsec_test"),
-        },
-        body=body,
-    )
-
-    evaluations = repository.list_evaluations_by_delivery(
-        str(response["trigger_delivery_id"])
-    )
-
-    assert response["ingest_status"] == TriggerDeliveryIngestStatus.UNMATCHED.value
-    assert response["dispatch_count"] == 0
-    assert pull_request_files_calls == 1
-    assert len(evaluations) == 2
-    assert evaluations[0].reason_code == "paths_any_mismatch"
-    assert evaluations[1].reason_code == "paths_any_mismatch"
-
-
 def test_process_pending_actions_marks_attempt_failed_when_token_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -724,12 +907,12 @@ def test_process_pending_actions_marks_attempt_failed_when_token_missing(
             account_id=account_id,
             owner="coolplayagent",
             repo_name="relay-teams",
-            subscribed_events=("pull_request",),
+            callback_url="https://example.com/api/triggers/github/deliveries",
         )
     )
     _ = service.update_account(
         account_id,
-        GitHubTriggerAccountUpdateInput(token=None),
+        GitHubTriggerAccountUpdateInput(clear_token=True),
     )
     monkeypatch.setattr(service, "_get_system_github_token", lambda: None)
     monkeypatch.setattr(
@@ -790,3 +973,75 @@ def test_process_pending_actions_marks_attempt_failed_when_token_missing(
     assert attempt.attempt_count == 1
     assert attempt.last_error is not None
     assert "not configured" in attempt.last_error
+
+
+def test_refresh_repo_callback_urls_from_system_config_replaces_local_callback(
+    tmp_path: Path,
+) -> None:
+    service, _, _, github_client = _build_service(
+        tmp_path,
+        get_github_config=lambda: GitHubConfig(
+            webhook_base_url="https://agent-teams.example.com/app",
+        ),
+    )
+    account_id = _create_account(service)
+    created = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            callback_url="http://127.0.0.1:8000/api/triggers/github/deliveries",
+        )
+    )
+    _ = service.create_rule(
+        TriggerRuleCreateInput(
+            name="issue-opened",
+            account_id=account_id,
+            repo_subscription_id=created.repo_subscription_id,
+            match_config=TriggerRuleMatchConfig(
+                event_name="issues",
+                actions=("opened",),
+            ),
+            dispatch_config=TriggerDispatchConfig(
+                target_type=TriggerTargetType.RUN_TEMPLATE,
+                run_template=_run_template(),
+            ),
+        )
+    )
+
+    updated = service.refresh_repo_callback_urls_from_system_config()
+
+    assert len(updated) == 1
+    assert updated[0].callback_url == (
+        "https://agent-teams.example.com/app/api/triggers/github/deliveries"
+    )
+    assert updated[0].webhook_status == GitHubWebhookStatus.REGISTERED
+    assert github_client.registered_webhooks[-1][2] == (
+        "https://agent-teams.example.com/app/api/triggers/github/deliveries"
+    )
+
+
+def test_refresh_repo_callback_urls_from_system_config_clears_old_generated_callback(
+    tmp_path: Path,
+) -> None:
+    service, _, _, _ = _build_service(
+        tmp_path,
+        get_github_config=lambda: GitHubConfig(webhook_base_url=None),
+    )
+    account_id = _create_account(service)
+    _ = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            callback_url="https://old.example.com/api/triggers/github/deliveries",
+        )
+    )
+
+    updated = service.refresh_repo_callback_urls_from_system_config(
+        previous_webhook_base_url="https://old.example.com",
+    )
+
+    assert len(updated) == 1
+    assert updated[0].callback_url is None
+    assert updated[0].webhook_status == GitHubWebhookStatus.UNREGISTERED

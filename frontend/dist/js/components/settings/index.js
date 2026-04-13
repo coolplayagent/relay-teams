@@ -9,7 +9,6 @@ import {
     loadNotificationSettingsPanel,
 } from './notifications.js';
 import { bindEnvironmentVariableSettingsHandlers, loadEnvironmentVariablesPanel } from './environmentVariables.js';
-import { bindGitHubSettingsHandlers, loadGitHubSettingsPanel } from './githubSettings.js';
 import {
     bindOrchestrationSettingsHandlers,
     loadOrchestrationSettingsPanel,
@@ -58,10 +57,6 @@ const TAB_METADATA = {
     web: {
         titleKey: 'settings.panel.web.title',
         descriptionKey: 'settings.panel.web.description',
-    },
-    github: {
-        titleKey: 'settings.panel.github.title',
-        descriptionKey: 'settings.panel.github.description',
     },
     proxy: {
         titleKey: 'settings.panel.proxy.title',
@@ -114,9 +109,6 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="web">
                         <span class="settings-tab-label" data-i18n="settings.tab.web">Web</span>
-                    </button>
-                    <button class="settings-tab" data-tab="github">
-                        <span class="settings-tab-label" data-i18n="settings.tab.github">GitHub</span>
                     </button>
                     <button class="settings-tab" data-tab="proxy">
                         <span class="settings-tab-label" data-i18n="settings.tab.proxy">Proxy</span>
@@ -817,61 +809,6 @@ function createModal() {
                             </div>
                         </div>
                     </div>
-                    <div class="settings-panel" id="github-panel" style="display:none;">
-                        <div class="settings-section">
-                            <div class="settings-content-stack proxy-panel-body">
-                                <div class="proxy-editor-form">
-                                    <section class="proxy-form-section">
-                                        <div class="proxy-form-section-header">
-                                            <h5 data-i18n="settings.github.section">GitHub CLI</h5>
-                                        </div>
-                                        <div class="proxy-form-grid">
-                                            <div class="form-group proxy-inline-field">
-                                                <label for="github-token" data-i18n="settings.github.token">GitHub Token</label>
-                                                <div class="secure-input-row">
-                                                    <input type="password" id="github-token" placeholder="ghp_..." data-i18n-placeholder="settings.github.token_placeholder" autocomplete="current-password">
-                                                    <button class="secure-input-btn" id="toggle-github-token-btn" type="button" title="Show GitHub token" aria-label="Show GitHub token" style="display:none;">
-                                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                                            <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
-                                                            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
-                                                        </svg>
-                                                    </button>
-                                                </div>
-                                            </div>
-                                            <div class="form-group proxy-inline-field web-provider-inline-field">
-                                                <span class="settings-token-source-label" data-i18n="settings.github.token_source">Get token</span>
-                                                <a class="web-provider-link-card" id="github-token-link" href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" title="https://github.com/settings/tokens" aria-label="https://github.com/settings/tokens">
-                                                    <span class="web-provider-link-copy">
-                                                        <span class="web-provider-link-badge">GitHub</span>
-                                                        <span class="web-provider-link-url">https://github.com/settings/tokens</span>
-                                                        <span class="settings-token-source-note" data-i18n="settings.github.token_source_help">Open GitHub token settings to create or copy a token</span>
-                                                    </span>
-                                                    <span class="web-provider-link-arrow" aria-hidden="true">
-                                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
-                                                            <path d="M7 17L17 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
-                                                            <path d="M9 7h8v8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
-                                                        </svg>
-                                                    </span>
-                                                </a>
-                                            </div>
-                                        </div>
-                                    </section>
-                                    <section class="proxy-form-section proxy-form-section-test">
-                                        <div class="proxy-form-section-header">
-                                            <h5 data-i18n="settings.github.connectivity">Connection Test</h5>
-                                        </div>
-                                        <div class="proxy-probe-grid">
-                                            <div class="form-group proxy-inline-field proxy-inline-field-test">
-                                                <label for="test-github-btn" data-i18n="settings.github.test_label">Saved token</label>
-                                                <button class="secondary-btn section-action-btn proxy-inline-test-btn" id="test-github-btn" type="button" data-i18n="settings.github.test_connection">Test Connection</button>
-                                            </div>
-                                        </div>
-                                        <div class="proxy-probe-status" id="github-probe-status" style="display:none;"></div>
-                                    </section>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                     <div class="settings-panel" id="skills-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack">
@@ -906,7 +843,6 @@ function createModal() {
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-env-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-notifications-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-web-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
-                            <button class="primary-btn section-action-btn settings-action" id="save-github-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-proxy-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reload-mcp-btn" type="button" style="display:none;" data-i18n="settings.action.reload">Reload</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reset-appearance-btn" type="button" style="display:none;" data-i18n="settings.action.reset">Reset</button>
@@ -952,7 +888,6 @@ function setupEventListeners() {
     bindEnvironmentVariableSettingsHandlers();
     bindNotificationSettingsHandlers();
     bindWebSettingsHandlers();
-    bindGitHubSettingsHandlers();
     bindProxySettingsHandlers();
     bindSystemStatusHandlers();
     try { bindAppearanceHandlers(); } catch (e) { console.error('appearance bind failed', e); }
@@ -986,7 +921,6 @@ async function showPanel(tab) {
     bindRoleSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
     bindWebSettingsHandlers();
-    bindGitHubSettingsHandlers();
     bindProxySettingsHandlers();
     bindSystemStatusHandlers();
 
@@ -1004,8 +938,6 @@ async function showPanel(tab) {
         await loadNotificationSettingsPanel();
     } else if (tab === 'web') {
         await loadWebSettingsPanel();
-    } else if (tab === 'github') {
-        await loadGitHubSettingsPanel();
     } else if (tab === 'proxy') {
         await loadProxyStatusPanel();
     } else if (tab === 'mcp') {
@@ -1059,10 +991,6 @@ function renderPanelActions(tab) {
     }
     if (tab === 'web') {
         document.getElementById('save-web-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'github') {
-        document.getElementById('save-github-btn').style.display = 'inline-flex';
         return;
     }
     if (tab === 'proxy') {
