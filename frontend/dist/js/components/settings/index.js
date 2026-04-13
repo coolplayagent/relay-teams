@@ -24,6 +24,7 @@ import { t, translateDocument } from '../../utils/i18n.js';
 let settingsModal = null;
 let currentTab = 'appearance';
 let initialized = false;
+let overlayPointerDown = false;
 
 const TAB_METADATA = {
     appearance: {
@@ -925,8 +926,14 @@ function setupEventListeners() {
         closeBtn.onclick = closeSettings;
     }
 
+    settingsModal.onmousedown = (e) => {
+        overlayPointerDown = e.target === settingsModal;
+    };
+
     settingsModal.onclick = (e) => {
-        if (e.target === settingsModal) {
+        const shouldClose = overlayPointerDown && e.target === settingsModal;
+        overlayPointerDown = false;
+        if (shouldClose) {
             closeSettings();
         }
     };
@@ -1082,6 +1089,7 @@ export function openSettings() {
 
 export function closeSettings() {
     if (!settingsModal) return;
+    overlayPointerDown = false;
     settingsModal.classList.remove('settings-modal-visible');
     settingsModal.style.display = 'none';
 }

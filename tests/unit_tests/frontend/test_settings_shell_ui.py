@@ -862,3 +862,35 @@ console.log(JSON.stringify({
     assert payload["envPanelDisplay"] == "block"
     assert payload["envAddDisplay"] == "inline-flex"
     assert load_calls["environment"] == 1
+
+
+def test_settings_modal_only_closes_for_direct_overlay_click(tmp_path: Path) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+initSettings();
+openSettings();
+
+const settingsModal = document.getElementById("settings-modal");
+const modalContent = settingsModal.children[0];
+
+settingsModal.onmousedown({ target: modalContent });
+settingsModal.onclick({ target: settingsModal });
+const afterDraggedReleaseDisplay = settingsModal.style.display;
+
+openSettings();
+settingsModal.onmousedown({ target: settingsModal });
+settingsModal.onclick({ target: settingsModal });
+const afterDirectOverlayClickDisplay = settingsModal.style.display;
+
+console.log(JSON.stringify({
+    afterDraggedReleaseDisplay,
+    afterDirectOverlayClickDisplay,
+}));
+""".strip(),
+    )
+
+    assert payload["afterDraggedReleaseDisplay"] == "flex"
+    assert payload["afterDirectOverlayClickDisplay"] == "none"
