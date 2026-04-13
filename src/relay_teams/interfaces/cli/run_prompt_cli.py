@@ -24,7 +24,8 @@ type ExecutePromptCallable = Callable[..., None]
 QUICK_PROMPT_OPTIONS_HINT = (
     "Available quick prompt options: --message <text>, "
     "--mode <normal|orchestration>, --role <role_id>, "
-    "--orchestration <id>, --workspace <path>, --yolo/--no-yolo."
+    "--orchestration <id>, --workspace <path> (defaults to current directory), "
+    "--yolo/--no-yolo."
 )
 
 
@@ -226,10 +227,9 @@ def _resolve_workspace_id(
     workspace: Path | None,
     request_json: RequestJsonCallable,
 ) -> str:
-    if workspace is None:
-        return "default"
-
-    resolved_workspace = workspace.expanduser().resolve()
+    resolved_workspace = (
+        Path.cwd().resolve() if workspace is None else workspace.expanduser().resolve()
+    )
     response = request_json(
         base_url,
         "POST",

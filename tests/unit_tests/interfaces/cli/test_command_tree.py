@@ -16,7 +16,20 @@ def _normalized_output(text: str) -> str:
     return " ".join(_ANSI_ESCAPE_RE.sub("", text).split())
 
 
-def test_root_message_runs_single_prompt(monkeypatch) -> None:
+def _workspace_response(
+    root_path: Path,
+    *,
+    workspace_id: str = "workspace-1",
+) -> dict[str, object]:
+    return {
+        "workspace": {
+            "workspace_id": workspace_id,
+            "root_path": str(root_path.resolve()),
+        }
+    }
+
+
+def test_root_message_runs_single_prompt(monkeypatch, tmp_path: Path) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
     streamed: dict[str, object] = {}
 
@@ -33,6 +46,8 @@ def test_root_message_runs_single_prompt(monkeypatch) -> None:
     ) -> dict[str, object] | list[object]:
         _ = (base_url, timeout_seconds)
         calls.append((method, path, payload))
+        if path == "/api/workspaces/pick":
+            return _workspace_response(tmp_path)
         if path == "/api/sessions":
             return {"session_id": "session-1"}
         if path == "/api/runs":
@@ -47,12 +62,18 @@ def test_root_message_runs_single_prompt(monkeypatch) -> None:
     monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
     monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
     monkeypatch.setattr(cli_app, "_stream_events", fake_stream)
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(cli_app.app, ["-m", "hello"])
 
     assert result.exit_code == 0
     assert calls == [
-        ("POST", "/api/sessions", {"workspace_id": "default"}),
+        (
+            "POST",
+            "/api/workspaces/pick",
+            {"root_path": str(tmp_path.resolve())},
+        ),
+        ("POST", "/api/sessions", {"workspace_id": "workspace-1"}),
         (
             "POST",
             "/api/runs",
@@ -90,12 +111,7 @@ def test_root_message_supports_workspace_selection(monkeypatch, tmp_path: Path) 
         _ = (base_url, timeout_seconds)
         calls.append((method, path, payload))
         if path == "/api/workspaces/pick":
-            return {
-                "workspace": {
-                    "workspace_id": "workspace-1",
-                    "root_path": str(tmp_path.resolve()),
-                }
-            }
+            return _workspace_response(tmp_path)
         if path == "/api/sessions":
             return {"session_id": "session-1"}
         if path == "/api/runs":
@@ -134,7 +150,10 @@ def test_root_message_supports_workspace_selection(monkeypatch, tmp_path: Path) 
     assert streamed == {"run_id": "run-1", "debug": False}
 
 
-def test_root_message_supports_normal_role_selection(monkeypatch) -> None:
+def test_root_message_supports_normal_role_selection(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
     def fake_autostart(base_url: str, autostart: bool) -> None:
@@ -149,12 +168,14 @@ def test_root_message_supports_normal_role_selection(monkeypatch) -> None:
     ) -> dict[str, object] | list[object]:
         _ = (base_url, timeout_seconds)
         calls.append((method, path, payload))
+        if path == "/api/workspaces/pick":
+            return _workspace_response(tmp_path)
         if path == "/api/sessions":
             return {"session_id": "session-1"}
         if path == "/api/sessions/session-1/topology":
             return {
                 "session_id": "session-1",
-                "workspace_id": "default",
+                "workspace_id": "workspace-1",
                 "metadata": {},
                 "session_mode": "normal",
                 "normal_root_role_id": "Crafter",
@@ -170,12 +191,18 @@ def test_root_message_supports_normal_role_selection(monkeypatch) -> None:
     monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
     monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
     monkeypatch.setattr(cli_app, "_stream_events", fake_stream)
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(cli_app.app, ["-m", "hello", "--role", "Crafter"])
 
     assert result.exit_code == 0
     assert calls == [
-        ("POST", "/api/sessions", {"workspace_id": "default"}),
+        (
+            "POST",
+            "/api/workspaces/pick",
+            {"root_path": str(tmp_path.resolve())},
+        ),
+        ("POST", "/api/sessions", {"workspace_id": "workspace-1"}),
         (
             "PATCH",
             "/api/sessions/session-1/topology",
@@ -198,7 +225,10 @@ def test_root_message_supports_normal_role_selection(monkeypatch) -> None:
     ]
 
 
-def test_root_message_supports_orchestration_mode(monkeypatch) -> None:
+def test_root_message_supports_orchestration_mode(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
     def fake_autostart(base_url: str, autostart: bool) -> None:
@@ -213,12 +243,14 @@ def test_root_message_supports_orchestration_mode(monkeypatch) -> None:
     ) -> dict[str, object] | list[object]:
         _ = (base_url, timeout_seconds)
         calls.append((method, path, payload))
+        if path == "/api/workspaces/pick":
+            return _workspace_response(tmp_path)
         if path == "/api/sessions":
             return {"session_id": "session-1"}
         if path == "/api/sessions/session-1/topology":
             return {
                 "session_id": "session-1",
-                "workspace_id": "default",
+                "workspace_id": "workspace-1",
                 "metadata": {},
                 "session_mode": "orchestration",
                 "orchestration_preset_id": "default",
@@ -233,6 +265,7 @@ def test_root_message_supports_orchestration_mode(monkeypatch) -> None:
     monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
     monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
     monkeypatch.setattr(cli_app, "_stream_events", fake_stream)
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
         cli_app.app,
@@ -248,7 +281,12 @@ def test_root_message_supports_orchestration_mode(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert calls == [
-        ("POST", "/api/sessions", {"workspace_id": "default"}),
+        (
+            "POST",
+            "/api/workspaces/pick",
+            {"root_path": str(tmp_path.resolve())},
+        ),
+        ("POST", "/api/sessions", {"workspace_id": "workspace-1"}),
         (
             "PATCH",
             "/api/sessions/session-1/topology",
@@ -270,7 +308,7 @@ def test_root_message_supports_orchestration_mode(monkeypatch) -> None:
     ]
 
 
-def test_root_message_allows_no_yolo_override(monkeypatch) -> None:
+def test_root_message_allows_no_yolo_override(monkeypatch, tmp_path: Path) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
     def fake_autostart(base_url: str, autostart: bool) -> None:
@@ -285,6 +323,8 @@ def test_root_message_allows_no_yolo_override(monkeypatch) -> None:
     ) -> dict[str, object] | list[object]:
         _ = (base_url, timeout_seconds)
         calls.append((method, path, payload))
+        if path == "/api/workspaces/pick":
+            return _workspace_response(tmp_path)
         if path == "/api/sessions":
             return {"session_id": "session-1"}
         if path == "/api/runs":
@@ -297,6 +337,7 @@ def test_root_message_allows_no_yolo_override(monkeypatch) -> None:
     monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
     monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
     monkeypatch.setattr(cli_app, "_stream_events", fake_stream)
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
         cli_app.app,
@@ -343,7 +384,10 @@ def test_root_message_rejects_role_with_orchestration_mode() -> None:
     assert "--role can only be used with --mode normal" in normalized_output
 
 
-def test_root_message_invalid_role_lists_available_ids(monkeypatch) -> None:
+def test_root_message_invalid_role_lists_available_ids(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
     def fake_autostart(base_url: str, autostart: bool) -> None:
@@ -358,6 +402,8 @@ def test_root_message_invalid_role_lists_available_ids(monkeypatch) -> None:
     ) -> dict[str, object] | list[object]:
         _ = (base_url, timeout_seconds)
         calls.append((method, path, payload))
+        if path == "/api/workspaces/pick":
+            return _workspace_response(tmp_path)
         if path == "/api/sessions":
             return {"session_id": "session-1"}
         if path == "/api/sessions/session-1/topology":
@@ -385,6 +431,7 @@ def test_root_message_invalid_role_lists_available_ids(monkeypatch) -> None:
 
     monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
     monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(cli_app.app, ["-m", "hello", "--role", "Missing"])
 
@@ -392,10 +439,29 @@ def test_root_message_invalid_role_lists_available_ids(monkeypatch) -> None:
     assert result.exit_code == 2
     assert "Invalid --role 'Missing'" in normalized_output
     assert "MainAgent, Crafter." in normalized_output
+    assert calls == [
+        (
+            "POST",
+            "/api/workspaces/pick",
+            {"root_path": str(tmp_path.resolve())},
+        ),
+        ("POST", "/api/sessions", {"workspace_id": "workspace-1"}),
+        (
+            "PATCH",
+            "/api/sessions/session-1/topology",
+            {
+                "session_mode": "normal",
+                "normal_root_role_id": "Missing",
+                "orchestration_preset_id": None,
+            },
+        ),
+        ("GET", "/api/roles:options", None),
+    ]
 
 
 def test_root_message_invalid_orchestration_id_lists_available_ids(
     monkeypatch,
+    tmp_path: Path,
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
@@ -411,6 +477,8 @@ def test_root_message_invalid_orchestration_id_lists_available_ids(
     ) -> dict[str, object] | list[object]:
         _ = (base_url, timeout_seconds)
         calls.append((method, path, payload))
+        if path == "/api/workspaces/pick":
+            return _workspace_response(tmp_path)
         if path == "/api/sessions":
             return {"session_id": "session-1"}
         if path == "/api/sessions/session-1/topology":
@@ -429,6 +497,7 @@ def test_root_message_invalid_orchestration_id_lists_available_ids(
 
     monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
     monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+    monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
         cli_app.app,
@@ -448,7 +517,12 @@ def test_root_message_invalid_orchestration_id_lists_available_ids(
     assert "Available orchestration" in normalized_output
     assert "ids: default, release." in normalized_output
     assert calls == [
-        ("POST", "/api/sessions", {"workspace_id": "default"}),
+        (
+            "POST",
+            "/api/workspaces/pick",
+            {"root_path": str(tmp_path.resolve())},
+        ),
+        ("POST", "/api/sessions", {"workspace_id": "workspace-1"}),
         (
             "PATCH",
             "/api/sessions/session-1/topology",
@@ -475,6 +549,8 @@ def test_root_help_lists_env_module() -> None:
     assert "--role" in normalized_output
     assert "--orchestration" in normalized_output
     assert "--workspace" in normalized_output
+    assert "Defaults" in normalized_output
+    assert "directory. Requires" in normalized_output
     assert "env" in normalized_output
     assert "mcp" in normalized_output
     assert "agents" in normalized_output
