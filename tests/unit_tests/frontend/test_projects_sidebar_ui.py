@@ -7,6 +7,8 @@ from typing import cast
 import json
 import subprocess
 
+from .css_helpers import load_components_css
+
 
 def test_projects_sidebar_groups_sessions_and_supports_project_actions(
     tmp_path: Path,
@@ -156,9 +158,7 @@ console.log(JSON.stringify({
     sidebar_script = (
         repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
     ).read_text(encoding="utf-8")
-    components_base_css = (
-        repo_root / "frontend" / "dist" / "css" / "components" / "base.css"
-    ).read_text(encoding="utf-8")
+    components_base_css = load_components_css()
 
     assert payload["beforeCount"] == 10
     assert payload["beforeVisibilityLabel"] == "Show all (11)"
@@ -325,9 +325,7 @@ export async function runAutomationProject() {
     sidebar_script = (
         repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
     ).read_text(encoding="utf-8")
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     assert payload["toggleCalls"] == ["session-1"]
     assert payload["childCount"] == 2
@@ -1638,10 +1636,7 @@ console.log(JSON.stringify({
 
 
 def test_projects_sidebar_hover_hint_preserves_project_action_space() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     actions_start = components_css.index(".projects-list .project-actions {")
     actions_end = components_css.index(

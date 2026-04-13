@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import cast
 
+from .css_helpers import load_components_css
+
 
 def test_project_view_opens_progressively_and_reuses_cached_tree_and_diff(
     tmp_path: Path,
@@ -1280,10 +1282,7 @@ export async function updateAutomationProject() {
     assert "workspace-view-panel-header" not in content_html
     assert content_html.count(">Automation<") == 0
 
-    repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     assert ".automation-list-panel .feature-panel-body {" in components_css
     assert "padding: 0.7rem 0.95rem 0.85rem;" in components_css
@@ -1293,10 +1292,7 @@ export async function updateAutomationProject() {
 
 
 def test_project_view_automation_header_keeps_action_row_out_of_prompt_flow() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     assert ".automation-detail-head {" in components_css
     assert "grid-template-columns: minmax(0, 1fr) auto;" in components_css
@@ -1305,10 +1301,7 @@ def test_project_view_automation_header_keeps_action_row_out_of_prompt_flow() ->
 
 
 def test_project_view_automation_editor_actions_keep_buttons_single_line() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    components_css = (
-        repo_root / "frontend" / "dist" / "css" / "components.css"
-    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
 
     assert (
         ".automation-editor-modal .automation-editor-modal-content {" in components_css

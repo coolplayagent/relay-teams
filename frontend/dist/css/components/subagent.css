@@ -1,0 +1,383 @@
+
+.projects-list .session-source-icon-im {
+    color: color-mix(in srgb, var(--success) 68%, var(--text-secondary));
+}
+
+.projects-list .session-source-icon-automation {
+    color: color-mix(in srgb, #c97a1d 76%, var(--text-secondary));
+}
+
+.projects-list .session-source-icon svg {
+    width: 0.95rem;
+    height: 0.95rem;
+}
+
+.projects-list .session-label-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.projects-list .session-meta {
+    position: relative;
+    flex: 0 0 3.1rem;
+    width: 3.1rem;
+    min-height: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin-left: auto;
+}
+
+.projects-list .session-time {
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    transition: opacity 0.14s ease;
+}
+
+.projects-list .session-actions {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    min-width: calc(40px + 0.1rem);
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.1rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.14s ease;
+}
+
+.projects-list .session-rename-btn,
+.projects-list .session-delete-btn {
+    position: static;
+    right: auto;
+    top: auto;
+    transform: none;
+    flex: 0 0 20px;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 0;
+    cursor: pointer;
+    opacity: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.14s ease, background-color 0.14s ease;
+}
+
+.projects-list .session-subagents-toggle {
+    flex: 0 0 auto;
+    min-width: 30px;
+    height: 22px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 0 0.18rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.12rem;
+    transition: color 0.14s ease, background-color 0.14s ease;
+}
+
+.projects-list .session-subagents-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.projects-list .session-subagents-toggle-count {
+    font-size: 0.66rem;
+}
+
+.projects-list .session-entry {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
+.projects-list .session-subagent-list {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.06rem;
+    margin-left: 0.78rem;
+    padding-left: 0.78rem;
+}
+
+.projects-list .session-subagent-list::before {
+    content: "";
+    position: absolute;
+    left: 0.08rem;
+    top: 0.08rem;
+    bottom: 0.08rem;
+    width: 1px;
+    background: color-mix(in srgb, var(--border-color) 82%, transparent);
+    opacity: 0.95;
+}
+
+.projects-list .session-subagent-item {
+    position: relative;
+    min-height: 28px;
+    padding-left: 0.58rem;
+    color: var(--text-secondary);
+}
+
+.projects-list .session-subagent-item.active {
+    box-shadow: none;
+}
+
+.projects-list .session-subagent-item.active::before {
+    content: "";
+    position: absolute;
+    left: -0.62rem;
+    top: 0.28rem;
+    bottom: 0.28rem;
+    width: 2px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary) 82%, transparent);
+}
+
+.projects-list .session-subagent-empty {
+    padding: 0.1rem 0.4rem 0.16rem 0.72rem;
+    color: var(--text-secondary);
+    font-size: 0.69rem;
+}
+
+.projects-list .session-item:hover .session-time,
+.projects-list .session-item:focus-within .session-time {
+    opacity: 0;
+}
+
+.projects-list .session-item:hover .session-actions,
+.projects-list .session-item:focus-within .session-actions {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.projects-list .session-rename-btn:hover,
+.projects-list .session-delete-btn:hover {
+    background: var(--bg-hover);
+}
+
+.projects-list .session-rename-btn:hover {
+    color: var(--text-primary);
+}
+
+.projects-list .session-delete-btn:hover {
+    color: var(--danger);
+}
+
+.projects-list .project-empty-sessions {
+    margin-left: 1.52rem;
+    padding: 0.06rem 0.4rem 0.26rem 0.56rem;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+}
+
+.projects-list .project-session-visibility-btn {
+    margin-left: 1.86rem;
+    margin-top: -0.02rem;
+    padding: 0.08rem 0.4rem 0.22rem 0.56rem;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.71rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.subagent-session-view {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 0.9rem 0 1.25rem;
+}
+
+.subagent-session-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0 0.4rem;
+}
+
+.subagent-session-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.subagent-session-title {
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--text-primary);
+}
+
+.subagent-session-meta {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+
+.subagent-session-badge {
+    flex: 0 0 auto;
+    padding: 0.18rem 0.52rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    text-transform: capitalize;
+    background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
+    color: var(--text-secondary);
+}
+
+.subagent-session-badge.is-running {
+    color: color-mix(in srgb, var(--primary) 80%, var(--text-primary));
+}
+
+.subagent-session-badge.is-completed {
+    color: color-mix(in srgb, var(--success) 78%, var(--text-primary));
+}
+
+.subagent-session-badge.is-failed,
+.subagent-session-badge.is-stopped {
+    color: color-mix(in srgb, var(--danger) 82%, var(--text-primary));
+}
+
+.subagent-session-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.projects-list .project-session-visibility-btn:hover {
+    color: var(--text-primary);
+}
+
+body.light-theme .projects-list .project-card {
+    background: transparent;
+}
+
+body.light-theme .projects-list .project-path-hint {
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+    box-shadow: 0 4px 12px rgba(17, 19, 18, 0.05);
+}
+
+body.light-theme .projects-list .project-menu {
+    background: var(--bg-surface);
+    box-shadow: 0 10px 22px rgba(17, 19, 18, 0.08);
+}
+
+body.light-theme .projects-list .project-action-btn:hover,
+body.light-theme .projects-list .project-toggle:hover,
+body.light-theme .projects-list .session-item:hover,
+body.light-theme .projects-list .session-rename-btn:hover,
+body.light-theme .projects-list .session-delete-btn:hover {
+    background: var(--bg-hover);
+}
+
+body.light-theme .projects-list .session-item {
+    background: transparent;
+    border-color: transparent;
+}
+
+body.light-theme .projects-list .session-item.active {
+    background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+
+body.light-theme .projects-list .project-row {
+    background: transparent;
+}
+
+body.light-theme .projects-list .project-body,
+body.light-theme .projects-list .project-session-list {
+    background: transparent;
+}
+
+.sidebar-header-btn .icon {
+    width: 0.95rem;
+    height: 0.95rem;
+}
+
+.sidebar-header-btn[data-sort-mode="name"] {
+    color: var(--text-secondary);
+}
+
+.sidebar-header-btn[data-sort-mode="recent"] {
+    color: var(--text-secondary);
+}
+
+body.light-theme .session-round-section.round-section-emphasis .round-detail-header {
+    background: color-mix(in srgb, var(--primary) 6%, var(--bg-surface) 94%);
+    border-color: color-mix(in srgb, var(--primary) 20%, var(--border-color) 80%);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+body.light-theme .subagent-toggle-btn {
+    background: var(--bg-surface-muted);
+}
+
+body.light-theme .subagent-toggle-btn:hover,
+body.light-theme .subagent-toggle-btn.active {
+    background: var(--bg-hover);
+}
+
+body.light-theme .tool-call,
+body.light-theme .markdown-code-block,
+body.light-theme .msg-content pre,
+body.light-theme .msg-text pre {
+    background: var(--bg-surface-muted);
+}
+
+body.light-theme .tool-detail-card {
+    background: var(--bg-surface-muted);
+    border-color: var(--border-color);
+}
+
+body.light-theme .markdown-code-header {
+    background: color-mix(in srgb, var(--bg-surface-muted) 88%, transparent);
+    border-bottom-color: var(--border-color);
+}
+
+body.light-theme .markdown-code-copy {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+body.light-theme .markdown-code-copy:hover {
+    background: rgba(255, 255, 255, 0.58);
+}
+
+body.light-theme .markdown-table-wrap {
+    background: var(--bg-surface);
+}
+
+body.light-theme .subagent-task-row {
+    background: transparent;
+}
+
+body.light-theme .round-detail-header,
+body.light-theme .round-nav-float,
+body.light-theme .recovery-banner,
+body.light-theme .human-dispatch-panel,
+body.light-theme .gate-card,
+body.light-theme .system-intro {
+    border-color: var(--border-color);
+}
+
+body.light-theme .subagent-role-select,
+body.light-theme .gate-feedback-input,
+body.light-theme .panel-inject-input,
+body.light-theme .composer-select-field select,
+body.light-theme .composer-mode-inline-select {
+    background: var(--bg-surface);
+}
