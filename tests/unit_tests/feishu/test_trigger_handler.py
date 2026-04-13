@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Literal
 from typing import cast
 
-from relay_teams.gateway.feishu.lark_ws_compat import import_lark_module
+
+import relay_teams.gateway.feishu.trigger_handler as trigger_handler_module
 from relay_teams.gateway.feishu.models import (
     FeishuChatQueueClearResult,
     FeishuChatQueueItemPreview,
@@ -27,6 +29,10 @@ from relay_teams.sessions import ExternalSessionBindingRepository, SessionServic
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from relay_teams.sessions.session_models import SessionMode, SessionRecord
+
+trigger_handler_module._sdk_event_payload = lambda event: cast(
+    dict[str, object], getattr(event, "_payload")
+)
 
 if TYPE_CHECKING:
     from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
@@ -128,11 +134,39 @@ class _FakeRunService:
 
 
 def _build_sdk_event(raw_body: str) -> P2ImMessageReceiveV1:
-    dispatcher_module = import_lark_module("lark_oapi.event.dispatcher_handler")
-    event_type = cast(
-        "type[P2ImMessageReceiveV1]", dispatcher_module.P2ImMessageReceiveV1
+    payload = cast(dict[str, object], json.loads(raw_body))
+    header_payload = cast(dict[str, object], payload.get("header") or {})
+    event_payload = cast(dict[str, object], payload.get("event") or {})
+    message_payload = cast(dict[str, object], event_payload.get("message") or {})
+    sender_payload = cast(dict[str, object], event_payload.get("sender") or {})
+    sender_id_payload = cast(dict[str, object], sender_payload.get("sender_id") or {})
+    event = cast(
+        "P2ImMessageReceiveV1",
+        SimpleNamespace(
+            header=SimpleNamespace(
+                event_id=header_payload.get("event_id"),
+                tenant_key=header_payload.get("tenant_key"),
+            ),
+            event=SimpleNamespace(
+                message=SimpleNamespace(
+                    message_id=message_payload.get("message_id"),
+                    chat_id=message_payload.get("chat_id"),
+                    chat_type=message_payload.get("chat_type"),
+                    message_type=message_payload.get("message_type"),
+                    content=message_payload.get("content"),
+                ),
+                sender=SimpleNamespace(
+                    sender_type=sender_payload.get("sender_type"),
+                    tenant_key=sender_payload.get("tenant_key"),
+                    sender_id=SimpleNamespace(
+                        open_id=sender_id_payload.get("open_id"),
+                    ),
+                ),
+            ),
+        ),
     )
-    return event_type(json.loads(raw_body))
+    setattr(event, "_payload", payload)
+    return event
 
 
 class _FakeFeishuClient:

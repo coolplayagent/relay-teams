@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 import json
 import os
+import runpy
 import subprocess
 import sys
 import threading
@@ -16,6 +17,7 @@ import zipfile
 import pytest
 
 from relay_teams.builtin import get_builtin_skills_dir
+from relay_teams.env.clawhub_cli import clear_clawhub_path_cache
 from relay_teams.skills import installer_support
 
 
@@ -592,14 +594,41 @@ def _run_script(
     env["HOME"] = home_value
     env["USERPROFILE"] = home_value
     env.update(extra_env)
-    return subprocess.run(
-        [sys.executable, str(script_path), *args],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-        timeout=30,
+
+    clear_clawhub_path_cache()
+    old_cwd = Path.cwd()
+    old_argv = sys.argv[:]
+    old_env = os.environ.copy()
+    stdout_buffer = StringIO()
+    stderr_buffer = StringIO()
+    return_code = 0
+    try:
+        os.chdir(repo_root)
+        os.environ.clear()
+        os.environ.update(env)
+        sys.argv = [str(script_path), *args]
+        with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+            try:
+                runpy.run_path(str(script_path), run_name="__main__")
+            except SystemExit as exc:
+                code = exc.code
+                if isinstance(code, int):
+                    return_code = code
+                elif code is None:
+                    return_code = 0
+                else:
+                    stderr_buffer.write(f"{code}\n")
+                    return_code = 1
+    finally:
+        sys.argv = old_argv
+        os.environ.clear()
+        os.environ.update(old_env)
+        os.chdir(old_cwd)
+    return subprocess.CompletedProcess(
+        args=[sys.executable, str(script_path), *args],
+        returncode=return_code,
+        stdout=stdout_buffer.getvalue(),
+        stderr=stderr_buffer.getvalue(),
     )
 
 
