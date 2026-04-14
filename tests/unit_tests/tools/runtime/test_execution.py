@@ -159,6 +159,14 @@ def _build_notification_service(
     )
 
 
+def _tool_result_payloads(deps: _FakeDeps) -> list[dict[str, object]]:
+    return [
+        cast(dict[str, object], json.loads(event.payload_json))
+        for event in deps.run_event_hub.events
+        if event.event_type == RunEventType.TOOL_RESULT
+    ]
+
+
 def test_execute_tool_returns_standard_envelope() -> None:
     deps = _FakeDeps(
         manager=_FakeApprovalManager(wait_result=("approve", "")),
@@ -199,6 +207,12 @@ def test_execute_tool_returns_standard_envelope() -> None:
     assert runtime is not None
     assert runtime.status == RunRuntimeStatus.RUNNING
     assert runtime.phase == RunRuntimePhase.SUBAGENT_RUNNING
+    tool_result_payloads = _tool_result_payloads(deps)
+    assert len(tool_result_payloads) == 1
+    assert tool_result_payloads[0]["tool_name"] == "read"
+    assert tool_result_payloads[0]["tool_call_id"] == "call-read-1"
+    assert tool_result_payloads[0]["error"] is False
+    assert tool_result_payloads[0]["result"] == result
 
 
 def test_execute_tool_skips_approval_flow_when_yolo_enabled() -> None:
@@ -301,6 +315,12 @@ def test_execute_tool_returns_denied_error_when_approval_rejected() -> None:
     )
     assert ticket is not None
     assert ticket.status == ApprovalTicketStatus.DENIED
+    tool_result_payloads = _tool_result_payloads(deps)
+    assert len(tool_result_payloads) == 1
+    assert tool_result_payloads[0]["tool_name"] == "write"
+    assert tool_result_payloads[0]["tool_call_id"] == "call-model-deny"
+    assert tool_result_payloads[0]["error"] is True
+    assert tool_result_payloads[0]["result"] == result
 
 
 def test_execute_tool_returns_timeout_error_when_approval_times_out() -> None:
@@ -371,6 +391,58 @@ def test_execute_tool_preserves_custom_tool_error_details() -> None:
         "url_host": "example.com",
         "status_code": 403,
     }
+    tool_result_payloads = _tool_result_payloads(deps)
+    assert len(tool_result_payloads) == 1
+    assert tool_result_payloads[0]["tool_name"] == "webfetch"
+    assert tool_result_payloads[0]["tool_call_id"] == "call-webfetch-error"
+    assert tool_result_payloads[0]["error"] is True
+    assert tool_result_payloads[0]["result"] == result
+
+
+def test_execute_tool_publishes_sanitized_dispatch_task_result_immediately() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "dispatch-call-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="dispatch_task",
+            args_summary={"task_name": "ask_time"},
+            action=lambda: {
+                "task_status": {
+                    "ask_time": {
+                        "task_name": "ask_time",
+                        "task_id": "task-1",
+                        "role_id": "time",
+                        "instance_id": "inst-1",
+                        "status": "completed",
+                        "result": "Current time is 2026-03-07 00:41:29.",
+                        "error": "Task stopped by user",
+                    }
+                }
+            },
+        )
+    )
+
+    tool_result_payloads = _tool_result_payloads(deps)
+    assert len(tool_result_payloads) == 1
+    payload_result = cast(dict[str, object], tool_result_payloads[0]["result"])
+    task_status = cast(
+        dict[str, object],
+        cast(dict[str, object], payload_result["data"])["task_status"],
+    )["ask_time"]
+    task_status_payload = cast(dict[str, object], task_status)
+    assert tool_result_payloads[0]["tool_name"] == "dispatch_task"
+    assert tool_result_payloads[0]["tool_call_id"] == "dispatch-call-1"
+    assert tool_result_payloads[0]["error"] is False
+    assert task_status_payload["status"] == "completed"
+    assert task_status_payload["result"] == "Current time is 2026-03-07 00:41:29."
+    assert "error" not in task_status_payload
+    assert result["ok"] is True
 
 
 def test_execute_tool_marks_value_error_as_non_retryable() -> None:

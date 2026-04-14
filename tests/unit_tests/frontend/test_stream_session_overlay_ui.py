@@ -729,3 +729,408 @@ console.log(JSON.stringify({
         {"text": "50159495496", "streaming": False},
     ]
     assert payload["cursorStates"] == [True, False]
+
+
+def test_tool_result_materializes_overlay_tool_block_into_visible_container(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "stream_tool_result_materialize"
+    temp_dir.mkdir()
+
+    (temp_dir / "stream.js").write_text(
+        source.replace("../../core/state.js", "./mockState.mjs")
+        .replace("./helpers.js", "./mockHelpers.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs"),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        """
+export function getRunPrimaryRoleId() {
+    return "";
+}
+
+export function isPrimaryRoleId() {
+    return false;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+export function formatMessage(_key, values = {}) {
+    return JSON.stringify(values);
+}
+
+export function t(key) {
+    return key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockHelpers.mjs").write_text(
+        """
+function toolMatches(block, toolName, toolCallId) {
+  const safeToolCallId = String(toolCallId || "");
+  if (safeToolCallId) {
+    return String(block?.dataset?.toolCallId || "") === safeToolCallId;
+  }
+  return String(block?.dataset?.toolName || "") === String(toolName || "");
+}
+
+function findInContent(contentEl, toolName, toolCallId) {
+  if (!contentEl || !Array.isArray(contentEl.children)) {
+    return null;
+  }
+  for (let index = contentEl.children.length - 1; index >= 0; index -= 1) {
+    const child = contentEl.children[index];
+    if (toolMatches(child, toolName, toolCallId)) {
+      return child;
+    }
+  }
+  return null;
+}
+
+export function applyToolReturn(toolBlock, content) {
+  toolBlock.__result = content;
+}
+
+export function appendStructuredContentPart() {}
+export function appendThinkingText() { return {}; }
+
+export function buildPendingToolBlock(toolName, args, toolCallId = null) {
+  const outputEl = { classList: { add() {}, remove() {} }, innerHTML: "", textContent: "" };
+  return {
+    dataset: {
+      toolName: String(toolName || ""),
+      toolCallId: String(toolCallId || ""),
+      status: "running",
+    },
+    __args: args || {},
+    __result: null,
+    querySelector(selector) {
+      if (selector === ".tool-output") {
+        return outputEl;
+      }
+      return null;
+    },
+    closest() { return null; },
+  };
+}
+
+export function findToolBlock(contentEl, toolName, toolCallId) {
+  return findInContent(contentEl, toolName, toolCallId);
+}
+
+export function findToolBlockInContainer(container, toolName, toolCallId) {
+  const messages = Array.isArray(container?.__messages) ? container.__messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const found = findInContent(messages[index].contentEl, toolName, toolCallId);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+export function indexPendingToolBlock(pendingToolBlocks, toolBlock, toolName, toolCallId) {
+  const key = `${toolName || ""}::${toolCallId || ""}`;
+  pendingToolBlocks[key] = toolBlock;
+  if (toolName) {
+    pendingToolBlocks[`${toolName}::`] = toolBlock;
+  }
+}
+
+export function renderMessageBlock(container, _role, label, _parts = [], options = {}) {
+  const contentEl = {
+    children: [],
+    appendChild(child) {
+      this.children.push(child);
+    },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  const wrapper = {
+    dataset: {
+      runId: String(options.runId || ""),
+      roleId: String(options.roleId || ""),
+      instanceId: String(options.instanceId || ""),
+      streamKey: String(options.streamKey || ""),
+    },
+    querySelector(selector) {
+      if (selector === ".msg-role") {
+        return { textContent: String(label || "").toUpperCase() };
+      }
+      if (selector === ".msg-content") {
+        return contentEl;
+      }
+      return null;
+    },
+    closest() { return null; },
+  };
+  container.__messages.push({ wrapper, contentEl });
+  return { wrapper, contentEl };
+}
+
+export function resolvePendingToolBlock(pendingToolBlocks, toolName, toolCallId) {
+  const byId = pendingToolBlocks[`${toolName || ""}::${toolCallId || ""}`];
+  if (byId) {
+    return byId;
+  }
+  return pendingToolBlocks[`${toolName || ""}::`] || null;
+}
+
+export function scrollBottom() {}
+export function setToolStatus() {}
+export function setToolValidationFailureState() {}
+export function syncStreamingCursor() {}
+export function updateThinkingText() {}
+export function updateMessageText() {}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner = """
+import {
+  applyStreamOverlayEvent,
+  getRunStreamOverlaySnapshot,
+  updateToolResult,
+} from "./stream.js";
+
+globalThis.document = {
+  createElement() {
+    return {
+      className: "",
+      dataset: {},
+      children: [],
+      appendChild(child) { this.children.push(child); },
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+      closest() { return null; },
+    };
+  },
+};
+
+const container = {
+  __messages: [],
+  querySelectorAll() {
+    return this.__messages.map(item => item.wrapper);
+  },
+};
+
+applyStreamOverlayEvent(
+  "tool_call",
+  {
+    tool_name: "shell",
+    tool_call_id: "call-1",
+    args: { command: "echo hi" },
+  },
+  {
+    runId: "run-1",
+    instanceId: "inst-1",
+    roleId: "Writer",
+    label: "Writer",
+  },
+);
+
+updateToolResult(
+  "inst-1",
+  "shell",
+  {
+    ok: true,
+    data: { text: "done" },
+  },
+  false,
+  "call-1",
+  {
+    runId: "run-1",
+    roleId: "Writer",
+    label: "Writer",
+    container,
+  },
+);
+
+const snapshot = getRunStreamOverlaySnapshot("run-1");
+const block = container.__messages[0].contentEl.children[0];
+
+console.log(JSON.stringify({
+  messageCount: container.__messages.length,
+  blockArgs: block.__args,
+  blockResult: block.__result,
+  overlay: snapshot.byInstance["inst-1"],
+}));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["messageCount"] == 1
+    assert payload["blockArgs"] == {"command": "echo hi"}
+    assert payload["blockResult"] == {"ok": True, "data": {"text": "done"}}
+    assert payload["overlay"] == {
+        "instanceId": "inst-1",
+        "roleId": "Writer",
+        "label": "Writer",
+        "parts": [
+            {
+                "kind": "tool",
+                "tool_call_id": "call-1",
+                "tool_name": "shell",
+                "args": {"command": "echo hi"},
+                "status": "completed",
+                "result": {"ok": True, "data": {"text": "done"}},
+            }
+        ],
+        "textStreaming": False,
+    }
+
+
+def test_tool_result_event_synthesizes_overlay_part_without_prior_tool_call(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "stream_tool_result_overlay_only"
+    temp_dir.mkdir()
+
+    (temp_dir / "stream.js").write_text(
+        source.replace("../../core/state.js", "./mockState.mjs")
+        .replace("./helpers.js", "./mockHelpers.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs"),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        """
+export function getRunPrimaryRoleId() {
+    return "";
+}
+
+export function isPrimaryRoleId() {
+    return false;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+export function formatMessage(_key, values = {}) {
+    return JSON.stringify(values);
+}
+
+export function t(key) {
+    return key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockHelpers.mjs").write_text(
+        """
+export function applyToolReturn() {}
+export function appendStructuredContentPart() {}
+export function appendThinkingText() { return {}; }
+export function buildPendingToolBlock() { return { querySelector() { return null; } }; }
+export function findToolBlock() { return null; }
+export function findToolBlockInContainer() { return null; }
+export function indexPendingToolBlock() {}
+export function renderMessageBlock() {
+  return {
+    wrapper: {
+      dataset: {},
+      querySelector() { return null; },
+      closest() { return null; },
+    },
+    contentEl: {
+      appendChild() {},
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+    },
+  };
+}
+export function resolvePendingToolBlock() { return null; }
+export function scrollBottom() {}
+export function setToolStatus() {}
+export function setToolValidationFailureState() {}
+export function syncStreamingCursor() {}
+export function updateThinkingText() {}
+export function updateMessageText() {}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner = """
+import {
+  applyStreamOverlayEvent,
+  getRunStreamOverlaySnapshot,
+} from "./stream.js";
+
+applyStreamOverlayEvent(
+  "tool_result",
+  {
+    tool_name: "read",
+    tool_call_id: "call-9",
+    result: {
+      ok: false,
+      error: { message: "boom" },
+    },
+  },
+  {
+    runId: "run-2",
+    instanceId: "inst-2",
+    roleId: "Researcher",
+    label: "Researcher",
+  },
+);
+
+console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-2")));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "coordinator": None,
+        "byInstance": {
+            "inst-2": {
+                "instanceId": "inst-2",
+                "roleId": "Researcher",
+                "label": "Researcher",
+                "parts": [
+                    {
+                        "kind": "tool",
+                        "tool_call_id": "call-9",
+                        "tool_name": "read",
+                        "args": {},
+                        "status": "error",
+                        "result": {
+                            "ok": False,
+                            "error": {"message": "boom"},
+                        },
+                    }
+                ],
+                "textStreaming": False,
+            }
+        },
+    }

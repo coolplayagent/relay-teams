@@ -41,6 +41,10 @@ from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.tools.runtime import ToolApprovalPolicy
+from relay_teams.tools.runtime.persisted_state import (
+    ToolExecutionStatus,
+    merge_tool_call_state,
+)
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_registry import RoleRegistry
@@ -379,6 +383,43 @@ def test_publish_tool_events_skips_retry_without_tool_name() -> None:
     provider._publish_committed_tool_outcome_events_from_messages(
         request=_request(),
         messages=[ModelRequest(parts=[RetryPromptPart(content="retry output")])],
+    )
+
+    assert hub.events == []
+
+
+def test_publish_tool_events_skips_tool_result_already_emitted_from_runtime() -> None:
+    hub = _FakeRunEventHub()
+    provider = _provider_with_hub(hub)
+    request = _request()
+    merge_tool_call_state(
+        shared_store=provider._session._shared_store,
+        task_id=request.task_id,
+        tool_call_id="dispatch_task:1",
+        tool_name="dispatch_task",
+        run_id=request.run_id,
+        session_id=request.session_id,
+        instance_id=request.instance_id,
+        role_id=request.role_id,
+        execution_status=ToolExecutionStatus.COMPLETED,
+        result_envelope={
+            "runtime_meta": {"tool_result_event_published": True},
+        },
+    )
+
+    provider._publish_committed_tool_outcome_events_from_messages(
+        request=request,
+        messages=[
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="dispatch_task",
+                        tool_call_id="dispatch_task:1",
+                        content={"ok": True, "data": {"status": "queued"}},
+                    )
+                ]
+            )
+        ],
     )
 
     assert hub.events == []

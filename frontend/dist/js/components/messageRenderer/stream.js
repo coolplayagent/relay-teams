@@ -333,17 +333,43 @@ export function updateToolResult(
 ) {
     const runId = String(options.runId || '');
     const roleId = String(options.roleId || '');
+    const label = String(options.label || '');
     const container = options.container || null;
     const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const st = streamState.get(streamKey);
-    const toolBlock = resolveToolBlockTarget(st, container, toolName, toolCallId);
+    const resolvedRunId = (st && st.runId) || runId;
+    const resolvedInstanceId = (st && st.instanceId) || instanceId;
+    const resolvedRoleId = (st && st.roleId) || roleId;
+    updateOverlayToolResult(
+        resolvedRunId,
+        resolvedInstanceId,
+        resolvedRoleId,
+        label,
+        toolName,
+        toolCallId,
+        result,
+        isError,
+    );
+    let toolBlock = resolveToolBlockTarget(st, container, toolName, toolCallId);
+    let boundState = st;
     if (!toolBlock) {
-        updateOverlayToolResult(runId, instanceId, roleId, toolName, toolCallId, result, isError);
-        return;
+        const materialized = materializeToolBlockFromOverlay({
+            container,
+            runId: resolvedRunId,
+            instanceId: resolvedInstanceId,
+            roleId: resolvedRoleId,
+            label,
+            toolName,
+            toolCallId,
+        });
+        if (!materialized) {
+            return;
+        }
+        toolBlock = materialized.toolBlock;
+        boundState = materialized.streamState;
     }
     applyToolReturn(toolBlock, result);
-    updateOverlayToolResult(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, toolName, toolCallId, result, isError);
-    scrollBottom((st && st.container) || container);
+    scrollBottom((boundState && boundState.container) || container);
 }
 
 export function markToolInputValidationFailed(instanceId, payload, options = {}) {
@@ -574,6 +600,7 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
             runId,
             streamKey,
             roleId,
+            label,
             payload?.tool_name || '',
             payload?.tool_call_id || null,
             resultEnvelope,
@@ -984,6 +1011,63 @@ function resolveToolBlockTarget(st, container, toolName, toolCallId) {
     return findToolBlockInContainer(container, toolName, toolCallId);
 }
 
+function materializeToolBlockFromOverlay({
+    container,
+    runId,
+    instanceId,
+    roleId,
+    label,
+    toolName,
+    toolCallId,
+}) {
+    if (!container) {
+        return null;
+    }
+    const overlayEntry = resolveOverlayEntry(runId, instanceId, roleId, label);
+    const overlayPart = overlayEntry
+        ? findOverlayToolPart(overlayEntry, toolName, toolCallId)
+        : null;
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
+    let st = streamState.get(streamKey);
+    if (!st) {
+        st = createStreamState({
+            container,
+            instanceId,
+            roleId,
+            label: String(label || overlayEntry?.label || roleId || 'Agent'),
+            runId,
+        });
+        streamState.set(streamKey, st);
+    }
+    const existing = resolveToolBlockTarget(
+        st,
+        container,
+        toolName,
+        toolCallId,
+    );
+    if (existing) {
+        return { streamState: st, toolBlock: existing };
+    }
+    endActiveText(st);
+    const nextToolName = String(
+        toolName || overlayPart?.tool_name || 'unknown_tool',
+    );
+    const nextToolCallId = toolCallId || overlayPart?.tool_call_id || null;
+    const toolBlock = buildPendingToolBlock(
+        nextToolName,
+        overlayPart?.args || {},
+        nextToolCallId,
+    );
+    st.contentEl.appendChild(toolBlock);
+    indexPendingToolBlock(
+        st.pendingToolBlocks,
+        toolBlock,
+        nextToolName,
+        nextToolCallId,
+    );
+    return { streamState: st, toolBlock };
+}
+
 function clearOverlayEntry(runId, instanceId, roleId) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
@@ -1189,21 +1273,20 @@ function finishOverlayThinking(runId, instanceId, roleId, partIndex) {
 function updateOverlayToolCall(runId, instanceId, roleId, label, toolPart) {
     const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
     if (!entry) return;
-    const nextPart = {
-        kind: 'tool',
-        tool_call_id: String(toolPart.tool_call_id || ''),
-        tool_name: String(toolPart.tool_name || ''),
-        args: toolPart.args || {},
-        status: String(toolPart.status || 'pending'),
-    };
-    entry.parts.push(nextPart);
+    const part = upsertOverlayToolPart(
+        entry,
+        toolPart.tool_name,
+        toolPart.tool_call_id || null,
+        toolPart.args || {},
+    );
+    part.args = normalizeOverlayToolArgs(toolPart.args);
+    part.status = String(toolPart.status || 'pending');
 }
 
-function updateOverlayToolResult(runId, instanceId, roleId, toolName, toolCallId, result, isError) {
-    const entry = ensureOverlayEntry(runId, instanceId, roleId, '');
+function updateOverlayToolResult(runId, instanceId, roleId, label, toolName, toolCallId, result, isError) {
+    const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
     if (!entry) return;
-    const part = findOverlayToolPart(entry, toolName, toolCallId);
-    if (!part) return;
+    const part = upsertOverlayToolPart(entry, toolName, toolCallId);
     part.status = isError ? 'error' : 'completed';
     part.result = result;
 }
@@ -1223,9 +1306,47 @@ function updateOverlayToolValidation(runId, instanceId, roleId, payload) {
 function updateOverlayToolApproval(runId, instanceId, roleId, toolName, payload, approvalStatus) {
     const entry = ensureOverlayEntry(runId, instanceId, roleId, '');
     if (!entry) return;
-    const part = findOverlayToolPart(entry, toolName, payload?.tool_call_id || null);
-    if (!part) return;
+    const part = upsertOverlayToolPart(
+        entry,
+        toolName,
+        payload?.tool_call_id || null,
+    );
     part.approvalStatus = approvalStatus;
+}
+
+function upsertOverlayToolPart(entry, toolName, toolCallId, args = {}) {
+    let part = findOverlayToolPart(entry, toolName, toolCallId);
+    if (!part) {
+        part = {
+            kind: 'tool',
+            tool_call_id: String(toolCallId || ''),
+            tool_name: String(toolName || 'unknown_tool'),
+            args: normalizeOverlayToolArgs(args),
+            status: 'pending',
+        };
+        entry.parts.push(part);
+        return part;
+    }
+    if (!part.tool_name && toolName) {
+        part.tool_name = String(toolName);
+    }
+    if (!part.tool_call_id && toolCallId) {
+        part.tool_call_id = String(toolCallId);
+    }
+    const normalizedArgs = normalizeOverlayToolArgs(args);
+    if (Object.keys(normalizedArgs).length > 0) {
+        part.args = normalizedArgs;
+    } else if (!part.args || typeof part.args !== 'object') {
+        part.args = {};
+    }
+    return part;
+}
+
+function normalizeOverlayToolArgs(args) {
+    if (args && typeof args === 'object' && !Array.isArray(args)) {
+        return args;
+    }
+    return {};
 }
 
 function findOverlayThinkingPartByKey(entry, key) {
