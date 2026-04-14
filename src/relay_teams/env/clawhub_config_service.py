@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from relay_teams.env.clawhub_config_models import ClawHubConfig
+from relay_teams.env.clawhub_auth import clear_clawhub_runtime_home
 from relay_teams.env.clawhub_connectivity import (
     ClawHubConnectivityProbeRequest,
     ClawHubConnectivityProbeResult,
@@ -52,6 +53,8 @@ class ClawHubConfigService:
         normalized_token = normalize_clawhub_token(config.token)
         self._write_env_file(token=None)
         self._secret_store.set_token(self._config_dir, normalized_token)
+        if normalized_token is None:
+            clear_clawhub_runtime_home(self._config_dir)
         sync_app_env_to_process_env(self._config_dir / ".env")
 
     def probe_connectivity(

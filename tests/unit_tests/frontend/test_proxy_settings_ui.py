@@ -215,6 +215,89 @@ console.log(JSON.stringify({
     ]
 
 
+def test_proxy_settings_ignore_unfocused_autofilled_saved_password(
+    tmp_path: Path,
+) -> None:
+    payload = _run_proxy_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindProxySettingsHandlers, loadProxyStatusPanel } from "./proxySettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindProxySettingsHandlers();
+await loadProxyStatusPanel();
+
+document.activeElement = null;
+document.getElementById("proxy-password").value = "browser_password";
+document.getElementById("proxy-password").oninput();
+document.getElementById("proxy-probe-url").value = "https://example.com";
+
+await document.getElementById("test-proxy-web-btn").onclick();
+await document.getElementById("save-proxy-btn").onclick();
+
+console.log(JSON.stringify({
+    proxyPasswordValue: document.getElementById("proxy-password").value,
+    proxyPasswordPlaceholder: document.getElementById("proxy-password").placeholder,
+    savePayload: globalThis.__saveProxyPayload,
+    probePayload: globalThis.__probePayload,
+}));
+""".strip(),
+    )
+
+    probe_payload = cast(dict[str, JsonValue], payload["probePayload"])
+    save_payload = cast(dict[str, JsonValue], payload["savePayload"])
+    proxy_override = cast(dict[str, JsonValue], probe_payload["proxy_override"])
+    assert payload["proxyPasswordValue"] == ""
+    assert payload["proxyPasswordPlaceholder"] == "************"
+    assert proxy_override["proxy_password"] == "secret"
+    assert save_payload["proxy_password"] == "secret"
+
+
+def test_proxy_settings_allow_replacing_saved_password_after_focus(
+    tmp_path: Path,
+) -> None:
+    payload = _run_proxy_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindProxySettingsHandlers, loadProxyStatusPanel } from "./proxySettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindProxySettingsHandlers();
+await loadProxyStatusPanel();
+
+document.activeElement = null;
+document.getElementById("proxy-password").onfocus();
+document.getElementById("proxy-password").value = "replacement-secret";
+document.getElementById("proxy-password").oninput();
+document.getElementById("proxy-probe-url").value = "https://example.com";
+
+await document.getElementById("test-proxy-web-btn").onclick();
+await document.getElementById("save-proxy-btn").onclick();
+
+console.log(JSON.stringify({
+    proxyPasswordValue: document.getElementById("proxy-password").value,
+    proxyPasswordPlaceholder: document.getElementById("proxy-password").placeholder,
+    savePayload: globalThis.__saveProxyPayload,
+    probePayload: globalThis.__probePayload,
+}));
+""".strip(),
+    )
+
+    probe_payload = cast(dict[str, JsonValue], payload["probePayload"])
+    save_payload = cast(dict[str, JsonValue], payload["savePayload"])
+    proxy_override = cast(dict[str, JsonValue], probe_payload["proxy_override"])
+    assert payload["proxyPasswordValue"] == ""
+    assert payload["proxyPasswordPlaceholder"] == "************"
+    assert proxy_override["proxy_password"] == "replacement-secret"
+    assert save_payload["proxy_password"] == "replacement-secret"
+
+
 def test_proxy_settings_panel_allows_clearing_saved_password(
     tmp_path: Path,
 ) -> None:

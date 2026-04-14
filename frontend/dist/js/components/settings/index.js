@@ -237,7 +237,7 @@ function createModal() {
                                                 <div class="form-group" id="profile-api-key-group">
                                                     <label for="profile-api-key" data-i18n="settings.model.api_key">API Key</label>
                                                     <div class="secure-input-row">
-                                                        <input type="password" id="profile-api-key" placeholder="sk-..." autocomplete="current-password">
+                                                        <input type="password" id="profile-api-key" placeholder="sk-..." autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
                                                         <button class="secure-input-btn" id="toggle-profile-api-key-btn" type="button" title="Show API key" aria-label="Show API key" style="display:none;">
                                                             <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                                                 <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
@@ -273,7 +273,7 @@ function createModal() {
                                                 <div class="form-group">
                                                     <label for="profile-maas-password">MAAS Password</label>
                                                     <div class="secure-input-row">
-                                                        <input type="password" id="profile-maas-password" placeholder="password" autocomplete="current-password">
+                                                        <input type="password" id="profile-maas-password" placeholder="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
                                                         <button class="secure-input-btn" id="toggle-profile-maas-password-btn" type="button" title="Show password" aria-label="Show password" style="display:none;">
                                                             <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                                                 <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
@@ -702,7 +702,7 @@ function createModal() {
                                             <div class="form-group proxy-inline-field">
                                                 <label for="proxy-password" data-i18n="settings.proxy.password">Password</label>
                                                 <div class="secure-input-row">
-                                                    <input type="password" id="proxy-password" placeholder="Optional proxy password" data-i18n-placeholder="settings.proxy.password_placeholder" autocomplete="current-password">
+                                                    <input type="password" id="proxy-password" placeholder="Optional proxy password" data-i18n-placeholder="settings.proxy.password_placeholder" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
                                                     <button class="secure-input-btn" id="toggle-proxy-password-btn" type="button" title="Show password" aria-label="Show password" style="display:none;">
                                                         <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                                             <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
@@ -764,7 +764,7 @@ function createModal() {
                                             <div class="form-group proxy-inline-field">
                                                 <label for="web-api-key" id="web-api-key-label" data-i18n="settings.web.exa_api_key">Exa API Key</label>
                                                 <div class="secure-input-row">
-                                                    <input type="password" id="web-api-key" placeholder="可选，用于更高频率限制" data-i18n-placeholder="settings.web.api_key_placeholder" autocomplete="current-password">
+                                                    <input type="password" id="web-api-key" placeholder="可选，用于更高频率限制" data-i18n-placeholder="settings.web.api_key_placeholder" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
                                                     <button class="secure-input-btn" id="toggle-web-api-key-btn" type="button" title="Show API key" aria-label="Show API key">
                                                         <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                                             <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>

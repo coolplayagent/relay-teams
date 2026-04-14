@@ -14,6 +14,10 @@ from relay_teams.env.clawhub_cli import (
     install_clawhub_via_npm,
     resolve_existing_clawhub_path,
 )
+from relay_teams.env.clawhub_auth import (
+    build_clawhub_managed_subprocess_env,
+    ensure_clawhub_cli_login,
+)
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_command_errors import (
     combine_clawhub_failure_messages,
@@ -155,7 +159,7 @@ class ClawHubConnectivityProbeService:
                     or "ClawHub CLI is not available on PATH.",
                 )
 
-        env = build_clawhub_subprocess_env(
+        env = build_clawhub_managed_subprocess_env(
             token,
             config_dir=self._config_dir,
             base_env=os.environ,
@@ -170,6 +174,56 @@ class ClawHubConnectivityProbeService:
                 clawhub_path,
                 env=env,
                 timeout_seconds=version_timeout_seconds,
+            )
+
+        auth_timeout_seconds = _resolve_remaining_timeout_seconds(probe_deadline)
+        if auth_timeout_seconds is None:
+            return self._build_result(
+                ok=False,
+                checked_at=checked_at,
+                started=started,
+                binary_available=True,
+                token_configured=True,
+                clawhub_path=clawhub_path,
+                clawhub_version=version_text,
+                installation_attempted=installation_attempted,
+                installed_during_probe=installed_during_probe,
+                registry=registry,
+                endpoint_fallback_used=endpoint_fallback_used,
+                retryable=True,
+                error_code="auth_timeout",
+                error_message="ClawHub CLI auth bootstrap timed out.",
+            )
+        auth_result = ensure_clawhub_cli_login(
+            token,
+            config_dir=self._config_dir,
+            base_env=os.environ,
+            clawhub_path=clawhub_path,
+            timeout_seconds=auth_timeout_seconds,
+        )
+        registry = auth_result.registry
+        endpoint_fallback_used = auth_result.endpoint_fallback_used
+        env = auth_result.env or env
+        if not auth_result.ok:
+            error_code, retryable = _classify_probe_error(
+                auth_result.error_message or "ClawHub CLI auth bootstrap failed.",
+                default_error_code=auth_result.error_code or "auth_failed",
+            )
+            return self._build_result(
+                ok=False,
+                checked_at=checked_at,
+                started=started,
+                binary_available=True,
+                token_configured=True,
+                clawhub_path=clawhub_path,
+                clawhub_version=version_text,
+                installation_attempted=installation_attempted,
+                installed_during_probe=installed_during_probe,
+                registry=registry,
+                endpoint_fallback_used=endpoint_fallback_used,
+                retryable=retryable,
+                error_code=error_code,
+                error_message=auth_result.error_message,
             )
 
         whoami_timeout_seconds = _resolve_remaining_timeout_seconds(probe_deadline)
@@ -228,7 +282,9 @@ class ClawHubConnectivityProbeService:
                 )
                 or "ClawHub CLI auth verification failed."
             )
-            if should_retry_clawhub_without_endpoint_overrides(
+            if (
+                not endpoint_fallback_used
+            ) and should_retry_clawhub_without_endpoint_overrides(
                 reason,
                 endpoint_overrides_configured=registry is not None,
             ):

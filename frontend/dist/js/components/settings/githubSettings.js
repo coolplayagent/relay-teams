@@ -79,6 +79,18 @@ export function bindGitHubSettingsHandlers(fieldIds = DEFAULT_GITHUB_FIELD_IDS) 
         tokenInput.onchange = () => {
             handleGitHubTokenInput(ids);
         };
+        tokenInput.onfocus = () => {
+            armGitHubTokenInput();
+        };
+        tokenInput.onpointerdown = () => {
+            armGitHubTokenInput();
+        };
+        tokenInput.onkeydown = () => {
+            armGitHubTokenInput();
+        };
+        tokenInput.onblur = () => {
+            disarmGitHubTokenInput();
+        };
     }
 
     const webhookBaseUrlInput = document.getElementById(ids.webhookBaseUrlInputId);
@@ -152,7 +164,7 @@ export function renderGitHubAccessPanelMarkup(
                     <div class="form-group proxy-inline-field">
                         <label for="${escapeHtml(ids.tokenInputId)}" data-i18n="settings.github.token">GitHub Token</label>
                         <div class="secure-input-row">
-                            <input type="password" id="${escapeHtml(ids.tokenInputId)}" placeholder="ghp_..." data-i18n-placeholder="settings.github.token_placeholder" autocomplete="current-password">
+                            <input type="password" id="${escapeHtml(ids.tokenInputId)}" placeholder="ghp_..." data-i18n-placeholder="settings.github.token_placeholder" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
                             <button class="secure-input-btn" id="${escapeHtml(ids.toggleTokenButtonId)}" type="button" title="Show GitHub token" aria-label="Show GitHub token" style="display:none;">
                                 <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                     <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
@@ -591,6 +603,7 @@ function createGitHubTokenState(persistedValue = null, hasPersistedValue = false
         hasPersistedValue: hasPersistedValue === true || Boolean(normalizedValue.trim()),
         isDirty: false,
         isLoadingReveal: false,
+        armedForInput: false,
         revealed: false,
     };
 }
@@ -598,9 +611,24 @@ function createGitHubTokenState(persistedValue = null, hasPersistedValue = false
 function handleGitHubTokenInput(fieldIds) {
     const tokenInput = document.getElementById(fieldIds.tokenInputId);
     const nextValue = tokenInput ? tokenInput.value : '';
+    if (
+        githubTokenState.hasPersistedValue
+        && !githubTokenState.persistedValueLoaded
+        && !githubTokenState.revealed
+        && !canAcceptGitHubTokenInput(tokenInput)
+    ) {
+        githubTokenState.draftValue = '';
+        githubTokenState.isDirty = false;
+        githubTokenState.armedForInput = false;
+        githubTokenState.revealed = false;
+        renderGitHubTokenField(fieldIds);
+        return;
+    }
     githubTokenState.draftValue = nextValue;
     githubTokenState.isDirty = githubTokenState.hasPersistedValue
-        ? nextValue !== githubTokenState.persistedValue
+        ? githubTokenState.persistedValueLoaded
+            ? nextValue !== githubTokenState.persistedValue
+            : nextValue.trim().length > 0
         : nextValue.trim().length > 0;
     if (!readGitHubTokenValue(fieldIds)) {
         githubTokenState.revealed = false;
@@ -661,6 +689,27 @@ function normalizeGitHubWebhookBaseUrl(value) {
     return typeof value === 'string' && value.trim()
         ? value.trim()
         : null;
+}
+
+function armGitHubTokenInput() {
+    githubTokenState.armedForInput = true;
+}
+
+function disarmGitHubTokenInput() {
+    githubTokenState.armedForInput = false;
+}
+
+function canAcceptGitHubTokenInput(tokenInput) {
+    if (!tokenInput) {
+        return false;
+    }
+    if (githubTokenState.armedForInput) {
+        return true;
+    }
+    if (typeof document !== 'object' || document === null) {
+        return false;
+    }
+    return document.activeElement === tokenInput;
 }
 
 function renderGitHubCallbackPreview(fieldIds) {

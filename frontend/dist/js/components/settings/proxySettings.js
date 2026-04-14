@@ -32,6 +32,10 @@ export function bindProxySettingsHandlers() {
     if (passwordInput) {
         passwordInput.oninput = handleProxyPasswordInput;
         passwordInput.onchange = handleProxyPasswordInput;
+        passwordInput.onfocus = armProxyPasswordInput;
+        passwordInput.onpointerdown = armProxyPasswordInput;
+        passwordInput.onkeydown = armProxyPasswordInput;
+        passwordInput.onblur = disarmProxyPasswordInput;
     }
 
     const togglePasswordBtn = document.getElementById('toggle-proxy-password-btn');
@@ -245,6 +249,7 @@ function createProxyPasswordState(persistedValue = null) {
         draftValue: '',
         hasPersistedValue: Boolean(normalizedValue.trim()),
         isDirty: false,
+        armedForInput: false,
         revealed: false,
     };
 }
@@ -252,6 +257,18 @@ function createProxyPasswordState(persistedValue = null) {
 function handleProxyPasswordInput() {
     const passwordInput = document.getElementById('proxy-password');
     const nextValue = passwordInput ? passwordInput.value : '';
+    if (
+        proxyPasswordState.hasPersistedValue
+        && !proxyPasswordState.revealed
+        && !canAcceptProxyPasswordInput(passwordInput)
+    ) {
+        proxyPasswordState.draftValue = '';
+        proxyPasswordState.isDirty = false;
+        proxyPasswordState.armedForInput = false;
+        proxyPasswordState.revealed = false;
+        renderProxyPasswordField();
+        return;
+    }
     proxyPasswordState.draftValue = nextValue;
     proxyPasswordState.isDirty = proxyPasswordState.hasPersistedValue
         ? nextValue !== proxyPasswordState.persistedValue
@@ -279,7 +296,7 @@ function readProxyPasswordValue() {
     if (proxyPasswordState.isDirty) {
         return inputValue || null;
     }
-    return inputValue || proxyPasswordState.persistedValue || null;
+    return proxyPasswordState.persistedValue || null;
 }
 
 function renderProxyPasswordField() {
@@ -329,7 +346,31 @@ function hasProxyPasswordValue() {
     const passwordInput = document.getElementById('proxy-password');
     const inputValue = passwordInput ? passwordInput.value.trim() : '';
     if (proxyPasswordState.hasPersistedValue && !proxyPasswordState.isDirty) {
-        return Boolean(proxyPasswordState.persistedValue || inputValue);
+        return Boolean(proxyPasswordState.persistedValue);
     }
     return Boolean(proxyPasswordState.draftValue.trim() || inputValue);
+}
+
+function armProxyPasswordInput() {
+    proxyPasswordState.armedForInput = true;
+}
+
+function disarmProxyPasswordInput() {
+    proxyPasswordState.armedForInput = false;
+}
+
+function canAcceptProxyPasswordInput(passwordInput) {
+    if (!passwordInput) {
+        return false;
+    }
+    if (proxyPasswordState.armedForInput) {
+        return true;
+    }
+    if (typeof document !== 'object' || document === null) {
+        return false;
+    }
+    if (!('activeElement' in document)) {
+        return true;
+    }
+    return document.activeElement === passwordInput;
 }

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 
+from relay_teams.env.clawhub_auth import ClawHubCliLoginResult
 from relay_teams.env.clawhub_cli import ClawHubCliInstallResult
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_connectivity import (
@@ -73,6 +74,20 @@ def test_clawhub_probe_validates_token_without_passing_it_on_cli(
         "relay_teams.env.clawhub_connectivity.os.environ",
         {"PATH": "/usr/bin"},
     )
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.ensure_clawhub_cli_login",
+        lambda *args, **kwargs: ClawHubCliLoginResult(
+            ok=True,
+            env={
+                "PATH": "/usr/bin",
+                "CLAWHUB_TOKEN": "ch_secret",
+                "HOME": "/tmp/.relay-teams/runtime/clawhub-home",
+                "USERPROFILE": "/tmp/.relay-teams/runtime/clawhub-home",
+                "XDG_CONFIG_HOME": "/tmp/.relay-teams/runtime/clawhub-home/.config",
+            },
+            registry=None,
+        ),
+    )
     observed_commands: list[list[str]] = []
 
     def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -135,6 +150,20 @@ def test_clawhub_probe_uses_remaining_timeout_budget_for_each_step(
         "relay_teams.env.clawhub_connectivity.perf_counter",
         lambda: next(perf_counter_values),
     )
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.ensure_clawhub_cli_login",
+        lambda *args, **kwargs: ClawHubCliLoginResult(
+            ok=True,
+            env={
+                "PATH": "/usr/bin",
+                "CLAWHUB_TOKEN": "ch_secret",
+                "HOME": "/tmp/.relay-teams/runtime/clawhub-home",
+                "USERPROFILE": "/tmp/.relay-teams/runtime/clawhub-home",
+                "XDG_CONFIG_HOME": "/tmp/.relay-teams/runtime/clawhub-home/.config",
+            },
+            registry=None,
+        ),
+    )
     observed_timeouts: list[float] = []
 
     def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -171,7 +200,7 @@ def test_clawhub_probe_uses_remaining_timeout_budget_for_each_step(
     )
 
     assert result.ok is True
-    assert observed_timeouts == [9.0, 6.0]
+    assert observed_timeouts == [9.0, 3.5]
 
 
 def test_clawhub_probe_rejects_invalid_token_when_auth_validation_fails(
@@ -185,31 +214,33 @@ def test_clawhub_probe_rejects_invalid_token_when_auth_validation_fails(
         "relay_teams.env.clawhub_connectivity.os.environ",
         {"PATH": "/usr/bin"},
     )
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.ensure_clawhub_cli_login",
+        lambda *args, **kwargs: ClawHubCliLoginResult(
+            ok=False,
+            env={
+                "PATH": "/usr/bin",
+                "CLAWHUB_TOKEN": "ch_secret",
+                "HOME": "/tmp/.relay-teams/runtime/clawhub-home",
+                "USERPROFILE": "/tmp/.relay-teams/runtime/clawhub-home",
+                "XDG_CONFIG_HOME": "/tmp/.relay-teams/runtime/clawhub-home/.config",
+            },
+            registry=None,
+            error_code="auth_failed",
+            error_message="Error: Invalid token",
+        ),
+    )
 
-    def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        command = kwargs.get("args")
-        if not isinstance(command, list):
-            command = _args[0]
-        assert isinstance(command, list)
-        env = kwargs.get("env")
-        assert isinstance(env, dict)
-        assert env["CLAWHUB_TOKEN"] == "ch_secret"
-        if command[1] == "--cli-version":
-            return subprocess.CompletedProcess(
-                args=command,
-                returncode=0,
-                stdout="0.4.2\n",
-                stderr="",
-            )
-        assert command[1] == "whoami"
-        return subprocess.CompletedProcess(
-            args=command,
-            returncode=1,
-            stdout="",
-            stderr="- Checking token\nError: Invalid token",
-        )
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout="0.4.2\n",
+            stderr="",
+        ),
+    )
     service = ClawHubConnectivityProbeService(
         config_dir=Path("/tmp/.relay-teams"),
         get_clawhub_config=lambda: ClawHubConfig(token=None),
@@ -221,7 +252,7 @@ def test_clawhub_probe_rejects_invalid_token_when_auth_validation_fails(
     assert result.error_code == "auth_failed"
     assert result.error_message == "Error: Invalid token"
     assert result.clawhub_version == "clawhub 0.4.2"
-    assert result.exit_code == 1
+    assert result.exit_code is None
 
 
 def test_clawhub_probe_installs_missing_binary(monkeypatch) -> None:
@@ -243,6 +274,20 @@ def test_clawhub_probe_installs_missing_binary(monkeypatch) -> None:
     monkeypatch.setattr(
         "relay_teams.env.clawhub_connectivity.os.environ",
         {"PATH": "/usr/bin"},
+    )
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.ensure_clawhub_cli_login",
+        lambda *args, **kwargs: ClawHubCliLoginResult(
+            ok=True,
+            env={
+                "PATH": f"{installed_clawhub_path.parent}{os.pathsep}/usr/bin",
+                "CLAWHUB_TOKEN": "ch_secret",
+                "HOME": "/tmp/.relay-teams/runtime/clawhub-home",
+                "USERPROFILE": "/tmp/.relay-teams/runtime/clawhub-home",
+                "XDG_CONFIG_HOME": "/tmp/.relay-teams/runtime/clawhub-home/.config",
+            },
+            registry=None,
+        ),
     )
 
     def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -298,6 +343,25 @@ def test_clawhub_probe_retries_without_endpoint_overrides_for_invalid_user_paylo
     monkeypatch.setattr(
         "relay_teams.env.clawhub_connectivity.os.environ",
         {"LANG": "zh_CN.UTF-8", "PATH": "/usr/bin"},
+    )
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.ensure_clawhub_cli_login",
+        lambda *args, **kwargs: ClawHubCliLoginResult(
+            ok=True,
+            env={
+                "LANG": "zh_CN.UTF-8",
+                "PATH": "/usr/bin",
+                "CLAWHUB_TOKEN": "ch_secret",
+                "CLAWHUB_SITE": "https://mirror-cn.clawhub.com",
+                "CLAWHUB_REGISTRY": "https://mirror-cn.clawhub.com",
+                "CLAWDHUB_SITE": "https://mirror-cn.clawhub.com",
+                "CLAWDHUB_REGISTRY": "https://mirror-cn.clawhub.com",
+                "HOME": "/tmp/.relay-teams/runtime/clawhub-home",
+                "USERPROFILE": "/tmp/.relay-teams/runtime/clawhub-home",
+                "XDG_CONFIG_HOME": "/tmp/.relay-teams/runtime/clawhub-home/.config",
+            },
+            registry="https://mirror-cn.clawhub.com",
+        ),
     )
     observed_envs: list[dict[str, str]] = []
 

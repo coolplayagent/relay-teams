@@ -137,6 +137,97 @@ console.log(JSON.stringify({
     }
 
 
+def test_web_settings_panel_ignores_unfocused_autofilled_saved_exa_key(
+    tmp_path: Path,
+) -> None:
+    payload = _run_web_settings_script(
+        tmp_path=tmp_path,
+        fetch_config={
+            "provider": "exa",
+            "exa_api_key": "saved-exa-key",
+            "fallback_provider": "searxng",
+            "searxng_instance_url": "https://search.example.test/",
+        },
+        runner_source="""
+import { bindWebSettingsHandlers, loadWebSettingsPanel } from "./webSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindWebSettingsHandlers();
+await loadWebSettingsPanel();
+
+document.activeElement = null;
+document.getElementById("web-api-key").value = "browser_password";
+document.getElementById("web-api-key").oninput();
+
+await document.getElementById("save-web-btn").onclick();
+
+console.log(JSON.stringify({
+    apiKeyValue: document.getElementById("web-api-key").value,
+    apiKeyPlaceholder: document.getElementById("web-api-key").placeholder,
+    savePayload: globalThis.__saveWebPayload,
+}));
+""".strip(),
+    )
+
+    assert payload["apiKeyValue"] == ""
+    assert payload["apiKeyPlaceholder"] == "************"
+    assert payload["savePayload"] == {
+        "provider": "exa",
+        "exa_api_key": "saved-exa-key",
+        "fallback_provider": "searxng",
+        "searxng_instance_url": "https://search.example.test/",
+    }
+
+
+def test_web_settings_panel_allows_replacing_saved_exa_key_after_focus(
+    tmp_path: Path,
+) -> None:
+    payload = _run_web_settings_script(
+        tmp_path=tmp_path,
+        fetch_config={
+            "provider": "exa",
+            "exa_api_key": "saved-exa-key",
+            "fallback_provider": "searxng",
+            "searxng_instance_url": "https://search.example.test/",
+        },
+        runner_source="""
+import { bindWebSettingsHandlers, loadWebSettingsPanel } from "./webSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindWebSettingsHandlers();
+await loadWebSettingsPanel();
+
+document.activeElement = null;
+document.getElementById("web-api-key").onfocus();
+document.getElementById("web-api-key").value = "replacement-exa-key";
+document.getElementById("web-api-key").oninput();
+
+await document.getElementById("save-web-btn").onclick();
+
+console.log(JSON.stringify({
+    apiKeyValue: document.getElementById("web-api-key").value,
+    apiKeyPlaceholder: document.getElementById("web-api-key").placeholder,
+    savePayload: globalThis.__saveWebPayload,
+}));
+""".strip(),
+    )
+
+    assert payload["apiKeyValue"] == ""
+    assert payload["apiKeyPlaceholder"] == "************"
+    assert payload["savePayload"] == {
+        "provider": "exa",
+        "exa_api_key": "replacement-exa-key",
+        "fallback_provider": "searxng",
+        "searxng_instance_url": "https://search.example.test/",
+    }
+
+
 def test_web_settings_panel_reveals_and_clears_saved_exa_key(
     tmp_path: Path,
 ) -> None:

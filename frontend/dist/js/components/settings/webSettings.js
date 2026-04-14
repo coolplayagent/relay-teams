@@ -52,6 +52,10 @@ export function bindWebSettingsHandlers() {
     if (apiKeyInput) {
         apiKeyInput.oninput = handleWebApiKeyInput;
         apiKeyInput.onchange = handleWebApiKeyInput;
+        apiKeyInput.onfocus = armWebApiKeyInput;
+        apiKeyInput.onpointerdown = armWebApiKeyInput;
+        apiKeyInput.onkeydown = armWebApiKeyInput;
+        apiKeyInput.onblur = disarmWebApiKeyInput;
     }
 
     const toggleApiKeyBtn = document.getElementById('toggle-web-api-key-btn');
@@ -164,6 +168,7 @@ function createWebApiKeyState(persistedValue = null) {
         draftValue: '',
         hasPersistedValue: Boolean(normalizedValue.trim()),
         isDirty: false,
+        armedForInput: false,
         revealed: false,
     };
 }
@@ -278,6 +283,19 @@ function handleWebApiKeyInput() {
     const nextValue = apiKeyInput ? apiKeyInput.value : '';
     const provider = getSelectedProvider();
     const nextState = getWebApiKeyState(provider);
+    if (
+        nextState.hasPersistedValue
+        && !nextState.revealed
+        && !canAcceptWebApiKeyInput(apiKeyInput)
+    ) {
+        nextState.draftValue = '';
+        nextState.isDirty = false;
+        nextState.armedForInput = false;
+        nextState.revealed = false;
+        webApiKeyStates[provider] = nextState;
+        renderWebApiKeyField();
+        return;
+    }
     nextState.draftValue = nextValue;
     nextState.isDirty = nextState.hasPersistedValue
         ? nextValue !== nextState.persistedValue
@@ -340,7 +358,7 @@ function readWebApiKeyValueForProvider(provider) {
     if (state.isDirty) {
         return inputValue || null;
     }
-    return inputValue || state.persistedValue || null;
+    return state.persistedValue || null;
 }
 
 function renderWebApiKeyField() {
@@ -396,7 +414,38 @@ function hasWebApiKeyValue(provider = getSelectedProvider()) {
             : state.draftValue.trim()
     );
     if (state.hasPersistedValue && !state.isDirty) {
-        return Boolean(state.persistedValue || inputValue);
+        return Boolean(state.persistedValue);
     }
     return Boolean(state.draftValue.trim() || inputValue);
+}
+
+function armWebApiKeyInput() {
+    const provider = getSelectedProvider();
+    const nextState = getWebApiKeyState(provider);
+    nextState.armedForInput = true;
+    webApiKeyStates[provider] = nextState;
+}
+
+function disarmWebApiKeyInput() {
+    const provider = getSelectedProvider();
+    const nextState = getWebApiKeyState(provider);
+    nextState.armedForInput = false;
+    webApiKeyStates[provider] = nextState;
+}
+
+function canAcceptWebApiKeyInput(apiKeyInput) {
+    if (!apiKeyInput) {
+        return false;
+    }
+    const state = getWebApiKeyState();
+    if (state.armedForInput) {
+        return true;
+    }
+    if (typeof document !== 'object' || document === null) {
+        return false;
+    }
+    if (!('activeElement' in document)) {
+        return true;
+    }
+    return document.activeElement === apiKeyInput;
 }

@@ -26,6 +26,14 @@ from relay_teams.env.clawhub_cli import (
     install_clawhub_via_npm,
     resolve_existing_clawhub_path,
 )
+from relay_teams.env.clawhub_auth import (
+    ClawHubCliLoginResult,
+    build_clawhub_managed_subprocess_env,
+    clear_clawhub_runtime_home,
+    ensure_clawhub_cli_login,
+    get_clawhub_runtime_config_path,
+    get_clawhub_runtime_home,
+)
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.clawhub_env import (
@@ -107,6 +115,7 @@ __all__ = [
     "CLAWHUB_SITE_ENV_KEY",
     "CLAWHUB_TOKEN_ENV_KEY",
     "ClawHubCliInstallResult",
+    "ClawHubCliLoginResult",
     "ClawHubConfig",
     "ClawHubConfigService",
     "GitHubConfig",
@@ -126,15 +135,20 @@ __all__ = [
     "apply_proxy_env_to_process_env",
     "build_subprocess_env",
     "build_clawhub_cli_env",
+    "build_clawhub_managed_subprocess_env",
     "build_clawhub_subprocess_env",
     "extract_proxy_env_vars",
     "build_github_cli_env",
     "clawhub_env_keys",
     "clear_clawhub_path_cache",
+    "clear_clawhub_runtime_home",
     "install_clawhub_via_npm",
+    "ensure_clawhub_cli_login",
     "get_app_env_file_path",
     "get_env_var",
     "get_project_env_file_path",
+    "get_clawhub_runtime_config_path",
+    "get_clawhub_runtime_home",
     "get_user_env_file_path",
     "github_env_keys",
     "host_matches_no_proxy",

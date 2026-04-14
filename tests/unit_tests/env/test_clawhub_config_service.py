@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from relay_teams.env.clawhub_auth import get_clawhub_runtime_home
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.clawhub_secret_store import ClawHubSecretStore
@@ -72,3 +73,21 @@ def test_save_clawhub_config_removes_plaintext_env_token(tmp_path: Path) -> None
     assert (config_dir / ".env").read_text(encoding="utf-8") == (
         "HTTP_PROXY=http://proxy.example:8080\n"
     )
+
+
+def test_save_clawhub_config_clears_runtime_home_when_token_removed(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".relay-teams"
+    config_dir.mkdir(parents=True)
+    runtime_home = get_clawhub_runtime_home(config_dir)
+    runtime_home.mkdir(parents=True, exist_ok=True)
+    (runtime_home / "marker.txt").write_text("present", encoding="utf-8")
+    service = ClawHubConfigService(
+        config_dir=config_dir,
+        secret_store=_FakeClawHubSecretStore(),
+    )
+
+    service.save_clawhub_config(ClawHubConfig(token=None))
+
+    assert not runtime_home.exists()
