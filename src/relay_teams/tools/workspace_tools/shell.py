@@ -85,7 +85,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 cwd=cwd,
                 yield_time_ms=yield_time_ms,
                 timeout_ms=timeout_ms,
-                env={CURRENT_ROLE_ENV_KEY: ctx.deps.role_id},
+                env={**ctx.deps.hook_env, CURRENT_ROLE_ENV_KEY: ctx.deps.role_id},
                 tty=tty,
                 background=background,
             )

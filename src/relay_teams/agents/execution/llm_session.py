@@ -140,6 +140,7 @@ from relay_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
 )
+from relay_teams.hooks import HookRuntimeEnvStore, HookService
 
 if TYPE_CHECKING:
     from relay_teams.agents.orchestration.task_execution_service import (
@@ -376,6 +377,8 @@ class AgentLlmSession:
         im_tool_service: "ImToolService | None" = None,
         computer_runtime: "ComputerRuntime | None" = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
+        hook_service: HookService | None = None,
+        hook_runtime_env_store: HookRuntimeEnvStore | None = None,
     ) -> None:
         self._config = config
         self._task_repo = task_repo
@@ -415,6 +418,8 @@ class AgentLlmSession:
         self._im_tool_service = im_tool_service
         self._computer_runtime = computer_runtime
         self._shell_approval_repo = shell_approval_repo
+        self._hook_service = hook_service
+        self._hook_runtime_env_store = hook_runtime_env_store
         self._mcp_tool_context_token_cache: dict[str, int] = {}
 
     async def run(self, request: LLMRequest) -> str:
@@ -526,6 +531,12 @@ class AgentLlmSession:
             metric_recorder=self._metric_recorder,
             notification_service=self._notification_service,
             im_tool_service=self._im_tool_service,
+            hook_service=self._hook_service,
+            hook_env=(
+                self._hook_runtime_env_store.get(request.run_id)
+                if self._hook_runtime_env_store is not None
+                else {}
+            ),
         )
         control_ctx = self._run_control_manager.context(
             run_id=request.run_id,

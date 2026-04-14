@@ -114,16 +114,8 @@ const FEATURE_GITHUB_FIELD_IDS = Object.freeze({
     saveButtonId: 'feature-save-github-btn',
     probeButtonId: 'feature-test-github-btn',
     tokenInputId: 'feature-github-token',
-    webhookSaveButtonId: 'feature-save-github-webhook-btn',
-    webhookProbeButtonId: 'feature-test-github-webhook-btn',
-    webhookBaseUrlInputId: 'feature-github-webhook-base-url',
-    callbackPreviewId: 'feature-github-callback-preview',
-    tunnelStartButtonId: 'feature-start-github-webhook-tunnel-btn',
-    tunnelStopButtonId: 'feature-stop-github-webhook-tunnel-btn',
-    tunnelStatusId: 'feature-github-webhook-tunnel-status',
     toggleTokenButtonId: 'feature-toggle-github-token-btn',
     statusId: 'feature-github-probe-status',
-    webhookStatusId: 'feature-github-webhook-probe-status',
 });
 const FEISHU_PLATFORM = 'feishu';
 const WECHAT_PLATFORM = 'wechat';
@@ -1785,41 +1777,7 @@ function normalizeCommaSeparatedValues(value) {
         .filter(Boolean);
 }
 
-function buildGitHubAccountPayloadFromDialogValues(account, values) {
-    const name = String(values?.name || '').trim();
-    if (!name) {
-        throw new Error(t('feature.automation.github_account_required'));
-    }
-    const payload = {
-        name,
-        display_name: String(values?.display_name || '').trim() || null,
-        enabled: values?.enabled === true,
-    };
-    const token = String(values?.token || '').trim();
-    const webhookSecret = String(values?.webhook_secret || '').trim();
-    if (account) {
-        if (values?.clear_token === true) {
-            payload.clear_token = true;
-        } else if (token) {
-            payload.token = token;
-        }
-        if (values?.clear_webhook_secret === true) {
-            payload.clear_webhook_secret = true;
-        } else if (webhookSecret) {
-            payload.webhook_secret = webhookSecret;
-        }
-    } else {
-        if (token) {
-            payload.token = token;
-        }
-        if (webhookSecret) {
-            payload.webhook_secret = webhookSecret;
-        }
-    }
-    return payload;
-}
-
-async function requestGitHubAccountInput(account = null, submitHandler = null) {
+async function requestGitHubAccountInput(account = null) {
     const values = await showFormDialog({
         title: account ? t('settings.roles.edit') : t('feature.automation.github_new_account'),
         message: t('feature.automation.github_account_copy'),
@@ -1842,14 +1800,10 @@ async function requestGitHubAccountInput(account = null, submitHandler = null) {
             {
                 id: 'token',
                 label: t('settings.github.token'),
-                type: 'password',
-                allowEmptyReveal: true,
                 value: '',
                 placeholder: account
                     ? t('feature.automation.github_secret_keep')
                     : 'ghp_...',
-                showLabel: t('settings.github.show_token'),
-                hideLabel: t('settings.github.hide_token'),
                 description: account
                     ? t('feature.automation.github_token_override_copy')
                     : t('feature.automation.github_token_copy'),
@@ -1864,14 +1818,10 @@ async function requestGitHubAccountInput(account = null, submitHandler = null) {
             {
                 id: 'webhook_secret',
                 label: t('feature.automation.github_webhook_secret'),
-                type: 'password',
-                allowEmptyReveal: true,
                 value: '',
                 placeholder: account
                     ? t('feature.automation.github_secret_keep')
                     : 'whsec_...',
-                showLabel: t('feature.automation.github_show_webhook_secret'),
-                hideLabel: t('feature.automation.github_hide_webhook_secret'),
                 description: t('feature.automation.github_webhook_secret_copy'),
             },
             {
@@ -1889,19 +1839,41 @@ async function requestGitHubAccountInput(account = null, submitHandler = null) {
                 description: t('feature.automation.github_enabled_copy'),
             },
         ],
-        submitHandler: typeof submitHandler === 'function'
-            ? async formValues => await submitHandler(
-                buildGitHubAccountPayloadFromDialogValues(account, formValues),
-            )
-            : null,
     });
     if (!values) {
         return null;
     }
-    if (typeof submitHandler === 'function') {
-        return values;
+    const name = String(values.name || '').trim();
+    if (!name) {
+        throw new Error(t('feature.automation.github_account_required'));
     }
-    return buildGitHubAccountPayloadFromDialogValues(account, values);
+    const payload = {
+        name,
+        display_name: String(values.display_name || '').trim() || null,
+        enabled: values.enabled === true,
+    };
+    const token = String(values.token || '').trim();
+    const webhookSecret = String(values.webhook_secret || '').trim();
+    if (account) {
+        if (values.clear_token === true) {
+            payload.clear_token = true;
+        } else if (token) {
+            payload.token = token;
+        }
+        if (values.clear_webhook_secret === true) {
+            payload.clear_webhook_secret = true;
+        } else if (webhookSecret) {
+            payload.webhook_secret = webhookSecret;
+        }
+    } else {
+        if (token) {
+            payload.token = token;
+        }
+        if (webhookSecret) {
+            payload.webhook_secret = webhookSecret;
+        }
+    }
+    return payload;
 }
 
 async function requestGitHubRepoInput(account, repo = null) {
@@ -3323,7 +3295,6 @@ function renderGitHubRepoDetail(repo) {
     const repoId = String(repo?.repo_subscription_id || '').trim();
     const rules = getGitHubRulesForRepo(repoId);
     const account = findGitHubAccountById(repo?.account_id);
-    const webhooksUrl = buildGitHubRepoWebhooksUrl(repo);
     return `
         <div class="automation-home-detail github-automation-detail">
             <div class="feature-detail-head automation-detail-head">
@@ -3356,27 +3327,6 @@ function renderGitHubRepoDetail(repo) {
                         <div><span>${escapeHtml(t('automation.detail.last_error'))}</span><strong>${escapeHtml(String(repo?.last_error || t('automation.detail.none')))}</strong></div>
                     </div>
                 </article>
-                ${webhooksUrl
-                    ? `
-                        <article class="feature-card github-webhooks-card">
-                            <span class="settings-token-source-label">${escapeHtml(t('feature.automation.github_open_webhooks'))}</span>
-                            <a class="web-provider-link-card" href="${escapeHtml(webhooksUrl)}" target="_blank" rel="noreferrer noopener" title="${escapeHtml(webhooksUrl)}" aria-label="${escapeHtml(webhooksUrl)}">
-                                <span class="web-provider-link-copy">
-                                    <span class="web-provider-link-badge">GitHub</span>
-                                    <span class="web-provider-link-url">${escapeHtml(webhooksUrl)}</span>
-                                    <span class="settings-token-source-note">${escapeHtml(t('feature.automation.github_open_webhooks_help'))}</span>
-                                </span>
-                                <span class="web-provider-link-arrow" aria-hidden="true">
-                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
-                                        <path d="M7 17L17 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
-                                        <path d="M9 7h8v8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
-                                    </svg>
-                                </span>
-                            </a>
-                        </article>
-                    `
-                    : ''
-                }
             </div>
             <section class="automation-flat-section">
                 <div class="automation-section-header automation-runs-header">
@@ -3390,26 +3340,18 @@ function renderGitHubRepoDetail(repo) {
                             const status = rule?.enabled === false ? 'disabled' : 'enabled';
                             return `
                                 <article class="automation-run-card github-rule-card">
-                                    <div class="automation-run-row github-rule-row">
-                                        <div class="github-rule-heading">
+                                    <div class="automation-run-row">
+                                        <div class="automation-run-copy">
                                             <strong>${escapeHtml(String(rule?.name || ruleId))}</strong>
-                                            ${renderFeatureStatusPill(t(`automation.status.${status}`), status)}
+                                            <span>${escapeHtml(formatGitHubRuleSummary(rule))}</span>
+                                            <span>${escapeHtml(formatGitHubRuleWorkspaceSummary(rule))}</span>
                                         </div>
-                                        <div class="feature-inline-actions github-rule-actions">
-                                            <button class="secondary-btn" type="button" data-github-rule-edit="${escapeHtml(ruleId)}">${escapeHtml(t('automation.action.edit'))}</button>
-                                            <button class="secondary-btn" type="button" data-github-rule-toggle="${escapeHtml(ruleId)}">${escapeHtml(status === 'enabled' ? t('automation.action.disable') : t('automation.action.enable'))}</button>
-                                            <button class="secondary-btn danger-btn" type="button" data-github-rule-delete="${escapeHtml(ruleId)}">${escapeHtml(t('settings.action.delete'))}</button>
-                                        </div>
+                                        ${renderFeatureStatusPill(t(`automation.status.${status}`), status)}
                                     </div>
-                                    <div class="automation-run-copy github-rule-copy">
-                                        <div class="feature-meta-list github-rule-meta-list">
-                                            <div><span>${escapeHtml(t('settings.triggers.workspace'))}</span><strong>${escapeHtml(formatGitHubRuleWorkspaceSummary(rule))}</strong></div>
-                                            <div><span>${escapeHtml(t('feature.automation.github_event_subscription'))}</span><strong>${escapeHtml(resolveGitHubRuleEventLabel(rule))}</strong></div>
-                                            <div><span>${escapeHtml(t('feature.automation.github_actions'))}</span><strong>${escapeHtml(resolveGitHubRuleActionsLabel(rule))}</strong></div>
-                                            <div><span>${escapeHtml(t('feature.automation.github_draft_pr'))}</span><strong>${escapeHtml(resolveGitHubRuleDraftPrLabel(rule))}</strong></div>
-                                            <div><span>${escapeHtml(t('feature.automation.github_base_branches'))}</span><strong>${escapeHtml(resolveGitHubRuleBaseBranchesLabel(rule))}</strong></div>
-                                            <div class="github-rule-prompt-row"><span>${escapeHtml(t('automation.detail.prompt'))}</span><code class="github-rule-prompt">${escapeHtml(resolveGitHubRulePromptTemplate(rule))}</code></div>
-                                        </div>
+                                    <div class="feature-inline-actions github-rule-actions">
+                                        <button class="secondary-btn" type="button" data-github-rule-edit="${escapeHtml(ruleId)}">${escapeHtml(t('automation.action.edit'))}</button>
+                                        <button class="secondary-btn" type="button" data-github-rule-toggle="${escapeHtml(ruleId)}">${escapeHtml(status === 'enabled' ? t('automation.action.disable') : t('automation.action.enable'))}</button>
+                                        <button class="secondary-btn danger-btn" type="button" data-github-rule-delete="${escapeHtml(ruleId)}">${escapeHtml(t('settings.action.delete'))}</button>
                                     </div>
                                 </article>
                             `;
@@ -3435,15 +3377,6 @@ function formatGitHubWebhookStatusLabel(status) {
     return t('feature.automation.github_webhook_unregistered');
 }
 
-function buildGitHubRepoWebhooksUrl(repo) {
-    const owner = String(repo?.owner || '').trim();
-    const repoName = String(repo?.repo_name || '').trim();
-    if (!owner || !repoName) {
-        return '';
-    }
-    return `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/settings/hooks`;
-}
-
 function formatGitHubRuleSummary(rule) {
     const matchConfig = rule?.match_config && typeof rule.match_config === 'object'
         ? rule.match_config
@@ -3454,48 +3387,13 @@ function formatGitHubRuleSummary(rule) {
 }
 
 function formatGitHubRuleWorkspaceSummary(rule) {
-    return resolveGitHubWorkspaceLabel(resolveGitHubRuleWorkspaceId(rule));
+    return formatMessage('feature.automation.github_rule_workspace_summary', {
+        workspace: resolveGitHubWorkspaceLabel(resolveGitHubRuleWorkspaceId(rule)),
+    });
 }
 
 function resolveGitHubRuleWorkspaceId(rule) {
     return String(rule?.dispatch_config?.run_template?.workspace_id || '').trim();
-}
-
-function resolveGitHubRuleEventLabel(rule) {
-    const eventName = String(rule?.match_config?.event_name || '').trim();
-    return resolveOptionLabel(getGitHubRuleEventOptions(), eventName, eventName || t('automation.detail.none'));
-}
-
-function resolveGitHubRuleActionsLabel(rule) {
-    const actions = Array.isArray(rule?.match_config?.actions)
-        ? rule.match_config.actions.map(action => String(action || '').trim()).filter(Boolean)
-        : [];
-    return actions.length > 0 ? actions.join(', ') : t('automation.detail.none');
-}
-
-function resolveGitHubRuleDraftPrLabel(rule) {
-    const draftPrValue = resolveGitHubDraftPrFieldValue(rule?.match_config?.draft_pr);
-    return resolveOptionLabel(getGitHubDraftPrOptions(), draftPrValue, t('automation.detail.none'));
-}
-
-function resolveGitHubRuleBaseBranchesLabel(rule) {
-    const branches = Array.isArray(rule?.match_config?.base_branches)
-        ? rule.match_config.base_branches.map(branch => String(branch || '').trim()).filter(Boolean)
-        : [];
-    return branches.length > 0 ? branches.join(', ') : t('feature.automation.github_base_branches_all');
-}
-
-function resolveGitHubRulePromptTemplate(rule) {
-    const promptTemplate = String(rule?.dispatch_config?.run_template?.prompt_template || '').trim();
-    return promptTemplate || t('automation.detail.none');
-}
-
-function resolveOptionLabel(options, value, fallback = '') {
-    const normalizedValue = String(value || '').trim();
-    const match = (Array.isArray(options) ? options : []).find(
-        option => String(option?.value || '').trim() === normalizedValue,
-    );
-    return String(match?.label || fallback || normalizedValue || '').trim();
 }
 
 function resolveGitHubWorkspaceLabel(workspaceId) {
@@ -4144,13 +4042,11 @@ function notifyGitHubFeatureError(error) {
 
 async function handleGitHubCreateAccountFeature() {
     try {
-        const account = await requestGitHubAccountInput(
-            null,
-            async payload => await createGitHubTriggerAccount(payload),
-        );
-        if (!account) {
+        const payload = await requestGitHubAccountInput();
+        if (!payload) {
             return;
         }
+        const account = await createGitHubTriggerAccount(payload);
         notifyGitHubFeatureSaved(resolveGitHubAccountLabel(account));
         await openAutomationGitHubView(`account:${String(account?.account_id || '').trim()}`);
     } catch (error) {
@@ -4164,16 +4060,11 @@ async function handleGitHubEditAccountFeature(accountId) {
         if (!account) {
             return;
         }
-        const updated = await requestGitHubAccountInput(
-            account,
-            async payload => await updateGitHubTriggerAccount(
-                String(account.account_id || '').trim(),
-                payload,
-            ),
-        );
-        if (!updated) {
+        const payload = await requestGitHubAccountInput(account);
+        if (!payload) {
             return;
         }
+        const updated = await updateGitHubTriggerAccount(String(account.account_id || '').trim(), payload);
         notifyGitHubFeatureSaved(resolveGitHubAccountLabel(updated));
         await openAutomationGitHubView(`account:${String(updated?.account_id || '').trim()}`);
     } catch (error) {

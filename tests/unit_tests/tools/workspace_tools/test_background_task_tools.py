@@ -161,6 +161,7 @@ async def test_shell_passes_none_tool_call_id_without_validation_error(
             role_id="writer",
             shell_approval_repo=None,
             tool_approval_policy=SimpleNamespace(yolo=False),
+            hook_env={},
         ),
     )
 
@@ -208,6 +209,7 @@ async def test_spawn_subagent_runs_synchronously_by_default(
             session_id="session-1",
             instance_id="inst-1",
             role_id="writer",
+            hook_env={},
         ),
     )
 
@@ -273,6 +275,7 @@ async def test_spawn_subagent_starts_background_subagent_task_when_requested(
             session_id="session-1",
             instance_id="inst-1",
             role_id="writer",
+            hook_env={},
         ),
     )
 
@@ -329,6 +332,7 @@ async def test_wait_background_task_waits_without_optional_timeout_argument(
             session_id="session-1",
             instance_id="inst-1",
             role_id="writer",
+            hook_env={},
         ),
     )
     captured_args: dict[str, object] = {}
@@ -712,4 +716,54 @@ async def test_shell_returns_blocked_tool_result_for_workdir_escape(
             "type": "tool_blocked",
             "message": "Path is outside workspace write scope: ../outside",
         },
+    }
+
+
+@pytest.mark.asyncio
+async def test_shell_merges_hook_env_into_command_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_background_tasks(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["shell"],
+    )
+    service = _CapturingBackgroundTaskService()
+    workspace = _FakeWorkspace(tmp_path)
+    ctx = SimpleNamespace(
+        tool_call_id="call-2",
+        deps=SimpleNamespace(
+            background_task_service=service,
+            workspace=workspace,
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            shell_approval_repo=None,
+            tool_approval_policy=SimpleNamespace(yolo=False),
+            hook_env={"HOOK_FLAG": "enabled", "ANOTHER_FLAG": "1"},
+        ),
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).visible_data)
+
+    monkeypatch.setattr(shell_module, "execute_tool", _fake_execute_tool)
+
+    _ = await tool(ctx, command="pwd")
+
+    assert service.calls[0]["env"] == {
+        "HOOK_FLAG": "enabled",
+        "ANOTHER_FLAG": "1",
+        shell_module.CURRENT_ROLE_ENV_KEY: "writer",
     }

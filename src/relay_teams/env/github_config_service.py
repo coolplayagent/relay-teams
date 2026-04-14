@@ -7,7 +7,6 @@ from pathlib import Path
 from relay_teams.env.github_config_models import (
     GitHubConfig,
     GitHubConfigUpdate,
-    GitHubTokenRevealView,
     GitHubConfigView,
 )
 from relay_teams.env.github_connectivity import (
@@ -96,10 +95,6 @@ class GitHubConfigService:
             token_configured=config.token is not None,
             webhook_base_url=config.webhook_base_url,
         )
-
-    def reveal_github_token(self) -> GitHubTokenRevealView:
-        config = self.get_github_config()
-        return GitHubTokenRevealView(token=config.token)
 
     def save_github_config(self, config: GitHubConfig) -> None:
         normalized_token = normalize_github_token(config.token)

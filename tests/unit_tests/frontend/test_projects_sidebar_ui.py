@@ -663,6 +663,29 @@ export async function runAutomationProject() {
     assert confirm_calls[0]["tone"] == "warning"
 
 
+def test_projects_sidebar_session_actions_keep_layout_visible_for_automation() -> None:
+    components_css = load_components_css()
+
+    session_actions_start = components_css.index(".projects-list .session-actions {")
+    session_actions_end = components_css.index(
+        ".projects-list .session-rename-btn,", session_actions_start
+    )
+    session_actions_rule = components_css[session_actions_start:session_actions_end]
+
+    assert "opacity: 0;" not in session_actions_rule
+    assert "pointer-events: none;" not in session_actions_rule
+    assert "display: inline-flex;" in session_actions_rule
+
+    rename_button_start = components_css.index(".projects-list .session-rename-btn,")
+    rename_button_end = components_css.index(
+        ".projects-list .session-subagents-toggle {", rename_button_start
+    )
+    rename_button_rule = components_css[rename_button_start:rename_button_end]
+
+    assert "opacity: 0.12;" in rename_button_rule
+    assert "pointer-events: none;" in rename_button_rule
+
+
 def test_projects_sidebar_renames_session_from_sidebar_action(tmp_path: Path) -> None:
     payload = _run_sidebar_script(
         tmp_path=tmp_path,

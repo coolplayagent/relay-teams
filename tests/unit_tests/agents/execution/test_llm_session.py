@@ -646,6 +646,8 @@ async def test_generate_async_passes_retry_after_to_retry_schedule() -> None:
     session.__dict__["_shell_approval_repo"] = None
     session.__dict__["_notification_service"] = None
     session.__dict__["_im_tool_service"] = None
+    session.__dict__["_hook_service"] = None
+    session.__dict__["_hook_runtime_env_store"] = None
     session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
         object, None
     )

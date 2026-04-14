@@ -78,6 +78,7 @@ if TYPE_CHECKING:
     )
     from relay_teams.workspace import WorkspaceManager
     from relay_teams.gateway.im import ImToolService
+    from relay_teams.hooks import HookRuntimeEnvStore, HookService
 
 
 @final
@@ -122,6 +123,8 @@ class OpenAICompatibleProvider(LLMProvider):
         retry_config: LlmRetryConfig | None = None,
         im_tool_service: ImToolService | None = None,
         computer_runtime: ComputerRuntime | None = None,
+        hook_service: HookService | None = None,
+        hook_runtime_env_store: HookRuntimeEnvStore | None = None,
     ) -> None:
         self._config_ref = config
         self._media_asset_service = media_asset_service
@@ -169,6 +172,8 @@ class OpenAICompatibleProvider(LLMProvider):
             retry_config=retry_config,
             im_tool_service=im_tool_service,
             computer_runtime=computer_runtime,
+            hook_service=hook_service,
+            hook_runtime_env_store=hook_runtime_env_store,
         )
 
     @override

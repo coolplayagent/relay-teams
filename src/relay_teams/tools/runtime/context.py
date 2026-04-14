@@ -5,7 +5,7 @@ from collections.abc import Awaitable
 from pathlib import Path
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, JsonValue, SkipValidation
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, SkipValidation
 from pydantic_ai import RunContext
 
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
@@ -33,6 +33,7 @@ from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.hooks import HookService
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
@@ -152,6 +153,8 @@ class ToolDeps(BaseModel):
     metric_recorder: SkipValidation[MetricRecorder | None] = None
     notification_service: SkipValidation[NotificationService | None] = None
     im_tool_service: SkipValidation[ImToolServiceLike | None] = None
+    hook_service: SkipValidation[HookService | None] = None
+    hook_env: dict[str, str] = Field(default_factory=dict)
 
 
 ToolContext = RunContext[ToolDeps]

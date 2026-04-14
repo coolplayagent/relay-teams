@@ -54,6 +54,7 @@ from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
 )
 from relay_teams.workspace import WorkspaceManager
+from relay_teams.hooks import HookRuntimeEnvStore, HookService
 
 if TYPE_CHECKING:
     from relay_teams.gateway.im import ImToolService
@@ -97,6 +98,8 @@ def create_provider_factory(
     external_agent_session_manager: ExternalAcpSessionManager | None = None,
     session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
     | None = None,
+    hook_service: HookService | None = None,
+    hook_runtime_env_store: HookRuntimeEnvStore | None = None,
 ) -> Callable[[RoleDefinition, str | None], LLMProvider]:
     def provider_factory(
         role: RoleDefinition, session_id: str | None = None
@@ -183,6 +186,8 @@ def create_provider_factory(
                 metric_recorder=metric_recorder,
                 retry_config=runtime_to_use.llm_retry,
                 im_tool_service=im_tool_service,
+                hook_service=hook_service,
+                hook_runtime_env_store=hook_runtime_env_store,
             ),
         )
         return provider_registry.create(config_to_use)

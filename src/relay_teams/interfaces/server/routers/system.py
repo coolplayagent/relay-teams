@@ -19,23 +19,13 @@ from relay_teams.env.environment_variable_models import (
     EnvironmentVariableScope,
 )
 from relay_teams.env.environment_variable_service import EnvironmentVariableService
-from relay_teams.env.github_config_models import (
-    GitHubConfigUpdate,
-    GitHubConfigView,
-    GitHubTokenRevealView,
-)
+from relay_teams.env.github_config_models import GitHubConfigUpdate, GitHubConfigView
 from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.env.github_connectivity import (
     GitHubConnectivityProbeRequest,
     GitHubConnectivityProbeResult,
     GitHubWebhookConnectivityProbeRequest,
     GitHubWebhookConnectivityProbeResult,
-)
-from relay_teams.env.localhost_run_tunnel_service import (
-    LocalhostRunTunnelStartRequest,
-    LocalhostRunTunnelStatus,
-    LocalhostRunTunnelStopRequest,
-    LocalhostRunTunnelService,
 )
 from relay_teams.external_agents import (
     ExternalAgentConfig,
@@ -57,9 +47,9 @@ from relay_teams.interfaces.server.deps import (
     get_clawhub_skill_service,
     get_config_status_service,
     get_environment_variable_service,
+    get_hook_config_service,
     get_external_agent_config_service,
     get_github_config_service,
-    get_localhost_run_tunnel_service,
     get_github_trigger_service,
     get_mcp_config_reload_service,
     get_model_config_service,
@@ -107,6 +97,11 @@ from relay_teams.skills.clawhub_models import (
 )
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.triggers import GitHubTriggerService
+from relay_teams.hooks import (
+    HookConfigService,
+    HookConfigValidationResult,
+    HookConfigView,
+)
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/system", tags=["System"])
@@ -328,6 +323,20 @@ def get_notification_config(
     return service.get_notification_config()
 
 
+@router.get("/configs/hooks")
+def get_hook_config(
+    service: HookConfigService = Depends(get_hook_config_service),
+) -> HookConfigView:
+    return service.get_hook_config()
+
+
+@router.post("/configs/hooks:validate")
+def validate_hook_config(
+    service: HookConfigService = Depends(get_hook_config_service),
+) -> HookConfigValidationResult:
+    return service.validate_hook_config()
+
+
 @router.get("/configs/environment-variables")
 def get_environment_variables(
     service: EnvironmentVariableService = Depends(get_environment_variable_service),
@@ -482,13 +491,6 @@ def get_github_config(
     service: GitHubConfigService = Depends(get_github_config_service),
 ) -> GitHubConfigView:
     return service.get_github_config_view()
-
-
-@router.post("/configs/github:reveal")
-def reveal_github_token(
-    service: GitHubConfigService = Depends(get_github_config_service),
-) -> GitHubTokenRevealView:
-    return service.reveal_github_token()
 
 
 @router.put("/configs/github")
@@ -695,77 +697,6 @@ def probe_github_webhook_connectivity(
         return service.probe_webhook_connectivity(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.get("/configs/github/webhook/tunnel")
-def get_github_webhook_tunnel_status(
-    service: LocalhostRunTunnelService = Depends(get_localhost_run_tunnel_service),
-) -> LocalhostRunTunnelStatus:
-    return service.get_status()
-
-
-@router.post("/configs/github/webhook/tunnel:start")
-def start_github_webhook_tunnel(
-    req: LocalhostRunTunnelStartRequest,
-    request: Request,
-    tunnel_service: LocalhostRunTunnelService = Depends(
-        get_localhost_run_tunnel_service
-    ),
-    github_config_service: GitHubConfigService = Depends(get_github_config_service),
-    trigger_service: GitHubTriggerService = Depends(get_github_trigger_service),
-) -> LocalhostRunTunnelStatus:
-    try:
-        effective_request = req.model_copy(
-            update={
-                "local_port": req.local_port or request.url.port or 8000,
-            }
-        )
-        status = tunnel_service.start(effective_request)
-        if req.auto_save_webhook_base_url and status.public_url:
-            previous_config = github_config_service.get_github_config()
-            github_config_service.update_github_config(
-                GitHubConfigUpdate(webhook_base_url=status.public_url)
-            )
-            trigger_service.refresh_repo_callback_urls_from_system_config(
-                previous_webhook_base_url=previous_config.webhook_base_url
-            )
-        return status
-    except Exception as exc:
-        _raise_system_http_error(
-            exc,
-            value_error_status=400,
-            runtime_error_status=400,
-            os_error_status=500,
-        )
-
-
-@router.post("/configs/github/webhook/tunnel:stop")
-def stop_github_webhook_tunnel(
-    req: LocalhostRunTunnelStopRequest,
-    tunnel_service: LocalhostRunTunnelService = Depends(
-        get_localhost_run_tunnel_service
-    ),
-    github_config_service: GitHubConfigService = Depends(get_github_config_service),
-    trigger_service: GitHubTriggerService = Depends(get_github_trigger_service),
-) -> LocalhostRunTunnelStatus:
-    try:
-        status = tunnel_service.stop()
-        if req.clear_webhook_base_url_if_matching and status.public_url:
-            existing_config = github_config_service.get_github_config()
-            if existing_config.webhook_base_url == status.public_url:
-                github_config_service.update_github_config(
-                    GitHubConfigUpdate(webhook_base_url=None)
-                )
-                trigger_service.refresh_repo_callback_urls_from_system_config(
-                    previous_webhook_base_url=existing_config.webhook_base_url
-                )
-        return status
-    except Exception as exc:
-        _raise_system_http_error(
-            exc,
-            runtime_error_status=400,
-            os_error_status=500,
-        )
 
 
 @router.post("/configs/mcp:reload")

@@ -21,8 +21,15 @@ from relay_teams.persistence import is_retryable_sqlite_error
 from relay_teams.agents.tasks.task_status_sanitizer import (
     sanitize_task_status_payload,
 )
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    ToolHookInput,
+)
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.sessions.runs.enums import InjectionSource
 
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketStatus
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimePhase, RunRuntimeStatus
@@ -89,6 +96,42 @@ async def execute_tool(
 
         meta: dict[str, JsonValue] = {}
         _raise_if_stopped(ctx)
+        (
+            approval_request,
+            force_hook_approval,
+            pre_hook_error,
+        ) = await _apply_pre_tool_hooks(
+            ctx=ctx,
+            tool_name=tool_name,
+            args_summary=args_summary,
+            tool_call_id=tool_call_id,
+            approval_request=approval_request,
+        )
+        if pre_hook_error is not None:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            meta["duration_ms"] = elapsed_ms
+            envelope = _visible_envelope(
+                ok=False,
+                error=pre_hook_error,
+                meta=meta,
+            )
+            _persist_tool_record(
+                ctx=ctx,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                args_summary=args_summary,
+                visible_envelope=envelope,
+                internal_data=None,
+                runtime_meta=meta,
+                execution_status=ToolExecutionStatus.FAILED,
+            )
+            _record_tool_metrics(
+                ctx=ctx,
+                tool_name=tool_name,
+                duration_ms=elapsed_ms,
+                success=False,
+            )
+            return envelope
         approval_ticket_id, approval_error = await _handle_tool_approval(
             ctx=ctx,
             tool_name=tool_name,
@@ -97,6 +140,7 @@ async def execute_tool(
             meta=meta,
             tool_call_id=tool_call_id,
             approval_request=approval_request,
+            force_approval=force_hook_approval,
         )
         if approval_error is not None:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -203,6 +247,13 @@ async def execute_tool(
             )
             if approval_ticket_id and not keep_approval_ticket_reusable:
                 ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
+            await _apply_post_tool_hooks(
+                ctx=ctx,
+                event_name=HookEventName.POST_TOOL_USE,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                args_summary=args_summary,
+            )
             return envelope
         except Exception as exc:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -264,6 +315,13 @@ async def execute_tool(
             )
             if approval_ticket_id and not keep_approval_ticket_reusable:
                 ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
+            await _apply_post_tool_hooks(
+                ctx=ctx,
+                event_name=HookEventName.POST_TOOL_USE_FAILURE,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                args_summary=args_summary,
+            )
             return envelope
 
 
@@ -412,13 +470,14 @@ async def _handle_tool_approval(
     meta: dict[str, JsonValue],
     tool_call_id: str,
     approval_request: ToolApprovalRequest | None = None,
+    force_approval: bool = False,
 ) -> tuple[str | None, ToolError | None]:
     decision = _evaluate_tool_approval_policy(
         policy=ctx.deps.tool_approval_policy,
         tool_name=tool_name,
         approval_request=approval_request,
     )
-    approval_required = decision.required
+    approval_required = decision.required or force_approval
     run_yolo = _policy_uses_yolo(ctx.deps.tool_approval_policy)
     args_preview = _safe_json(args_summary)
     approval_preview = _safe_json(
@@ -906,3 +965,112 @@ def _approval_mode_from_meta(
 
 def _policy_uses_yolo(policy: object) -> bool:
     return bool(getattr(policy, "yolo", False))
+
+
+async def _apply_pre_tool_hooks(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    args_summary: dict[str, JsonValue],
+    tool_call_id: str,
+    approval_request: ToolApprovalRequest | None,
+) -> tuple[ToolApprovalRequest | None, bool, ToolError | None]:
+    hook_service = getattr(ctx.deps, "hook_service", None)
+    if hook_service is None:
+        return approval_request, False, None
+    hook_result = await hook_service.run_tool_event(
+        event_name=HookEventName.PRE_TOOL_USE,
+        event=ToolHookInput(
+            session_id=ctx.deps.session_id,
+            run_id=ctx.deps.run_id,
+            trace_id=ctx.deps.trace_id,
+            task_id=ctx.deps.task_id,
+            instance_id=ctx.deps.instance_id,
+            role_id=ctx.deps.role_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_input=args_summary,
+        ),
+    )
+    if hook_result.decision == HookDecisionType.DENY:
+        return (
+            approval_request,
+            False,
+            ToolError(
+                type="hook_denied",
+                message=hook_result.reason or "Tool call denied by runtime hook.",
+                retryable=False,
+            ),
+        )
+    if hook_result.decision == HookDecisionType.ASK:
+        if approval_request is None:
+            approval_request = ToolApprovalRequest(
+                target_summary=hook_result.reason or f"{tool_name} requires approval.",
+                source="hook",
+            )
+        return approval_request, True, None
+    return approval_request, False, None
+
+
+async def _apply_permission_request_hooks(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    tool_call_id: str,
+    args_summary: dict[str, JsonValue],
+) -> HookDecisionBundle | None:
+    hook_service = getattr(ctx.deps, "hook_service", None)
+    if hook_service is None:
+        return None
+    return await hook_service.run_tool_event(
+        event_name=HookEventName.PERMISSION_REQUEST,
+        event=ToolHookInput(
+            session_id=ctx.deps.session_id,
+            run_id=ctx.deps.run_id,
+            trace_id=ctx.deps.trace_id,
+            task_id=ctx.deps.task_id,
+            instance_id=ctx.deps.instance_id,
+            role_id=ctx.deps.role_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_input=args_summary,
+        ),
+    )
+
+
+async def _apply_post_tool_hooks(
+    *,
+    ctx: ToolContext,
+    event_name: HookEventName,
+    tool_name: str,
+    tool_call_id: str,
+    args_summary: dict[str, JsonValue],
+) -> None:
+    hook_service = getattr(ctx.deps, "hook_service", None)
+    if hook_service is None:
+        return
+    hook_result = await hook_service.run_tool_event(
+        event_name=event_name,
+        event=ToolHookInput(
+            session_id=ctx.deps.session_id,
+            run_id=ctx.deps.run_id,
+            trace_id=ctx.deps.trace_id,
+            task_id=ctx.deps.task_id,
+            instance_id=ctx.deps.instance_id,
+            role_id=ctx.deps.role_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_input=args_summary,
+        ),
+    )
+    if not hook_result.additional_context:
+        return
+    try:
+        ctx.deps.injection_manager.enqueue(
+            run_id=ctx.deps.run_id,
+            recipient_instance_id=ctx.deps.instance_id,
+            source=InjectionSource.SYSTEM,
+            content=hook_result.additional_context,
+        )
+    except KeyError:
+        return

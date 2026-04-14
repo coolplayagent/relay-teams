@@ -104,22 +104,6 @@ export async function fetchGitHubConfig() {
     return requestJson('/api/system/configs/github', undefined, 'Failed to fetch GitHub config');
 }
 
-export async function revealGitHubToken() {
-    return requestJson(
-        '/api/system/configs/github:reveal',
-        { method: 'POST' },
-        'Failed to reveal GitHub token',
-    );
-}
-
-export async function fetchGitHubWebhookTunnelStatus() {
-    return requestJson(
-        '/api/system/configs/github/webhook/tunnel',
-        undefined,
-        'Failed to fetch GitHub webhook tunnel status',
-    );
-}
-
 export async function fetchClawHubConfig() {
     return requestJson('/api/system/configs/clawhub', undefined, 'Failed to fetch ClawHub config');
 }
@@ -294,6 +278,47 @@ export async function saveGitHubConfig(config) {
     );
 }
 
+
+export async function revealGitHubToken() {
+    return requestJson(
+        '/api/system/configs/github/token:reveal',
+        { method: 'POST' },
+        'Failed to reveal GitHub token',
+    );
+}
+
+export async function fetchGitHubWebhookTunnelStatus() {
+    return requestJson(
+        '/api/system/configs/github/webhook/tunnel',
+        undefined,
+        'Failed to fetch GitHub webhook tunnel status',
+    );
+}
+
+export async function startGitHubWebhookTunnel(payload) {
+    return requestJson(
+        '/api/system/configs/github/webhook/tunnel:start',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to start GitHub webhook tunnel',
+    );
+}
+
+export async function stopGitHubWebhookTunnel(payload) {
+    return requestJson(
+        '/api/system/configs/github/webhook/tunnel:stop',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to stop GitHub webhook tunnel',
+    );
+}
+
 export async function reloadMcpConfig() {
     return requestJson(
         '/api/system/configs/mcp:reload',
@@ -383,30 +408,6 @@ export async function probeGitHubWebhookConnectivity(payload) {
             body: JSON.stringify(payload),
         },
         'Failed to probe GitHub webhook connectivity',
-    );
-}
-
-export async function startGitHubWebhookTunnel(payload = {}) {
-    return requestJson(
-        '/api/system/configs/github/webhook/tunnel:start',
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        },
-        'Failed to start GitHub webhook tunnel',
-    );
-}
-
-export async function stopGitHubWebhookTunnel(payload = {}) {
-    return requestJson(
-        '/api/system/configs/github/webhook/tunnel:stop',
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        },
-        'Failed to stop GitHub webhook tunnel',
     );
 }
 

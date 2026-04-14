@@ -738,41 +738,6 @@ console.log(JSON.stringify({
     assert payload["baseUrlDisabled"] is False
 
 
-def test_switching_to_maas_moves_model_group_below_credentials(tmp_path: Path) -> None:
-    payload = _run_model_profiles_script(
-        tmp_path=tmp_path,
-        runner_source="""
-import { bindModelProfileHandlers } from "./modelProfiles.mjs";
-
-const notifications = [];
-
-const elements = createElements();
-installGlobals(elements, notifications);
-bindModelProfileHandlers();
-
-document.getElementById("add-profile-btn").onclick();
-const initialParentId = document.getElementById("profile-model-group").parentElement?.id || null;
-document.getElementById("profile-provider").value = "maas";
-document.getElementById("profile-provider").onchange();
-const maasParentId = document.getElementById("profile-model-group").parentElement?.id || null;
-document.getElementById("profile-provider").value = "openai_compatible";
-document.getElementById("profile-provider").onchange();
-
-console.log(JSON.stringify({
-    initialParentId,
-    maasParentId,
-    finalParentId: document.getElementById("profile-model-group").parentElement?.id || null,
-    primaryRowDisplay: document.getElementById("profile-primary-credentials-row").style.display,
-}));
-""".strip(),
-    )
-
-    assert payload["initialParentId"] == "profile-primary-credentials-row"
-    assert payload["maasParentId"] == "profile-maas-model-slot"
-    assert payload["finalParentId"] == "profile-primary-credentials-row"
-    assert payload["primaryRowDisplay"] == "grid"
-
-
 def test_fetching_models_keeps_full_browser_list_when_model_input_is_partial(
     tmp_path: Path,
 ) -> None:
@@ -1897,7 +1862,7 @@ export function t(key) {
 
     runner_path.write_text(
         f"""
-function createElement(initialDisplay = "block", id = "") {{
+function createElement(initialDisplay = "block") {{
     let lastQuerySource = "";
     const queryCache = new Map();
 
@@ -1928,7 +1893,6 @@ function createElement(initialDisplay = "block", id = "") {{
     }}
 
     return {{
-        id,
         style: {{ display: initialDisplay }},
         value: "",
         disabled: false,
@@ -1941,21 +1905,11 @@ function createElement(initialDisplay = "block", id = "") {{
         innerHTML: "",
         className: "",
         dataset: {{}},
-        parentElement: null,
-        children: [],
         onclick: null,
         oninput: null,
         onblur: null,
         onkeydown: null,
         focused: false,
-        appendChild(child) {{
-            if (child.parentElement) {{
-                child.parentElement.children = child.parentElement.children.filter(candidate => candidate !== child);
-            }}
-            child.parentElement = this;
-            this.children.push(child);
-            return child;
-        }},
         focus() {{
             this.focused = true;
         }},
@@ -1973,47 +1927,39 @@ function createElement(initialDisplay = "block", id = "") {{
 }}
 
 function createElements() {{
-        const entries = [
-            ["profiles-list", createElement("block", "profiles-list")],
-            ["profile-editor", createElement("none", "profile-editor")],
-            ["add-profile-btn", createElement("block", "add-profile-btn")],
-            ["save-profile-btn", createElement("block", "save-profile-btn")],
-            ["test-profile-btn", createElement("block", "test-profile-btn")],
-            ["fetch-profile-models-btn", createElement("block", "fetch-profile-models-btn")],
-            ["open-profile-model-menu-btn", createElement("block", "open-profile-model-menu-btn")],
-            ["cancel-profile-btn", createElement("block", "cancel-profile-btn")],
-            ["profile-probe-status", createElement("none", "profile-probe-status")],
-            ["profile-model-discovery-status", createElement("none", "profile-model-discovery-status")],
-            ["profile-editor-title", createElement("block", "profile-editor-title")],
-            ["profile-name", createElement("block", "profile-name")],
-            ["profile-provider", createElement("block", "profile-provider")],
-            ["profile-provider-options", createElement("block", "profile-provider-options")],
-            ["profile-is-default", createElement("block", "profile-is-default")],
-            ["profile-model", createElement("block", "profile-model")],
-            ["profile-model-menu", createElement("none", "profile-model-menu")],
-            ["profile-base-url", createElement("block", "profile-base-url")],
-            ["profile-primary-credentials-row", createElement("grid", "profile-primary-credentials-row")],
-            ["profile-api-key-group", createElement("block", "profile-api-key-group")],
-            ["profile-api-key", createElement("block", "profile-api-key")],
-            ["profile-model-group", createElement("block", "profile-model-group")],
-            ["toggle-profile-api-key-btn", createElement("none", "toggle-profile-api-key-btn")],
-            ["profile-maas-auth-fields", createElement("none", "profile-maas-auth-fields")],
-            ["profile-maas-model-slot", createElement("block", "profile-maas-model-slot")],
-            ["profile-maas-username", createElement("block", "profile-maas-username")],
-            ["profile-maas-password", createElement("block", "profile-maas-password")],
-            ["toggle-profile-maas-password-btn", createElement("none", "toggle-profile-maas-password-btn")],
-            ["profile-temperature", createElement("block", "profile-temperature")],
-            ["profile-top-p", createElement("block", "profile-top-p")],
-            ["profile-max-tokens", createElement("block", "profile-max-tokens")],
-            ["profile-context-window", createElement("block", "profile-context-window")],
-            ["profile-connect-timeout", createElement("block", "profile-connect-timeout")],
-            ["profile-ssl-verify", createElement("block", "profile-ssl-verify")],
-        ];
-        const elements = new Map(entries);
-        elements.get("profile-primary-credentials-row")?.appendChild(elements.get("profile-api-key-group"));
-        elements.get("profile-primary-credentials-row")?.appendChild(elements.get("profile-model-group"));
-        elements.get("profile-maas-auth-fields")?.appendChild(elements.get("profile-maas-model-slot"));
-        return elements;
+        return new Map([
+            ["profiles-list", createElement("block")],
+            ["profile-editor", createElement("none")],
+            ["add-profile-btn", createElement("block")],
+            ["save-profile-btn", createElement("block")],
+        ["test-profile-btn", createElement("block")],
+        ["fetch-profile-models-btn", createElement("block")],
+        ["open-profile-model-menu-btn", createElement("block")],
+        ["cancel-profile-btn", createElement("block")],
+        ["profile-probe-status", createElement("none")],
+        ["profile-model-discovery-status", createElement("none")],
+        ["profile-editor-title", createElement("block")],
+        ["profile-name", createElement("block")],
+        ["profile-provider", createElement("block")],
+        ["profile-provider-options", createElement("block")],
+        ["profile-is-default", createElement("block")],
+        ["profile-model", createElement("block")],
+        ["profile-model-menu", createElement("none")],
+        ["profile-base-url", createElement("block")],
+        ["profile-api-key-group", createElement("block")],
+        ["profile-api-key", createElement("block")],
+        ["toggle-profile-api-key-btn", createElement("none")],
+        ["profile-maas-auth-fields", createElement("none")],
+        ["profile-maas-username", createElement("block")],
+        ["profile-maas-password", createElement("block")],
+        ["toggle-profile-maas-password-btn", createElement("none")],
+            ["profile-temperature", createElement("block")],
+            ["profile-top-p", createElement("block")],
+            ["profile-max-tokens", createElement("block")],
+            ["profile-context-window", createElement("block")],
+            ["profile-connect-timeout", createElement("block")],
+            ["profile-ssl-verify", createElement("block")],
+        ]);
     }}
 
 function installGlobals(elements, notifications) {{

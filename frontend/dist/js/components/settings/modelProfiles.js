@@ -1086,36 +1086,12 @@ function hasDraftMaasPassword(maasAuth) {
     return Boolean(maasAuth.password) || draftMaasPasswordState.hasPersistedValue;
 }
 
-function syncDraftModelFieldPlacement(maasProvider) {
-    const primaryCredentialsRow = document.getElementById('profile-primary-credentials-row');
-    const apiKeyGroup = document.getElementById('profile-api-key-group');
-    const modelGroup = document.getElementById('profile-model-group');
-    const maasModelSlot = document.getElementById('profile-maas-model-slot');
-    if (!primaryCredentialsRow || !apiKeyGroup || !modelGroup || !maasModelSlot) {
-        return;
-    }
-
-    if (maasProvider) {
-        if (modelGroup.parentElement !== maasModelSlot && typeof maasModelSlot.appendChild === 'function') {
-            maasModelSlot.appendChild(modelGroup);
-        }
-        primaryCredentialsRow.style.display = 'none';
-        return;
-    }
-
-    if (modelGroup.parentElement !== primaryCredentialsRow && typeof primaryCredentialsRow.appendChild === 'function') {
-        primaryCredentialsRow.appendChild(modelGroup);
-    }
-    primaryCredentialsRow.style.display = 'grid';
-}
-
 function renderDraftProviderFields() {
     const maasProvider = isMaaSProvider(getDraftProvider());
     const apiKeyGroup = document.getElementById('profile-api-key-group');
     const maasFields = document.getElementById('profile-maas-auth-fields');
     const passwordInput = document.getElementById('profile-maas-password');
     const baseUrlInput = document.getElementById('profile-base-url');
-    syncDraftModelFieldPlacement(maasProvider);
     if (apiKeyGroup) {
         apiKeyGroup.style.display = maasProvider ? 'none' : 'block';
     }

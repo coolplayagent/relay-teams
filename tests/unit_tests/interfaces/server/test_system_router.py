@@ -30,10 +30,6 @@ from relay_teams.env.github_connectivity import (
     GitHubWebhookConnectivityProbeRequest,
     GitHubWebhookConnectivityProbeResult,
 )
-from relay_teams.env.localhost_run_tunnel_service import (
-    LocalhostRunTunnelStartRequest,
-    LocalhostRunTunnelStatus,
-)
 from relay_teams.env.web_config_models import (
     DEFAULT_SEARXNG_INSTANCE_SEEDS,
     DEFAULT_SEARXNG_INSTANCE_URL,
@@ -47,9 +43,9 @@ from relay_teams.interfaces.server.deps import (
     get_clawhub_skill_service,
     get_config_status_service,
     get_environment_variable_service,
+    get_hook_config_service,
     get_external_agent_config_service,
     get_github_config_service,
-    get_localhost_run_tunnel_service,
     get_github_trigger_service,
     get_mcp_config_reload_service,
     get_model_config_service,
@@ -101,12 +97,7 @@ class _FakeSystemService:
         self.saved_web_config: dict[str, object] | None = None
         self.saved_clawhub_config: dict[str, object] | None = None
         self.saved_github_config: dict[str, object] | None = None
-        self.current_github_token: str | None = None
-        self.current_github_webhook_base_url: str | None = None
         self.refreshed_github_callback_previous_base_url: str | None = None
-        self.tunnel_status = LocalhostRunTunnelStatus()
-        self.started_tunnel_request: dict[str, object] | None = None
-        self.stopped_tunnel_request: dict[str, object] | None = None
         self.saved_ui_language_settings: dict[str, object] | None = None
         self.proxy_save_error: RuntimeError | None = None
         self.model_reload_error: Exception | None = None
@@ -274,61 +265,17 @@ class _FakeSystemService:
         )
 
     def get_github_config(self) -> GitHubConfig:
-        return GitHubConfig(
-            token=self.current_github_token,
-            webhook_base_url=self.current_github_webhook_base_url,
-        )
+        return GitHubConfig(token=None, webhook_base_url=None)
 
     def get_github_config_view(self) -> GitHubConfigView:
-        return GitHubConfigView(
-            token_configured=self.current_github_token is not None,
-            webhook_base_url=self.current_github_webhook_base_url,
-        )
-
-    def reveal_github_token(self) -> dict[str, str | None]:
-        return {"token": self.current_github_token}
+        return GitHubConfigView(token_configured=False, webhook_base_url=None)
 
     def update_github_config(self, config: GitHubConfigUpdate) -> GitHubConfig:
         self.saved_github_config = config.model_dump(mode="json")
-        if "token" in config.model_fields_set and config.token is not None:
-            self.current_github_token = config.token
-        if "webhook_base_url" in config.model_fields_set:
-            self.current_github_webhook_base_url = config.webhook_base_url
         return GitHubConfig(
-            token=self.current_github_token,
-            webhook_base_url=self.current_github_webhook_base_url,
+            token=None,
+            webhook_base_url=config.webhook_base_url,
         )
-
-    def get_status(self) -> LocalhostRunTunnelStatus:
-        return self.tunnel_status
-
-    def start(
-        self, request: LocalhostRunTunnelStartRequest
-    ) -> LocalhostRunTunnelStatus:
-        self.started_tunnel_request = request.model_dump(mode="json")
-        self.tunnel_status = LocalhostRunTunnelStatus(
-            status="active",
-            public_url="https://demo-tunnel.lhr.life",
-            address="demo-tunnel.lhr.life",
-            local_host=request.local_host or "127.0.0.1",
-            local_port=request.local_port or 8000,
-            pid=4321,
-            started_at="2026-04-14T03:00:00Z",
-            last_event="tcpip-forward",
-            last_message="demo-tunnel.lhr.life tunneled with tls termination",
-        )
-        return self.tunnel_status
-
-    def stop(self) -> LocalhostRunTunnelStatus:
-        self.stopped_tunnel_request = {}
-        self.tunnel_status = self.tunnel_status.model_copy(
-            update={
-                "status": "stopped",
-                "stopped_at": "2026-04-14T03:05:00Z",
-                "last_event": "stopped",
-            }
-        )
-        return self.tunnel_status
 
     def refresh_repo_callback_urls_from_system_config(
         self,
@@ -626,9 +573,9 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_clawhub_config_service] = lambda: fake_service
     app.dependency_overrides[get_clawhub_skill_service] = lambda: fake_service
     app.dependency_overrides[get_github_config_service] = lambda: fake_service
-    app.dependency_overrides[get_localhost_run_tunnel_service] = lambda: fake_service
     app.dependency_overrides[get_github_trigger_service] = lambda: fake_service
     app.dependency_overrides[get_external_agent_config_service] = lambda: fake_service
+    app.dependency_overrides[get_hook_config_service] = lambda: fake_service
     return TestClient(app)
 
 
@@ -798,28 +745,15 @@ def test_save_github_config_rejects_removed_clear_token_field() -> None:
 
 
 def test_get_github_config_hides_token_value() -> None:
-    service = _FakeSystemService()
-    service.current_github_token = "ghp_saved"
-    client = _create_test_client(service)
+    client = _create_test_client(_FakeSystemService())
 
     response = client.get("/api/system/configs/github")
 
     assert response.status_code == 200
     assert response.json() == {
-        "token_configured": True,
+        "token_configured": False,
         "webhook_base_url": None,
     }
-
-
-def test_reveal_github_token() -> None:
-    service = _FakeSystemService()
-    service.current_github_token = "ghp_saved"
-    client = _create_test_client(service)
-
-    response = client.post("/api/system/configs/github:reveal")
-
-    assert response.status_code == 200
-    assert response.json() == {"token": "ghp_saved"}
 
 
 def test_probe_github_webhook_connectivity() -> None:
@@ -849,82 +783,6 @@ def test_probe_github_webhook_connectivity() -> None:
         "error_code": None,
         "error_message": None,
     }
-
-
-def test_get_github_webhook_tunnel_status() -> None:
-    service = _FakeSystemService()
-    service.tunnel_status = LocalhostRunTunnelStatus(
-        status="active",
-        public_url="https://demo-tunnel.lhr.life",
-        address="demo-tunnel.lhr.life",
-        local_host="127.0.0.1",
-        local_port=8000,
-        pid=4321,
-        started_at="2026-04-14T03:00:00Z",
-        last_event="tcpip-forward",
-        last_message="demo-tunnel.lhr.life tunneled with tls termination",
-    )
-    client = _create_test_client(service)
-
-    response = client.get("/api/system/configs/github/webhook/tunnel")
-
-    assert response.status_code == 200
-    assert response.json()["public_url"] == "https://demo-tunnel.lhr.life"
-    assert response.json()["status"] == "active"
-
-
-def test_start_github_webhook_tunnel_saves_webhook_base_url() -> None:
-    service = _FakeSystemService()
-    client = _create_test_client(service)
-
-    response = client.post(
-        "/api/system/configs/github/webhook/tunnel:start",
-        json={"auto_save_webhook_base_url": True},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["public_url"] == "https://demo-tunnel.lhr.life"
-    assert service.started_tunnel_request == {
-        "local_host": None,
-        "local_port": 8000,
-        "wait_timeout_ms": 15000,
-        "auto_save_webhook_base_url": True,
-    }
-    assert service.saved_github_config == {
-        "token": None,
-        "webhook_base_url": "https://demo-tunnel.lhr.life",
-    }
-    assert service.current_github_webhook_base_url == "https://demo-tunnel.lhr.life"
-    assert service.refreshed_github_callback_previous_base_url is None
-
-
-def test_stop_github_webhook_tunnel_clears_matching_webhook_base_url() -> None:
-    service = _FakeSystemService()
-    service.current_github_webhook_base_url = "https://demo-tunnel.lhr.life"
-    service.tunnel_status = LocalhostRunTunnelStatus(
-        status="active",
-        public_url="https://demo-tunnel.lhr.life",
-        address="demo-tunnel.lhr.life",
-        local_host="127.0.0.1",
-        local_port=8000,
-        pid=4321,
-        started_at="2026-04-14T03:00:00Z",
-    )
-    client = _create_test_client(service)
-
-    response = client.post(
-        "/api/system/configs/github/webhook/tunnel:stop",
-        json={"clear_webhook_base_url_if_matching": True},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "stopped"
-    assert service.saved_github_config == {"token": None, "webhook_base_url": None}
-    assert service.current_github_webhook_base_url is None
-    assert (
-        service.refreshed_github_callback_previous_base_url
-        == "https://demo-tunnel.lhr.life"
-    )
 
 
 def test_get_clawhub_config() -> None:
@@ -1931,6 +1789,33 @@ def test_save_model_profile_forwards_headers() -> None:
     assert cast(dict[str, JsonValue], first_header_payload)["name"] == "Authorization"
 
 
+class _FakeHookConfigService:
+    def get_hook_config(self) -> dict[str, object]:
+        return {
+            "config_path": "C:/app/hooks.json",
+            "exists": True,
+            "config": {"hooks": {"SessionStart": []}},
+            "summary": {
+                "event_count": 1,
+                "matcher_group_count": 0,
+                "handler_count": 0,
+            },
+        }
+
+    def validate_hook_config(self) -> dict[str, object]:
+        return {
+            "valid": True,
+            "config_path": "C:/app/hooks.json",
+            "exists": True,
+            "summary": {
+                "event_count": 1,
+                "matcher_group_count": 0,
+                "handler_count": 0,
+            },
+            "error": None,
+        }
+
+
 class _FakeEnvironmentVariableService:
     def __init__(self) -> None:
         self.saved_payload: dict[str, str] | None = None
@@ -2128,3 +2013,26 @@ def test_get_model_config_preserves_omitted_sparse_fields() -> None:
             "api_key": "secret",
         }
     }
+
+
+def test_get_hook_config() -> None:
+    client = _create_test_client(_FakeHookConfigService())
+
+    response = client.get("/api/system/configs/hooks")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["config_path"] == "C:/app/hooks.json"
+    assert payload["exists"] is True
+    assert payload["summary"]["event_count"] == 1
+
+
+def test_validate_hook_config() -> None:
+    client = _create_test_client(_FakeHookConfigService())
+
+    response = client.post("/api/system/configs/hooks:validate")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["valid"] is True
+    assert payload["summary"]["event_count"] == 1

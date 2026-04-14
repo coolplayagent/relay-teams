@@ -61,7 +61,6 @@ export {
     fetchOrchestrationConfig,
     fetchProxyConfig,
     fetchGitHubConfig,
-    revealGitHubToken,
     fetchGitHubWebhookTunnelStatus,
     fetchWebConfig,
     fetchSystemHealth,
@@ -70,6 +69,7 @@ export {
     deleteClawHubSkill,
     probeGitHubConnectivity,
     probeGitHubWebhookConnectivity,
+    revealGitHubToken,
     probeModelConnection,
     probeWebConnectivity,
     fetchClawHubConfig,
@@ -89,10 +89,10 @@ export {
     saveOrchestrationConfig,
     saveProxyConfig,
     saveGitHubConfig,
-    saveWebConfig,
-    saveUiLanguageSettings,
     startGitHubWebhookTunnel,
     stopGitHubWebhookTunnel,
+    saveWebConfig,
+    saveUiLanguageSettings,
     testExternalAgent,
 } from './system.js';
 

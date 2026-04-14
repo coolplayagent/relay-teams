@@ -1618,15 +1618,6 @@
     line-height: 1.4;
 }
 
-.github-webhook-tunnel-note {
-    display: block;
-    grid-column: 1 / -1;
-    white-space: nowrap;
-    overflow: visible;
-    text-overflow: clip;
-    font-size: 0.72rem;
-}
-
 .web-provider-link-arrow {
     display: inline-flex;
     align-items: center;
@@ -2109,13 +2100,6 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
         width: auto;
         justify-self: start;
         align-self: auto;
-    }
-
-    .github-webhook-tunnel-note {
-        grid-column: auto;
-        white-space: normal;
-        overflow: visible;
-        text-overflow: clip;
     }
 }
 

@@ -39,7 +39,6 @@ from relay_teams.agents.orchestration.task_execution_service import TaskExecutio
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.environment_variable_service import EnvironmentVariableService
 from relay_teams.env.github_config_service import GitHubConfigService
-from relay_teams.env.localhost_run_tunnel_service import LocalhostRunTunnelService
 from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
 from relay_teams.env.web_config_service import WebConfigService
@@ -91,6 +90,12 @@ from relay_teams.metrics import (
 from relay_teams.media import MediaAssetRepository, MediaAssetService
 from relay_teams.monitors import MonitorRepository, MonitorService
 from relay_teams.notifications import NotificationConfigManager, NotificationService
+from relay_teams.hooks import (
+    HookConfigLoader,
+    HookConfigService,
+    HookRuntimeEnvStore,
+    HookService,
+)
 from relay_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
 )
@@ -211,6 +216,13 @@ class ServerContainer:
         app_config_dir = runtime.paths.config_dir
         ensure_app_config_bootstrap(app_config_dir)
         self.config_dir: Path = app_config_dir
+        self.hook_config_loader: HookConfigLoader = HookConfigLoader(
+            config_dir=app_config_dir
+        )
+        self.hook_runtime_env_store: HookRuntimeEnvStore = HookRuntimeEnvStore()
+        self.hook_config_service: HookConfigService = HookConfigService(
+            loader=self.hook_config_loader
+        )
         self.runtime: RuntimeConfig = runtime
         self._session_model_profile_lookup = session_model_profile_lookup
 
@@ -234,7 +246,6 @@ class ServerContainer:
             config_dir=app_config_dir,
             get_proxy_config=self.proxy_config_service.get_proxy_config,
         )
-        self.localhost_run_tunnel_service = LocalhostRunTunnelService()
         self.clawhub_config_service: ClawHubConfigService = ClawHubConfigService(
             config_dir=app_config_dir
         )
@@ -412,6 +423,10 @@ class ServerContainer:
             event_log=self.event_log,
             run_state_repo=self.run_state_repo,
         )
+        self.hook_service = HookService(
+            config_loader=self.hook_config_loader,
+            run_event_hub=self.run_event_hub,
+        )
         self.monitor_repository = MonitorRepository(runtime.paths.db_path)
         self.monitor_service = MonitorService(
             repository=self.monitor_repository,
@@ -588,6 +603,8 @@ class ServerContainer:
             media_asset_service=self.media_asset_service,
             runtime_role_resolver=self.runtime_role_resolver,
             shell_approval_repo=self.shell_approval_repo,
+            hook_service=self.hook_service,
+            hook_runtime_env_store=self.hook_runtime_env_store,
         )
         self.monitor_service.bind_action_sink(self.run_service)
         self.session_service: SessionService = SessionService(
@@ -851,6 +868,8 @@ class ServerContainer:
             im_tool_service=self.im_tool_service,
             external_agent_session_manager=self.external_acp_session_manager,
             session_model_profile_lookup=self._session_model_profile_lookup,
+            hook_service=self.hook_service,
+            hook_runtime_env_store=self.hook_runtime_env_store,
         )
         self.task_execution_service = create_task_execution_service(
             role_registry=self.role_registry,
@@ -946,7 +965,6 @@ class ServerContainer:
         self.feishu_message_pool_service.stop()
         self.feishu_subscription_service.stop()
         self.wechat_gateway_service.stop()
-        self.localhost_run_tunnel_service.stop()
         await self.external_acp_session_manager.close()
         await self.background_task_manager.close()
         return None

@@ -50,3 +50,7 @@ class RunEventType(str, Enum):
     RUN_FAILED = "run_failed"
     AWAITING_MANUAL_ACTION = "awaiting_manual_action"
     TOKEN_USAGE = "token_usage"
+    HOOK_STARTED = "hook_started"
+    HOOK_COMPLETED = "hook_completed"
+    HOOK_FAILED = "hook_failed"
+    HOOK_DECISION_APPLIED = "hook_decision_applied"

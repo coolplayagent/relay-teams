@@ -105,6 +105,16 @@ from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.ids import new_task_id
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.workspace import build_conversation_id
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookRuntimeEnvStore,
+    HookService,
+    SessionHookInput,
+    StopHookInput,
+    UserPromptSubmitHookInput,
+)
 
 if TYPE_CHECKING:
     from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
@@ -242,6 +252,8 @@ class RunManager:
         media_asset_service: MediaAssetService | None = None,
         runtime_role_resolver: RuntimeRoleResolver | None = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
+        hook_service: HookService | None = None,
+        hook_runtime_env_store: HookRuntimeEnvStore | None = None,
     ) -> None:
         self._meta_agent: MetaAgent = meta_agent
         self._provider_factory = provider_factory or (
@@ -272,6 +284,8 @@ class RunManager:
         self._media_asset_service = media_asset_service
         self._runtime_role_resolver = runtime_role_resolver
         self._shell_approval_repo = shell_approval_repo
+        self._hook_service = hook_service
+        self._hook_runtime_env_store = hook_runtime_env_store
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
@@ -315,6 +329,150 @@ class RunManager:
             }
         )
 
+    async def _run_session_hook(
+        self,
+        *,
+        event_name: HookEventName,
+        run_id: str,
+        session_id: str,
+        status: str = "",
+        completion_reason: str = "",
+    ) -> HookDecisionBundle | None:
+        if self._hook_service is None:
+            return None
+        try:
+            return await self._hook_service.run_session_event(
+                event_name=event_name,
+                event=SessionHookInput(
+                    session_id=session_id,
+                    run_id=run_id,
+                    trace_id=run_id,
+                    status=status,
+                    completion_reason=completion_reason,
+                ),
+            )
+        except Exception as exc:
+            with bind_trace_context(
+                trace_id=run_id, run_id=run_id, session_id=session_id
+            ):
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    event="run.hook.session_failed",
+                    message="Session hook execution failed",
+                    exc_info=exc,
+                    payload={"hook_event": event_name.value},
+                )
+            return None
+
+    def _apply_session_hook_env(
+        self, *, run_id: str, hook_result: HookDecisionBundle | None
+    ) -> None:
+        if self._hook_runtime_env_store is None or hook_result is None:
+            return
+        self._hook_runtime_env_store.replace(run_id=run_id, values=hook_result.set_env)
+
+    def _clear_session_hook_env(self, *, run_id: str) -> None:
+        if self._hook_runtime_env_store is None:
+            return
+        self._hook_runtime_env_store.clear(run_id)
+
+    async def _run_stop_hook(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        result: RunResult,
+    ) -> HookDecisionBundle | None:
+        if self._hook_service is None:
+            return None
+        event_name = (
+            HookEventName.STOP
+            if result.status == "completed"
+            else HookEventName.STOP_FAILURE
+        )
+        try:
+            return await self._hook_service.run_stop_event(
+                event_name=event_name,
+                event=StopHookInput(
+                    session_id=session_id,
+                    run_id=run_id,
+                    trace_id=result.trace_id,
+                    root_task_id=result.root_task_id,
+                    status=result.status,
+                    completion_reason=result.completion_reason.value,
+                    output_text=result.output_text,
+                    error_message=str(result.error_message or ""),
+                ),
+            )
+        except Exception as exc:
+            with bind_trace_context(
+                trace_id=run_id, run_id=run_id, session_id=session_id
+            ):
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    event="run.hook.stop_failed",
+                    message="Stop hook execution failed",
+                    exc_info=exc,
+                )
+            return None
+
+    async def _apply_terminal_hooks(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        result: RunResult,
+        allow_retry: bool,
+    ) -> RunResult:
+        current_result = self._normalize_terminal_run_result(result)
+        stop_retry_attempts = 0
+        while True:
+            hook_result = await self._run_stop_hook(
+                run_id=run_id,
+                session_id=session_id,
+                result=current_result,
+            )
+            if current_result.status != "completed":
+                return current_result
+            if (
+                not allow_retry
+                or stop_retry_attempts >= 1
+                or hook_result is None
+                or hook_result.decision != HookDecisionType.RETRY
+            ):
+                return current_result
+            followup = (
+                hook_result.additional_context.strip()
+                or hook_result.reason.strip()
+                or "Continue working and verify the answer before stopping."
+            )
+            if not self._append_followup_to_coordinator(
+                run_id,
+                followup,
+                enqueue=True,
+                source=InjectionSource.SYSTEM,
+            ):
+                return current_result
+            stop_retry_attempts += 1
+            with bind_trace_context(
+                trace_id=run_id, run_id=run_id, session_id=session_id
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event="run.hook.stop_retry",
+                    message="Stop hook requested another coordinator pass",
+                    payload={"attempt": stop_retry_attempts},
+                )
+            resumed_result = await self._run_with_auto_recovery(
+                run_id=run_id,
+                session_id=session_id,
+                runner=lambda: self._resume_existing_run(run_id),
+            )
+            current_result = self._normalize_terminal_run_result(resumed_result)
+
     def _runtime_for_run(self, run_id: str) -> RunRuntimeRecord | None:
         if self._run_runtime_repo is not None:
             runtime = self._run_runtime_repo.get(run_id)
@@ -356,6 +514,89 @@ class RunManager:
                 status=RunRuntimeStatus.RUNNING,
                 phase=RunRuntimePhase.COORDINATOR_RUNNING,
             )
+
+        session_start_result = await self._run_session_hook(
+            event_name=HookEventName.SESSION_START,
+            run_id=run_id,
+            session_id=session_id,
+        )
+        self._apply_session_hook_env(run_id=run_id, hook_result=session_start_result)
+        if (
+            session_start_result is not None
+            and session_start_result.decision == HookDecisionType.DENY
+        ):
+            result = self._build_completed_error_run_result(
+                run_id=run_id,
+                session_id=session_id,
+                error_code="hook_session_start_denied",
+                error_message=(
+                    session_start_result.reason
+                    or "Run was denied by runtime session hook."
+                ),
+            )
+            if self._run_runtime_repo is not None:
+                self._run_runtime_repo.update(
+                    run_id,
+                    root_task_id=result.root_task_id,
+                    status=RunRuntimeStatus.COMPLETED,
+                    phase=RunRuntimePhase.TERMINAL,
+                    active_instance_id=None,
+                    active_task_id=None,
+                    active_role_id=None,
+                    active_subagent_instance_id=None,
+                    last_error=result.error_message,
+                )
+            await self._run_session_hook(
+                event_name=HookEventName.SESSION_END,
+                run_id=run_id,
+                session_id=session_id,
+                status=result.status,
+                completion_reason=result.completion_reason.value,
+            )
+            self._clear_session_hook_env(run_id=run_id)
+            return result
+
+        if self._hook_service is not None:
+            hook_result = await self._hook_service.run_user_prompt_submit(
+                event=UserPromptSubmitHookInput(
+                    session_id=session_id,
+                    run_id=run_id,
+                    trace_id=run_id,
+                    prompt=intent.intent,
+                )
+            )
+            if hook_result.updated_input is not None:
+                intent.intent = hook_result.updated_input
+            if hook_result.decision == HookDecisionType.DENY:
+                result = self._build_completed_error_run_result(
+                    run_id=run_id,
+                    session_id=session_id,
+                    error_code="hook_prompt_denied",
+                    error_message=(
+                        hook_result.reason or "Prompt was denied by runtime hook."
+                    ),
+                )
+                if self._run_runtime_repo is not None:
+                    self._run_runtime_repo.update(
+                        run_id,
+                        root_task_id=result.root_task_id,
+                        status=RunRuntimeStatus.COMPLETED,
+                        phase=RunRuntimePhase.TERMINAL,
+                        active_instance_id=None,
+                        active_task_id=None,
+                        active_role_id=None,
+                        active_subagent_instance_id=None,
+                        last_error=result.error_message,
+                    )
+                await self._run_session_hook(
+                    event_name=HookEventName.SESSION_END,
+                    run_id=run_id,
+                    session_id=session_id,
+                    status=result.status,
+                    completion_reason=result.completion_reason.value,
+                )
+                self._clear_session_hook_env(run_id=run_id)
+                return result
         if self._run_intent_repo is not None:
             self._run_intent_repo.upsert(
                 run_id=run_id,
@@ -363,6 +604,9 @@ class RunManager:
                 intent=intent,
             )
         self._remember_active_run(session_id, run_id)
+        terminal_status = ""
+        terminal_completion_reason = ""
+        should_run_session_end = False
         with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
             log_event(
                 logger,
@@ -384,6 +628,15 @@ class RunManager:
                         ),
                     )
                 )
+                result = await self._apply_terminal_hooks(
+                    run_id=run_id,
+                    session_id=session_id,
+                    result=result,
+                    allow_retry=intent.run_kind == RunKind.CONVERSATION,
+                )
+                terminal_status = result.status
+                terminal_completion_reason = result.completion_reason.value
+                should_run_session_end = True
                 if self._run_runtime_repo is not None:
                     self._run_runtime_repo.update(
                         run_id,
@@ -426,6 +679,15 @@ class RunManager:
                     error_code="run_start_failed",
                     error_message=str(exc),
                 )
+                result = await self._apply_terminal_hooks(
+                    run_id=run_id,
+                    session_id=session_id,
+                    result=result,
+                    allow_retry=False,
+                )
+                terminal_status = result.status
+                terminal_completion_reason = result.completion_reason.value
+                should_run_session_end = True
                 if self._run_runtime_repo is not None:
                     self._run_runtime_repo.update(
                         run_id,
@@ -440,6 +702,15 @@ class RunManager:
                     )
                 return result
             finally:
+                if should_run_session_end:
+                    await self._run_session_hook(
+                        event_name=HookEventName.SESSION_END,
+                        run_id=run_id,
+                        session_id=session_id,
+                        status=terminal_status,
+                        completion_reason=terminal_completion_reason,
+                    )
+                self._clear_session_hook_env(run_id=run_id)
                 self._injection_manager.deactivate(run_id)
                 self._running_run_ids.discard(run_id)
 
@@ -1048,13 +1319,46 @@ class RunManager:
                 event="run.started",
                 message="Run worker started",
             )
+        terminal_session_status = ""
+        terminal_completion_reason = ""
+        should_run_session_end = False
         try:
-            raw_result = await self._run_with_auto_recovery(
+            session_start_result = await self._run_session_hook(
+                event_name=HookEventName.SESSION_START,
                 run_id=run_id,
                 session_id=session_id,
-                runner=runner,
             )
-            result = self._normalize_terminal_run_result(raw_result)
+            self._apply_session_hook_env(
+                run_id=run_id, hook_result=session_start_result
+            )
+            if (
+                session_start_result is not None
+                and session_start_result.decision == HookDecisionType.DENY
+            ):
+                raw_result = self._build_completed_error_run_result(
+                    run_id=run_id,
+                    session_id=session_id,
+                    error_code="hook_session_start_denied",
+                    error_message=(
+                        session_start_result.reason
+                        or "Run was denied by runtime session hook."
+                    ),
+                )
+            else:
+                raw_result = await self._run_with_auto_recovery(
+                    run_id=run_id,
+                    session_id=session_id,
+                    runner=runner,
+                )
+            result = await self._apply_terminal_hooks(
+                run_id=run_id,
+                session_id=session_id,
+                result=raw_result,
+                allow_retry=True,
+            )
+            terminal_session_status = result.status
+            terminal_completion_reason = result.completion_reason.value
+            should_run_session_end = True
             completion_reason = result.completion_reason
             failed = result.status == "failed"
             terminal_status = (
@@ -1163,6 +1467,9 @@ class RunManager:
                     payload=paused_payload,
                 )
         except asyncio.CancelledError:
+            terminal_session_status = "stopped"
+            terminal_completion_reason = "cancelled"
+            should_run_session_end = True
             self._safe_runtime_update(
                 run_id,
                 status=RunRuntimeStatus.STOPPED,
@@ -1203,7 +1510,15 @@ class RunManager:
                 error_code="run_worker_failed",
                 error_message=str(exc),
             )
-            result = self._normalize_terminal_run_result(result)
+            result = await self._apply_terminal_hooks(
+                run_id=run_id,
+                session_id=session_id,
+                result=result,
+                allow_retry=False,
+            )
+            terminal_session_status = result.status
+            terminal_completion_reason = result.completion_reason.value
+            should_run_session_end = True
             failed = result.status == "failed"
             output_text = result.output_text or str(result.error_message or "").strip()
             self._safe_runtime_update(
@@ -1266,6 +1581,14 @@ class RunManager:
                 ),
             )
         finally:
+            if should_run_session_end:
+                await self._run_session_hook(
+                    event_name=HookEventName.SESSION_END,
+                    run_id=run_id,
+                    session_id=session_id,
+                    status=terminal_session_status,
+                    completion_reason=terminal_completion_reason,
+                )
             if self._background_task_manager is not None:
                 try:
                     await self._background_task_manager.stop_all_for_run(
@@ -1286,6 +1609,7 @@ class RunManager:
                             message="Failed to clean up background tasks",
                             exc_info=exc,
                         )
+            self._clear_session_hook_env(run_id=run_id)
             self._safe_finalize_run(run_id=run_id, session_id=session_id)
 
     def _finalize_run(self, *, run_id: str, session_id: str) -> None:

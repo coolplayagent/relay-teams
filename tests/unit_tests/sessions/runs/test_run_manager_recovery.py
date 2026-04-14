@@ -64,6 +64,12 @@ from relay_teams.tools.workspace_tools.shell_approval_repo import (
 )
 from relay_teams.tools.workspace_tools.shell_policy import ShellRuntimeFamily
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.hooks import (
+    HookDecisionType,
+    HookEventName,
+    HookRuntimeEnvStore,
+    HookService,
+)
 
 
 class _MetaAgent:
@@ -111,6 +117,8 @@ def _build_manager(
     background_task_manager: BackgroundTaskManager | None = None,
     background_task_service: BackgroundTaskService | None = None,
     monitor_service: MonitorService | None = None,
+    hook_service: HookService | None = None,
+    hook_runtime_env_store: HookRuntimeEnvStore | None = None,
 ) -> RunManager:
     control = RunControlManager()
     injection = RunInjectionManager()
@@ -154,6 +162,8 @@ def _build_manager(
         monitor_service=monitor_service,
         notification_service=None,
         shell_approval_repo=shell_approval_repo,
+        hook_service=hook_service,
+        hook_runtime_env_store=hook_runtime_env_store,
     )
 
 
@@ -2304,3 +2314,345 @@ async def test_stream_run_events_does_not_start_pending_run_worker(
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+class _CapturingMetaAgent:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def handle_intent(self, intent, trace_id: str | None = None):
+        _ = trace_id
+        self.prompts.append(intent.intent)
+        return RunResult(
+            trace_id="run-hook",
+            root_task_id="task-hook",
+            status="completed",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+            output=content_parts_from_text("done"),
+        )
+
+    async def resume_run(self, *, trace_id: str):
+        raise AssertionError(f"not expected: {trace_id}")
+
+
+class _StaticPromptHookService:
+    def __init__(
+        self, decision: HookDecisionType, *, updated_input: str | None = None
+    ) -> None:
+        self._decision = decision
+        self._updated_input = updated_input
+
+    async def run_user_prompt_submit(self, *, event) -> object:
+        _ = event
+        return type(
+            "_HookResult",
+            (),
+            {
+                "decision": self._decision,
+                "reason": "blocked by hook"
+                if self._decision == HookDecisionType.DENY
+                else "",
+                "updated_input": self._updated_input,
+            },
+        )()
+
+
+def test_run_intent_prompt_hook_can_rewrite_prompt(tmp_path: Path) -> None:
+    meta_agent = _CapturingMetaAgent()
+    manager = _build_manager(
+        tmp_path / "run_prompt_hook_rewrite.db",
+        meta_agent=cast(object, meta_agent),
+        hook_service=cast(
+            HookService,
+            cast(
+                object,
+                _StaticPromptHookService(
+                    HookDecisionType.ALLOW,
+                    updated_input="rewritten prompt",
+                ),
+            ),
+        ),
+    )
+
+    result = asyncio.run(
+        manager.run_intent(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("original prompt"),
+            )
+        )
+    )
+
+    assert result.status == "completed"
+    assert meta_agent.prompts == ["rewritten prompt"]
+
+
+def test_run_intent_prompt_hook_can_deny_prompt(tmp_path: Path) -> None:
+    meta_agent = _CapturingMetaAgent()
+    manager = _build_manager(
+        tmp_path / "run_prompt_hook_deny.db",
+        meta_agent=cast(object, meta_agent),
+        hook_service=cast(
+            HookService,
+            cast(object, _StaticPromptHookService(HookDecisionType.DENY)),
+        ),
+    )
+
+    result = asyncio.run(
+        manager.run_intent(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("blocked prompt"),
+            )
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "hook_prompt_denied"
+    assert meta_agent.prompts == []
+
+
+class _LifecycleMetaAgent:
+    def __init__(self) -> None:
+        self.handle_calls = 0
+        self.resume_calls = 0
+
+    async def handle_intent(self, intent, trace_id: str | None = None):
+        _ = intent
+        self.handle_calls += 1
+        return RunResult(
+            trace_id=trace_id or "run-existing",
+            root_task_id="task-root-1",
+            status="completed",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+            output=content_parts_from_text("first pass"),
+        )
+
+    async def resume_run(self, *, trace_id: str):
+        self.resume_calls += 1
+        return RunResult(
+            trace_id=trace_id,
+            root_task_id="task-root-1",
+            status="completed",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+            output=content_parts_from_text("second pass"),
+        )
+
+
+class _LifecycleHookService:
+    def __init__(
+        self,
+        *,
+        session_start_decision: HookDecisionType = HookDecisionType.ALLOW,
+        stop_decision: HookDecisionType = HookDecisionType.ALLOW,
+        stop_additional_context: str = "",
+    ) -> None:
+        self.session_start_decision = session_start_decision
+        self.stop_decision = stop_decision
+        self.stop_additional_context = stop_additional_context
+        self.session_events: list[tuple[str, str]] = []
+        self.stop_events: list[str] = []
+        self.session_start_env: dict[str, str] = {}
+
+    async def run_user_prompt_submit(self, *, event) -> object:
+        _ = event
+        return type(
+            "_HookResult",
+            (),
+            {
+                "decision": HookDecisionType.ALLOW,
+                "reason": "",
+                "updated_input": None,
+            },
+        )()
+
+    async def run_session_event(self, *, event_name, event) -> object:
+        self.session_events.append((event_name.value, event.status))
+        if event_name == HookEventName.SESSION_START:
+            self.session_start_env = {"HOOK_FLAG": "enabled"}
+        decision = (
+            self.session_start_decision
+            if event_name == HookEventName.SESSION_START
+            else HookDecisionType.CONTINUE
+        )
+        reason = (
+            "blocked by session hook"
+            if event_name == HookEventName.SESSION_START
+            and decision == HookDecisionType.DENY
+            else ""
+        )
+        return type(
+            "_SessionHookResult",
+            (),
+            {
+                "decision": decision,
+                "reason": reason,
+                "updated_input": None,
+                "additional_context": "",
+                "set_env": self.session_start_env
+                if event_name == HookEventName.SESSION_START
+                else {},
+                "matched_handlers": 1,
+            },
+        )()
+
+    async def run_stop_event(self, *, event_name, event) -> object:
+        _ = event
+        self.stop_events.append(event_name.value)
+        return type(
+            "_StopHookResult",
+            (),
+            {
+                "decision": self.stop_decision,
+                "reason": "needs another pass"
+                if self.stop_decision == HookDecisionType.RETRY
+                else "",
+                "updated_input": None,
+                "additional_context": self.stop_additional_context,
+                "set_env": {},
+                "matched_handlers": 1,
+            },
+        )()
+
+
+def test_run_intent_session_start_hook_can_deny_run(tmp_path: Path) -> None:
+    meta_agent = _CapturingMetaAgent()
+    hook_service = _LifecycleHookService(
+        session_start_decision=HookDecisionType.DENY,
+    )
+    manager = _build_manager(
+        tmp_path / "run_session_start_hook_deny.db",
+        meta_agent=cast(object, meta_agent),
+        hook_service=cast(HookService, cast(object, hook_service)),
+    )
+
+    result = asyncio.run(
+        manager.run_intent(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("blocked prompt"),
+            )
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "hook_session_start_denied"
+    assert meta_agent.prompts == []
+    assert hook_service.session_events[0] == (HookEventName.SESSION_START.value, "")
+    assert hook_service.session_events[-1] == (
+        HookEventName.SESSION_END.value,
+        "failed",
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_stop_hook_can_resume_with_followup(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_worker_stop_hook_retry.db"
+    meta_agent = _LifecycleMetaAgent()
+    hook_service = _LifecycleHookService(
+        stop_decision=HookDecisionType.RETRY,
+        stop_additional_context="Please verify the result and continue if needed.",
+    )
+    manager = _build_manager(
+        db_path,
+        meta_agent=cast(object, meta_agent),
+        hook_service=cast(HookService, cast(object, hook_service)),
+    )
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+    manager._running_run_ids.add("run-existing")
+    manager._injection_manager.activate("run-existing")
+    _upsert_coordinator(AgentInstanceRepository(db_path))
+    _create_root_task(TaskRepository(db_path))
+
+    async def runner() -> RunResult:
+        return await meta_agent.handle_intent(None, trace_id="run-existing")
+
+    await manager._worker(
+        run_id="run-existing",
+        session_id="session-1",
+        runner=runner,
+    )
+
+    runtime = runtime_repo.get("run-existing")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.COMPLETED
+    assert meta_agent.handle_calls == 1
+    assert meta_agent.resume_calls == 1
+    assert hook_service.stop_events == [
+        HookEventName.STOP.value,
+        HookEventName.STOP.value,
+    ]
+
+    coordinator_messages = MessageRepository(db_path).get_messages_for_instance(
+        "session-1",
+        "inst-1",
+    )
+    assert any(
+        "Please verify the result and continue if needed."
+        in json.dumps(message["message"], ensure_ascii=False)
+        for message in coordinator_messages
+    )
+    assert hook_service.session_events[-1] == (
+        HookEventName.SESSION_END.value,
+        "completed",
+    )
+
+
+def test_run_intent_session_start_hook_stores_and_clears_env(tmp_path: Path) -> None:
+    class _EnvAwareMetaAgent:
+        def __init__(self, env_store: HookRuntimeEnvStore) -> None:
+            self._env_store = env_store
+            self.seen_env: dict[str, str] = {}
+            self.run_id: str | None = None
+
+        async def handle_intent(self, intent, trace_id: str | None = None):
+            _ = intent
+            if trace_id is None:
+                raise AssertionError("expected trace_id")
+            self.run_id = trace_id
+            self.seen_env = self._env_store.get(trace_id)
+            return RunResult(
+                trace_id=trace_id,
+                root_task_id="task-hook-env",
+                status="completed",
+                completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+                output=content_parts_from_text("done"),
+            )
+
+        async def resume_run(self, *, trace_id: str):
+            raise AssertionError(f"not expected: {trace_id}")
+
+    env_store = HookRuntimeEnvStore()
+    hook_service = _LifecycleHookService()
+    meta_agent = _EnvAwareMetaAgent(env_store)
+    manager = _build_manager(
+        tmp_path / "run_session_start_hook_env.db",
+        meta_agent=cast(object, meta_agent),
+        hook_service=cast(HookService, cast(object, hook_service)),
+        hook_runtime_env_store=env_store,
+    )
+
+    result = asyncio.run(
+        manager.run_intent(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("prompt"),
+            )
+        )
+    )
+
+    assert result.status == "completed"
+    assert meta_agent.run_id is not None
+    assert meta_agent.seen_env == {"HOOK_FLAG": "enabled"}
+    assert env_store.get(meta_agent.run_id) == {}

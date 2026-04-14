@@ -282,8 +282,8 @@ function createModal() {
                                                         </button>
                                                     </div>
                                                 </div>
-                                                <div class="form-group-span-2" id="profile-maas-model-slot"></div>
                                             </div>
+                                                <div class="form-group" id="profile-maas-model-slot" style="display:none;"></div>
                                         </div>
                                         <div class="profile-model-discovery-status" id="profile-model-discovery-status" style="display:none;"></div>
                                         <div class="profile-editor-subsection">
