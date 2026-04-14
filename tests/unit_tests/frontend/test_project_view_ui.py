@@ -561,6 +561,78 @@ console.log(JSON.stringify({
     ]
 
 
+def test_project_view_edits_github_account_with_inline_submit_handler(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationGitHubView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockGitHubAccounts = [
+    {
+        account_id: "ghta_1",
+        name: "github-main",
+        display_name: "GitHub Main",
+        status: "enabled",
+        token_configured: true,
+        webhook_secret_configured: true,
+    },
+];
+globalThis.__showFormDialogResult = {
+    name: "github-main",
+    display_name: "GitHub Main",
+    token: "",
+    clear_token: false,
+    webhook_secret: "",
+    clear_webhook_secret: false,
+    enabled: true,
+};
+
+initializeProjectView();
+await openAutomationGitHubView("account:ghta_1");
+await flushTasks();
+await flushTasks();
+
+const editButton = document.querySelector('[data-github-account-edit]');
+editButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(editButton),
+    submitHandlerType: typeof dialogCall.submitHandler,
+    updatedPayload: globalThis.__updatedGitHubAccountPayload || null,
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["submitHandlerType"] == "function"
+    assert payload["updatedPayload"] == {
+        "accountId": "ghta_1",
+        "payload": {
+            "name": "github-main",
+            "display_name": "GitHub Main",
+            "enabled": True,
+        },
+    }
+    assert payload["toastCalls"] == [
+        {
+            "title": "Saved",
+            "message": "GitHub Main",
+            "tone": "success",
+        }
+    ]
+
+
 def test_project_view_creates_github_repo_from_repository_dropdown(
     tmp_path: Path,
 ) -> None:
@@ -3178,6 +3250,9 @@ export const state = {
         "feature.automation.github_account_required": "Account name is required.",
         "feature.automation.github_repo_required": "Repository name is required.",
         "feature.automation.github_repo_options_empty": "No repositories are available for this account token.",
+        "feature.automation.github_saved_title": "Saved",
+        "feature.automation.github_failed_title": "Save failed",
+        "feature.automation.github_deleted_title": "Deleted",
         "feature.gateway.title": "IM Gateway",
         "feature.gateway.summary": "{feishu} Feishu · {wechat} WeChat",
         "feature.gateway.add_feishu": "Add Robot",

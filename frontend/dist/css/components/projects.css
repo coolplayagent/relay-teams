@@ -1451,6 +1451,32 @@
     flex: 0 0 auto;
 }
 
+.github-rule-row {
+    align-items: center;
+}
+
+.github-rule-heading {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.github-rule-heading strong {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.github-rule-actions {
+    flex: 0 0 auto;
+    justify-content: flex-end;
+}
+
+.github-rule-copy {
+    margin-top: 0.55rem;
+}
+
 @media (max-width: 960px) {
     .automation-hero-grid,
     .automation-detail-grid,
@@ -1462,6 +1488,19 @@
     .automation-run-row {
         flex-direction: column;
         align-items: flex-start;
+    }
+
+    .github-rule-row {
+        align-items: stretch;
+    }
+
+    .github-rule-heading {
+        flex-wrap: wrap;
+    }
+
+    .github-rule-actions {
+        width: 100%;
+        justify-content: flex-start;
     }
 }
 
