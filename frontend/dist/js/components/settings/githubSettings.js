@@ -428,11 +428,18 @@ function buildGitHubWebhookProbeMessage(result) {
         });
     }
 
-    const reason = result.error_message || result.error_code || 'Unknown error';
+    const reason = resolveGitHubWebhookProbeReason(result);
     return formatMessage('settings.github.webhook_probe_reason', {
         final_url: finalUrl,
         reason,
     });
+}
+
+function resolveGitHubWebhookProbeReason(result) {
+    if (result?.error_code === 'temporary_public_url_inactive') {
+        return t('settings.github.webhook_probe_temporary_public_url_inactive');
+    }
+    return result.error_message || result.error_code || 'Unknown error';
 }
 
 function renderGitHubProbeState(fieldIds) {

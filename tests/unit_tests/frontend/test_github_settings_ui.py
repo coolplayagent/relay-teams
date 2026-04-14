@@ -76,7 +76,7 @@ console.log(JSON.stringify({
     assert payload["webhookProbeStatusDisplay"] == "block"
     assert (
         "Webhook reachability OK: 200 in 44ms via "
-        "https://agent-teams.example.com/api/system/health"
+        "https://agent-teams.example.com/app/api/system/health"
     ) in cast(str, payload["webhookProbeStatusText"])
     assert payload["probeButtonText"] == "Test Connection"
     assert payload["webhookProbeButtonText"] == "Test Callback URL"
@@ -235,6 +235,47 @@ console.log(JSON.stringify({
     ]
 
 
+def test_github_settings_panel_explains_inactive_temporary_public_url(
+    tmp_path: Path,
+) -> None:
+    payload = _run_github_settings_script(
+        tmp_path=tmp_path,
+        fetch_config={
+            "token": None,
+            "token_configured": False,
+            "webhook_base_url": "https://expired-tunnel.lhr.life",
+        },
+        probe_webhook_result={
+            "ok": False,
+            "status_code": 503,
+            "error_code": "temporary_public_url_inactive",
+            "error_message": "Temporary public URL is inactive. Create a new temporary URL and retry.",
+            "latency_ms": 31,
+        },
+        runner_source="""
+import { bindGitHubSettingsHandlers, loadGitHubSettingsPanel } from "./githubSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindGitHubSettingsHandlers();
+await loadGitHubSettingsPanel();
+await document.getElementById("test-github-webhook-btn").onclick();
+
+console.log(JSON.stringify({
+    webhookProbeStatusText: document.getElementById("github-webhook-probe-status").textContent,
+}));
+""".strip(),
+    )
+
+    assert payload["webhookProbeStatusText"] == (
+        "Webhook reachability failed for "
+        "https://expired-tunnel.lhr.life/api/system/health: "
+        "Temporary public URL is inactive. Create a new temporary URL and retry the callback test."
+    )
+
+
 def test_github_settings_panel_shows_empty_callback_preview_without_public_base_url(
     tmp_path: Path,
 ) -> None:
@@ -341,6 +382,7 @@ def _run_github_settings_script(
     runner_source: str,
     *,
     fetch_config: dict[str, JsonValue] | None = None,
+    probe_webhook_result: dict[str, JsonValue] | None = None,
 ) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -365,6 +407,14 @@ def _run_github_settings_script(
         "webhook_base_url": None,
     }
     fetch_github_config_json = json.dumps(fetch_github_config)
+    probe_github_webhook_result = probe_webhook_result or {
+        "ok": True,
+        "status_code": 200,
+        "latency_ms": 44,
+        "error_code": None,
+        "error_message": None,
+    }
+    probe_github_webhook_result_json = json.dumps(probe_github_webhook_result)
     mock_api_path.write_text(
         """
 let currentConfig = __FETCH_GITHUB_CONFIG__;
@@ -421,13 +471,11 @@ export async function probeGitHubConnectivity(payload) {
 export async function probeGitHubWebhookConnectivity(payload) {
     globalThis.__probeGitHubWebhookPayload = payload;
     return {
-        ok: true,
         webhook_base_url: payload.webhook_base_url,
         callback_url: `${payload.webhook_base_url}/api/triggers/github/deliveries`,
-        health_url: "https://agent-teams.example.com/api/system/health",
-        final_url: "https://agent-teams.example.com/api/system/health",
-        status_code: 200,
-        latency_ms: 44,
+        health_url: `${payload.webhook_base_url}/api/system/health`,
+        final_url: `${payload.webhook_base_url}/api/system/health`,
+        ...__PROBE_GITHUB_WEBHOOK_RESULT__,
     };
 }
 
@@ -465,7 +513,9 @@ export async function stopGitHubWebhookTunnel(payload) {
     }
     return currentTunnelStatus;
 }
-""".replace("__FETCH_GITHUB_CONFIG__", fetch_github_config_json).strip(),
+""".replace("__FETCH_GITHUB_CONFIG__", fetch_github_config_json)
+        .replace("__PROBE_GITHUB_WEBHOOK_RESULT__", probe_github_webhook_result_json)
+        .strip(),
         encoding="utf-8",
     )
     mock_feedback_path.write_text(
@@ -493,6 +543,7 @@ const translations = {
     "settings.github.webhook_probe_failed": "Webhook reachability probe failed: {error}",
     "settings.github.webhook_probe_success": "Webhook reachability OK: {status_code} in {latency_ms}ms via {final_url}",
     "settings.github.webhook_probe_reason": "Webhook reachability failed for {final_url}: {reason}",
+    "settings.github.webhook_probe_temporary_public_url_inactive": "Temporary public URL is inactive. Create a new temporary URL and retry the callback test.",
     "settings.github.test_connection": "Test Connection",
     "settings.github.test_webhook": "Test Callback URL",
     "settings.github.testing": "Testing...",
