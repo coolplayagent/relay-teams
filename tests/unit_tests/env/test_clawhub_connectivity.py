@@ -69,6 +69,10 @@ def test_clawhub_probe_validates_token_without_passing_it_on_cli(
         "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
     )
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.os.environ",
+        {"PATH": "/usr/bin"},
+    )
     observed_commands: list[list[str]] = []
 
     def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -177,6 +181,10 @@ def test_clawhub_probe_rejects_invalid_token_when_auth_validation_fails(
         "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
     )
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.os.environ",
+        {"PATH": "/usr/bin"},
+    )
 
     def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         command = kwargs.get("args")
@@ -232,6 +240,10 @@ def test_clawhub_probe_installs_missing_binary(monkeypatch) -> None:
             registry="https://mirrors.huaweicloud.com/repository/npm/",
         ),
     )
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.os.environ",
+        {"PATH": "/usr/bin"},
+    )
 
     def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         command = kwargs.get("args")
@@ -274,3 +286,63 @@ def test_clawhub_probe_installs_missing_binary(monkeypatch) -> None:
     assert result.diagnostics.token_configured is True
     assert result.diagnostics.installation_attempted is True
     assert result.diagnostics.installed_during_probe is True
+
+
+def test_clawhub_probe_retries_without_endpoint_overrides_for_invalid_user_payload(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
+        lambda: Path("/usr/bin/clawhub"),
+    )
+    monkeypatch.setattr(
+        "relay_teams.env.clawhub_connectivity.os.environ",
+        {"LANG": "zh_CN.UTF-8", "PATH": "/usr/bin"},
+    )
+    observed_envs: list[dict[str, str]] = []
+
+    def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = kwargs.get("args")
+        if not isinstance(command, list):
+            command = _args[0]
+        assert isinstance(command, list)
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        observed_envs.append(dict(env))
+        if command[1] == "--cli-version":
+            assert env["CLAWHUB_REGISTRY"] == "https://mirror-cn.clawhub.com"
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="0.4.2\n",
+                stderr="",
+            )
+        assert command[1] == "whoami"
+        if len(observed_envs) == 2:
+            assert env["CLAWHUB_REGISTRY"] == "https://mirror-cn.clawhub.com"
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=1,
+                stdout="",
+                stderr="- Checking token\nValidation error\nuser: invalid value",
+            )
+        assert "CLAWHUB_REGISTRY" not in env
+        assert "CLAWHUB_SITE" not in env
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="",
+            stderr="- Checking token\n✔ steven",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    service = ClawHubConnectivityProbeService(
+        config_dir=Path("/tmp/.relay-teams"),
+        get_clawhub_config=lambda: ClawHubConfig(token=None),
+    )
+
+    result = service.probe(ClawHubConnectivityProbeRequest(token="ch_secret"))
+
+    assert result.ok is True
+    assert result.diagnostics.registry == "https://mirror-cn.clawhub.com"
+    assert result.diagnostics.endpoint_fallback_used is True

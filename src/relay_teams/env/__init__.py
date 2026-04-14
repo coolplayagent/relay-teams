@@ -45,6 +45,7 @@ from relay_teams.env.clawhub_env import (
     resolve_clawhub_site_from_env,
     resolve_default_clawhub_site,
     resolve_clawhub_token_from_env,
+    strip_clawhub_endpoint_overrides,
 )
 from relay_teams.env.proxy_env import (
     ProxyEnvConfig,
@@ -153,6 +154,7 @@ __all__ = [
     "resolve_default_clawhub_site",
     "resolve_existing_clawhub_path",
     "resolve_clawhub_token_from_env",
+    "strip_clawhub_endpoint_overrides",
     "normalize_github_token",
     "resolve_github_token_from_env",
     "sync_proxy_env_to_process_env",

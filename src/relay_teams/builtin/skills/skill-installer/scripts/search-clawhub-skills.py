@@ -5,7 +5,7 @@ import argparse
 import json
 import sys
 
-from relay_teams.skills.clawhub_search_service import search_clawhub_skills
+from relay_teams.skills.clawhub_cli_support import run_clawhub_search
 
 
 def main() -> int:
@@ -15,21 +15,21 @@ def main() -> int:
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args()
 
-    result = search_clawhub_skills(
+    result = run_clawhub_search(
         query=" ".join(part for part in args.query if part.strip()),
         limit=args.limit,
     )
-    if not result.ok:
+    if not result["ok"]:
         print(
-            result.error_message or "ClawHub skill search failed.",
+            str(result.get("error_message") or "ClawHub skill search failed."),
             file=sys.stderr,
         )
         return 1
 
     if args.format == "json":
-        print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False))
+        print(json.dumps(result, ensure_ascii=False))
     else:
-        print(_render_search_text(result.model_dump(mode="json")))
+        print(_render_search_text(result))
     return 0
 
 

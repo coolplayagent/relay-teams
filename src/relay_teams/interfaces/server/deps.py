@@ -39,8 +39,6 @@ from relay_teams.roles.settings_service import RoleSettingsService
 from relay_teams.sessions import SessionService
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
-from relay_teams.skills.clawhub_install_service import ClawHubSkillInstallService
-from relay_teams.skills.clawhub_search_service import ClawHubSkillSearchService
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
@@ -186,14 +184,6 @@ def get_skill_runtime_service(request: Request) -> SkillRuntimeService:
 
 def get_clawhub_skill_service(request: Request) -> ClawHubSkillService:
     return get_container(request).clawhub_skill_service
-
-
-def get_clawhub_search_service(request: Request) -> ClawHubSkillSearchService:
-    return get_container(request).clawhub_search_service
-
-
-def get_clawhub_install_service(request: Request) -> ClawHubSkillInstallService:
-    return get_container(request).clawhub_install_service
 
 
 def get_metrics_service(request: Request) -> MetricsService:

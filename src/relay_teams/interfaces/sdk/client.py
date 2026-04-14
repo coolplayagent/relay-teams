@@ -94,45 +94,6 @@ class AgentTeamsClient:
             return [item for item in raw if isinstance(item, dict)]
         return []
 
-    def search_clawhub_skills(
-        self,
-        *,
-        query: str,
-        limit: int | None = None,
-        token: str | None = None,
-    ) -> dict[str, JsonValue]:
-        payload: dict[str, JsonValue] = {"query": query}
-        if limit is not None:
-            payload["limit"] = limit
-        if token is not None:
-            payload["token"] = token
-        return self._request_json(
-            "POST",
-            "/api/system/configs/clawhub/skills:search",
-            payload,
-        )
-
-    def install_clawhub_skill(
-        self,
-        *,
-        slug: str,
-        version: str | None = None,
-        force: bool | None = None,
-        token: str | None = None,
-    ) -> dict[str, JsonValue]:
-        payload: dict[str, JsonValue] = {"slug": slug}
-        if version is not None:
-            payload["version"] = version
-        if force is not None:
-            payload["force"] = force
-        if token is not None:
-            payload["token"] = token
-        return self._request_json(
-            "POST",
-            "/api/system/configs/clawhub/skills:install",
-            payload,
-        )
-
     def get_clawhub_skill(self, skill_id: str) -> dict[str, JsonValue]:
         return self._request_json(
             "GET",

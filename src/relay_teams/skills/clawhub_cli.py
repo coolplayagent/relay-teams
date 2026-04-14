@@ -109,81 +109,6 @@ def build_clawhub_app(
             return
         _render_skill_summary_table(items)
 
-    @skills_app.command("search")
-    def skills_search(
-        query: str = typer.Argument(..., help="ClawHub search query."),
-        output_format: ClawHubOutputFormat = typer.Option(
-            ClawHubOutputFormat.TABLE,
-            "--format",
-            help="Render as an ASCII table or JSON.",
-            case_sensitive=False,
-        ),
-        limit: int = typer.Option(
-            10,
-            "--limit",
-            min=1,
-            max=50,
-            help="Maximum number of search results.",
-        ),
-        base_url: str = typer.Option(default_base_url, "--base-url"),
-        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-    ) -> None:
-        auto_start_if_needed(base_url, autostart)
-        payload: dict[str, object] = {"query": query, "limit": limit}
-        result = request_json(
-            base_url,
-            "POST",
-            "/api/system/configs/clawhub/skills:search",
-            payload,
-        )
-        data = _require_object_response(
-            result, "/api/system/configs/clawhub/skills:search"
-        )
-        if output_format == ClawHubOutputFormat.JSON:
-            typer.echo(json.dumps(data, ensure_ascii=False))
-            return
-        _render_skill_search_result(data)
-
-    @skills_app.command("install")
-    def skills_install(
-        slug: str = typer.Argument(..., help="ClawHub skill slug."),
-        version: str | None = typer.Option(
-            None,
-            "--version",
-            help="Install a specific ClawHub skill version.",
-        ),
-        force: bool = typer.Option(
-            False,
-            "--force",
-            help="Overwrite an existing skill directory if needed.",
-        ),
-        output_format: ClawHubOutputFormat = typer.Option(
-            ClawHubOutputFormat.TABLE,
-            "--format",
-            help="Render as an ASCII table or JSON.",
-            case_sensitive=False,
-        ),
-        base_url: str = typer.Option(default_base_url, "--base-url"),
-        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-    ) -> None:
-        auto_start_if_needed(base_url, autostart)
-        payload: dict[str, object] = {"slug": slug, "force": force}
-        if version is not None:
-            payload["version"] = version
-        result = request_json(
-            base_url,
-            "POST",
-            "/api/system/configs/clawhub/skills:install",
-            payload,
-        )
-        data = _require_object_response(
-            result, "/api/system/configs/clawhub/skills:install"
-        )
-        if output_format == ClawHubOutputFormat.JSON:
-            typer.echo(json.dumps(data, ensure_ascii=False))
-            return
-        _render_skill_install_result(data)
-
     @skills_app.command("get")
     def skills_get(
         skill_id: str = typer.Argument(..., help="ClawHub skill directory id."),
@@ -323,54 +248,6 @@ def _render_skill_summary_table(items: list[dict[str, object]]) -> None:
     typer.echo(border)
 
 
-def _render_skill_search_result(payload: dict[str, object]) -> None:
-    raw_items = payload.get("items")
-    if not isinstance(raw_items, list):
-        raise RuntimeError(
-            "Expected search result items from /api/system/configs/clawhub/skills:search"
-        )
-    items = [item for item in raw_items if isinstance(item, dict)]
-    query = str(payload.get("query") or "").strip()
-    if query:
-        typer.echo(f'ClawHub search results for "{query}":')
-    else:
-        typer.echo("ClawHub search results:")
-    if not items:
-        typer.echo("<none>")
-        return
-    slug_width = max(len("Slug"), *(len(str(item.get("slug") or "")) for item in items))
-    version_width = max(
-        len("Version"),
-        *(len(str(item.get("version") or "")) for item in items),
-    )
-    title_width = max(
-        len("Title"), *(len(str(item.get("title") or "")) for item in items)
-    )
-    score_width = max(
-        len("Score"), *(len(str(item.get("score") or "")) for item in items)
-    )
-    border = (
-        f"+-{'-' * slug_width}-+-{'-' * version_width}-+-{'-' * title_width}-"
-        f"+-{'-' * score_width}-+"
-    )
-    typer.echo(border)
-    typer.echo(
-        f"| {'Slug'.ljust(slug_width)} | "
-        f"{'Version'.ljust(version_width)} | "
-        f"{'Title'.ljust(title_width)} | "
-        f"{'Score'.ljust(score_width)} |"
-    )
-    typer.echo(border)
-    for item in items:
-        typer.echo(
-            f"| {str(item.get('slug') or '').ljust(slug_width)} | "
-            f"{str(item.get('version') or '').ljust(version_width)} | "
-            f"{str(item.get('title') or '').ljust(title_width)} | "
-            f"{str(item.get('score') or '').ljust(score_width)} |"
-        )
-    typer.echo(border)
-
-
 def _render_skill_detail(item: dict[str, object]) -> None:
     typer.echo(f"Skill ID: {item.get('skill_id', '')}")
     typer.echo(f"Runtime Name: {item.get('runtime_name', '')}")
@@ -383,27 +260,3 @@ def _render_skill_detail(item: dict[str, object]) -> None:
     files = item.get("files")
     if isinstance(files, list):
         typer.echo(f"Files: {len(files)}")
-
-
-def _render_skill_install_result(payload: dict[str, object]) -> None:
-    slug = str(payload.get("slug") or "").strip()
-    typer.echo(f"ClawHub install result for {slug or '<unknown>'}:")
-    if not payload.get("ok"):
-        typer.echo(str(payload.get("error_message") or "Install failed."))
-        return
-    installed_skill = payload.get("installed_skill")
-    if isinstance(installed_skill, dict):
-        typer.echo(
-            "Installed: "
-            + str(installed_skill.get("directory") or "<unknown directory>")
-        )
-        typer.echo(
-            "Runtime name: " + str(installed_skill.get("runtime_name") or "<unknown>")
-        )
-        typer.echo("Runtime ref: " + str(installed_skill.get("ref") or "<unknown>"))
-    diagnostics = payload.get("diagnostics")
-    if isinstance(diagnostics, dict):
-        typer.echo(
-            "Skills reloaded: "
-            + ("yes" if bool(diagnostics.get("skills_reloaded")) else "no")
-        )

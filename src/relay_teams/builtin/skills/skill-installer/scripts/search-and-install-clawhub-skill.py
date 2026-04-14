@@ -5,8 +5,10 @@ import argparse
 import json
 import sys
 
-from relay_teams.skills.clawhub_install_service import install_clawhub_skill
-from relay_teams.skills.clawhub_search_service import search_clawhub_skills
+from relay_teams.skills.clawhub_cli_support import (
+    run_clawhub_install,
+    run_clawhub_search,
+)
 
 
 def main() -> int:
@@ -19,32 +21,32 @@ def main() -> int:
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args()
 
-    search_result = search_clawhub_skills(
+    search_result = run_clawhub_search(
         query=args.query,
         limit=args.search_limit,
     )
-    if not search_result.ok:
+    if not bool(search_result.get("ok")):
         print(
-            search_result.error_message or "ClawHub skill search failed.",
+            str(search_result.get("error_message") or "ClawHub skill search failed."),
             file=sys.stderr,
         )
         return 1
 
-    install_result = install_clawhub_skill(
+    install_result = run_clawhub_install(
         slug=args.slug,
         version=args.version,
         force=args.force,
     )
-    if not install_result.ok:
+    if not bool(install_result.get("ok")):
         print(
-            install_result.error_message or "ClawHub skill install failed.",
+            str(install_result.get("error_message") or "ClawHub skill install failed."),
             file=sys.stderr,
         )
         return 1
 
     payload: dict[str, object] = {
-        "search": search_result.model_dump(mode="json"),
-        "install": install_result.model_dump(mode="json"),
+        "search": search_result,
+        "install": install_result,
     }
     if args.format == "json":
         print(json.dumps(payload, ensure_ascii=False))
