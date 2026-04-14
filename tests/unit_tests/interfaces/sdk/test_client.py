@@ -178,9 +178,6 @@ def test_clawhub_sdk_calls_expected_endpoints(monkeypatch) -> None:
     assert client.probe_clawhub_connectivity(token="ch_secret", timeout_ms=2500) == {
         "status": "ok"
     }
-    assert client.search_clawhub_skills(query="skill creator", limit=5) == {
-        "status": "ok"
-    }
     assert client.install_clawhub_skill(
         slug="skill-creator-2",
         version="v1.2.3",
@@ -200,11 +197,6 @@ def test_clawhub_sdk_calls_expected_endpoints(monkeypatch) -> None:
             "POST",
             "/api/system/configs/clawhub:probe",
             {"token": "ch_secret", "timeout_ms": 2500},
-        ),
-        (
-            "POST",
-            "/api/system/configs/clawhub/skills:search",
-            {"query": "skill creator", "limit": 5},
         ),
         (
             "POST",

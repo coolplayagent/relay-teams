@@ -332,41 +332,6 @@ Notes:
 - `runtime_name` is the runtime authorization identity used by the skill registry.
 - These values may differ.
 
-### `POST /system/configs/clawhub/skills:search`
-
-Searches the remote ClawHub registry by keyword or slug using the local `clawhub` CLI.
-
-The search currently:
-- auto-installs `clawhub` with `npm install -g clawhub` when missing, preferring `https://mirrors.huaweicloud.com/repository/npm/`
-- injects the saved or supplied `CLAWHUB_TOKEN` when present
-- applies China defaults for both `CLAWHUB_SITE` and `CLAWHUB_REGISTRY`
-- retries once without `CLAWHUB_SITE` and `CLAWHUB_REGISTRY` when the configured endpoint returns a malformed validation payload
-
-Request body:
-- `query`
-- optional `limit`
-- optional `token`
-
-Response fields include:
-- `ok`
-- `query`
-- `items[]`
-  - `slug`
-  - `title`
-  - optional `version`
-  - optional `score`
-- `clawhub_path`
-- `latency_ms`
-- `checked_at`
-- `diagnostics.binary_available`
-- `diagnostics.token_configured`
-- `diagnostics.installation_attempted`
-- `diagnostics.installed_during_search`
-- optional `diagnostics.registry`
-- `diagnostics.endpoint_fallback_used`
-- optional `error_code`
-- optional `error_message`
-
 ### `POST /system/configs/clawhub/skills:install`
 
 Installs a remote ClawHub skill into the Agent Teams app config directory by running `clawhub --workdir <app-config-dir> install <slug>`.

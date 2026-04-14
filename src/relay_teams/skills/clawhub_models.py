@@ -51,23 +51,6 @@ class ClawHubSkillDetail(ClawHubSkillSummary):
     files: tuple[ClawHubSkillFile, ...] = ()
 
 
-class ClawHubRemoteSkillSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    slug: RequiredIdentifierStr
-    title: str = Field(min_length=1)
-    version: str | None = None
-    score: float | None = None
-
-
-class ClawHubSkillSearchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    query: str = Field(min_length=1)
-    limit: int = Field(default=10, ge=1, le=50)
-    token: str | None = None
-
-
 class ClawHubSkillInstallRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -75,17 +58,6 @@ class ClawHubSkillInstallRequest(BaseModel):
     version: str | None = None
     force: bool = False
     token: str | None = None
-
-
-class ClawHubSkillSearchDiagnostics(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    binary_available: bool
-    token_configured: bool
-    installation_attempted: bool = False
-    installed_during_search: bool = False
-    registry: str | None = None
-    endpoint_fallback_used: bool = False
 
 
 class ClawHubSkillInstallDiagnostics(BaseModel):
@@ -99,21 +71,6 @@ class ClawHubSkillInstallDiagnostics(BaseModel):
     endpoint_fallback_used: bool = False
     workdir: str | None = None
     skills_reloaded: bool = False
-
-
-class ClawHubSkillSearchResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    ok: bool
-    query: str = Field(min_length=1)
-    items: tuple[ClawHubRemoteSkillSummary, ...] = ()
-    clawhub_path: str | None = None
-    latency_ms: int = Field(ge=0)
-    checked_at: datetime
-    diagnostics: ClawHubSkillSearchDiagnostics
-    retryable: bool = False
-    error_code: str | None = None
-    error_message: str | None = None
 
 
 class ClawHubSkillInstallResult(BaseModel):

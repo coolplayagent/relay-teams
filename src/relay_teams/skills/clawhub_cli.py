@@ -109,41 +109,6 @@ def build_clawhub_app(
             return
         _render_skill_summary_table(items)
 
-    @skills_app.command("search")
-    def skills_search(
-        query: str = typer.Argument(..., help="ClawHub search query."),
-        output_format: ClawHubOutputFormat = typer.Option(
-            ClawHubOutputFormat.TABLE,
-            "--format",
-            help="Render as an ASCII table or JSON.",
-            case_sensitive=False,
-        ),
-        limit: int = typer.Option(
-            10,
-            "--limit",
-            min=1,
-            max=50,
-            help="Maximum number of search results.",
-        ),
-        base_url: str = typer.Option(default_base_url, "--base-url"),
-        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-    ) -> None:
-        auto_start_if_needed(base_url, autostart)
-        payload: dict[str, object] = {"query": query, "limit": limit}
-        result = request_json(
-            base_url,
-            "POST",
-            "/api/system/configs/clawhub/skills:search",
-            payload,
-        )
-        data = _require_object_response(
-            result, "/api/system/configs/clawhub/skills:search"
-        )
-        if output_format == ClawHubOutputFormat.JSON:
-            typer.echo(json.dumps(data, ensure_ascii=False))
-            return
-        _render_skill_search_result(data)
-
     @skills_app.command("install")
     def skills_install(
         slug: str = typer.Argument(..., help="ClawHub skill slug."),
@@ -319,54 +284,6 @@ def _render_skill_summary_table(items: list[dict[str, object]]) -> None:
             f"| {str(item.get('skill_id') or '').ljust(id_width)} | "
             f"{str(item.get('runtime_name') or '').ljust(name_width)} | "
             f"{('yes' if item.get('valid') else 'no').ljust(valid_width)} |"
-        )
-    typer.echo(border)
-
-
-def _render_skill_search_result(payload: dict[str, object]) -> None:
-    raw_items = payload.get("items")
-    if not isinstance(raw_items, list):
-        raise RuntimeError(
-            "Expected search result items from /api/system/configs/clawhub/skills:search"
-        )
-    items = [item for item in raw_items if isinstance(item, dict)]
-    query = str(payload.get("query") or "").strip()
-    if query:
-        typer.echo(f'ClawHub search results for "{query}":')
-    else:
-        typer.echo("ClawHub search results:")
-    if not items:
-        typer.echo("<none>")
-        return
-    slug_width = max(len("Slug"), *(len(str(item.get("slug") or "")) for item in items))
-    version_width = max(
-        len("Version"),
-        *(len(str(item.get("version") or "")) for item in items),
-    )
-    title_width = max(
-        len("Title"), *(len(str(item.get("title") or "")) for item in items)
-    )
-    score_width = max(
-        len("Score"), *(len(str(item.get("score") or "")) for item in items)
-    )
-    border = (
-        f"+-{'-' * slug_width}-+-{'-' * version_width}-+-{'-' * title_width}-"
-        f"+-{'-' * score_width}-+"
-    )
-    typer.echo(border)
-    typer.echo(
-        f"| {'Slug'.ljust(slug_width)} | "
-        f"{'Version'.ljust(version_width)} | "
-        f"{'Title'.ljust(title_width)} | "
-        f"{'Score'.ljust(score_width)} |"
-    )
-    typer.echo(border)
-    for item in items:
-        typer.echo(
-            f"| {str(item.get('slug') or '').ljust(slug_width)} | "
-            f"{str(item.get('version') or '').ljust(version_width)} | "
-            f"{str(item.get('title') or '').ljust(title_width)} | "
-            f"{str(item.get('score') or '').ljust(score_width)} |"
         )
     typer.echo(border)
 

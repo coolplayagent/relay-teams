@@ -45,7 +45,6 @@ from relay_teams.env.web_connectivity import (
 from relay_teams.interfaces.server.deps import (
     get_clawhub_config_service,
     get_clawhub_install_service,
-    get_clawhub_search_service,
     get_clawhub_skill_service,
     get_config_status_service,
     get_environment_variable_service,
@@ -93,15 +92,12 @@ from relay_teams.providers.model_connectivity import (
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
 from relay_teams.skills.clawhub_install_service import ClawHubSkillInstallService
 from relay_teams.skills.clawhub_models import (
-    ClawHubSkillSearchRequest,
-    ClawHubSkillSearchResult,
     ClawHubSkillInstallRequest,
     ClawHubSkillInstallResult,
     ClawHubSkillDetail,
     ClawHubSkillSummary,
     ClawHubSkillWriteRequest,
 )
-from relay_teams.skills.clawhub_search_service import ClawHubSkillSearchService
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.triggers import GitHubTriggerService
 from relay_teams.validation import RequiredIdentifierStr
@@ -544,20 +540,6 @@ def list_clawhub_skills(
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> tuple[ClawHubSkillSummary, ...]:
     return service.list_skills()
-
-
-@router.post(
-    "/configs/clawhub/skills:search",
-    response_model=ClawHubSkillSearchResult,
-)
-def search_clawhub_skills(
-    req: ClawHubSkillSearchRequest,
-    service: ClawHubSkillSearchService = Depends(get_clawhub_search_service),
-) -> ClawHubSkillSearchResult:
-    try:
-        return service.search(req)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post(

@@ -65,31 +65,6 @@ def test_clawhub_skill_commands_call_expected_endpoints(monkeypatch) -> None:
         calls.append((method, path, payload))
         if method == "GET" and path == "/api/system/configs/clawhub/skills":
             return [{"skill_id": "skill-creator-2"}]
-        if method == "POST" and path == "/api/system/configs/clawhub/skills:search":
-            return {
-                "ok": True,
-                "query": "skill creator",
-                "items": [
-                    {
-                        "slug": "skill-creator",
-                        "title": "Skill Creator",
-                        "version": "v0.1.0",
-                        "score": 66.021,
-                    }
-                ],
-                "latency_ms": 42,
-                "checked_at": "2026-04-09T12:00:00Z",
-                "diagnostics": {
-                    "binary_available": True,
-                    "token_configured": False,
-                    "installation_attempted": False,
-                    "installed_during_search": False,
-                    "registry": "https://mirror-cn.clawhub.com",
-                },
-                "retryable": False,
-                "error_code": None,
-                "error_message": None,
-            }
         if method == "POST" and path == "/api/system/configs/clawhub/skills:install":
             return {
                 "ok": True,
@@ -130,19 +105,6 @@ def test_clawhub_skill_commands_call_expected_endpoints(monkeypatch) -> None:
         cli_app.app,
         ["clawhub", "skills", "list", "--format", "json"],
     )
-    search_result = runner.invoke(
-        cli_app.app,
-        [
-            "clawhub",
-            "skills",
-            "search",
-            "skill creator",
-            "--format",
-            "json",
-            "--limit",
-            "5",
-        ],
-    )
     install_result = runner.invoke(
         cli_app.app,
         [
@@ -175,15 +137,6 @@ def test_clawhub_skill_commands_call_expected_endpoints(monkeypatch) -> None:
 
     assert list_result.exit_code == 0
     assert json.loads(list_result.stdout) == [{"skill_id": "skill-creator-2"}]
-    assert search_result.exit_code == 0
-    assert json.loads(search_result.stdout)["items"] == [
-        {
-            "slug": "skill-creator",
-            "title": "Skill Creator",
-            "version": "v0.1.0",
-            "score": 66.021,
-        }
-    ]
     assert install_result.exit_code == 0
     assert json.loads(install_result.stdout)["installed_skill"]["ref"] == (
         "app:skill-creator"
@@ -192,11 +145,6 @@ def test_clawhub_skill_commands_call_expected_endpoints(monkeypatch) -> None:
     assert delete_result.exit_code == 0
     assert calls == [
         ("GET", "/api/system/configs/clawhub/skills", None),
-        (
-            "POST",
-            "/api/system/configs/clawhub/skills:search",
-            {"query": "skill creator", "limit": 5},
-        ),
         (
             "POST",
             "/api/system/configs/clawhub/skills:install",

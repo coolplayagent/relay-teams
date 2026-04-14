@@ -41,7 +41,6 @@ from relay_teams.env.web_connectivity import WebConnectivityProbeResult
 from relay_teams.interfaces.server.deps import (
     get_clawhub_config_service,
     get_clawhub_install_service,
-    get_clawhub_search_service,
     get_clawhub_skill_service,
     get_config_status_service,
     get_environment_variable_service,
@@ -77,8 +76,6 @@ from relay_teams.skills.clawhub_models import (
     ClawHubSkillDetail,
     ClawHubSkillInstallRequest,
     ClawHubSkillInstallResult,
-    ClawHubSkillSearchRequest,
-    ClawHubSkillSearchResult,
     ClawHubSkillSummary,
     ClawHubSkillWriteRequest,
 )
@@ -295,32 +292,6 @@ class _FakeSystemService:
 
     def save_clawhub_config(self, config: ClawHubConfig) -> None:
         self.saved_clawhub_config = config.model_dump(mode="json")
-
-    def search(self, request: ClawHubSkillSearchRequest) -> ClawHubSkillSearchResult:
-        return ClawHubSkillSearchResult.model_validate(
-            {
-                "ok": True,
-                "query": request.query,
-                "items": [
-                    {
-                        "slug": "skill-creator",
-                        "version": "v0.1.0",
-                        "title": "Skill Creator",
-                        "score": 66.021,
-                    }
-                ],
-                "clawhub_path": "/usr/bin/clawhub",
-                "latency_ms": 42,
-                "checked_at": "2026-04-09T12:00:00Z",
-                "diagnostics": {
-                    "binary_available": True,
-                    "token_configured": False,
-                    "installation_attempted": False,
-                    "installed_during_search": False,
-                    "registry": "https://mirror-cn.clawhub.com",
-                },
-            }
-        )
 
     def install(self, request: ClawHubSkillInstallRequest) -> ClawHubSkillInstallResult:
         return ClawHubSkillInstallResult.model_validate(
@@ -638,7 +609,6 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_web_config_service] = lambda: fake_service
     app.dependency_overrides[get_clawhub_config_service] = lambda: fake_service
     app.dependency_overrides[get_clawhub_install_service] = lambda: fake_service
-    app.dependency_overrides[get_clawhub_search_service] = lambda: fake_service
     app.dependency_overrides[get_clawhub_skill_service] = lambda: fake_service
     app.dependency_overrides[get_github_config_service] = lambda: fake_service
     app.dependency_overrides[get_github_trigger_service] = lambda: fake_service
@@ -920,43 +890,6 @@ def test_list_clawhub_skills() -> None:
             "error": None,
         }
     ]
-
-
-def test_search_clawhub_skills() -> None:
-    client = _create_test_client(_FakeSystemService())
-
-    response = client.post(
-        "/api/system/configs/clawhub/skills:search",
-        json={"query": "skill creator", "limit": 5},
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "ok": True,
-        "query": "skill creator",
-        "items": [
-            {
-                "slug": "skill-creator",
-                "title": "Skill Creator",
-                "version": "v0.1.0",
-                "score": 66.021,
-            }
-        ],
-        "clawhub_path": "/usr/bin/clawhub",
-        "latency_ms": 42,
-        "checked_at": "2026-04-09T12:00:00Z",
-        "diagnostics": {
-            "binary_available": True,
-            "token_configured": False,
-            "installation_attempted": False,
-            "installed_during_search": False,
-            "registry": "https://mirror-cn.clawhub.com",
-            "endpoint_fallback_used": False,
-        },
-        "retryable": False,
-        "error_code": None,
-        "error_message": None,
-    }
 
 
 def test_install_clawhub_skill() -> None:
