@@ -84,6 +84,10 @@ export function bindModelProfileHandlers() {
     const apiKeyInput = document.getElementById('profile-api-key');
     if (apiKeyInput) {
         apiKeyInput.oninput = handleDraftApiKeyInput;
+        apiKeyInput.onfocus = armDraftApiKeyInput;
+        apiKeyInput.onpointerdown = armDraftApiKeyInput;
+        apiKeyInput.onkeydown = armDraftApiKeyInput;
+        apiKeyInput.onblur = disarmDraftApiKeyInput;
     }
 
     const maasUsernameInput = document.getElementById('profile-maas-username');
@@ -94,6 +98,10 @@ export function bindModelProfileHandlers() {
     const maasPasswordInput = document.getElementById('profile-maas-password');
     if (maasPasswordInput) {
         maasPasswordInput.oninput = handleDraftMaasPasswordInput;
+        maasPasswordInput.onfocus = armDraftMaasPasswordInput;
+        maasPasswordInput.onpointerdown = armDraftMaasPasswordInput;
+        maasPasswordInput.onkeydown = armDraftMaasPasswordInput;
+        maasPasswordInput.onblur = disarmDraftMaasPasswordInput;
     }
 
     const toggleApiKeyBtn = document.getElementById('toggle-profile-api-key-btn');
@@ -231,6 +239,7 @@ function handleEditProfile(name) {
         draftValue: '',
         hasPersistedValue: Boolean(profile.has_api_key),
         isDirty: false,
+        armedForInput: false,
         revealed: false,
     };
     draftMaasPasswordState = {
@@ -238,6 +247,7 @@ function handleEditProfile(name) {
         draftValue: '',
         hasPersistedValue: Boolean(profile.maas_auth?.has_password),
         isDirty: false,
+        armedForInput: false,
         revealed: false,
     };
     document.getElementById('profile-maas-username').value = profile.maas_auth?.username || '';
@@ -814,10 +824,11 @@ function handleDraftApiKeyInput() {
     if (
         draftApiKeyState.hasPersistedValue
         && !draftApiKeyState.revealed
-        && !isDraftSecretInputActive(apiKeyInput)
+        && !canAcceptDraftApiKeyInput(apiKeyInput)
     ) {
         draftApiKeyState.draftValue = '';
         draftApiKeyState.isDirty = false;
+        draftApiKeyState.armedForInput = false;
         draftApiKeyState.revealed = false;
         renderDraftApiKeyField();
         return;
@@ -837,10 +848,11 @@ function handleDraftMaasPasswordInput() {
     if (
         draftMaasPasswordState.hasPersistedValue
         && !draftMaasPasswordState.revealed
-        && !isDraftSecretInputActive(maasPasswordInput)
+        && !canAcceptDraftMaasPasswordInput(maasPasswordInput)
     ) {
         draftMaasPasswordState.draftValue = '';
         draftMaasPasswordState.isDirty = false;
+        draftMaasPasswordState.armedForInput = false;
         draftMaasPasswordState.revealed = false;
         renderDraftMaaSPasswordField();
         return;
@@ -1188,6 +1200,7 @@ function createDraftSecretState() {
         draftValue: '',
         hasPersistedValue: false,
         isDirty: false,
+        armedForInput: false,
         revealed: false,
     };
 }
@@ -1204,8 +1217,46 @@ function readDraftApiKeyValue() {
     return '';
 }
 
-function isDraftSecretInputActive(secretInput) {
-    if (!secretInput || typeof document !== 'object' || document === null) {
+function armDraftApiKeyInput() {
+    draftApiKeyState.armedForInput = true;
+}
+
+function disarmDraftApiKeyInput() {
+    draftApiKeyState.armedForInput = false;
+}
+
+function canAcceptDraftApiKeyInput(secretInput) {
+    if (!secretInput) {
+        return false;
+    }
+    if (draftApiKeyState.armedForInput) {
+        return true;
+    }
+    if (typeof document !== 'object' || document === null) {
+        return false;
+    }
+    if (!('activeElement' in document)) {
+        return true;
+    }
+    return document.activeElement === secretInput;
+}
+
+function armDraftMaasPasswordInput() {
+    draftMaasPasswordState.armedForInput = true;
+}
+
+function disarmDraftMaasPasswordInput() {
+    draftMaasPasswordState.armedForInput = false;
+}
+
+function canAcceptDraftMaasPasswordInput(secretInput) {
+    if (!secretInput) {
+        return false;
+    }
+    if (draftMaasPasswordState.armedForInput) {
+        return true;
+    }
+    if (typeof document !== 'object' || document === null) {
         return false;
     }
     if (!('activeElement' in document)) {

@@ -79,6 +79,18 @@ export function bindGitHubSettingsHandlers(fieldIds = DEFAULT_GITHUB_FIELD_IDS) 
         tokenInput.onchange = () => {
             handleGitHubTokenInput(ids);
         };
+        tokenInput.onfocus = () => {
+            armGitHubTokenInput();
+        };
+        tokenInput.onpointerdown = () => {
+            armGitHubTokenInput();
+        };
+        tokenInput.onkeydown = () => {
+            armGitHubTokenInput();
+        };
+        tokenInput.onblur = () => {
+            disarmGitHubTokenInput();
+        };
     }
 
     const webhookBaseUrlInput = document.getElementById(ids.webhookBaseUrlInputId);
@@ -591,6 +603,7 @@ function createGitHubTokenState(persistedValue = null, hasPersistedValue = false
         hasPersistedValue: hasPersistedValue === true || Boolean(normalizedValue.trim()),
         isDirty: false,
         isLoadingReveal: false,
+        armedForInput: false,
         revealed: false,
     };
 }
@@ -602,10 +615,11 @@ function handleGitHubTokenInput(fieldIds) {
         githubTokenState.hasPersistedValue
         && !githubTokenState.persistedValueLoaded
         && !githubTokenState.revealed
-        && !isGitHubTokenInputActive(tokenInput)
+        && !canAcceptGitHubTokenInput(tokenInput)
     ) {
         githubTokenState.draftValue = '';
         githubTokenState.isDirty = false;
+        githubTokenState.armedForInput = false;
         githubTokenState.revealed = false;
         renderGitHubTokenField(fieldIds);
         return;
@@ -677,8 +691,22 @@ function normalizeGitHubWebhookBaseUrl(value) {
         : null;
 }
 
-function isGitHubTokenInputActive(tokenInput) {
-    if (!tokenInput || typeof document !== 'object' || document === null) {
+function armGitHubTokenInput() {
+    githubTokenState.armedForInput = true;
+}
+
+function disarmGitHubTokenInput() {
+    githubTokenState.armedForInput = false;
+}
+
+function canAcceptGitHubTokenInput(tokenInput) {
+    if (!tokenInput) {
+        return false;
+    }
+    if (githubTokenState.armedForInput) {
+        return true;
+    }
+    if (typeof document !== 'object' || document === null) {
         return false;
     }
     return document.activeElement === tokenInput;

@@ -207,6 +207,51 @@ console.log(JSON.stringify({
     assert payload["probePayload"] == {}
 
 
+def test_github_settings_panel_allows_replacing_saved_token_after_focus(
+    tmp_path: Path,
+) -> None:
+    payload = _run_github_settings_script(
+        tmp_path=tmp_path,
+        fetch_config={
+            "token": "ghp_saved",
+            "token_configured": True,
+            "webhook_base_url": None,
+        },
+        runner_source="""
+import { bindGitHubSettingsHandlers, loadGitHubSettingsPanel } from "./githubSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindGitHubSettingsHandlers();
+await loadGitHubSettingsPanel();
+
+document.activeElement = null;
+document.getElementById("github-token").onfocus();
+document.getElementById("github-token").value = "ghp_replacement";
+document.getElementById("github-token").oninput();
+
+await document.getElementById("test-github-btn").onclick();
+await document.getElementById("save-github-btn").onclick();
+
+console.log(JSON.stringify({
+    tokenValue: document.getElementById("github-token").value,
+    tokenPlaceholder: document.getElementById("github-token").placeholder,
+    toggleDisplay: document.getElementById("toggle-github-token-btn").style.display,
+    savePayloads: globalThis.__saveGitHubPayloads,
+    probePayload: globalThis.__probeGitHubPayload,
+}));
+""".strip(),
+    )
+
+    assert payload["tokenValue"] == ""
+    assert payload["tokenPlaceholder"] == "************"
+    assert payload["toggleDisplay"] == "inline-flex"
+    assert payload["savePayloads"] == [{"token": "ghp_replacement"}]
+    assert payload["probePayload"] == {"token": "ghp_replacement"}
+
+
 def test_github_settings_panel_starts_and_stops_temporary_public_url(
     tmp_path: Path,
 ) -> None:

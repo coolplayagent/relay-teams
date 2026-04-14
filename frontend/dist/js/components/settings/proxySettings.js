@@ -32,6 +32,10 @@ export function bindProxySettingsHandlers() {
     if (passwordInput) {
         passwordInput.oninput = handleProxyPasswordInput;
         passwordInput.onchange = handleProxyPasswordInput;
+        passwordInput.onfocus = armProxyPasswordInput;
+        passwordInput.onpointerdown = armProxyPasswordInput;
+        passwordInput.onkeydown = armProxyPasswordInput;
+        passwordInput.onblur = disarmProxyPasswordInput;
     }
 
     const togglePasswordBtn = document.getElementById('toggle-proxy-password-btn');
@@ -245,6 +249,7 @@ function createProxyPasswordState(persistedValue = null) {
         draftValue: '',
         hasPersistedValue: Boolean(normalizedValue.trim()),
         isDirty: false,
+        armedForInput: false,
         revealed: false,
     };
 }
@@ -255,10 +260,11 @@ function handleProxyPasswordInput() {
     if (
         proxyPasswordState.hasPersistedValue
         && !proxyPasswordState.revealed
-        && !isProxyPasswordInputActive(passwordInput)
+        && !canAcceptProxyPasswordInput(passwordInput)
     ) {
         proxyPasswordState.draftValue = '';
         proxyPasswordState.isDirty = false;
+        proxyPasswordState.armedForInput = false;
         proxyPasswordState.revealed = false;
         renderProxyPasswordField();
         return;
@@ -345,8 +351,22 @@ function hasProxyPasswordValue() {
     return Boolean(proxyPasswordState.draftValue.trim() || inputValue);
 }
 
-function isProxyPasswordInputActive(passwordInput) {
-    if (!passwordInput || typeof document !== 'object' || document === null) {
+function armProxyPasswordInput() {
+    proxyPasswordState.armedForInput = true;
+}
+
+function disarmProxyPasswordInput() {
+    proxyPasswordState.armedForInput = false;
+}
+
+function canAcceptProxyPasswordInput(passwordInput) {
+    if (!passwordInput) {
+        return false;
+    }
+    if (proxyPasswordState.armedForInput) {
+        return true;
+    }
+    if (typeof document !== 'object' || document === null) {
         return false;
     }
     if (!('activeElement' in document)) {

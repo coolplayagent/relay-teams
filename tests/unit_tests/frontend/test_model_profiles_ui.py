@@ -990,6 +990,42 @@ console.log(JSON.stringify({
     assert "api_key" not in saved_profile_body
 
 
+def test_edit_profile_allows_replacing_saved_api_key_after_focus(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+document.activeElement = null;
+document.getElementById("profile-api-key").onfocus();
+document.getElementById("profile-api-key").value = "replacement-secret-key";
+document.getElementById("profile-api-key").oninput();
+
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    toggleDisplay: document.getElementById("toggle-profile-api-key-btn").style.display,
+    savedProfile: globalThis.__savedProfile,
+}));
+""".strip(),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    assert payload["toggleDisplay"] == "inline-flex"
+    assert saved_profile_body["api_key"] == "replacement-secret-key"
+
+
 def test_edit_profile_api_key_toggle_reveals_saved_value(tmp_path: Path) -> None:
     payload = _run_model_profiles_script(
         tmp_path=tmp_path,
@@ -1100,6 +1136,90 @@ export async function deleteModelProfile(name) {
     assert payload["toggleDisplay"] == "inline-flex"
     assert saved_maas_auth == {
         "username": "saved-user",
+    }
+
+
+def test_edit_maas_profile_allows_replacing_saved_password_after_focus(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "maas-profile").onclick();
+document.activeElement = null;
+document.getElementById("profile-maas-password").onfocus();
+document.getElementById("profile-maas-password").value = "replacement-maas-password";
+document.getElementById("profile-maas-password").oninput();
+
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    passwordValue: document.getElementById("profile-maas-password").value,
+    passwordPlaceholder: document.getElementById("profile-maas-password").placeholder,
+    toggleDisplay: document.getElementById("toggle-profile-maas-password-btn").style.display,
+    savedProfile: globalThis.__savedProfile,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        "maas-profile": {
+            provider: "maas",
+            model: "maas-chat",
+            base_url: "http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/",
+            maas_auth: {
+                username: "saved-user",
+                password: "saved-password",
+                has_password: true,
+            },
+            is_default: false,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42, token_usage: { total_tokens: 9 } };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: ["maas-chat"] };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    saved_maas_auth = cast(dict[str, JsonValue], saved_profile_body["maas_auth"])
+    assert payload["toggleDisplay"] == "inline-flex"
+    assert saved_maas_auth == {
+        "username": "saved-user",
+        "password": "replacement-maas-password",
     }
 
 

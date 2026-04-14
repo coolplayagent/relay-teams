@@ -48,6 +48,10 @@ export function bindClawHubSettingsHandlers(fieldIds = DEFAULT_CLAWHUB_FIELD_IDS
         tokenInput.onchange = () => {
             handleClawHubTokenInput(ids);
         };
+        tokenInput.onfocus = armClawHubTokenInput;
+        tokenInput.onpointerdown = armClawHubTokenInput;
+        tokenInput.onkeydown = armClawHubTokenInput;
+        tokenInput.onblur = disarmClawHubTokenInput;
     }
 
     const toggleTokenBtn = document.getElementById(ids.toggleTokenButtonId);
@@ -206,6 +210,7 @@ function createClawHubTokenState(persistedValue = null) {
         draftValue: '',
         hasPersistedValue: Boolean(normalizedValue.trim()),
         isDirty: false,
+        armedForInput: false,
         revealed: false,
     };
 }
@@ -213,6 +218,18 @@ function createClawHubTokenState(persistedValue = null) {
 function handleClawHubTokenInput(fieldIds) {
     const tokenInput = document.getElementById(fieldIds.tokenInputId);
     const nextValue = tokenInput ? tokenInput.value : '';
+    if (
+        clawhubTokenState.hasPersistedValue
+        && !clawhubTokenState.revealed
+        && !canAcceptClawHubTokenInput(tokenInput)
+    ) {
+        clawhubTokenState.draftValue = '';
+        clawhubTokenState.isDirty = false;
+        clawhubTokenState.armedForInput = false;
+        clawhubTokenState.revealed = false;
+        renderClawHubTokenField(fieldIds);
+        return;
+    }
     clawhubTokenState.draftValue = nextValue;
     clawhubTokenState.isDirty = clawhubTokenState.hasPersistedValue
         ? nextValue !== clawhubTokenState.persistedValue
@@ -241,6 +258,30 @@ function readClawHubTokenValue(fieldIds) {
         return inputValue || null;
     }
     return clawhubTokenState.persistedValue || null;
+}
+
+function armClawHubTokenInput() {
+    clawhubTokenState.armedForInput = true;
+}
+
+function disarmClawHubTokenInput() {
+    clawhubTokenState.armedForInput = false;
+}
+
+function canAcceptClawHubTokenInput(tokenInput) {
+    if (!tokenInput) {
+        return false;
+    }
+    if (clawhubTokenState.armedForInput) {
+        return true;
+    }
+    if (typeof document !== 'object' || document === null) {
+        return false;
+    }
+    if (!('activeElement' in document)) {
+        return true;
+    }
+    return document.activeElement === tokenInput;
 }
 
 function renderClawHubTokenField(fieldIds) {
