@@ -5,7 +5,11 @@ from collections.abc import Mapping
 import os
 from pathlib import Path
 
-from relay_teams.env.proxy_env import build_subprocess_env, load_proxy_env_config
+from relay_teams.env.proxy_env import (
+    build_subprocess_env,
+    extract_proxy_env_vars,
+    load_proxy_env_config,
+)
 
 CLAWHUB_TOKEN_ENV_KEY = "CLAWHUB_TOKEN"
 CLAWHUB_SITE_ENV_KEY = "CLAWHUB_SITE"
@@ -150,7 +154,7 @@ def build_clawhub_subprocess_env(
         extra_env_files=_clawhub_proxy_env_files(config_dir),
         include_process_env=True,
     )
-    extra_env = proxy_config.normalized_env()
+    extra_env = extract_proxy_env_vars(proxy_config.normalized_env())
     extra_env.update(
         build_clawhub_cli_env(
             token,

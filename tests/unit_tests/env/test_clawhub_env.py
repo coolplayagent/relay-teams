@@ -72,3 +72,7 @@ def test_build_clawhub_subprocess_env_includes_hydrated_proxy_values(
     assert env[CLAWHUB_TOKEN_ENV_KEY] == "ch_secret"
     assert env["HTTP_PROXY"] == "http://alice:secret@proxy.example:8080"
     assert env["NO_PROXY"] == "localhost"
+    assert env["NODE_USE_ENV_PROXY"] == "1"
+    assert env["npm_config_proxy"] == "http://alice:secret@proxy.example:8080"
+    assert env["npm_config_https_proxy"] == "http://alice:secret@proxy.example:8080"
+    assert env["npm_config_noproxy"] == "localhost"
