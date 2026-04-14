@@ -20,6 +20,16 @@ def _clear_proxy_env(monkeypatch) -> None:
         "NO_PROXY",
         "no_proxy",
         "SSL_VERIFY",
+        "NODE_USE_ENV_PROXY",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+        "NPM_CONFIG_PROXY",
+        "npm_config_proxy",
+        "NPM_CONFIG_HTTPS_PROXY",
+        "npm_config_https_proxy",
+        "NPM_CONFIG_NOPROXY",
+        "npm_config_noproxy",
+        "NPM_CONFIG_STRICT_SSL",
+        "npm_config_strict_ssl",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -103,6 +113,13 @@ def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
         "http_proxy": "http://proxy.internal:8080",
         "NO_PROXY": "localhost,127.0.0.1",
         "no_proxy": "localhost,127.0.0.1",
+        "NODE_USE_ENV_PROXY": "1",
+        "NPM_CONFIG_PROXY": "http://proxy.internal:8080",
+        "npm_config_proxy": "http://proxy.internal:8080",
+        "NPM_CONFIG_HTTPS_PROXY": "http://proxy.internal:8080",
+        "npm_config_https_proxy": "http://proxy.internal:8080",
+        "NPM_CONFIG_NOPROXY": "localhost,127.0.0.1",
+        "npm_config_noproxy": "localhost,127.0.0.1",
     }
     assert registry.get_spec("filesystem").server_config["env"] == expected_proxy_env
     assert registry.get_spec("events").server_config["env"] == expected_proxy_env
@@ -111,6 +128,10 @@ def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
     assert os.environ["http_proxy"] == "http://proxy.internal:8080"
     assert os.environ["NO_PROXY"] == "localhost,127.0.0.1"
     assert os.environ["no_proxy"] == "localhost,127.0.0.1"
+    assert os.environ["NODE_USE_ENV_PROXY"] == "1"
+    assert os.environ["npm_config_proxy"] == "http://proxy.internal:8080"
+    assert os.environ["npm_config_https_proxy"] == "http://proxy.internal:8080"
+    assert os.environ["npm_config_noproxy"] == "localhost,127.0.0.1"
 
 
 def test_load_registry_preserves_explicit_server_env_over_proxy_defaults(
@@ -150,6 +171,11 @@ def test_load_registry_preserves_explicit_server_env_over_proxy_defaults(
     assert registry.get_spec("remote").server_config["env"] == {
         "HTTP_PROXY": "http://custom-proxy.internal:9000",
         "http_proxy": "http://custom-proxy.internal:9000",
+        "NODE_USE_ENV_PROXY": "1",
+        "NPM_CONFIG_PROXY": "http://custom-proxy.internal:9000",
+        "npm_config_proxy": "http://custom-proxy.internal:9000",
+        "NPM_CONFIG_HTTPS_PROXY": "http://custom-proxy.internal:9000",
+        "npm_config_https_proxy": "http://custom-proxy.internal:9000",
         "CUSTOM_TOKEN": "secret",
     }
 

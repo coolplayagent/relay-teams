@@ -164,6 +164,51 @@ async def test_build_command_env_does_not_download_gh_when_missing(
 
 
 @pytest.mark.asyncio
+async def test_build_command_env_includes_node_proxy_runtime_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bash_runtime = ResolvedCommandRuntime(
+        kind=CommandRuntimeKind.BASH,
+        executable="/bin/bash",
+        display_name="Bash",
+    )
+
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_existing_gh_path",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_existing_clawhub_path",
+        lambda: None,
+    )
+    monkeypatch.setattr(runtime_module, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(runtime_module, "_load_clawhub_cli_env", lambda: {})
+    monkeypatch.setattr(
+        runtime_module.os,
+        "environ",
+        {
+            "PATH": "/usr/bin",
+            "HTTP_PROXY": "http://proxy.example:8080",
+            "NO_PROXY": "localhost,127.0.0.1",
+        },
+    )
+
+    env = await build_command_env(
+        runtime=bash_runtime,
+        command="node script.js",
+    )
+
+    assert env["HTTP_PROXY"] == "http://proxy.example:8080"
+    assert env["NO_PROXY"] == "localhost,127.0.0.1"
+    assert env["NODE_USE_ENV_PROXY"] == "1"
+    assert env["npm_config_proxy"] == "http://proxy.example:8080"
+    assert env["npm_config_https_proxy"] == "http://proxy.example:8080"
+    assert env["npm_config_noproxy"] == "localhost,127.0.0.1"
+
+
+@pytest.mark.asyncio
 async def test_build_command_env_prepends_existing_gh_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

@@ -20,11 +20,22 @@ _PROXY_ENV_KEY_GROUPS: tuple[tuple[str, str], ...] = (
     ("ALL_PROXY", "all_proxy"),
     ("NO_PROXY", "no_proxy"),
 )
+_NODE_PROXY_ENV_KEY_GROUPS: tuple[tuple[str, str], ...] = (
+    ("NPM_CONFIG_PROXY", "npm_config_proxy"),
+    ("NPM_CONFIG_HTTPS_PROXY", "npm_config_https_proxy"),
+    ("NPM_CONFIG_NOPROXY", "npm_config_noproxy"),
+    ("NPM_CONFIG_STRICT_SSL", "npm_config_strict_ssl"),
+)
 _PROXY_ENV_KEYS: tuple[str, ...] = tuple(
     key for key_group in _PROXY_ENV_KEY_GROUPS for key in key_group
 )
 _SSL_VERIFY_ENV_KEYS: tuple[str, ...] = ("SSL_VERIFY",)
 _PROCESS_ENV_KEYS: tuple[str, ...] = _PROXY_ENV_KEYS + _SSL_VERIFY_ENV_KEYS
+_NODE_PROXY_ENV_KEYS: tuple[str, ...] = (
+    "NODE_USE_ENV_PROXY",
+    "NODE_TLS_REJECT_UNAUTHORIZED",
+) + tuple(key for key_group in _NODE_PROXY_ENV_KEY_GROUPS for key in key_group)
+_RUNTIME_ENV_KEYS: tuple[str, ...] = _PROCESS_ENV_KEYS + _NODE_PROXY_ENV_KEYS
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _DEFAULT_SSL_VERIFY = False
@@ -174,7 +185,7 @@ class NoProxyRule(BaseModel):
 
 
 def extract_proxy_env_vars(env_values: Mapping[str, str]) -> dict[str, str]:
-    return resolve_proxy_env_config(env_values).normalized_env()
+    return _build_runtime_proxy_env(resolve_proxy_env_config(env_values))
 
 
 def apply_proxy_env_to_process_env(env_values: Mapping[str, str]) -> dict[str, str]:
@@ -206,9 +217,15 @@ def load_proxy_env_config(
     )
 
 
+def _build_runtime_proxy_env(proxy_config: ProxyEnvConfig) -> dict[str, str]:
+    env_values = proxy_config.normalized_env()
+    env_values.update(_build_node_runtime_proxy_env(proxy_config))
+    return env_values
+
+
 def sync_proxy_env_to_process_env(proxy_config: ProxyEnvConfig) -> dict[str, str]:
-    normalized_env = proxy_config.normalized_env()
-    for key in _PROCESS_ENV_KEYS:
+    normalized_env = _build_runtime_proxy_env(proxy_config)
+    for key in _RUNTIME_ENV_KEYS:
         if key in normalized_env:
             os.environ[key] = normalized_env[key]
             continue
@@ -222,7 +239,7 @@ def build_subprocess_env(
     extra_env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     resolved_env = dict(os.environ if base_env is None else base_env)
-    for key in _PROCESS_ENV_KEYS:
+    for key in _RUNTIME_ENV_KEYS:
         resolved_env.pop(key, None)
     resolved_env.update(extract_proxy_env_vars(os.environ))
     if extra_env is not None:
@@ -326,6 +343,72 @@ def _normalize_no_proxy_for_export(value: str | None) -> str | None:
     if not tokens:
         return None
     return ",".join(tokens)
+
+
+def _build_node_runtime_proxy_env(proxy_config: ProxyEnvConfig) -> dict[str, str]:
+    env_values: dict[str, str] = {}
+    if not proxy_config.has_proxy:
+        return env_values
+
+    env_values["NODE_USE_ENV_PROXY"] = "1"
+
+    http_proxy = proxy_config.http_proxy or proxy_config.all_proxy
+    if http_proxy is not None:
+        _set_env_pair(
+            env_values,
+            uppercase_key="NPM_CONFIG_PROXY",
+            lowercase_key="npm_config_proxy",
+            value=http_proxy,
+        )
+
+    https_proxy = (
+        proxy_config.https_proxy or proxy_config.http_proxy or proxy_config.all_proxy
+    )
+    if https_proxy is not None:
+        _set_env_pair(
+            env_values,
+            uppercase_key="NPM_CONFIG_HTTPS_PROXY",
+            lowercase_key="npm_config_https_proxy",
+            value=https_proxy,
+        )
+
+    no_proxy = _normalize_no_proxy_for_export(proxy_config.no_proxy)
+    if no_proxy is not None:
+        _set_env_pair(
+            env_values,
+            uppercase_key="NPM_CONFIG_NOPROXY",
+            lowercase_key="npm_config_noproxy",
+            value=no_proxy,
+        )
+
+    if proxy_config.ssl_verify is False:
+        _set_env_pair(
+            env_values,
+            uppercase_key="NPM_CONFIG_STRICT_SSL",
+            lowercase_key="npm_config_strict_ssl",
+            value="false",
+        )
+        env_values["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+    elif proxy_config.ssl_verify is True:
+        _set_env_pair(
+            env_values,
+            uppercase_key="NPM_CONFIG_STRICT_SSL",
+            lowercase_key="npm_config_strict_ssl",
+            value="true",
+        )
+
+    return env_values
+
+
+def _set_env_pair(
+    env_values: dict[str, str],
+    *,
+    uppercase_key: str,
+    lowercase_key: str,
+    value: str,
+) -> None:
+    env_values[uppercase_key] = value
+    env_values[lowercase_key] = value
 
 
 def host_matches_no_proxy(host: str, no_proxy: str | None) -> bool:
