@@ -105,8 +105,10 @@ export function handleToolResult(payload, instanceId, eventMeta = null, roleId =
     markLlmRetrySucceeded();
     const { container, isCoordinator } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
+    const primaryRoleId = getRunPrimaryRoleId(runId);
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
+    const label = isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent');
     const resultEnvelope = payload.result || {};
     const isError = typeof resultEnvelope === 'object'
         ? resultEnvelope.ok === false
@@ -115,7 +117,8 @@ export function handleToolResult(payload, instanceId, eventMeta = null, roleId =
         applyStreamOverlayEvent('tool_result', payload, {
             runId,
             instanceId: isPrimary ? 'primary' : instanceId,
-            roleId,
+            roleId: isPrimary ? primaryRoleId : roleId,
+            label,
         });
         return;
     }
@@ -127,7 +130,8 @@ export function handleToolResult(payload, instanceId, eventMeta = null, roleId =
         payload.tool_call_id || null,
         {
             runId: eventMeta?.run_id || eventMeta?.trace_id || '',
-            roleId,
+            roleId: isPrimary ? primaryRoleId : roleId,
+            label,
             container,
         },
     );

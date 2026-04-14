@@ -122,6 +122,10 @@ from relay_teams.tools.runtime import (
     ToolApprovalPolicy,
     ToolDeps,
 )
+from relay_teams.tools.runtime.persisted_state import (
+    ToolExecutionStatus,
+    load_tool_call_state,
+)
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
 )
@@ -3025,6 +3029,13 @@ class AgentLlmSession:
                 continue
             for part in msg.parts:
                 if isinstance(part, ToolReturnPart):
+                    tool_call_id = str(part.tool_call_id or "").strip()
+                    if self._tool_result_already_emitted_from_runtime(
+                        request=request,
+                        tool_name=str(part.tool_name),
+                        tool_call_id=tool_call_id,
+                    ):
+                        continue
                     result_payload = cast(
                         JsonValue,
                         sanitize_task_status_payload(
@@ -3051,11 +3062,7 @@ class AgentLlmSession:
                             payload_json=self._to_json(
                                 {
                                     "tool_name": str(part.tool_name),
-                                    "tool_call_id": (
-                                        str(part.tool_call_id)
-                                        if part.tool_call_id
-                                        else ""
-                                    ),
+                                    "tool_call_id": tool_call_id,
                                     "result": result_payload,
                                     "error": is_error,
                                     "role_id": request.role_id,
@@ -3086,6 +3093,35 @@ class AgentLlmSession:
                             ),
                         )
                     )
+
+    def _tool_result_already_emitted_from_runtime(
+        self,
+        *,
+        request: LLMRequest,
+        tool_name: str,
+        tool_call_id: str,
+    ) -> bool:
+        if not tool_call_id:
+            return False
+        state = load_tool_call_state(
+            shared_store=self._shared_store,
+            task_id=request.task_id,
+            tool_call_id=tool_call_id,
+        )
+        if state is None or state.tool_name != tool_name:
+            return False
+        if state.execution_status not in (
+            ToolExecutionStatus.COMPLETED,
+            ToolExecutionStatus.FAILED,
+        ):
+            return False
+        result_envelope = state.result_envelope
+        if not isinstance(result_envelope, dict):
+            return False
+        runtime_meta = result_envelope.get("runtime_meta")
+        if not isinstance(runtime_meta, dict):
+            return False
+        return runtime_meta.get("tool_result_event_published") is True
 
     def _to_json_compatible(self, value: object) -> JsonValue:
         if isinstance(value, (str, int, float, bool)) or value is None:

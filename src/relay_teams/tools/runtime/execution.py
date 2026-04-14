@@ -18,6 +18,9 @@ from relay_teams.logger import get_logger, log_event, log_tool_error
 from relay_teams.metrics.adapters import record_tool_execution
 from relay_teams.notifications import NotificationContext, NotificationType
 from relay_teams.persistence import is_retryable_sqlite_error
+from relay_teams.agents.tasks.task_status_sanitizer import (
+    sanitize_task_status_payload,
+)
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_models import RunEvent
 
@@ -98,6 +101,7 @@ async def execute_tool(
         if approval_error is not None:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             meta["duration_ms"] = elapsed_ms
+            meta["tool_result_event_published"] = True
             envelope = _visible_envelope(
                 ok=False,
                 error=approval_error,
@@ -118,6 +122,12 @@ async def execute_tool(
                 tool_name=tool_name,
                 duration_ms=elapsed_ms,
                 success=False,
+            )
+            _publish_tool_result_event(
+                ctx=ctx,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                visible_envelope=envelope,
             )
             return envelope
 
@@ -163,6 +173,7 @@ async def execute_tool(
                 payload={"tool_name": tool_name},
             )
 
+            meta["tool_result_event_published"] = True
             envelope = _visible_envelope(
                 ok=True,
                 data=visible_data,
@@ -183,6 +194,12 @@ async def execute_tool(
                 tool_name=tool_name,
                 duration_ms=elapsed_ms,
                 success=True,
+            )
+            _publish_tool_result_event(
+                ctx=ctx,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                visible_envelope=envelope,
             )
             if approval_ticket_id and not keep_approval_ticket_reusable:
                 ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
@@ -217,6 +234,7 @@ async def execute_tool(
                     "details": error.details,
                 },
             )
+            meta["tool_result_event_published"] = True
             envelope = _visible_envelope(
                 ok=False,
                 error=error,
@@ -237,6 +255,12 @@ async def execute_tool(
                 tool_name=tool_name,
                 duration_ms=elapsed_ms,
                 success=False,
+            )
+            _publish_tool_result_event(
+                ctx=ctx,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                visible_envelope=envelope,
             )
             if approval_ticket_id and not keep_approval_ticket_reusable:
                 ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
@@ -265,6 +289,41 @@ def _record_tool_metrics(
         tool_name=tool_name,
         duration_ms=duration_ms,
         success=success,
+    )
+
+
+def _publish_tool_result_event(
+    *,
+    ctx: ToolContext,
+    tool_call_id: str,
+    tool_name: str,
+    visible_envelope: dict[str, JsonValue],
+) -> None:
+    result_payload = cast(
+        JsonValue,
+        sanitize_task_status_payload(visible_envelope),
+    )
+    is_error = bool(visible_envelope.get("ok") is False)
+    ctx.deps.run_event_hub.publish(
+        RunEvent(
+            session_id=ctx.deps.session_id,
+            run_id=ctx.deps.run_id,
+            trace_id=ctx.deps.trace_id,
+            task_id=ctx.deps.task_id,
+            instance_id=ctx.deps.instance_id,
+            role_id=ctx.deps.role_id,
+            event_type=RunEventType.TOOL_RESULT,
+            payload_json=dumps(
+                {
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "result": result_payload,
+                    "error": is_error,
+                    "role_id": ctx.deps.role_id,
+                    "instance_id": ctx.deps.instance_id,
+                }
+            ),
+        )
     )
 
 
