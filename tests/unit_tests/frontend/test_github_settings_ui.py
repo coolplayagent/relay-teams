@@ -235,6 +235,71 @@ console.log(JSON.stringify({
     ]
 
 
+def test_github_settings_panel_backfills_delayed_tunnel_public_url(
+    tmp_path: Path,
+) -> None:
+    payload = _run_github_settings_script(
+        tmp_path=tmp_path,
+        fetch_config={
+            "token": None,
+            "token_configured": False,
+            "webhook_base_url": "https://expired-tunnel.lhr.life",
+        },
+        start_tunnel_result={
+            "status": "starting",
+            "public_url": None,
+            "local_host": "127.0.0.1",
+            "local_port": 8000,
+            "last_message": "Requesting a temporary public URL from localhost.run...",
+        },
+        tunnel_status_after_start={
+            "status": "active",
+            "public_url": "https://delayed-tunnel.lhr.life",
+            "local_host": "127.0.0.1",
+            "local_port": 8000,
+        },
+        runner_source="""
+import { bindGitHubSettingsHandlers, loadGitHubSettingsPanel } from "./githubSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindGitHubSettingsHandlers();
+await loadGitHubSettingsPanel();
+await document.getElementById("start-github-webhook-tunnel-btn").onclick();
+
+console.log(JSON.stringify({
+    notifications,
+    savePayloads: globalThis.__saveGitHubPayloads,
+    webhookBaseUrlValue: document.getElementById("github-webhook-base-url").value,
+    callbackPreviewText: document.getElementById("github-callback-preview").textContent,
+    tunnelStatusText: document.getElementById("github-webhook-tunnel-status").textContent,
+}));
+""".strip(),
+    )
+
+    assert payload["webhookBaseUrlValue"] == "https://delayed-tunnel.lhr.life"
+    assert (
+        payload["callbackPreviewText"]
+        == "https://delayed-tunnel.lhr.life/api/triggers/github/deliveries"
+    )
+    assert (
+        payload["tunnelStatusText"]
+        == "Temporary public URL ready: https://delayed-tunnel.lhr.life -> 127.0.0.1:8000"
+    )
+    assert payload["savePayloads"] == [
+        {"webhook_base_url": "https://delayed-tunnel.lhr.life"},
+    ]
+    assert cast(list[dict[str, JsonValue]], payload["notifications"]) == [
+        {
+            "title": "Temporary Public URL Ready",
+            "message": "Temporary public URL ready: https://delayed-tunnel.lhr.life -> 127.0.0.1:8000",
+            "tone": "success",
+        },
+    ]
+
+
 def test_github_settings_panel_explains_inactive_temporary_public_url(
     tmp_path: Path,
 ) -> None:
@@ -383,6 +448,8 @@ def _run_github_settings_script(
     *,
     fetch_config: dict[str, JsonValue] | None = None,
     probe_webhook_result: dict[str, JsonValue] | None = None,
+    start_tunnel_result: dict[str, JsonValue] | None = None,
+    tunnel_status_after_start: dict[str, JsonValue] | None = None,
 ) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -415,6 +482,16 @@ def _run_github_settings_script(
         "error_message": None,
     }
     probe_github_webhook_result_json = json.dumps(probe_github_webhook_result)
+    start_tunnel_result_json = json.dumps(
+        start_tunnel_result
+        or {
+            "status": "active",
+            "public_url": "https://demo-tunnel.lhr.life",
+            "local_host": "127.0.0.1",
+            "local_port": 8000,
+        }
+    )
+    tunnel_status_after_start_json = json.dumps(tunnel_status_after_start)
     mock_api_path.write_text(
         """
 let currentConfig = __FETCH_GITHUB_CONFIG__;
@@ -424,6 +501,9 @@ let currentTunnelStatus = {
     local_host: null,
     local_port: null,
 };
+let startTunnelResult = __START_TUNNEL_RESULT__;
+let tunnelStatusAfterStart = __TUNNEL_STATUS_AFTER_START__;
+let fetchTunnelStatusCallCount = 0;
 
 export async function fetchGitHubConfig() {
     return {
@@ -440,6 +520,11 @@ export async function revealGitHubToken() {
 }
 
 export async function fetchGitHubWebhookTunnelStatus() {
+    fetchTunnelStatusCallCount += 1;
+    if (fetchTunnelStatusCallCount > 1 && tunnelStatusAfterStart) {
+        currentTunnelStatus = tunnelStatusAfterStart;
+        tunnelStatusAfterStart = null;
+    }
     return currentTunnelStatus;
 }
 
@@ -481,17 +566,14 @@ export async function probeGitHubWebhookConnectivity(payload) {
 
 export async function startGitHubWebhookTunnel(payload) {
     globalThis.__startTunnelPayload = payload;
-    currentTunnelStatus = {
-        status: "active",
-        public_url: "https://demo-tunnel.lhr.life",
-        local_host: "127.0.0.1",
-        local_port: 8000,
-    };
+    currentTunnelStatus = startTunnelResult;
     if (payload.auto_save_webhook_base_url === true) {
-        currentConfig = {
-            ...currentConfig,
-            webhook_base_url: currentTunnelStatus.public_url,
-        };
+        if (currentTunnelStatus.public_url) {
+            currentConfig = {
+                ...currentConfig,
+                webhook_base_url: currentTunnelStatus.public_url,
+            };
+        }
     }
     return currentTunnelStatus;
 }
@@ -515,6 +597,8 @@ export async function stopGitHubWebhookTunnel(payload) {
 }
 """.replace("__FETCH_GITHUB_CONFIG__", fetch_github_config_json)
         .replace("__PROBE_GITHUB_WEBHOOK_RESULT__", probe_github_webhook_result_json)
+        .replace("__START_TUNNEL_RESULT__", start_tunnel_result_json)
+        .replace("__TUNNEL_STATUS_AFTER_START__", tunnel_status_after_start_json)
         .strip(),
         encoding="utf-8",
     )

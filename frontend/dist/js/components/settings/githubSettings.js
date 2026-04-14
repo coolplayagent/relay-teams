@@ -278,21 +278,24 @@ async function handleStartGitHubWebhookTunnel(fieldIds) {
     };
     renderGitHubWebhookTunnelStatus(fieldIds);
     try {
-        const status = await startGitHubWebhookTunnel({
+        const startStatus = await startGitHubWebhookTunnel({
             auto_save_webhook_base_url: true,
         });
-        lastTunnelStatus = status;
-        if (status.public_url) {
+        const resolvedStatus = await resolveGitHubWebhookTunnelStartStatus(startStatus);
+        lastTunnelStatus = resolvedStatus;
+        const publicUrl = normalizeGitHubWebhookBaseUrl(resolvedStatus?.public_url);
+        if (publicUrl) {
             const webhookBaseUrlInput = document.getElementById(fieldIds.webhookBaseUrlInputId);
             if (webhookBaseUrlInput) {
-                webhookBaseUrlInput.value = status.public_url;
+                webhookBaseUrlInput.value = publicUrl;
             }
             renderGitHubCallbackPreview(fieldIds);
+            await saveGitHubConfig({ webhook_base_url: publicUrl });
         }
         showToast({
             title: t('settings.github.tunnel_started'),
-            message: buildGitHubWebhookTunnelMessage(status),
-            tone: status.status === 'failed' ? 'danger' : 'success',
+            message: buildGitHubWebhookTunnelMessage(resolvedStatus),
+            tone: resolvedStatus.status === 'failed' ? 'danger' : 'success',
         });
         await loadGitHubSettingsPanel(fieldIds);
     } catch (e) {
@@ -308,6 +311,38 @@ async function handleStartGitHubWebhookTunnel(fieldIds) {
             tone: 'danger',
         });
     }
+}
+
+async function resolveGitHubWebhookTunnelStartStatus(status) {
+    let nextStatus = status;
+    if (
+        normalizeGitHubWebhookBaseUrl(nextStatus?.public_url)
+        || nextStatus?.status === 'failed'
+    ) {
+        return nextStatus;
+    }
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        await waitForGitHubWebhookTunnelStatus(250);
+        try {
+            nextStatus = await fetchGitHubWebhookTunnelStatus();
+        } catch (_error) {
+            break;
+        }
+        if (
+            normalizeGitHubWebhookBaseUrl(nextStatus?.public_url)
+            || nextStatus?.status === 'failed'
+        ) {
+            return nextStatus;
+        }
+    }
+    return nextStatus;
+}
+
+function waitForGitHubWebhookTunnelStatus(delayMs) {
+    return new Promise(resolve => {
+        setTimeout(resolve, delayMs);
+    });
 }
 
 async function handleStopGitHubWebhookTunnel(fieldIds) {
