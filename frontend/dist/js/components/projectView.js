@@ -3323,6 +3323,7 @@ function renderGitHubRepoDetail(repo) {
     const repoId = String(repo?.repo_subscription_id || '').trim();
     const rules = getGitHubRulesForRepo(repoId);
     const account = findGitHubAccountById(repo?.account_id);
+    const webhooksUrl = buildGitHubRepoWebhooksUrl(repo);
     return `
         <div class="automation-home-detail github-automation-detail">
             <div class="feature-detail-head automation-detail-head">
@@ -3355,6 +3356,27 @@ function renderGitHubRepoDetail(repo) {
                         <div><span>${escapeHtml(t('automation.detail.last_error'))}</span><strong>${escapeHtml(String(repo?.last_error || t('automation.detail.none')))}</strong></div>
                     </div>
                 </article>
+                ${webhooksUrl
+                    ? `
+                        <article class="feature-card github-webhooks-card">
+                            <span class="settings-token-source-label">${escapeHtml(t('feature.automation.github_open_webhooks'))}</span>
+                            <a class="web-provider-link-card" href="${escapeHtml(webhooksUrl)}" target="_blank" rel="noreferrer noopener" title="${escapeHtml(webhooksUrl)}" aria-label="${escapeHtml(webhooksUrl)}">
+                                <span class="web-provider-link-copy">
+                                    <span class="web-provider-link-badge">GitHub</span>
+                                    <span class="web-provider-link-url">${escapeHtml(webhooksUrl)}</span>
+                                    <span class="settings-token-source-note">${escapeHtml(t('feature.automation.github_open_webhooks_help'))}</span>
+                                </span>
+                                <span class="web-provider-link-arrow" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
+                                        <path d="M7 17L17 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                        <path d="M9 7h8v8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                    </svg>
+                                </span>
+                            </a>
+                        </article>
+                    `
+                    : ''
+                }
             </div>
             <section class="automation-flat-section">
                 <div class="automation-section-header automation-runs-header">
@@ -3411,6 +3433,15 @@ function formatGitHubWebhookStatusLabel(status) {
         return t('feature.automation.github_webhook_error');
     }
     return t('feature.automation.github_webhook_unregistered');
+}
+
+function buildGitHubRepoWebhooksUrl(repo) {
+    const owner = String(repo?.owner || '').trim();
+    const repoName = String(repo?.repo_name || '').trim();
+    if (!owner || !repoName) {
+        return '';
+    }
+    return `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/settings/hooks`;
 }
 
 function formatGitHubRuleSummary(rule) {

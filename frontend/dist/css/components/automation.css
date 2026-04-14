@@ -112,6 +112,21 @@
     flex: 0 0 auto;
 }
 
+.automation-detail-head .feature-action-row a.secondary-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+}
+
+.github-webhooks-card {
+    justify-content: space-between;
+}
+
+.github-webhooks-card .web-provider-link-card {
+    width: 100%;
+}
+
 .automation-detail-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

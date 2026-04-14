@@ -515,6 +515,10 @@ console.log(JSON.stringify({
     assert "Task Prompt" in str(payload["contentHtml"])
     assert "Review the PR" in str(payload["contentHtml"])
     assert "summarize impact." in str(payload["contentHtml"])
+    assert "Open Webhooks" in str(payload["contentHtml"])
+    assert "https://github.com/octocat/Hello-World/settings/hooks" in str(
+        payload["contentHtml"]
+    )
 
 
 def test_project_view_github_account_dialog_uses_secure_fields(
@@ -3324,6 +3328,7 @@ export const state = {
         "feature.automation.github_no_repos_copy": "Create a repository subscription under this account.",
         "feature.automation.github_no_rules": "No rules",
         "feature.automation.github_no_rules_copy": "Create a rule for this repository.",
+        "feature.automation.github_open_webhooks": "Open Webhooks",
         "feature.automation.github_callback_url": "Callback URL",
         "feature.automation.github_webhook_status": "Webhook Status",
         "feature.automation.github_default_branch": "Default Branch",
