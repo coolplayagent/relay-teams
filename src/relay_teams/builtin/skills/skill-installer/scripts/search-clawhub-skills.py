@@ -5,7 +5,7 @@ import argparse
 import json
 import sys
 
-from relay_teams.skills.clawhub_search_support import run_clawhub_search
+from relay_teams.skills.clawhub_cli_support import run_clawhub_search
 
 
 def main() -> int:

@@ -57,8 +57,6 @@ export {
     fetchClawHubConfig,
     fetchClawHubSkill,
     fetchClawHubSkills,
-    installClawHubSkill,
-    searchClawHubSkills,
     fetchGitHubConfig,
     fetchWebConfig,
     probeModelConnection,

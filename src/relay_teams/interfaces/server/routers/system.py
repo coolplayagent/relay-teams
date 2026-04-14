@@ -44,7 +44,6 @@ from relay_teams.env.web_connectivity import (
 )
 from relay_teams.interfaces.server.deps import (
     get_clawhub_config_service,
-    get_clawhub_install_service,
     get_clawhub_skill_service,
     get_config_status_service,
     get_environment_variable_service,
@@ -90,10 +89,7 @@ from relay_teams.providers.model_connectivity import (
     ModelConnectivityProbeResult,
 )
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
-from relay_teams.skills.clawhub_install_service import ClawHubSkillInstallService
 from relay_teams.skills.clawhub_models import (
-    ClawHubSkillInstallRequest,
-    ClawHubSkillInstallResult,
     ClawHubSkillDetail,
     ClawHubSkillSummary,
     ClawHubSkillWriteRequest,
@@ -540,20 +536,6 @@ def list_clawhub_skills(
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> tuple[ClawHubSkillSummary, ...]:
     return service.list_skills()
-
-
-@router.post(
-    "/configs/clawhub/skills:install",
-    response_model=ClawHubSkillInstallResult,
-)
-def install_clawhub_skill(
-    req: ClawHubSkillInstallRequest,
-    service: ClawHubSkillInstallService = Depends(get_clawhub_install_service),
-) -> ClawHubSkillInstallResult:
-    try:
-        return service.install(req)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get(

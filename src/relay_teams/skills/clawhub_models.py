@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -49,41 +48,3 @@ class ClawHubSkillDetail(ClawHubSkillSummary):
     instructions: str = ""
     manifest_content: str | None = None
     files: tuple[ClawHubSkillFile, ...] = ()
-
-
-class ClawHubSkillInstallRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    slug: RequiredIdentifierStr
-    version: str | None = None
-    force: bool = False
-    token: str | None = None
-
-
-class ClawHubSkillInstallDiagnostics(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    binary_available: bool
-    token_configured: bool
-    installation_attempted: bool = False
-    installed_during_install: bool = False
-    registry: str | None = None
-    endpoint_fallback_used: bool = False
-    workdir: str | None = None
-    skills_reloaded: bool = False
-
-
-class ClawHubSkillInstallResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    ok: bool
-    slug: RequiredIdentifierStr
-    requested_version: str | None = None
-    installed_skill: ClawHubSkillSummary | None = None
-    clawhub_path: str | None = None
-    latency_ms: int = Field(ge=0)
-    checked_at: datetime
-    diagnostics: ClawHubSkillInstallDiagnostics
-    retryable: bool = False
-    error_code: str | None = None
-    error_message: str | None = None

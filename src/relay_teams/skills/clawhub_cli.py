@@ -109,46 +109,6 @@ def build_clawhub_app(
             return
         _render_skill_summary_table(items)
 
-    @skills_app.command("install")
-    def skills_install(
-        slug: str = typer.Argument(..., help="ClawHub skill slug."),
-        version: str | None = typer.Option(
-            None,
-            "--version",
-            help="Install a specific ClawHub skill version.",
-        ),
-        force: bool = typer.Option(
-            False,
-            "--force",
-            help="Overwrite an existing skill directory if needed.",
-        ),
-        output_format: ClawHubOutputFormat = typer.Option(
-            ClawHubOutputFormat.TABLE,
-            "--format",
-            help="Render as an ASCII table or JSON.",
-            case_sensitive=False,
-        ),
-        base_url: str = typer.Option(default_base_url, "--base-url"),
-        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-    ) -> None:
-        auto_start_if_needed(base_url, autostart)
-        payload: dict[str, object] = {"slug": slug, "force": force}
-        if version is not None:
-            payload["version"] = version
-        result = request_json(
-            base_url,
-            "POST",
-            "/api/system/configs/clawhub/skills:install",
-            payload,
-        )
-        data = _require_object_response(
-            result, "/api/system/configs/clawhub/skills:install"
-        )
-        if output_format == ClawHubOutputFormat.JSON:
-            typer.echo(json.dumps(data, ensure_ascii=False))
-            return
-        _render_skill_install_result(data)
-
     @skills_app.command("get")
     def skills_get(
         skill_id: str = typer.Argument(..., help="ClawHub skill directory id."),
@@ -300,27 +260,3 @@ def _render_skill_detail(item: dict[str, object]) -> None:
     files = item.get("files")
     if isinstance(files, list):
         typer.echo(f"Files: {len(files)}")
-
-
-def _render_skill_install_result(payload: dict[str, object]) -> None:
-    slug = str(payload.get("slug") or "").strip()
-    typer.echo(f"ClawHub install result for {slug or '<unknown>'}:")
-    if not payload.get("ok"):
-        typer.echo(str(payload.get("error_message") or "Install failed."))
-        return
-    installed_skill = payload.get("installed_skill")
-    if isinstance(installed_skill, dict):
-        typer.echo(
-            "Installed: "
-            + str(installed_skill.get("directory") or "<unknown directory>")
-        )
-        typer.echo(
-            "Runtime name: " + str(installed_skill.get("runtime_name") or "<unknown>")
-        )
-        typer.echo("Runtime ref: " + str(installed_skill.get("ref") or "<unknown>"))
-    diagnostics = payload.get("diagnostics")
-    if isinstance(diagnostics, dict):
-        typer.echo(
-            "Skills reloaded: "
-            + ("yes" if bool(diagnostics.get("skills_reloaded")) else "no")
-        )

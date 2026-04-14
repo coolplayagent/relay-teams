@@ -40,7 +40,6 @@ from relay_teams.env.web_config_models import (
 from relay_teams.env.web_connectivity import WebConnectivityProbeResult
 from relay_teams.interfaces.server.deps import (
     get_clawhub_config_service,
-    get_clawhub_install_service,
     get_clawhub_skill_service,
     get_config_status_service,
     get_environment_variable_service,
@@ -74,8 +73,6 @@ from relay_teams.providers.model_config import (
 )
 from relay_teams.skills.clawhub_models import (
     ClawHubSkillDetail,
-    ClawHubSkillInstallRequest,
-    ClawHubSkillInstallResult,
     ClawHubSkillSummary,
     ClawHubSkillWriteRequest,
 )
@@ -292,41 +289,6 @@ class _FakeSystemService:
 
     def save_clawhub_config(self, config: ClawHubConfig) -> None:
         self.saved_clawhub_config = config.model_dump(mode="json")
-
-    def install(self, request: ClawHubSkillInstallRequest) -> ClawHubSkillInstallResult:
-        return ClawHubSkillInstallResult.model_validate(
-            {
-                "ok": True,
-                "slug": request.slug,
-                "requested_version": request.version,
-                "installed_skill": {
-                    "skill_id": request.slug,
-                    "runtime_name": "skill-creator",
-                    "description": "Create Codex skills.",
-                    "ref": "app:skill-creator",
-                    "scope": "app",
-                    "directory": f"/tmp/.relay-teams/skills/{request.slug}",
-                    "manifest_path": f"/tmp/.relay-teams/skills/{request.slug}/SKILL.md",
-                    "valid": True,
-                    "error": None,
-                },
-                "clawhub_path": "/usr/bin/clawhub",
-                "latency_ms": 63,
-                "checked_at": "2026-04-09T12:05:00Z",
-                "diagnostics": {
-                    "binary_available": True,
-                    "token_configured": False,
-                    "installation_attempted": False,
-                    "installed_during_install": False,
-                    "registry": "https://mirror-cn.clawhub.com",
-                    "workdir": "/tmp/.relay-teams",
-                    "skills_reloaded": True,
-                },
-                "retryable": False,
-                "error_code": None,
-                "error_message": None,
-            }
-        )
 
     def list_skills(self) -> tuple[ClawHubSkillSummary, ...]:
         return tuple(
@@ -608,7 +570,6 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_ui_language_settings_service] = lambda: fake_service
     app.dependency_overrides[get_web_config_service] = lambda: fake_service
     app.dependency_overrides[get_clawhub_config_service] = lambda: fake_service
-    app.dependency_overrides[get_clawhub_install_service] = lambda: fake_service
     app.dependency_overrides[get_clawhub_skill_service] = lambda: fake_service
     app.dependency_overrides[get_github_config_service] = lambda: fake_service
     app.dependency_overrides[get_github_trigger_service] = lambda: fake_service
@@ -890,49 +851,6 @@ def test_list_clawhub_skills() -> None:
             "error": None,
         }
     ]
-
-
-def test_install_clawhub_skill() -> None:
-    client = _create_test_client(_FakeSystemService())
-
-    response = client.post(
-        "/api/system/configs/clawhub/skills:install",
-        json={"slug": "skill-creator-2", "version": "v1.2.3", "force": True},
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "ok": True,
-        "slug": "skill-creator-2",
-        "requested_version": "v1.2.3",
-        "installed_skill": {
-            "skill_id": "skill-creator-2",
-            "runtime_name": "skill-creator",
-            "description": "Create Codex skills.",
-            "ref": "app:skill-creator",
-            "scope": "app",
-            "directory": "/tmp/.relay-teams/skills/skill-creator-2",
-            "manifest_path": "/tmp/.relay-teams/skills/skill-creator-2/SKILL.md",
-            "valid": True,
-            "error": None,
-        },
-        "clawhub_path": "/usr/bin/clawhub",
-        "latency_ms": 63,
-        "checked_at": "2026-04-09T12:05:00Z",
-        "diagnostics": {
-            "binary_available": True,
-            "token_configured": False,
-            "installation_attempted": False,
-            "installed_during_install": False,
-            "registry": "https://mirror-cn.clawhub.com",
-            "endpoint_fallback_used": False,
-            "workdir": "/tmp/.relay-teams",
-            "skills_reloaded": True,
-        },
-        "retryable": False,
-        "error_code": None,
-        "error_message": None,
-    }
 
 
 def test_save_and_delete_clawhub_skill() -> None:

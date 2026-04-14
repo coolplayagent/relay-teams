@@ -6,28 +6,26 @@ from pathlib import Path
 import subprocess
 from typing import cast
 
-from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_cli import ClawHubCliInstallResult
-from relay_teams.skills.clawhub_install_service import (
-    ClawHubSkillInstallService,
-    install_clawhub_skill,
-)
-from relay_teams.skills.clawhub_models import ClawHubSkillInstallRequest
+from relay_teams.skills.clawhub_cli_support import run_clawhub_install
 
 
-def test_install_clawhub_skill_reports_runtime_identity(
+def test_run_clawhub_install_reports_runtime_identity(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / ".relay-teams"
-    reload_events: list[str] = []
     monkeypatch.setattr(
-        "relay_teams.skills.clawhub_install_service.resolve_existing_clawhub_path",
+        "relay_teams.skills.clawhub_cli_support.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
     )
     monkeypatch.setattr(
-        "relay_teams.skills.clawhub_install_service.os.environ",
-        {"LANG": "zh_CN.UTF-8", "PATH": "/usr/bin"},
+        "relay_teams.skills.clawhub_cli_support.os.environ",
+        {
+            "LANG": "zh_CN.UTF-8",
+            "PATH": "/usr/bin",
+            "CLAWHUB_TOKEN": "ch_secret",
+        },
     )
 
     def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -66,39 +64,39 @@ def test_install_clawhub_skill_reports_runtime_identity(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = install_clawhub_skill(
+    result = run_clawhub_install(
         slug="skill-creator-2",
         version="v1.2.3",
         force=True,
-        token="ch_secret",
         config_dir=config_dir,
-        on_skill_installed=lambda: reload_events.append("reloaded"),
     )
 
-    assert result.ok is True
-    assert result.slug == "skill-creator-2"
-    assert result.requested_version == "v1.2.3"
-    assert result.installed_skill is not None
-    assert result.installed_skill.skill_id == "skill-creator-2"
-    assert result.installed_skill.runtime_name == "skill-creator"
-    assert result.installed_skill.ref == "app:skill-creator"
-    assert result.diagnostics.registry == "https://mirror-cn.clawhub.com"
-    assert result.diagnostics.skills_reloaded is True
-    assert reload_events == ["reloaded"]
+    assert result["ok"] is True
+    assert result["slug"] == "skill-creator-2"
+    assert result["requested_version"] == "v1.2.3"
+    installed_skill = result.get("installed_skill")
+    assert isinstance(installed_skill, dict)
+    assert installed_skill["skill_id"] == "skill-creator-2"
+    assert installed_skill["runtime_name"] == "skill-creator"
+    assert installed_skill["ref"] == "app:skill-creator"
+    diagnostics = result.get("diagnostics")
+    assert isinstance(diagnostics, dict)
+    assert diagnostics["registry"] == "https://mirror-cn.clawhub.com"
+    assert diagnostics["skills_reloaded"] is False
 
 
-def test_install_clawhub_skill_installs_missing_binary(
+def test_run_clawhub_install_installs_missing_binary(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / ".relay-teams"
     installed_path = Path("/opt/tools/clawhub/bin/clawhub")
     monkeypatch.setattr(
-        "relay_teams.skills.clawhub_install_service.resolve_existing_clawhub_path",
+        "relay_teams.skills.clawhub_cli_support.resolve_existing_clawhub_path",
         lambda: None,
     )
     monkeypatch.setattr(
-        "relay_teams.skills.clawhub_install_service.install_clawhub_via_npm",
+        "relay_teams.skills.clawhub_cli_support.install_clawhub_via_npm",
         lambda *, timeout_seconds, base_env=None: ClawHubCliInstallResult(
             ok=True,
             attempted=True,
@@ -108,7 +106,7 @@ def test_install_clawhub_skill_installs_missing_binary(
         ),
     )
     monkeypatch.setattr(
-        "relay_teams.skills.clawhub_install_service.os.environ",
+        "relay_teams.skills.clawhub_cli_support.os.environ",
         {"PATH": "/usr/bin"},
     )
 
@@ -140,28 +138,30 @@ def test_install_clawhub_skill_installs_missing_binary(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = install_clawhub_skill(
+    result = run_clawhub_install(
         slug="skill-creator",
         config_dir=config_dir,
     )
 
-    assert result.ok is True
-    assert result.clawhub_path == str(installed_path)
-    assert result.diagnostics.installation_attempted is True
-    assert result.diagnostics.installed_during_install is True
+    assert result["ok"] is True
+    assert result["clawhub_path"] == str(installed_path)
+    diagnostics = result.get("diagnostics")
+    assert isinstance(diagnostics, dict)
+    assert diagnostics["installation_attempted"] is True
+    assert diagnostics["installed_during_install"] is True
 
 
-def test_install_clawhub_skill_reports_runtime_discovery_failure(
+def test_run_clawhub_install_reports_runtime_discovery_failure(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / ".relay-teams"
     monkeypatch.setattr(
-        "relay_teams.skills.clawhub_install_service.resolve_existing_clawhub_path",
+        "relay_teams.skills.clawhub_cli_support.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
     )
     monkeypatch.setattr(
-        "relay_teams.skills.clawhub_install_service.os.environ",
+        "relay_teams.skills.clawhub_cli_support.os.environ",
         {"PATH": "/usr/bin"},
     )
     monkeypatch.setattr(
@@ -175,81 +175,38 @@ def test_install_clawhub_skill_reports_runtime_discovery_failure(
         ),
     )
 
-    result = install_clawhub_skill(
+    result = run_clawhub_install(
         slug="missing-runtime-skill",
         config_dir=config_dir,
     )
 
-    assert result.ok is False
-    assert result.error_code == "runtime_skill_unavailable"
+    assert result["ok"] is False
+    assert result["error_code"] == "runtime_skill_unavailable"
 
 
-def test_install_clawhub_skill_rejects_unsupported_slug(tmp_path: Path) -> None:
+def test_run_clawhub_install_rejects_unsupported_slug(tmp_path: Path) -> None:
     config_dir = tmp_path / ".relay-teams"
 
-    result = install_clawhub_skill(
+    result = run_clawhub_install(
         slug="org/skill-creator",
         config_dir=config_dir,
     )
 
-    assert result.ok is False
-    assert result.error_code == "unsupported_slug"
+    assert result["ok"] is False
+    assert result["error_code"] == "unsupported_slug"
 
 
-def test_clawhub_install_service_reads_token_from_saved_config(
+def test_run_clawhub_install_retries_without_endpoint_overrides(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     config_dir = tmp_path / ".relay-teams"
     monkeypatch.setattr(
-        "relay_teams.skills.clawhub_install_service.resolve_existing_clawhub_path",
+        "relay_teams.skills.clawhub_cli_support.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
     )
     monkeypatch.setattr(
-        "relay_teams.skills.clawhub_install_service.os.environ",
-        {"PATH": "/usr/bin"},
-    )
-
-    def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        env = kwargs.get("env")
-        assert isinstance(env, dict)
-        assert env["CLAWHUB_TOKEN"] == "ch_saved"
-        skill_dir = config_dir / "skills" / "skill-creator"
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / "SKILL.md").write_text(
-            "---\nname: skill-creator\ndescription: Create skills.\n---\nUse skill creator.\n",
-            encoding="utf-8",
-        )
-        return subprocess.CompletedProcess(
-            args=["clawhub", "install", "skill-creator"],
-            returncode=0,
-            stdout="installed",
-            stderr="",
-        )
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    service = ClawHubSkillInstallService(
-        config_dir=config_dir,
-        get_clawhub_config=lambda: ClawHubConfig(token="ch_saved"),
-    )
-
-    result = service.install(ClawHubSkillInstallRequest(slug="skill-creator"))
-
-    assert result.ok is True
-    assert result.diagnostics.token_configured is True
-
-
-def test_install_clawhub_skill_retries_without_endpoint_overrides(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    config_dir = tmp_path / ".relay-teams"
-    monkeypatch.setattr(
-        "relay_teams.skills.clawhub_install_service.resolve_existing_clawhub_path",
-        lambda: Path("/usr/bin/clawhub"),
-    )
-    monkeypatch.setattr(
-        "relay_teams.skills.clawhub_install_service.os.environ",
+        "relay_teams.skills.clawhub_cli_support.os.environ",
         {"LANG": "zh_CN.UTF-8", "PATH": "/usr/bin"},
     )
     observed_envs: list[dict[str, str]] = []
@@ -284,13 +241,16 @@ def test_install_clawhub_skill_retries_without_endpoint_overrides(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = install_clawhub_skill(
+    result = run_clawhub_install(
         slug="skill-creator",
         config_dir=config_dir,
     )
 
-    assert result.ok is True
-    assert result.installed_skill is not None
-    assert result.installed_skill.skill_id == "skill-creator"
-    assert result.diagnostics.registry == "https://mirror-cn.clawhub.com"
-    assert result.diagnostics.endpoint_fallback_used is True
+    assert result["ok"] is True
+    installed_skill = result.get("installed_skill")
+    assert isinstance(installed_skill, dict)
+    assert installed_skill["skill_id"] == "skill-creator"
+    diagnostics = result.get("diagnostics")
+    assert isinstance(diagnostics, dict)
+    assert diagnostics["registry"] == "https://mirror-cn.clawhub.com"
+    assert diagnostics["endpoint_fallback_used"] is True

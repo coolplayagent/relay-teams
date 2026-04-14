@@ -9,15 +9,8 @@ from relay_teams.skills.discovery import (
 from relay_teams.skills.clawhub_models import (
     ClawHubSkillDetail,
     ClawHubSkillFile,
-    ClawHubSkillInstallDiagnostics,
-    ClawHubSkillInstallRequest,
-    ClawHubSkillInstallResult,
     ClawHubSkillSummary,
     ClawHubSkillWriteRequest,
-)
-from relay_teams.skills.clawhub_install_service import (
-    ClawHubSkillInstallService,
-    install_clawhub_skill,
 )
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
@@ -76,15 +69,10 @@ __all__ = [
     "build_skill_ref",
     "ClawHubSkillDetail",
     "ClawHubSkillFile",
-    "ClawHubSkillInstallDiagnostics",
-    "ClawHubSkillInstallRequest",
-    "ClawHubSkillInstallResult",
-    "ClawHubSkillInstallService",
     "ClawHubSkillService",
     "ClawHubSkillSummary",
     "ClawHubSkillWriteRequest",
     "get_project_skills_dir",
     "get_user_skills_dir",
-    "install_clawhub_skill",
     "parse_skill_ref",
 ]

@@ -5,7 +5,7 @@ import argparse
 import json
 import sys
 
-from relay_teams.skills.clawhub_install_service import install_clawhub_skill
+from relay_teams.skills.clawhub_cli_support import run_clawhub_install
 
 
 def main() -> int:
@@ -16,22 +16,22 @@ def main() -> int:
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args()
 
-    result = install_clawhub_skill(
+    result = run_clawhub_install(
         slug=args.slug,
         version=args.version,
         force=args.force,
     )
-    if not result.ok:
+    if not bool(result.get("ok")):
         print(
-            result.error_message or "ClawHub skill install failed.",
+            str(result.get("error_message") or "ClawHub skill install failed."),
             file=sys.stderr,
         )
         return 1
 
     if args.format == "json":
-        print(json.dumps(result.model_dump(mode="json"), ensure_ascii=False))
+        print(json.dumps(result, ensure_ascii=False))
     else:
-        print(_render_install_text(result.model_dump(mode="json")))
+        print(_render_install_text(result))
     return 0
 
 
