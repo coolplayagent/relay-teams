@@ -233,7 +233,7 @@ function createModal() {
                                                 <label for="profile-base-url" data-i18n="settings.model.base_url">Base URL</label>
                                                 <input type="text" id="profile-base-url" placeholder="e.g., https://api.openai.com/v1" data-i18n-placeholder="settings.model.base_url_placeholder" autocomplete="url">
                                             </div>
-                                            <div class="profile-credentials-row form-group-span-2">
+                                            <div class="profile-credentials-row form-group-span-2" id="profile-primary-credentials-row">
                                                 <div class="form-group" id="profile-api-key-group">
                                                     <label for="profile-api-key" data-i18n="settings.model.api_key">API Key</label>
                                                     <div class="secure-input-row">
@@ -246,7 +246,7 @@ function createModal() {
                                                         </button>
                                                     </div>
                                                 </div>
-                                                <div class="form-group form-group-inline-action">
+                                                <div class="form-group form-group-inline-action" id="profile-model-group">
                                                     <label for="profile-model" data-i18n="settings.model.model">Model</label>
                                                     <div class="secure-input-row profile-model-input-row">
                                                         <input type="text" id="profile-model" autocomplete="off" spellcheck="false">
@@ -282,6 +282,7 @@ function createModal() {
                                                         </button>
                                                     </div>
                                                 </div>
+                                                <div class="form-group-span-2" id="profile-maas-model-slot"></div>
                                             </div>
                                         </div>
                                         <div class="profile-model-discovery-status" id="profile-model-discovery-status" style="display:none;"></div>
