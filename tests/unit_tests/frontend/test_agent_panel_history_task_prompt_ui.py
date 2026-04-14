@@ -5,7 +5,10 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
 
+
+@pytest.mark.timeout(5)
 def test_load_agent_history_uses_task_prompt_label_for_subagent_messages(
     tmp_path: Path,
 ) -> None:
