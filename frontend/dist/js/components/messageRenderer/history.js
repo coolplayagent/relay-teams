@@ -116,6 +116,7 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
         && (
             (Array.isArray(streamOverlayEntry.parts) && streamOverlayEntry.parts.length > 0)
             || streamOverlayEntry.textStreaming === true
+            || streamOverlayEntry.idleCursor === true
         )
     ) {
         renderStreamOverlayEntry(
@@ -203,6 +204,7 @@ function renderStreamOverlayEntry(
     let renderedLiveTextTail = false;
     const overlayParts = Array.isArray(streamOverlayEntry.parts) ? streamOverlayEntry.parts : [];
     const hasLiveTextTail = streamOverlayEntry.textStreaming === true;
+    const hasIdleCursor = streamOverlayEntry.idleCursor === true;
     const trailingTextPart = [...overlayParts]
         .reverse()
         .find(part => part && typeof part === 'object' && part.kind === 'text');
@@ -249,8 +251,14 @@ function renderStreamOverlayEntry(
     });
 
     flushText(hasLiveTextTail && !!trailingTextPart);
-    if (hasLiveTextTail && !renderedLiveTextTail) {
-        appendMessageText(contentEl, '', { streaming: true });
+    if ((hasLiveTextTail || hasIdleCursor) && !renderedLiveTextTail) {
+        const liveTail = appendMessageText(contentEl, '', { streaming: true });
+        if (hasIdleCursor && liveTail) {
+            if (liveTail.dataset) {
+                liveTail.dataset.idleCursor = 'true';
+            }
+            liveTail.__idleCursor = true;
+        }
     }
 }
 
@@ -491,6 +499,9 @@ function shouldCollapseIntermediateMessages(streamOverlayEntry, options = {}) {
         return true;
     }
     if (streamOverlayEntry.textStreaming === true) {
+        return false;
+    }
+    if (streamOverlayEntry.idleCursor === true) {
         return false;
     }
     const parts = Array.isArray(streamOverlayEntry.parts) ? streamOverlayEntry.parts : [];

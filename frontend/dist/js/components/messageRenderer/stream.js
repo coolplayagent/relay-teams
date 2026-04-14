@@ -73,7 +73,9 @@ export function appendStreamChunk(instanceId, text, runId = '', roleId = '', lab
 
     st.raw += text;
     st.activeRaw += text;
+    st.activeTextIsIdle = false;
     updateMessageText(st.activeTextEl, st.activeRaw, { streaming: true });
+    markIdleCursorPlaceholder(st.activeTextEl, false);
     updateOverlayText(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, label || st.label, text);
     setOverlayTextStreaming(
         st.runId || runId,
@@ -81,6 +83,13 @@ export function appendStreamChunk(instanceId, text, runId = '', roleId = '', lab
         roleId || st.roleId,
         label || st.label,
         true,
+    );
+    setOverlayIdleCursor(
+        st.runId || runId,
+        st.instanceId || instanceId,
+        roleId || st.roleId,
+        label || st.label,
+        false,
     );
     scrollBottom(st.container);
 }
@@ -369,6 +378,9 @@ export function updateToolResult(
         boundState = materialized.streamState;
     }
     applyToolReturn(toolBlock, result);
+    if (boundState && !hasActiveThinking(boundState)) {
+        ensureIdleStreamingTail(boundState);
+    }
     scrollBottom((boundState && boundState.container) || container);
 }
 
@@ -462,6 +474,9 @@ export function finalizeThinking(instanceId, partIndex, options = {}) {
         st.thinkingActiveByPart.delete(String(partIndex));
     }
     finishOverlayThinking((st && st.runId) || runId, (st && st.instanceId) || instanceId, (st && st.roleId) || roleId, partIndex);
+    if (st && !hasActiveThinking(st)) {
+        ensureIdleStreamingTail(st);
+    }
     return true;
 }
 
@@ -554,11 +569,13 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
     if (evType === 'text_delta') {
         clearOverlayEntryCleanupTimer(runId, streamKey);
         updateOverlayText(runId, streamKey, roleId, label, payload?.text || '');
+        setOverlayIdleCursor(runId, streamKey, roleId, label, false);
         return;
     }
     if (evType === 'thinking_started') {
         clearOverlayEntryCleanupTimer(runId, streamKey);
         setOverlayTextStreaming(runId, streamKey, roleId, label, false);
+        setOverlayIdleCursor(runId, streamKey, roleId, label, false);
         startOverlayThinking(runId, streamKey, roleId, label, payload?.part_index ?? 0);
         return;
     }
@@ -577,11 +594,13 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
     }
     if (evType === 'thinking_finished') {
         finishOverlayThinking(runId, streamKey, roleId, payload?.part_index ?? 0);
+        setOverlayIdleCursor(runId, streamKey, roleId, label, true);
         return;
     }
     if (evType === 'tool_call') {
         clearOverlayEntryCleanupTimer(runId, streamKey);
         setOverlayTextStreaming(runId, streamKey, roleId, label, false);
+        setOverlayIdleCursor(runId, streamKey, roleId, label, false);
         updateOverlayToolCall(runId, streamKey, roleId, label, {
             tool_call_id: payload?.tool_call_id || '',
             tool_name: payload?.tool_name || '',
@@ -606,6 +625,7 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
             resultEnvelope,
             isError,
         );
+        setOverlayIdleCursor(runId, streamKey, roleId, label, true);
         return;
     }
     if (evType === 'tool_input_validation_failed') {
@@ -632,11 +652,13 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
     }
     if (evType === 'model_step_finished') {
         setOverlayTextStreaming(runId, streamKey, roleId, label, false);
+        setOverlayIdleCursor(runId, streamKey, roleId, label, false);
         scheduleOverlayEntryCleanup(runId, streamKey, roleId, cleanupDelayMs);
         return;
     }
     if (evType === 'run_completed' || evType === 'run_failed' || evType === 'run_stopped') {
         setOverlayTextStreaming(runId, streamKey, roleId, label, false);
+        setOverlayIdleCursor(runId, streamKey, roleId, label, false);
         scheduleRunOverlayCleanup(runId, cleanupDelayMs);
     }
 }
@@ -667,7 +689,16 @@ function finalizeStreamEntry(entry) {
         return;
     }
     if (entry.activeTextEl) {
-        updateMessageText(entry.activeTextEl, entry.activeRaw, { streaming: false });
+        if (entry.activeTextIsIdle === true && isIdleCursorPlaceholder(entry.activeTextEl)) {
+            syncStreamingCursor(entry.activeTextEl, false);
+            entry.activeTextEl.remove?.();
+        } else {
+            updateMessageText(entry.activeTextEl, entry.activeRaw, { streaming: false });
+            markIdleCursorPlaceholder(entry.activeTextEl, false);
+        }
+        entry.activeTextEl = null;
+        entry.activeRaw = '';
+        entry.activeTextIsIdle = false;
     }
     if (entry.thinkingParts instanceof Map) {
         entry.thinkingParts.forEach(thinkingEntry => {
@@ -750,6 +781,7 @@ function createStreamState({
         activeTextEl: null,
         raw: '',
         activeRaw: '',
+        activeTextIsIdle: false,
         thinkingParts: new Map(),
         thinkingActiveByPart: new Map(),
         thinkingSequence: 0,
@@ -779,10 +811,17 @@ function findReusableStreamState({
     if (!wrapper) return null;
     const contentEl = wrapper.querySelector('.msg-content');
     if (!contentEl) return null;
-    const activeTextEl = findLastReusableTextElement(contentEl);
-    const activeRaw = resolveReusableRawText(overlayEntry);
+    const idleRebind = overlayEntry?.idleCursor === true && overlayEntry?.textStreaming !== true;
+    const activeTextEl = idleRebind
+        ? findReusableIdleCursorElement(contentEl)
+        : findLastReusableTextElement(contentEl);
+    const activeRaw = idleRebind ? '' : resolveReusableRawText(overlayEntry);
     if (activeTextEl) {
         syncStreamingCursor(activeTextEl, overlayEntry?.textStreaming === true);
+        if (overlayEntry?.idleCursor === true && overlayEntry?.textStreaming !== true) {
+            markIdleCursorPlaceholder(activeTextEl, true);
+            syncStreamingCursor(activeTextEl, true);
+        }
     }
     const thinkingBinding = bindReusableThinkingState(contentEl, overlayEntry);
     const pendingToolBlocks = bindReusableToolBlocks(contentEl, overlayEntry);
@@ -794,6 +833,7 @@ function findReusableStreamState({
         activeTextEl,
         raw: activeRaw,
         activeRaw,
+        activeTextIsIdle: isIdleCursorPlaceholder(activeTextEl),
         thinkingParts: thinkingBinding.parts,
         thinkingActiveByPart: thinkingBinding.activeByPart,
         thinkingSequence: thinkingBinding.nextSequence,
@@ -877,7 +917,21 @@ function findLastReusableTextElement(contentEl) {
     for (let index = textBlocks.length - 1; index >= 0; index -= 1) {
         const textEl = textBlocks[index];
         if (textEl.closest('.thinking-block')) continue;
+        if (isIdleCursorPlaceholder(textEl)) continue;
         return textEl;
+    }
+    return null;
+}
+
+function findReusableIdleCursorElement(contentEl) {
+    if (!contentEl) return null;
+    const textBlocks = Array.from(contentEl.querySelectorAll('.msg-text'));
+    for (let index = textBlocks.length - 1; index >= 0; index -= 1) {
+        const textEl = textBlocks[index];
+        if (textEl.closest('.thinking-block')) continue;
+        if (isIdleCursorPlaceholder(textEl)) {
+            return textEl;
+        }
     }
     return null;
 }
@@ -989,11 +1043,19 @@ function escapeSelectorValue(value) {
 function endActiveText(st) {
     if (!st) return;
     if (st.activeTextEl) {
-        syncStreamingCursor(st.activeTextEl, false);
+        if (st.activeTextIsIdle === true && isIdleCursorPlaceholder(st.activeTextEl)) {
+            syncStreamingCursor(st.activeTextEl, false);
+            st.activeTextEl.remove?.();
+        } else {
+            syncStreamingCursor(st.activeTextEl, false);
+            markIdleCursorPlaceholder(st.activeTextEl, false);
+        }
     }
     setOverlayTextStreaming(st.runId, st.instanceId, st.roleId, st.label, false);
+    setOverlayIdleCursor(st.runId, st.instanceId, st.roleId, st.label, false);
     st.activeTextEl = null;
     st.activeRaw = '';
+    st.activeTextIsIdle = false;
 }
 
 function resolveToolBlockTarget(st, container, toolName, toolCallId) {
@@ -1100,6 +1162,7 @@ function ensureOverlayEntry(runId, instanceId, roleId, label) {
             thinkingActiveByPart: new Map(),
             thinkingSequence: 0,
             textStreaming: false,
+            idleCursor: false,
         };
         runOverlay.entries.set(key, entry);
     } else {
@@ -1109,6 +1172,7 @@ function ensureOverlayEntry(runId, instanceId, roleId, label) {
         if (!entry.thinkingActiveByPart) entry.thinkingActiveByPart = new Map();
         if (typeof entry.thinkingSequence !== 'number') entry.thinkingSequence = 0;
         if (typeof entry.textStreaming !== 'boolean') entry.textStreaming = false;
+        if (typeof entry.idleCursor !== 'boolean') entry.idleCursor = false;
     }
     return entry;
 }
@@ -1203,6 +1267,7 @@ function updateOverlayText(runId, instanceId, roleId, label, text) {
     if (!entry) return;
     const nextText = String(text || '');
     entry.textStreaming = true;
+    entry.idleCursor = false;
     if (!nextText) return;
     const lastPart = entry.parts[entry.parts.length - 1];
     if (lastPart && lastPart.kind === 'text') {
@@ -1216,6 +1281,12 @@ function setOverlayTextStreaming(runId, instanceId, roleId, label, isStreaming) 
     const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
     if (!entry) return;
     entry.textStreaming = isStreaming === true;
+}
+
+function setOverlayIdleCursor(runId, instanceId, roleId, label, isIdle) {
+    const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
+    if (!entry) return;
+    entry.idleCursor = isIdle === true;
 }
 
 function startOverlayThinking(runId, instanceId, roleId, label, partIndex) {
@@ -1406,6 +1477,49 @@ function findOverlayToolPart(entry, toolName, toolCallId) {
     return null;
 }
 
+function hasActiveThinking(st) {
+    return !!(st?.thinkingActiveByPart && st.thinkingActiveByPart.size > 0);
+}
+
+function ensureIdleStreamingTail(st) {
+    if (!st || hasActiveThinking(st)) {
+        return;
+    }
+    if (!st.activeTextEl || !isIdleCursorPlaceholder(st.activeTextEl)) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'msg-text';
+        st.contentEl.appendChild(placeholder);
+        st.activeTextEl = placeholder;
+    }
+    st.activeRaw = '';
+    st.activeTextIsIdle = true;
+    updateMessageText(st.activeTextEl, '', { streaming: true });
+    markIdleCursorPlaceholder(st.activeTextEl, true);
+    setOverlayTextStreaming(st.runId, st.instanceId, st.roleId, st.label, false);
+    setOverlayIdleCursor(st.runId, st.instanceId, st.roleId, st.label, true);
+}
+
+function isIdleCursorPlaceholder(textEl) {
+    if (!textEl) {
+        return false;
+    }
+    return textEl?.dataset?.idleCursor === 'true' || textEl.__idleCursor === true;
+}
+
+function markIdleCursorPlaceholder(textEl, isIdle) {
+    if (!textEl) {
+        return;
+    }
+    if (textEl.dataset) {
+        if (isIdle === true) {
+            textEl.dataset.idleCursor = 'true';
+        } else if ('idleCursor' in textEl.dataset) {
+            delete textEl.dataset.idleCursor;
+        }
+    }
+    textEl.__idleCursor = isIdle === true;
+}
+
 function resolveThinkingEntry(st, partIndex, options = {}) {
     if (!st) return null;
     const safePartIndex = String(partIndex);
@@ -1458,5 +1572,6 @@ function cloneOverlayEntry(entry) {
         label: entry.label,
         parts: entry.parts.map(part => ({ ...part })),
         textStreaming: entry.textStreaming === true,
+        idleCursor: entry.idleCursor === true,
     };
 }
