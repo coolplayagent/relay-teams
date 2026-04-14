@@ -75,6 +75,59 @@
     gap: 0.85rem;
 }
 
+.github-automation-detail {
+    --github-detail-heading-size: 0.95rem;
+    --github-detail-label-size: 0.74rem;
+    --github-detail-value-size: 0.92rem;
+    --github-detail-code-size: 0.84rem;
+    --github-detail-note-size: 0.76rem;
+}
+
+.github-automation-detail .automation-section-header h3,
+.github-automation-detail .automation-section-header h4 {
+    font-size: var(--github-detail-heading-size);
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.github-automation-detail .feature-meta-list span,
+.github-automation-detail .github-rule-meta-list span,
+.github-automation-detail .settings-token-source-label {
+    color: var(--text-secondary);
+    font-size: var(--github-detail-label-size);
+    font-weight: 600;
+    line-height: 1.45;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.github-automation-detail .feature-meta-list strong,
+.github-automation-detail .github-rule-heading strong,
+.github-automation-detail .github-rule-meta-list strong,
+.github-automation-detail .web-provider-link-url {
+    font-size: var(--github-detail-value-size);
+    font-weight: 600;
+    line-height: 1.45;
+}
+
+.github-automation-detail .feature-meta-list strong,
+.github-automation-detail .github-rule-heading strong,
+.github-automation-detail .github-rule-meta-list strong {
+    font-family: inherit;
+}
+
+.github-automation-detail .feature-meta-list code,
+.github-automation-detail .github-rule-meta-list code {
+    font-size: var(--github-detail-code-size);
+    line-height: 1.6;
+}
+
+.github-automation-detail .settings-token-source-note,
+.github-automation-detail .web-provider-link-note {
+    font-size: var(--github-detail-note-size);
+    line-height: 1.45;
+}
+
 .automation-detail-head {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;

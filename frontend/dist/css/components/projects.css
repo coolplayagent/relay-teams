@@ -1485,11 +1485,14 @@
 .github-rule-meta-list {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.6rem 0.9rem;
+    gap: 0.7rem 0.9rem;
 }
 
 .github-rule-meta-list > div {
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
 }
 
 .github-rule-prompt-row {
@@ -1498,6 +1501,7 @@
 
 .github-rule-prompt {
     display: block;
+    font-size: 0.84rem;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     line-height: 1.6;
