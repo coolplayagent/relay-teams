@@ -237,6 +237,23 @@ function renderNextDialog() {
                                         </label>
                                     `;
                                 }
+                                if (fieldType === 'password') {
+                                    const showLabel = escapeHtml(field.showLabel || t('feedback.show_sensitive'));
+                                    const hideLabel = escapeHtml(field.hideLabel || t('feedback.hide_sensitive'));
+                                    const hasValue = String(fieldValue ?? '').trim().length > 0;
+                                    return `
+                                        <label class="feedback-dialog-input-wrap">
+                                            <span class="feedback-dialog-input-label">${inputLabel}</span>
+                                            ${fieldCopy}
+                                            <div class="secure-input-row feedback-dialog-secure-row">
+                                                <input type="password" class="feedback-dialog-input" data-feedback-form-input="${escapeHtml(fieldId)}" data-feedback-form-type="password" placeholder="${placeholder}" value="${escapeHtml(fieldValue)}" autocomplete="${escapeHtml(field.autocomplete || 'current-password')}" />
+                                                <button class="secure-input-btn feedback-dialog-secure-toggle" data-feedback-password-toggle="${escapeHtml(fieldId)}" data-feedback-show-label="${showLabel}" data-feedback-hide-label="${hideLabel}" type="button" title="${showLabel}" aria-label="${showLabel}"${hasValue ? '' : ' style="display:none;"'}>
+                                                    ${renderSecureInputIcon()}
+                                                </button>
+                                            </div>
+                                        </label>
+                                    `;
+                                }
                                 return `
                                     <label class="feedback-dialog-input-wrap">
                                         <span class="feedback-dialog-input-label">${inputLabel}</span>
@@ -269,6 +286,7 @@ function renderNextDialog() {
     const formInputs = Array.from(hosts.dialogRoot.querySelectorAll('[data-feedback-form-input]'));
     const submitError = hosts.dialogRoot.querySelector('[data-feedback-submit-error]');
     bindMultiselectControls(hosts.dialogRoot);
+    bindPasswordInputControls(hosts.dialogRoot);
     if (confirmBtn) {
         confirmBtn.onclick = async () => {
             if (activeDialog?.submitting === true) {
@@ -494,6 +512,61 @@ function bindMultiselectControls(dialogNode) {
     });
 }
 
+function bindPasswordInputControls(dialogNode) {
+    const formInputs = Array.from(dialogNode.querySelectorAll('[data-feedback-form-input]'));
+    Array.from(dialogNode.querySelectorAll('[data-feedback-password-toggle]')).forEach(toggleBtn => {
+        if (!(toggleBtn instanceof HTMLButtonElement)) {
+            return;
+        }
+        const fieldId = String(toggleBtn.getAttribute('data-feedback-password-toggle') || '').trim();
+        if (!fieldId) {
+            return;
+        }
+        const matchedInput = formInputs.find(node => String(node.getAttribute?.('data-feedback-form-input') || '').trim() === fieldId);
+        if (!(matchedInput instanceof HTMLInputElement)) {
+            return;
+        }
+        const showLabel = String(toggleBtn.getAttribute('data-feedback-show-label') || t('feedback.show_sensitive')).trim();
+        const hideLabel = String(toggleBtn.getAttribute('data-feedback-hide-label') || t('feedback.hide_sensitive')).trim();
+        const renderToggle = () => {
+            const hasValue = Boolean(String(matchedInput.value || '').trim());
+            const revealed = toggleBtn.getAttribute('data-feedback-revealed') === 'true';
+            if (!hasValue) {
+                matchedInput.type = 'password';
+                toggleBtn.style.display = 'none';
+                toggleBtn.className = 'secure-input-btn feedback-dialog-secure-toggle';
+                toggleBtn.title = showLabel;
+            } else {
+                matchedInput.type = revealed ? 'text' : 'password';
+                toggleBtn.style.display = 'inline-flex';
+                toggleBtn.className = revealed
+                    ? 'secure-input-btn feedback-dialog-secure-toggle is-active'
+                    : 'secure-input-btn feedback-dialog-secure-toggle';
+                toggleBtn.title = revealed ? hideLabel : showLabel;
+            }
+            toggleBtn.setAttribute('aria-label', toggleBtn.title);
+        };
+        toggleBtn.onclick = () => {
+            if (!String(matchedInput.value || '').trim()) {
+                return;
+            }
+            const nextRevealed = toggleBtn.getAttribute('data-feedback-revealed') !== 'true';
+            toggleBtn.setAttribute('data-feedback-revealed', nextRevealed ? 'true' : 'false');
+            renderToggle();
+            matchedInput.focus?.();
+        };
+        const handleInput = () => {
+            if (!String(matchedInput.value || '').trim()) {
+                toggleBtn.setAttribute('data-feedback-revealed', 'false');
+            }
+            renderToggle();
+        };
+        matchedInput.addEventListener('input', handleInput);
+        matchedInput.addEventListener('change', handleInput);
+        renderToggle();
+    });
+}
+
 function setDialogSubmittingState(context, isSubmitting) {
     const { activeDialog: dialog, confirmBtn, cancelBtn, formInputs } = context;
     if (dialog && typeof dialog === 'object') {
@@ -519,4 +592,21 @@ function setDialogSubmittingState(context, isSubmitting) {
             });
         }
     });
+    const dialogNode = confirmBtn?.closest?.('.feedback-dialog') || cancelBtn?.closest?.('.feedback-dialog');
+    if (dialogNode instanceof HTMLElement) {
+        Array.from(dialogNode.querySelectorAll('[data-feedback-password-toggle]')).forEach(button => {
+            if (button instanceof HTMLButtonElement) {
+                button.disabled = isSubmitting;
+            }
+        });
+    }
+}
+
+function renderSecureInputIcon() {
+    return `
+        <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+            <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+        </svg>
+    `;
 }

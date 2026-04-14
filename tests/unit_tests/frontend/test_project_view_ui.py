@@ -434,6 +434,74 @@ console.log(JSON.stringify({
     assert payload["loadCalls"] == 1
 
 
+def test_project_view_github_account_dialog_uses_secure_fields(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationGitHubView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockGitHubAccounts = [
+    {
+        account_id: "ghta_1",
+        name: "github-main",
+        display_name: "GitHub Main",
+        status: "enabled",
+        token_configured: true,
+        webhook_secret_configured: true,
+    },
+];
+
+initializeProjectView();
+await openAutomationGitHubView("account:ghta_1");
+await flushTasks();
+await flushTasks();
+
+const editButton = document.querySelector('[data-github-account-edit]');
+editButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+const secureFields = fields
+    .filter(field => field.id === "token" || field.id === "webhook_secret")
+    .map(field => ({
+        id: field.id,
+        type: field.type || "text",
+        showLabel: field.showLabel || "",
+        hideLabel: field.hideLabel || "",
+    }));
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(editButton),
+    secureFields,
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["secureFields"] == [
+        {
+            "id": "token",
+            "type": "password",
+            "showLabel": "Show GitHub token",
+            "hideLabel": "Hide GitHub token",
+        },
+        {
+            "id": "webhook_secret",
+            "type": "password",
+            "showLabel": "Show Webhook Secret",
+            "hideLabel": "Hide Webhook Secret",
+        },
+    ]
+
+
 def test_project_view_creates_github_repo_from_repository_dropdown(
     tmp_path: Path,
 ) -> None:
@@ -3044,6 +3112,10 @@ export const state = {
         "feature.automation.github_account_secret": "Webhook Secret",
         "feature.automation.github_configured": "Configured",
         "feature.automation.github_not_configured": "Not configured",
+        "feature.automation.github_show_webhook_secret": "Show Webhook Secret",
+        "feature.automation.github_hide_webhook_secret": "Hide Webhook Secret",
+        "settings.github.show_token": "Show GitHub token",
+        "settings.github.hide_token": "Hide GitHub token",
         "feature.automation.github_account_required": "Account name is required.",
         "feature.automation.github_repo_required": "Repository name is required.",
         "feature.automation.github_repo_options_empty": "No repositories are available for this account token.",

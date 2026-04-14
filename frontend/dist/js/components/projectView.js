@@ -114,8 +114,16 @@ const FEATURE_GITHUB_FIELD_IDS = Object.freeze({
     saveButtonId: 'feature-save-github-btn',
     probeButtonId: 'feature-test-github-btn',
     tokenInputId: 'feature-github-token',
+    webhookSaveButtonId: 'feature-save-github-webhook-btn',
+    webhookProbeButtonId: 'feature-test-github-webhook-btn',
+    webhookBaseUrlInputId: 'feature-github-webhook-base-url',
+    callbackPreviewId: 'feature-github-callback-preview',
+    tunnelStartButtonId: 'feature-start-github-webhook-tunnel-btn',
+    tunnelStopButtonId: 'feature-stop-github-webhook-tunnel-btn',
+    tunnelStatusId: 'feature-github-webhook-tunnel-status',
     toggleTokenButtonId: 'feature-toggle-github-token-btn',
     statusId: 'feature-github-probe-status',
+    webhookStatusId: 'feature-github-webhook-probe-status',
 });
 const FEISHU_PLATFORM = 'feishu';
 const WECHAT_PLATFORM = 'wechat';
@@ -1800,10 +1808,13 @@ async function requestGitHubAccountInput(account = null) {
             {
                 id: 'token',
                 label: t('settings.github.token'),
+                type: 'password',
                 value: '',
                 placeholder: account
                     ? t('feature.automation.github_secret_keep')
                     : 'ghp_...',
+                showLabel: t('settings.github.show_token'),
+                hideLabel: t('settings.github.hide_token'),
                 description: account
                     ? t('feature.automation.github_token_override_copy')
                     : t('feature.automation.github_token_copy'),
@@ -1818,10 +1829,13 @@ async function requestGitHubAccountInput(account = null) {
             {
                 id: 'webhook_secret',
                 label: t('feature.automation.github_webhook_secret'),
+                type: 'password',
                 value: '',
                 placeholder: account
                     ? t('feature.automation.github_secret_keep')
                     : 'whsec_...',
+                showLabel: t('feature.automation.github_show_webhook_secret'),
+                hideLabel: t('feature.automation.github_hide_webhook_secret'),
                 description: t('feature.automation.github_webhook_secret_copy'),
             },
             {

@@ -128,6 +128,10 @@
     font: inherit;
 }
 
+.feedback-dialog-secure-row .feedback-dialog-input {
+    min-width: 0;
+}
+
 .feedback-dialog-form {
     display: grid;
     gap: 0.55rem;
@@ -220,4 +224,3 @@
 .feedback-tone-danger {
     border-color: color-mix(in srgb, var(--danger) 40%, var(--border-color));
 }
-
