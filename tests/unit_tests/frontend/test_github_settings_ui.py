@@ -164,6 +164,49 @@ console.log(JSON.stringify({
     }
 
 
+def test_github_settings_panel_ignores_unfocused_autofilled_dom_value(
+    tmp_path: Path,
+) -> None:
+    payload = _run_github_settings_script(
+        tmp_path=tmp_path,
+        fetch_config={
+            "token": "ghp_saved",
+            "token_configured": True,
+            "webhook_base_url": None,
+        },
+        runner_source="""
+import { bindGitHubSettingsHandlers, loadGitHubSettingsPanel } from "./githubSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindGitHubSettingsHandlers();
+await loadGitHubSettingsPanel();
+
+document.getElementById("github-token").value = "browser_password";
+document.getElementById("github-token").oninput();
+
+await document.getElementById("test-github-btn").onclick();
+await document.getElementById("save-github-btn").onclick();
+
+console.log(JSON.stringify({
+    tokenValue: document.getElementById("github-token").value,
+    tokenPlaceholder: document.getElementById("github-token").placeholder,
+    toggleDisplay: document.getElementById("toggle-github-token-btn").style.display,
+    savePayloads: globalThis.__saveGitHubPayloads,
+    probePayload: globalThis.__probeGitHubPayload,
+}));
+""".strip(),
+    )
+
+    assert payload["tokenValue"] == ""
+    assert payload["tokenPlaceholder"] == "************"
+    assert payload["toggleDisplay"] == "inline-flex"
+    assert payload["savePayloads"] == [{}]
+    assert payload["probePayload"] == {}
+
+
 def test_github_settings_panel_starts_and_stops_temporary_public_url(
     tmp_path: Path,
 ) -> None:
@@ -426,6 +469,10 @@ def test_github_settings_markup_includes_token_link_card() -> None:
     assert 'href="https://github.com/settings/tokens"' in github_source
     assert 'target="_blank"' in github_source
     assert 'rel="noreferrer"' in github_source
+    assert 'autocomplete="new-password"' in github_source
+    assert 'autocapitalize="off"' in github_source
+    assert 'autocorrect="off"' in github_source
+    assert 'spellcheck="false"' in github_source
     assert 'id="${escapeHtml(ids.webhookBaseUrlInputId)}"' in github_source
     assert 'id="${escapeHtml(ids.callbackPreviewId)}"' in github_source
     assert 'id="${escapeHtml(ids.tunnelStartButtonId)}"' in github_source

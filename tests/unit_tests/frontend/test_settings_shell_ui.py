@@ -278,17 +278,33 @@ console.log(JSON.stringify({
     assert 'id="fetch-profile-models-btn"' in modal_html
     assert 'title="Fetch Models"' in modal_html
     assert 'id="toggle-profile-api-key-btn"' in modal_html
+    assert (
+        'id="profile-api-key" placeholder="sk-..." autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false"'
+        in modal_html
+    )
     assert 'id="profile-maas-auth-fields"' in modal_html
     assert 'id="profile-maas-username"' in modal_html
     assert 'id="profile-maas-password"' in modal_html
+    assert (
+        'id="profile-maas-password" placeholder="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false"'
+        in modal_html
+    )
     assert 'id="toggle-profile-maas-password-btn"' in modal_html
     assert 'id="toggle-web-api-key-btn"' in modal_html
     assert (
         'id="toggle-web-api-key-btn" type="button" title="Show API key" aria-label="Show API key"'
         in modal_html
     )
+    assert (
+        'id="web-api-key" placeholder="可选，用于更高频率限制" data-i18n-placeholder="settings.web.api_key_placeholder" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false"'
+        in modal_html
+    )
     assert 'id="toggle-github-token-btn"' not in modal_html
     assert 'id="toggle-proxy-password-btn"' in modal_html
+    assert (
+        'id="proxy-password" placeholder="Optional proxy password" data-i18n-placeholder="settings.proxy.password_placeholder" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false"'
+        in modal_html
+    )
     assert 'id="web-searxng-instance-url-field"' in modal_html
     assert 'id="web-searxng-builtins-field"' in modal_html
     assert 'id="web-searxng-builtins-list"' in modal_html

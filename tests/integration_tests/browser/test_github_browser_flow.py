@@ -1,0 +1,150 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+from collections.abc import Iterator
+import json
+import os
+from pathlib import Path
+
+import httpx
+from playwright.sync_api import Page
+from playwright.sync_api import expect
+from playwright.sync_api import sync_playwright
+import pytest
+
+from integration_tests.support.environment import IntegrationEnvironment
+
+
+_VIEWPORT_WIDTH = 1600
+_VIEWPORT_HEIGHT = 1200
+_WAIT_TIMEOUT_MS = 30_000
+
+
+@pytest.fixture()
+def browser_page() -> Iterator[Page]:
+    browser_root = _resolve_playwright_browser_root()
+    previous_browser_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_root)
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            context = browser.new_context(
+                viewport={"width": _VIEWPORT_WIDTH, "height": _VIEWPORT_HEIGHT},
+                color_scheme="dark",
+            )
+            page = context.new_page()
+            try:
+                yield page
+            finally:
+                context.close()
+                browser.close()
+    finally:
+        if previous_browser_root is None:
+            os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+        else:
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = previous_browser_root
+
+
+def test_browser_github_saved_token_wins_over_autofilled_dom_value(
+    browser_page: Page,
+    integration_env: IntegrationEnvironment,
+    api_client: httpx.Client,
+) -> None:
+    saved_token = "ghp_browser_saved_token"
+    response = api_client.put(
+        "/api/system/configs/github",
+        json={"token": saved_token},
+    )
+    response.raise_for_status()
+
+    page = browser_page
+    page.goto(integration_env.api_base_url, wait_until="domcontentloaded")
+    expect(page.locator("#projects-list")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+
+    page.locator('.home-feature-item[data-feature-id="automation"]').click()
+    expect(page.locator("#project-view")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    page.locator('[data-automation-section="github"]').click()
+    token_input = page.locator("#feature-github-token")
+    expect(token_input).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    expect(token_input).to_have_attribute("autocomplete", "new-password")
+    expect(token_input).to_have_value("", timeout=_WAIT_TIMEOUT_MS)
+
+    token_input.evaluate(
+        "(input) => { input.value = 'browser_password'; input.dispatchEvent(new Event('input', { bubbles: true })); }"
+    )
+    expect(token_input).to_have_value("", timeout=_WAIT_TIMEOUT_MS)
+
+    captured_probe_payload: dict[str, object] = {}
+
+    def handle_probe(route) -> None:
+        request = route.request
+        captured_probe_payload.update(json.loads(request.post_data or "{}"))
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "ok": True,
+                    "username": "octocat",
+                    "gh_version": "2.88.1",
+                    "latency_ms": 12,
+                }
+            ),
+        )
+
+    probe_url = f"{integration_env.api_base_url}/api/system/configs/github:probe"
+    page.route(probe_url, handle_probe)
+    try:
+        page.locator("#feature-test-github-btn").click()
+        expect(page.locator("#feature-github-probe-status")).to_contain_text(
+            "octocat",
+            timeout=_WAIT_TIMEOUT_MS,
+        )
+    finally:
+        page.unroute(probe_url, handle_probe)
+
+    assert captured_probe_payload == {}
+
+    with page.expect_request(
+        lambda request: (
+            request.method == "PUT"
+            and request.url
+            == f"{integration_env.api_base_url}/api/system/configs/github"
+        ),
+        timeout=_WAIT_TIMEOUT_MS,
+    ) as save_request_info:
+        page.locator("#feature-save-github-btn").click()
+
+    save_payload = json.loads(save_request_info.value.post_data or "{}")
+    assert save_payload == {}
+
+
+def _resolve_playwright_browser_root() -> Path:
+    candidates: list[Path] = []
+
+    configured_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if configured_root:
+        candidates.append(Path(configured_root).expanduser())
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        candidates.append(Path(local_app_data).expanduser() / "ms-playwright")
+    user_profile = os.environ.get("USERPROFILE")
+    if user_profile:
+        candidates.append(
+            Path(user_profile).expanduser() / "AppData" / "Local" / "ms-playwright"
+        )
+
+    try:
+        import pwd
+
+        candidates.append(
+            Path(pwd.getpwuid(os.getuid()).pw_dir) / ".cache" / "ms-playwright"
+        )
+    except (ImportError, KeyError, OSError):
+        pass
+
+    for candidate in candidates:
+        if any(candidate.glob("chromium-*")):
+            return candidate
+
+    raise AssertionError("Playwright browser cache was not found on this machine.")

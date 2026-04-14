@@ -116,6 +116,40 @@ console.log(JSON.stringify({
     assert payload["probePayload"] == {"token": "ch_saved"}
 
 
+def test_clawhub_settings_panel_ignores_browser_autofill_when_saved_token_is_clean(
+    tmp_path: Path,
+) -> None:
+    payload = _run_clawhub_settings_script(
+        tmp_path=tmp_path,
+        fetch_config={"token": "ch_saved"},
+        runner_source="""
+import { bindClawHubSettingsHandlers, loadClawHubSettingsPanel } from "./clawhubSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+
+bindClawHubSettingsHandlers();
+await loadClawHubSettingsPanel();
+
+document.getElementById("clawhub-token").value = "browser_password";
+
+await document.getElementById("test-clawhub-btn").onclick();
+await new Promise(resolve => setTimeout(resolve, 0));
+await document.getElementById("save-clawhub-token-btn").onclick();
+await new Promise(resolve => setTimeout(resolve, 0));
+
+console.log(JSON.stringify({
+    savePayload: globalThis.__saveClawHubPayload,
+    probePayload: globalThis.__probeClawHubPayload,
+}));
+""".strip(),
+    )
+
+    assert payload["savePayload"] == {"token": "ch_saved"}
+    assert payload["probePayload"] == {"token": "ch_saved"}
+
+
 def test_clawhub_settings_panel_shows_auto_install_success_message(
     tmp_path: Path,
 ) -> None:
@@ -229,6 +263,7 @@ def test_clawhub_settings_markup_lives_in_skills_feature_and_keeps_actions_inlin
     assert 'id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.statusId)}"' in source
     assert 'id="feature-clawhub-token-link"' in source
     assert 'href="https://clawhub.ai/settings"' in source
+    assert 'autocomplete="new-password"' in source
     assert 'target="_blank"' in source
     assert 'rel="noreferrer"' in source
     assert 'id="clawhub-token"' not in project_view_source

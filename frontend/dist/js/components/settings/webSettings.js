@@ -278,6 +278,18 @@ function handleWebApiKeyInput() {
     const nextValue = apiKeyInput ? apiKeyInput.value : '';
     const provider = getSelectedProvider();
     const nextState = getWebApiKeyState(provider);
+    if (
+        nextState.hasPersistedValue
+        && !nextState.revealed
+        && !isWebApiKeyInputActive(apiKeyInput)
+    ) {
+        nextState.draftValue = '';
+        nextState.isDirty = false;
+        nextState.revealed = false;
+        webApiKeyStates[provider] = nextState;
+        renderWebApiKeyField();
+        return;
+    }
     nextState.draftValue = nextValue;
     nextState.isDirty = nextState.hasPersistedValue
         ? nextValue !== nextState.persistedValue
@@ -340,7 +352,7 @@ function readWebApiKeyValueForProvider(provider) {
     if (state.isDirty) {
         return inputValue || null;
     }
-    return inputValue || state.persistedValue || null;
+    return state.persistedValue || null;
 }
 
 function renderWebApiKeyField() {
@@ -396,7 +408,17 @@ function hasWebApiKeyValue(provider = getSelectedProvider()) {
             : state.draftValue.trim()
     );
     if (state.hasPersistedValue && !state.isDirty) {
-        return Boolean(state.persistedValue || inputValue);
+        return Boolean(state.persistedValue);
     }
     return Boolean(state.draftValue.trim() || inputValue);
+}
+
+function isWebApiKeyInputActive(apiKeyInput) {
+    if (!apiKeyInput || typeof document !== 'object' || document === null) {
+        return false;
+    }
+    if (!('activeElement' in document)) {
+        return true;
+    }
+    return document.activeElement === apiKeyInput;
 }

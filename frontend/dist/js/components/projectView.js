@@ -2925,7 +2925,7 @@ function renderSkillsFeatureView() {
                         <div class="form-group proxy-inline-field">
                             <label for="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.tokenInputId)}">${escapeHtml(t('settings.clawhub.token'))}</label>
                             <div class="secure-input-row">
-                                <input type="password" id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.tokenInputId)}" placeholder="${escapeHtml(t('settings.clawhub.token_placeholder'))}" autocomplete="current-password">
+                                <input type="password" id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.tokenInputId)}" placeholder="${escapeHtml(t('settings.clawhub.token_placeholder'))}" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
                                 <button class="secure-input-btn" id="${escapeHtml(FEATURE_CLAWHUB_FIELD_IDS.toggleTokenButtonId)}" type="button" title="${escapeHtml(t('settings.clawhub.show_token'))}" aria-label="${escapeHtml(t('settings.clawhub.show_token'))}" style="display:none;">
                                     <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                         <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>

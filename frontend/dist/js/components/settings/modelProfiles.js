@@ -811,6 +811,17 @@ function handleDraftApiKeyInput() {
     if (!apiKeyInput) {
         return;
     }
+    if (
+        draftApiKeyState.hasPersistedValue
+        && !draftApiKeyState.revealed
+        && !isDraftSecretInputActive(apiKeyInput)
+    ) {
+        draftApiKeyState.draftValue = '';
+        draftApiKeyState.isDirty = false;
+        draftApiKeyState.revealed = false;
+        renderDraftApiKeyField();
+        return;
+    }
 
     draftApiKeyState.draftValue = apiKeyInput.value;
     draftApiKeyState.isDirty = draftApiKeyState.draftValue !== draftApiKeyState.persistedValue;
@@ -821,6 +832,17 @@ function handleDraftApiKeyInput() {
 function handleDraftMaasPasswordInput() {
     const maasPasswordInput = document.getElementById('profile-maas-password');
     if (!maasPasswordInput) {
+        return;
+    }
+    if (
+        draftMaasPasswordState.hasPersistedValue
+        && !draftMaasPasswordState.revealed
+        && !isDraftSecretInputActive(maasPasswordInput)
+    ) {
+        draftMaasPasswordState.draftValue = '';
+        draftMaasPasswordState.isDirty = false;
+        draftMaasPasswordState.revealed = false;
+        renderDraftMaaSPasswordField();
         return;
     }
 
@@ -1084,7 +1106,7 @@ function readDraftMaasPasswordValue() {
     if (!draftMaasPasswordState.hasPersistedValue) {
         return inputValue || draftMaasPasswordState.draftValue.trim();
     }
-    if (draftMaasPasswordState.isDirty || inputValue) {
+    if (draftMaasPasswordState.isDirty) {
         return inputValue || draftMaasPasswordState.draftValue.trim();
     }
     return '';
@@ -1152,10 +1174,20 @@ function readDraftApiKeyValue() {
     if (!draftApiKeyState.hasPersistedValue) {
         return inputValue || draftApiKeyState.draftValue.trim();
     }
-    if (draftApiKeyState.isDirty || inputValue) {
+    if (draftApiKeyState.isDirty) {
         return inputValue || draftApiKeyState.draftValue.trim();
     }
     return '';
+}
+
+function isDraftSecretInputActive(secretInput) {
+    if (!secretInput || typeof document !== 'object' || document === null) {
+        return false;
+    }
+    if (!('activeElement' in document)) {
+        return true;
+    }
+    return document.activeElement === secretInput;
 }
 
 function renderDraftApiKeyField() {

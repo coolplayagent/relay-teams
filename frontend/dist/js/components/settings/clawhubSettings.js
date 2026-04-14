@@ -240,7 +240,7 @@ function readClawHubTokenValue(fieldIds) {
     if (clawhubTokenState.isDirty) {
         return inputValue || null;
     }
-    return inputValue || clawhubTokenState.persistedValue || null;
+    return clawhubTokenState.persistedValue || null;
 }
 
 function renderClawHubTokenField(fieldIds) {
