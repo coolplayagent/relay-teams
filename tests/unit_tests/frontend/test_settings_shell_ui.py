@@ -277,10 +277,13 @@ console.log(JSON.stringify({
     assert 'id="profile-model-menu"' in modal_html
     assert 'id="fetch-profile-models-btn"' in modal_html
     assert 'title="Fetch Models"' in modal_html
+    assert 'id="profile-primary-credentials-row"' in modal_html
+    assert 'id="profile-model-group"' in modal_html
     assert 'id="toggle-profile-api-key-btn"' in modal_html
     assert 'id="profile-maas-auth-fields"' in modal_html
     assert 'id="profile-maas-username"' in modal_html
     assert 'id="profile-maas-password"' in modal_html
+    assert 'id="profile-maas-model-slot"' in modal_html
     assert 'id="toggle-profile-maas-password-btn"' in modal_html
     assert 'id="toggle-web-api-key-btn"' in modal_html
     assert (
@@ -300,6 +303,9 @@ console.log(JSON.stringify({
     assert ">Fetch</button>" not in modal_html
     assert modal_html.index('label for="profile-api-key"') < modal_html.index(
         'label for="profile-model"'
+    )
+    assert modal_html.index('id="profile-maas-password"') < modal_html.index(
+        'id="profile-maas-model-slot"'
     )
     assert modal_html.index('label for="web-provider"') < modal_html.index(
         'label for="web-api-key"'
