@@ -13,11 +13,18 @@ from relay_teams.env.clawhub_cli import (
     install_clawhub_via_npm,
     resolve_existing_clawhub_path,
 )
+from relay_teams.env.clawhub_command_errors import (
+    combine_clawhub_failure_messages,
+    explain_clawhub_failure,
+    should_retry_clawhub_without_endpoint_overrides,
+    summarize_clawhub_command_failure,
+)
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_env import (
     build_clawhub_subprocess_env,
     normalize_clawhub_token,
     resolve_clawhub_registry_from_env,
+    strip_clawhub_endpoint_overrides,
 )
 from relay_teams.paths import get_app_config_dir
 from relay_teams.skills.clawhub_models import (
@@ -137,6 +144,7 @@ def install_clawhub_skill(
     )
     env["PATH"] = _prepend_to_path(env.get("PATH"), clawhub_path.parent)
     registry = resolve_clawhub_registry_from_env(env)
+    endpoint_fallback_used = False
     command = [
         str(clawhub_path),
         "--workdir",
@@ -149,6 +157,7 @@ def install_clawhub_skill(
         command.extend(["--version", normalized_version])
     if force:
         command.append("--force")
+    deadline = started + timeout_seconds
 
     try:
         completed = subprocess.run(
@@ -174,6 +183,7 @@ def install_clawhub_skill(
             installation_attempted=installation_attempted,
             installed_during_install=installed_during_install,
             registry=registry,
+            endpoint_fallback_used=endpoint_fallback_used,
             workdir=resolved_config_dir,
             retryable=True,
             error_code="install_timeout",
@@ -181,23 +191,110 @@ def install_clawhub_skill(
         )
 
     if completed.returncode != 0:
-        return _build_result(
-            ok=False,
-            slug=normalized_slug,
-            requested_version=normalized_version,
-            checked_at=checked_at,
-            started=started,
-            clawhub_path=clawhub_path,
-            binary_available=True,
-            token_configured=normalized_token is not None,
-            installation_attempted=installation_attempted,
-            installed_during_install=installed_during_install,
-            registry=registry,
-            workdir=resolved_config_dir,
-            error_code="install_failed",
-            error_message=_first_meaningful_line(completed.stderr, completed.stdout)
-            or "ClawHub skill install failed.",
+        reason = (
+            summarize_clawhub_command_failure(completed.stderr, completed.stdout)
+            or "ClawHub skill install failed."
         )
+        if should_retry_clawhub_without_endpoint_overrides(
+            reason,
+            endpoint_overrides_configured=registry is not None,
+        ):
+            endpoint_fallback_used = True
+            fallback_env = dict(env)
+            strip_clawhub_endpoint_overrides(fallback_env)
+            remaining_timeout_seconds = max(deadline - perf_counter(), 0.001)
+            try:
+                fallback_completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=fallback_env,
+                    timeout=remaining_timeout_seconds,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                combined_reason = combine_clawhub_failure_messages(
+                    reason,
+                    str(exc) or "ClawHub skill install timed out.",
+                )
+                return _build_result(
+                    ok=False,
+                    slug=normalized_slug,
+                    requested_version=normalized_version,
+                    checked_at=checked_at,
+                    started=started,
+                    clawhub_path=clawhub_path,
+                    binary_available=True,
+                    token_configured=normalized_token is not None,
+                    installation_attempted=installation_attempted,
+                    installed_during_install=installed_during_install,
+                    registry=registry,
+                    endpoint_fallback_used=endpoint_fallback_used,
+                    workdir=resolved_config_dir,
+                    retryable=True,
+                    error_code="install_timeout",
+                    error_message=explain_clawhub_failure(
+                        combined_reason,
+                        endpoint_overrides_configured=registry is not None,
+                        endpoint_fallback_used=endpoint_fallback_used,
+                    ),
+                )
+            if fallback_completed.returncode == 0:
+                completed = fallback_completed
+            else:
+                fallback_reason = (
+                    summarize_clawhub_command_failure(
+                        fallback_completed.stderr,
+                        fallback_completed.stdout,
+                    )
+                    or "ClawHub skill install failed."
+                )
+                reason = combine_clawhub_failure_messages(reason, fallback_reason)
+                return _build_result(
+                    ok=False,
+                    slug=normalized_slug,
+                    requested_version=normalized_version,
+                    checked_at=checked_at,
+                    started=started,
+                    clawhub_path=clawhub_path,
+                    binary_available=True,
+                    token_configured=normalized_token is not None,
+                    installation_attempted=installation_attempted,
+                    installed_during_install=installed_during_install,
+                    registry=registry,
+                    endpoint_fallback_used=endpoint_fallback_used,
+                    workdir=resolved_config_dir,
+                    error_code="install_failed",
+                    error_message=explain_clawhub_failure(
+                        reason,
+                        endpoint_overrides_configured=registry is not None,
+                        endpoint_fallback_used=endpoint_fallback_used,
+                    ),
+                )
+        else:
+            return _build_result(
+                ok=False,
+                slug=normalized_slug,
+                requested_version=normalized_version,
+                checked_at=checked_at,
+                started=started,
+                clawhub_path=clawhub_path,
+                binary_available=True,
+                token_configured=normalized_token is not None,
+                installation_attempted=installation_attempted,
+                installed_during_install=installed_during_install,
+                registry=registry,
+                endpoint_fallback_used=endpoint_fallback_used,
+                workdir=resolved_config_dir,
+                error_code="install_failed",
+                error_message=explain_clawhub_failure(
+                    reason,
+                    endpoint_overrides_configured=registry is not None,
+                    endpoint_fallback_used=endpoint_fallback_used,
+                ),
+            )
 
     installed_skill = _load_installed_skill_summary(
         config_dir=resolved_config_dir,
@@ -216,6 +313,7 @@ def install_clawhub_skill(
             installation_attempted=installation_attempted,
             installed_during_install=installed_during_install,
             registry=registry,
+            endpoint_fallback_used=endpoint_fallback_used,
             workdir=resolved_config_dir,
             error_code="runtime_skill_unavailable",
             error_message=(
@@ -243,6 +341,7 @@ def install_clawhub_skill(
                 installation_attempted=installation_attempted,
                 installed_during_install=installed_during_install,
                 registry=registry,
+                endpoint_fallback_used=endpoint_fallback_used,
                 workdir=resolved_config_dir,
                 error_code="skills_reload_failed",
                 error_message=str(exc),
@@ -261,6 +360,7 @@ def install_clawhub_skill(
         installation_attempted=installation_attempted,
         installed_during_install=installed_during_install,
         registry=registry,
+        endpoint_fallback_used=endpoint_fallback_used,
         workdir=resolved_config_dir,
         skills_reloaded=skills_reloaded,
     )
@@ -280,6 +380,7 @@ def _build_result(
     installation_attempted: bool = False,
     installed_during_install: bool = False,
     registry: str | None = None,
+    endpoint_fallback_used: bool = False,
     workdir: Path | None = None,
     skills_reloaded: bool = False,
     retryable: bool = False,
@@ -300,6 +401,7 @@ def _build_result(
             installation_attempted=installation_attempted,
             installed_during_install=installed_during_install,
             registry=registry,
+            endpoint_fallback_used=endpoint_fallback_used,
             workdir=None if workdir is None else str(workdir),
             skills_reloaded=skills_reloaded,
         ),
@@ -329,15 +431,6 @@ def _load_installed_skill_summary(
         valid=detail.valid,
         error=detail.error,
     )
-
-
-def _first_meaningful_line(*chunks: str) -> str | None:
-    for chunk in chunks:
-        for line in chunk.splitlines():
-            normalized_line = line.strip()
-            if normalized_line:
-                return normalized_line
-    return None
 
 
 def _normalize_optional_text(value: str | None) -> str | None:

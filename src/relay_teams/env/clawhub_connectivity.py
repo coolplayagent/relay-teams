@@ -15,11 +15,17 @@ from relay_teams.env.clawhub_cli import (
     resolve_existing_clawhub_path,
 )
 from relay_teams.env.clawhub_config_models import ClawHubConfig
+from relay_teams.env.clawhub_command_errors import (
+    combine_clawhub_failure_messages,
+    explain_clawhub_failure,
+    should_retry_clawhub_without_endpoint_overrides,
+    summarize_clawhub_command_failure,
+)
 from relay_teams.env.clawhub_env import (
-    CLAWHUB_REGISTRY_ENV_KEY,
-    CLAWHUB_SITE_ENV_KEY,
     build_clawhub_subprocess_env,
     normalize_clawhub_token,
+    resolve_clawhub_registry_from_env,
+    strip_clawhub_endpoint_overrides,
 )
 
 _MAX_CLAWHUB_PROBE_TIMEOUT_MS = 300_000
@@ -45,6 +51,8 @@ class ClawHubConnectivityProbeDiagnostics(BaseModel):
     token_configured: bool
     installation_attempted: bool = False
     installed_during_probe: bool = False
+    registry: str | None = None
+    endpoint_fallback_used: bool = False
 
 
 class ClawHubConnectivityProbeResult(BaseModel):
@@ -152,8 +160,9 @@ class ClawHubConnectivityProbeService:
             config_dir=self._config_dir,
             base_env=os.environ,
         )
-        _strip_clawhub_site_overrides(env)
         env["PATH"] = _prepend_to_path(env.get("PATH"), clawhub_path.parent)
+        registry = resolve_clawhub_registry_from_env(env)
+        endpoint_fallback_used = False
         version_text: str | None = None
         version_timeout_seconds = _resolve_remaining_timeout_seconds(probe_deadline)
         if version_timeout_seconds is not None:
@@ -175,6 +184,8 @@ class ClawHubConnectivityProbeService:
                 clawhub_version=version_text,
                 installation_attempted=installation_attempted,
                 installed_during_probe=installed_during_probe,
+                registry=registry,
+                endpoint_fallback_used=endpoint_fallback_used,
                 retryable=True,
                 error_code="whoami_timeout",
                 error_message="ClawHub CLI auth verification timed out.",
@@ -202,6 +213,8 @@ class ClawHubConnectivityProbeService:
                 clawhub_version=version_text,
                 installation_attempted=installation_attempted,
                 installed_during_probe=installed_during_probe,
+                registry=registry,
+                endpoint_fallback_used=endpoint_fallback_used,
                 retryable=True,
                 error_code="whoami_timeout",
                 error_message=str(exc) or "ClawHub CLI auth verification timed out.",
@@ -209,14 +222,112 @@ class ClawHubConnectivityProbeService:
 
         if whoami_completed.returncode != 0:
             reason = (
-                _resolve_command_output_text(
+                summarize_clawhub_command_failure(
                     whoami_completed.stderr,
                     whoami_completed.stdout,
                 )
                 or "ClawHub CLI auth verification failed."
             )
-            error_code, retryable = _classify_probe_error(
+            if should_retry_clawhub_without_endpoint_overrides(
                 reason,
+                endpoint_overrides_configured=registry is not None,
+            ):
+                endpoint_fallback_used = True
+                fallback_env = dict(env)
+                strip_clawhub_endpoint_overrides(fallback_env)
+                fallback_timeout_seconds = _resolve_remaining_timeout_seconds(
+                    probe_deadline
+                )
+                if fallback_timeout_seconds is None:
+                    formatted_reason = explain_clawhub_failure(
+                        reason,
+                        endpoint_overrides_configured=registry is not None,
+                        endpoint_fallback_used=endpoint_fallback_used,
+                    )
+                    return self._build_result(
+                        ok=False,
+                        checked_at=checked_at,
+                        started=started,
+                        binary_available=True,
+                        token_configured=True,
+                        clawhub_path=clawhub_path,
+                        clawhub_version=version_text,
+                        installation_attempted=installation_attempted,
+                        installed_during_probe=installed_during_probe,
+                        registry=registry,
+                        endpoint_fallback_used=endpoint_fallback_used,
+                        retryable=True,
+                        error_code="whoami_timeout",
+                        error_message=formatted_reason,
+                    )
+                try:
+                    fallback_completed = subprocess.run(
+                        [str(clawhub_path), "whoami"],
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        env=fallback_env,
+                        timeout=fallback_timeout_seconds,
+                        check=False,
+                    )
+                except subprocess.TimeoutExpired as exc:
+                    combined_reason = combine_clawhub_failure_messages(
+                        reason,
+                        str(exc) or "ClawHub CLI auth verification timed out.",
+                    )
+                    formatted_reason = explain_clawhub_failure(
+                        combined_reason,
+                        endpoint_overrides_configured=registry is not None,
+                        endpoint_fallback_used=endpoint_fallback_used,
+                    )
+                    return self._build_result(
+                        ok=False,
+                        checked_at=checked_at,
+                        started=started,
+                        binary_available=True,
+                        token_configured=True,
+                        clawhub_path=clawhub_path,
+                        clawhub_version=version_text,
+                        installation_attempted=installation_attempted,
+                        installed_during_probe=installed_during_probe,
+                        registry=registry,
+                        endpoint_fallback_used=endpoint_fallback_used,
+                        retryable=True,
+                        error_code="whoami_timeout",
+                        error_message=formatted_reason,
+                    )
+                if fallback_completed.returncode == 0:
+                    return self._build_result(
+                        ok=True,
+                        checked_at=checked_at,
+                        started=started,
+                        binary_available=True,
+                        token_configured=True,
+                        clawhub_path=clawhub_path,
+                        clawhub_version=version_text,
+                        exit_code=fallback_completed.returncode,
+                        installation_attempted=installation_attempted,
+                        installed_during_probe=installed_during_probe,
+                        registry=registry,
+                        endpoint_fallback_used=endpoint_fallback_used,
+                    )
+                fallback_reason = (
+                    summarize_clawhub_command_failure(
+                        fallback_completed.stderr,
+                        fallback_completed.stdout,
+                    )
+                    or "ClawHub CLI auth verification failed."
+                )
+                whoami_completed = fallback_completed
+                reason = combine_clawhub_failure_messages(reason, fallback_reason)
+            formatted_reason = explain_clawhub_failure(
+                reason,
+                endpoint_overrides_configured=registry is not None,
+                endpoint_fallback_used=endpoint_fallback_used,
+            )
+            error_code, retryable = _classify_probe_error(
+                formatted_reason,
                 default_error_code="auth_failed",
             )
             return self._build_result(
@@ -230,9 +341,11 @@ class ClawHubConnectivityProbeService:
                 exit_code=whoami_completed.returncode,
                 installation_attempted=installation_attempted,
                 installed_during_probe=installed_during_probe,
+                registry=registry,
+                endpoint_fallback_used=endpoint_fallback_used,
                 retryable=retryable,
                 error_code=error_code,
-                error_message=reason,
+                error_message=formatted_reason,
             )
 
         return self._build_result(
@@ -246,6 +359,8 @@ class ClawHubConnectivityProbeService:
             exit_code=whoami_completed.returncode,
             installation_attempted=installation_attempted,
             installed_during_probe=installed_during_probe,
+            registry=registry,
+            endpoint_fallback_used=endpoint_fallback_used,
         )
 
     def _build_result(
@@ -261,6 +376,8 @@ class ClawHubConnectivityProbeService:
         exit_code: int | None = None,
         installation_attempted: bool = False,
         installed_during_probe: bool = False,
+        registry: str | None = None,
+        endpoint_fallback_used: bool = False,
         retryable: bool = False,
         error_code: str | None = None,
         error_message: str | None = None,
@@ -277,6 +394,8 @@ class ClawHubConnectivityProbeService:
                 token_configured=token_configured,
                 installation_attempted=installation_attempted,
                 installed_during_probe=installed_during_probe,
+                registry=registry,
+                endpoint_fallback_used=endpoint_fallback_used,
             ),
             retryable=retryable,
             error_code=error_code,
@@ -388,13 +507,3 @@ def _classify_probe_error(
     if "network" in lowered or "connect" in lowered:
         return ("network_error", True)
     return (default_error_code, False)
-
-
-def _strip_clawhub_site_overrides(env: dict[str, str]) -> None:
-    for key in (
-        CLAWHUB_SITE_ENV_KEY,
-        CLAWHUB_REGISTRY_ENV_KEY,
-        "CLAWDHUB_SITE",
-        "CLAWDHUB_REGISTRY",
-    ):
-        env.pop(key, None)

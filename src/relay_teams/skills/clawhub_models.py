@@ -85,6 +85,7 @@ class ClawHubSkillSearchDiagnostics(BaseModel):
     installation_attempted: bool = False
     installed_during_search: bool = False
     registry: str | None = None
+    endpoint_fallback_used: bool = False
 
 
 class ClawHubSkillInstallDiagnostics(BaseModel):
@@ -95,6 +96,7 @@ class ClawHubSkillInstallDiagnostics(BaseModel):
     installation_attempted: bool = False
     installed_during_install: bool = False
     registry: str | None = None
+    endpoint_fallback_used: bool = False
     workdir: str | None = None
     skills_reloaded: bool = False
 

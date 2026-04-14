@@ -24,6 +24,12 @@ _CHINA_TIMEZONE_MARKERS = (
     "asia/urumqi",
     "prc",
 )
+_CLAWHUB_ENDPOINT_ENV_KEYS = (
+    CLAWHUB_SITE_ENV_KEY,
+    CLAWHUB_REGISTRY_ENV_KEY,
+    _LEGACY_CLAWHUB_SITE_ENV_KEY,
+    _LEGACY_CLAWHUB_REGISTRY_ENV_KEY,
+)
 
 
 def normalize_clawhub_token(value: str | None) -> str | None:
@@ -154,6 +160,11 @@ def build_clawhub_subprocess_env(
         )
     )
     return build_subprocess_env(base_env=resolved_base_env, extra_env=extra_env)
+
+
+def strip_clawhub_endpoint_overrides(env: dict[str, str]) -> None:
+    for key in _CLAWHUB_ENDPOINT_ENV_KEYS:
+        env.pop(key, None)
 
 
 def _is_china_environment(env_values: Mapping[str, str]) -> bool:

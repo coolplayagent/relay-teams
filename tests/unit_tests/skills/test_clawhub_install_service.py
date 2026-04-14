@@ -237,3 +237,60 @@ def test_clawhub_install_service_reads_token_from_saved_config(
 
     assert result.ok is True
     assert result.diagnostics.token_configured is True
+
+
+def test_install_clawhub_skill_retries_without_endpoint_overrides(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".relay-teams"
+    monkeypatch.setattr(
+        "relay_teams.skills.clawhub_install_service.resolve_existing_clawhub_path",
+        lambda: Path("/usr/bin/clawhub"),
+    )
+    monkeypatch.setattr(
+        "relay_teams.skills.clawhub_install_service.os.environ",
+        {"LANG": "zh_CN.UTF-8", "PATH": "/usr/bin"},
+    )
+    observed_envs: list[dict[str, str]] = []
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = cast(list[str], args[0])
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        observed_envs.append(dict(env))
+        if len(observed_envs) == 1:
+            assert env["CLAWHUB_REGISTRY"] == "https://mirror-cn.clawhub.com"
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=1,
+                stdout="",
+                stderr="- Installing\nValidation error\nuser: invalid value",
+            )
+        assert "CLAWHUB_REGISTRY" not in env
+        assert "CLAWHUB_SITE" not in env
+        skill_dir = config_dir / "skills" / "skill-creator"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: skill-creator\ndescription: Create skills.\n---\nUse skill creator.\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="installed",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = install_clawhub_skill(
+        slug="skill-creator",
+        config_dir=config_dir,
+    )
+
+    assert result.ok is True
+    assert result.installed_skill is not None
+    assert result.installed_skill.skill_id == "skill-creator"
+    assert result.diagnostics.registry == "https://mirror-cn.clawhub.com"
+    assert result.diagnostics.endpoint_fallback_used is True

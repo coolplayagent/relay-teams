@@ -13,11 +13,18 @@ from relay_teams.env.clawhub_cli import (
     install_clawhub_via_npm,
     resolve_existing_clawhub_path,
 )
+from relay_teams.env.clawhub_command_errors import (
+    combine_clawhub_failure_messages,
+    explain_clawhub_failure,
+    should_retry_clawhub_without_endpoint_overrides,
+    summarize_clawhub_command_failure,
+)
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_env import (
     build_clawhub_subprocess_env,
     normalize_clawhub_token,
     resolve_clawhub_registry_from_env,
+    strip_clawhub_endpoint_overrides,
 )
 from relay_teams.skills.clawhub_models import (
     ClawHubRemoteSkillSummary,
@@ -110,16 +117,19 @@ def search_clawhub_skills(
     )
     env["PATH"] = _prepend_to_path(env.get("PATH"), clawhub_path.parent)
     registry = resolve_clawhub_registry_from_env(env)
+    endpoint_fallback_used = False
+    command = [
+        str(clawhub_path),
+        "search",
+        normalized_query,
+        "--limit",
+        str(limit),
+    ]
+    deadline = started + timeout_seconds
 
     try:
         completed = subprocess.run(
-            [
-                str(clawhub_path),
-                "search",
-                normalized_query,
-                "--limit",
-                str(limit),
-            ],
+            command,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -140,27 +150,111 @@ def search_clawhub_skills(
             installation_attempted=installation_attempted,
             installed_during_search=installed_during_search,
             registry=registry,
+            endpoint_fallback_used=endpoint_fallback_used,
             retryable=True,
             error_code="search_timeout",
             error_message=str(exc) or "ClawHub skill search timed out.",
         )
 
     if completed.returncode != 0:
-        return _build_result(
-            ok=False,
-            query=normalized_query,
-            checked_at=checked_at,
-            started=started,
-            clawhub_path=clawhub_path,
-            binary_available=True,
-            token_configured=normalized_token is not None,
-            installation_attempted=installation_attempted,
-            installed_during_search=installed_during_search,
-            registry=registry,
-            error_code="search_failed",
-            error_message=_first_meaningful_line(completed.stderr, completed.stdout)
-            or "ClawHub skill search failed.",
+        reason = (
+            summarize_clawhub_command_failure(completed.stderr, completed.stdout)
+            or "ClawHub skill search failed."
         )
+        if should_retry_clawhub_without_endpoint_overrides(
+            reason,
+            endpoint_overrides_configured=registry is not None,
+        ):
+            endpoint_fallback_used = True
+            fallback_env = dict(env)
+            strip_clawhub_endpoint_overrides(fallback_env)
+            remaining_timeout_seconds = max(deadline - perf_counter(), 0.001)
+            try:
+                fallback_completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=fallback_env,
+                    timeout=remaining_timeout_seconds,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                combined_reason = combine_clawhub_failure_messages(
+                    reason,
+                    str(exc) or "ClawHub skill search timed out.",
+                )
+                return _build_result(
+                    ok=False,
+                    query=normalized_query,
+                    checked_at=checked_at,
+                    started=started,
+                    clawhub_path=clawhub_path,
+                    binary_available=True,
+                    token_configured=normalized_token is not None,
+                    installation_attempted=installation_attempted,
+                    installed_during_search=installed_during_search,
+                    registry=registry,
+                    endpoint_fallback_used=endpoint_fallback_used,
+                    retryable=True,
+                    error_code="search_timeout",
+                    error_message=explain_clawhub_failure(
+                        combined_reason,
+                        endpoint_overrides_configured=registry is not None,
+                        endpoint_fallback_used=endpoint_fallback_used,
+                    ),
+                )
+            if fallback_completed.returncode == 0:
+                completed = fallback_completed
+            else:
+                fallback_reason = (
+                    summarize_clawhub_command_failure(
+                        fallback_completed.stderr,
+                        fallback_completed.stdout,
+                    )
+                    or "ClawHub skill search failed."
+                )
+                reason = combine_clawhub_failure_messages(reason, fallback_reason)
+                return _build_result(
+                    ok=False,
+                    query=normalized_query,
+                    checked_at=checked_at,
+                    started=started,
+                    clawhub_path=clawhub_path,
+                    binary_available=True,
+                    token_configured=normalized_token is not None,
+                    installation_attempted=installation_attempted,
+                    installed_during_search=installed_during_search,
+                    registry=registry,
+                    endpoint_fallback_used=endpoint_fallback_used,
+                    error_code="search_failed",
+                    error_message=explain_clawhub_failure(
+                        reason,
+                        endpoint_overrides_configured=registry is not None,
+                        endpoint_fallback_used=endpoint_fallback_used,
+                    ),
+                )
+        else:
+            return _build_result(
+                ok=False,
+                query=normalized_query,
+                checked_at=checked_at,
+                started=started,
+                clawhub_path=clawhub_path,
+                binary_available=True,
+                token_configured=normalized_token is not None,
+                installation_attempted=installation_attempted,
+                installed_during_search=installed_during_search,
+                registry=registry,
+                endpoint_fallback_used=endpoint_fallback_used,
+                error_code="search_failed",
+                error_message=explain_clawhub_failure(
+                    reason,
+                    endpoint_overrides_configured=registry is not None,
+                    endpoint_fallback_used=endpoint_fallback_used,
+                ),
+            )
 
     try:
         items = _parse_search_output(completed.stdout)
@@ -176,6 +270,7 @@ def search_clawhub_skills(
             installation_attempted=installation_attempted,
             installed_during_search=installed_during_search,
             registry=registry,
+            endpoint_fallback_used=endpoint_fallback_used,
             error_code="search_parse_failed",
             error_message=str(exc),
         )
@@ -191,6 +286,7 @@ def search_clawhub_skills(
         installation_attempted=installation_attempted,
         installed_during_search=installed_during_search,
         registry=registry,
+        endpoint_fallback_used=endpoint_fallback_used,
         items=items,
     )
 
@@ -207,6 +303,7 @@ def _build_result(
     installation_attempted: bool = False,
     installed_during_search: bool = False,
     registry: str | None = None,
+    endpoint_fallback_used: bool = False,
     items: tuple[ClawHubRemoteSkillSummary, ...] = (),
     retryable: bool = False,
     error_code: str | None = None,
@@ -225,6 +322,7 @@ def _build_result(
             installation_attempted=installation_attempted,
             installed_during_search=installed_during_search,
             registry=registry,
+            endpoint_fallback_used=endpoint_fallback_used,
         ),
         retryable=retryable,
         error_code=error_code,
@@ -264,15 +362,6 @@ def _parse_search_line(raw_line: str) -> ClawHubRemoteSkillSummary | None:
         title=match.group("title").strip(),
         score=score,
     )
-
-
-def _first_meaningful_line(*chunks: str) -> str | None:
-    for chunk in chunks:
-        for line in chunk.splitlines():
-            normalized_line = line.strip()
-            if normalized_line:
-                return normalized_line
-    return None
 
 
 def _prepend_to_path(existing_path: str | None, directory: Path) -> str:

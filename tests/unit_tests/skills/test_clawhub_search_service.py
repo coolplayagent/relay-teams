@@ -147,3 +147,52 @@ def test_clawhub_search_service_reads_token_from_saved_config(
 
     assert result.ok is True
     assert result.diagnostics.token_configured is True
+
+
+def test_search_clawhub_skills_retries_without_endpoint_overrides(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "relay_teams.skills.clawhub_search_service.resolve_existing_clawhub_path",
+        lambda: Path("/usr/bin/clawhub"),
+    )
+    monkeypatch.setattr(
+        "relay_teams.skills.clawhub_search_service.os.environ",
+        {"LANG": "zh_CN.UTF-8", "PATH": "/usr/bin"},
+    )
+    observed_envs: list[dict[str, str]] = []
+
+    def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        observed_envs.append(dict(env))
+        if len(observed_envs) == 1:
+            assert env["CLAWHUB_REGISTRY"] == "https://mirror-cn.clawhub.com"
+            return subprocess.CompletedProcess(
+                args=["clawhub", "search", "skill creator", "--limit", "1"],
+                returncode=1,
+                stdout="",
+                stderr="- Searching\nValidation error\nuser: invalid value",
+            )
+        assert "CLAWHUB_REGISTRY" not in env
+        assert "CLAWHUB_SITE" not in env
+        return subprocess.CompletedProcess(
+            args=["clawhub", "search", "skill creator", "--limit", "1"],
+            returncode=0,
+            stdout="skill-creator  Skill Creator  (3.389)\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = search_clawhub_skills(
+        query="skill creator",
+        limit=1,
+        config_dir=tmp_path / ".relay-teams",
+    )
+
+    assert result.ok is True
+    assert result.items[0].slug == "skill-creator"
+    assert result.diagnostics.registry == "https://mirror-cn.clawhub.com"
+    assert result.diagnostics.endpoint_fallback_used is True

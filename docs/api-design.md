@@ -290,6 +290,8 @@ The probe currently verifies:
 - `clawhub` is available on `PATH` or can be resolved from npm's global bin directory
 - if `clawhub` is missing, the backend attempts to install it automatically with `npm install -g clawhub`, preferring `https://mirrors.huaweicloud.com/repository/npm/`
 - `clawhub --cli-version` can run with `CLAWHUB_TOKEN` injected
+- the same ClawHub site and registry defaults used by search/install are applied during auth verification
+- when a configured site or registry returns a malformed `whoami` payload such as `user: invalid value`, the backend retries once without `CLAWHUB_SITE` and `CLAWHUB_REGISTRY`
 
 Response fields include:
 - `ok`
@@ -301,6 +303,8 @@ Response fields include:
 - `diagnostics.token_configured`
 - `diagnostics.installation_attempted`
 - `diagnostics.installed_during_probe`
+- optional `diagnostics.registry`
+- `diagnostics.endpoint_fallback_used`
 - optional `error_code`
 - optional `error_message`
 
@@ -336,6 +340,7 @@ The search currently:
 - auto-installs `clawhub` with `npm install -g clawhub` when missing, preferring `https://mirrors.huaweicloud.com/repository/npm/`
 - injects the saved or supplied `CLAWHUB_TOKEN` when present
 - applies China defaults for both `CLAWHUB_SITE` and `CLAWHUB_REGISTRY`
+- retries once without `CLAWHUB_SITE` and `CLAWHUB_REGISTRY` when the configured endpoint returns a malformed validation payload
 
 Request body:
 - `query`
@@ -358,6 +363,7 @@ Response fields include:
 - `diagnostics.installation_attempted`
 - `diagnostics.installed_during_search`
 - optional `diagnostics.registry`
+- `diagnostics.endpoint_fallback_used`
 - optional `error_code`
 - optional `error_message`
 
@@ -369,6 +375,7 @@ The install currently:
 - auto-installs `clawhub` with `npm install -g clawhub` when missing, preferring `https://mirrors.huaweicloud.com/repository/npm/`
 - injects the saved or supplied `CLAWHUB_TOKEN` when present
 - applies China defaults for both `CLAWHUB_SITE` and `CLAWHUB_REGISTRY`
+- retries once without `CLAWHUB_SITE` and `CLAWHUB_REGISTRY` when the configured endpoint returns a malformed validation payload
 - verifies the installed skill can be discovered from the Agent Teams app skill directory after the CLI succeeds
 - reloads the runtime skill registry when invoked through the running server container
 
@@ -400,6 +407,7 @@ Response fields include:
 - `diagnostics.installation_attempted`
 - `diagnostics.installed_during_install`
 - optional `diagnostics.registry`
+- `diagnostics.endpoint_fallback_used`
 - optional `diagnostics.workdir`
 - `diagnostics.skills_reloaded`
 - optional `error_code`
