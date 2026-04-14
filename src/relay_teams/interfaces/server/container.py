@@ -39,6 +39,7 @@ from relay_teams.agents.orchestration.task_execution_service import TaskExecutio
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.environment_variable_service import EnvironmentVariableService
 from relay_teams.env.github_config_service import GitHubConfigService
+from relay_teams.env.localhost_run_tunnel_service import LocalhostRunTunnelService
 from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
 from relay_teams.env.web_config_service import WebConfigService
@@ -233,6 +234,7 @@ class ServerContainer:
             config_dir=app_config_dir,
             get_proxy_config=self.proxy_config_service.get_proxy_config,
         )
+        self.localhost_run_tunnel_service = LocalhostRunTunnelService()
         self.clawhub_config_service: ClawHubConfigService = ClawHubConfigService(
             config_dir=app_config_dir
         )
@@ -944,6 +946,7 @@ class ServerContainer:
         self.feishu_message_pool_service.stop()
         self.feishu_subscription_service.stop()
         self.wechat_gateway_service.stop()
+        self.localhost_run_tunnel_service.stop()
         await self.external_acp_session_manager.close()
         await self.background_task_manager.close()
         return None

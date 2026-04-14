@@ -31,6 +31,26 @@ The web UI now includes a language toggle beside the settings button so you can 
 
 Frontend assets are now decoupled under `frontend/dist` and served by the backend.
 
+### Temporary Public URL for GitHub Webhooks
+
+The GitHub Webhook panel can create a temporary public URL for local testing.
+This uses `localhost.run` over `ssh` and the service assigns a random temporary hostname such as `*.lhr.life`.
+Users do not register the exact `lhr.life` hostname themselves.
+
+How to use it:
+
+1. Open `Automation -> GitHub -> GitHub Access`.
+2. In `GitHub Webhook`, click `Create Temporary URL`.
+3. Wait for the generated `Webhook Base URL` to be filled automatically.
+4. Copy the derived `Callback URL` into GitHub's `Payload URL`.
+5. Configure the same GitHub webhook `Secret` on both sides so GitHub sends `X-Hub-Signature-256`.
+
+Notes:
+
+- This feature requires `ssh` to be installed on the host running `relay-teams`.
+- The temporary public hostname only stays valid while the tunnel is running.
+- Use your own stable domain and reverse proxy for long-lived production webhooks.
+
 ## Quick start
 
 ### 1) Install dependencies
@@ -82,5 +102,4 @@ uv run --extra dev pytest -q
 uv run --extra dev ruff check --fix
 uv run --extra dev basedpyright
 ```
-
 

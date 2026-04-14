@@ -434,6 +434,292 @@ console.log(JSON.stringify({
     assert payload["loadCalls"] == 1
 
 
+def test_project_view_repo_detail_shows_full_github_rule_configuration(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationGitHubView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockGitHubAccounts = [
+    {
+        account_id: "ghta_1",
+        name: "github-main",
+        display_name: "GitHub Main",
+        status: "enabled",
+        token_configured: true,
+        webhook_secret_configured: true,
+    },
+];
+globalThis.__mockGitHubRepos = [
+    {
+        repo_subscription_id: "ghrs_1",
+        account_id: "ghta_1",
+        owner: "octocat",
+        repo_name: "Hello-World",
+        full_name: "octocat/Hello-World",
+        callback_url: "https://example.com/github/webhook",
+        webhook_status: "registered",
+        enabled: true,
+        subscribed_events: ["pull_request"],
+    },
+];
+globalThis.__mockGitHubRules = [
+    {
+        trigger_rule_id: "trg_1",
+        repo_subscription_id: "ghrs_1",
+        name: "pr-opened",
+        enabled: true,
+        match_config: {
+            event_name: "pull_request",
+            actions: ["opened", "edited"],
+            draft_pr: false,
+            base_branches: ["main", "release/*"],
+        },
+        dispatch_config: {
+            target_type: "run_template",
+            run_template: {
+                workspace_id: "rule-workspace",
+                prompt_template: "Review the PR\\nand summarize impact.",
+            },
+        },
+    },
+];
+
+initializeProjectView();
+await openAutomationGitHubView("repo:ghrs_1");
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    contentHtml: els.projectViewContent.innerHTML,
+}));
+""".strip(),
+    )
+
+    assert "Workspace ID" in str(payload["contentHtml"])
+    assert "rule-workspace" in str(payload["contentHtml"])
+    assert "Subscribed Event" in str(payload["contentHtml"])
+    assert "Pull Request" in str(payload["contentHtml"])
+    assert "Actions" in str(payload["contentHtml"])
+    assert "opened, edited" in str(payload["contentHtml"])
+    assert "Draft Pull Request" in str(payload["contentHtml"])
+    assert "Ready for review only" in str(payload["contentHtml"])
+    assert "Base Branches" in str(payload["contentHtml"])
+    assert "main, release/*" in str(payload["contentHtml"])
+    assert "Task Prompt" in str(payload["contentHtml"])
+    assert "Review the PR" in str(payload["contentHtml"])
+    assert "summarize impact." in str(payload["contentHtml"])
+    assert "Open Webhooks" in str(payload["contentHtml"])
+    assert "https://github.com/octocat/Hello-World/settings/hooks" in str(
+        payload["contentHtml"]
+    )
+
+
+def test_project_view_github_account_dialog_uses_secure_fields(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationGitHubView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockGitHubAccounts = [
+    {
+        account_id: "ghta_1",
+        name: "github-main",
+        display_name: "GitHub Main",
+        status: "enabled",
+        token_configured: true,
+        webhook_secret_configured: true,
+    },
+];
+
+initializeProjectView();
+await openAutomationGitHubView("account:ghta_1");
+await flushTasks();
+await flushTasks();
+
+const editButton = document.querySelector('[data-github-account-edit]');
+editButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+    const secureFields = fields
+        .filter(field => field.id === "token" || field.id === "webhook_secret")
+        .map(field => ({
+            id: field.id,
+            type: field.type || "text",
+            allowEmptyReveal: field.allowEmptyReveal === true,
+            showLabel: field.showLabel || "",
+            hideLabel: field.hideLabel || "",
+        }));
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(editButton),
+    secureFields,
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["secureFields"] == [
+        {
+            "id": "token",
+            "type": "password",
+            "allowEmptyReveal": True,
+            "showLabel": "Show GitHub token",
+            "hideLabel": "Hide GitHub token",
+        },
+        {
+            "id": "webhook_secret",
+            "type": "password",
+            "allowEmptyReveal": True,
+            "showLabel": "Show Webhook Secret",
+            "hideLabel": "Hide Webhook Secret",
+        },
+    ]
+
+
+def test_project_view_new_github_account_dialog_allows_empty_reveal(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationGitHubView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockGitHubAccounts = [];
+
+initializeProjectView();
+await openAutomationGitHubView();
+await flushTasks();
+await flushTasks();
+
+const createButton = document.querySelector('[data-github-account-create]');
+createButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+const secureFields = fields
+    .filter(field => field.id === "token" || field.id === "webhook_secret")
+    .map(field => ({
+        id: field.id,
+        type: field.type || "text",
+        allowEmptyReveal: field.allowEmptyReveal === true,
+    }));
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(createButton),
+    secureFields,
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["secureFields"] == [
+        {
+            "id": "token",
+            "type": "password",
+            "allowEmptyReveal": True,
+        },
+        {
+            "id": "webhook_secret",
+            "type": "password",
+            "allowEmptyReveal": True,
+        },
+    ]
+
+
+def test_project_view_edits_github_account_with_inline_submit_handler(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationGitHubView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockGitHubAccounts = [
+    {
+        account_id: "ghta_1",
+        name: "github-main",
+        display_name: "GitHub Main",
+        status: "enabled",
+        token_configured: true,
+        webhook_secret_configured: true,
+    },
+];
+globalThis.__showFormDialogResult = {
+    name: "github-main",
+    display_name: "GitHub Main",
+    token: "",
+    clear_token: false,
+    webhook_secret: "",
+    clear_webhook_secret: false,
+    enabled: true,
+};
+
+initializeProjectView();
+await openAutomationGitHubView("account:ghta_1");
+await flushTasks();
+await flushTasks();
+
+const editButton = document.querySelector('[data-github-account-edit]');
+editButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(editButton),
+    submitHandlerType: typeof dialogCall.submitHandler,
+    updatedPayload: globalThis.__updatedGitHubAccountPayload || null,
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["submitHandlerType"] == "function"
+    assert payload["updatedPayload"] == {
+        "accountId": "ghta_1",
+        "payload": {
+            "name": "github-main",
+            "display_name": "GitHub Main",
+            "enabled": True,
+        },
+    }
+    assert payload["toastCalls"] == [
+        {
+            "title": "Saved",
+            "message": "GitHub Main",
+            "tone": "success",
+        }
+    ]
+
+
 def test_project_view_creates_github_repo_from_repository_dropdown(
     tmp_path: Path,
 ) -> None:
@@ -3027,6 +3313,12 @@ export const state = {
         "feature.automation.github_actions": "Actions",
         "feature.automation.github_actions_placeholder": "Select actions",
         "feature.automation.github_actions_copy": "Select one or more GitHub actions. Pull Request options include opened, reopened, edited, synchronize, and review_requested. Issues typically use opened, reopened, and edited.",
+        "feature.automation.github_draft_pr": "Draft Pull Request",
+        "feature.automation.github_draft_pr_any": "Any",
+        "feature.automation.github_draft_pr_false": "Ready for review only",
+        "feature.automation.github_draft_pr_true": "Draft only",
+        "feature.automation.github_base_branches": "Base Branches",
+        "feature.automation.github_base_branches_all": "All branches",
         "feature.automation.github_webhook_registered": "Registered",
         "feature.automation.github_webhook_unregistered": "Unregistered",
         "feature.automation.github_webhook_error": "Error",
@@ -3036,6 +3328,7 @@ export const state = {
         "feature.automation.github_no_repos_copy": "Create a repository subscription under this account.",
         "feature.automation.github_no_rules": "No rules",
         "feature.automation.github_no_rules_copy": "Create a rule for this repository.",
+        "feature.automation.github_open_webhooks": "Open Webhooks",
         "feature.automation.github_callback_url": "Callback URL",
         "feature.automation.github_webhook_status": "Webhook Status",
         "feature.automation.github_default_branch": "Default Branch",
@@ -3044,9 +3337,16 @@ export const state = {
         "feature.automation.github_account_secret": "Webhook Secret",
         "feature.automation.github_configured": "Configured",
         "feature.automation.github_not_configured": "Not configured",
+        "feature.automation.github_show_webhook_secret": "Show Webhook Secret",
+        "feature.automation.github_hide_webhook_secret": "Hide Webhook Secret",
+        "settings.github.show_token": "Show GitHub token",
+        "settings.github.hide_token": "Hide GitHub token",
         "feature.automation.github_account_required": "Account name is required.",
         "feature.automation.github_repo_required": "Repository name is required.",
         "feature.automation.github_repo_options_empty": "No repositories are available for this account token.",
+        "feature.automation.github_saved_title": "Saved",
+        "feature.automation.github_failed_title": "Save failed",
+        "feature.automation.github_deleted_title": "Deleted",
         "feature.gateway.title": "IM Gateway",
         "feature.gateway.summary": "{feishu} Feishu · {wechat} WeChat",
         "feature.gateway.add_feishu": "Add Robot",
@@ -3067,6 +3367,8 @@ export const state = {
         "automation.action.disable": "Disable",
         "automation.action.enable": "Enable",
         "automation.detail.configuration": "Configuration",
+        "automation.detail.none": "None",
+        "automation.detail.prompt": "Task Prompt",
         "automation.detail.overview_copy": "Review schedule and recent runs.",
         "automation.detail.schedule": "Schedule",
         "automation.detail.timezone": "Timezone",

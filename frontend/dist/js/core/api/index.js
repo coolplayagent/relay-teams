@@ -61,6 +61,8 @@ export {
     fetchOrchestrationConfig,
     fetchProxyConfig,
     fetchGitHubConfig,
+    revealGitHubToken,
+    fetchGitHubWebhookTunnelStatus,
     fetchWebConfig,
     fetchSystemHealth,
     discoverModelCatalog,
@@ -89,6 +91,8 @@ export {
     saveGitHubConfig,
     saveWebConfig,
     saveUiLanguageSettings,
+    startGitHubWebhookTunnel,
+    stopGitHubWebhookTunnel,
     testExternalAgent,
 } from './system.js';
 

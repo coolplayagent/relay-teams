@@ -35,3 +35,9 @@ class GitHubConfigView(BaseModel):
 
     token_configured: bool = False
     webhook_base_url: str | None = None
+
+
+class GitHubTokenRevealView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str | None = None

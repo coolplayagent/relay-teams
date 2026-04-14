@@ -32,6 +32,7 @@ from relay_teams.tools.workspace_tools.github_cli_errors import GitHubCliNotFoun
 _MAX_GITHUB_PROBE_TIMEOUT_MS = 300_000
 _DEFAULT_TIMEOUT_SECONDS = 15.0
 _STATUS_CODE_RE = re.compile(r"\bHTTP (?P<status>\d{3})\b")
+_LOCALHOST_RUN_INACTIVE_MARKERS = ("no tunnel here",)
 
 
 class GitHubConnectivityProbeRequest(BaseModel):
@@ -358,21 +359,30 @@ class GitHubWebhookConnectivityProbeService:
         redirected = bool(response.history)
         status_code = response.status_code
         ok = 200 <= status_code < 400
-        error_message = None if ok else f"HTTP {status_code}"
-        error_code = None if ok else "http_error"
+        endpoint_reachable = True
+        retryable = False
+        error_message = None
+        error_code = None
+        if not ok:
+            (
+                endpoint_reachable,
+                retryable,
+                error_code,
+                error_message,
+            ) = _classify_github_webhook_http_error(response)
         return self._build_result(
             ok=ok,
             checked_at=checked_at,
             started=started,
             used_proxy=used_proxy,
             redirected=redirected,
-            endpoint_reachable=True,
+            endpoint_reachable=endpoint_reachable,
             webhook_base_url=configured_base_url,
             callback_url=callback_url,
             health_url=health_url,
             final_url=str(response.url),
             status_code=status_code,
-            retryable=False,
+            retryable=retryable,
             error_code=error_code,
             error_message=error_message,
         )
@@ -471,6 +481,25 @@ def _build_github_webhook_transport_error_result(
         error_code=error_code,
         error_message=error_message,
     )
+
+
+def _classify_github_webhook_http_error(
+    response: httpx.Response,
+) -> tuple[bool, bool, str, str]:
+    status_code = response.status_code
+    response_text = response.text.lower()
+    if status_code == 503 and any(
+        marker in response_text for marker in _LOCALHOST_RUN_INACTIVE_MARKERS
+    ):
+        return (
+            False,
+            True,
+            "temporary_public_url_inactive",
+            "Temporary public URL is inactive. Create a new temporary URL and retry.",
+        )
+    if status_code >= 500:
+        return (True, True, "service_unavailable", f"HTTP {status_code}")
+    return (True, False, "http_error", f"HTTP {status_code}")
 
 
 def _read_gh_version(gh_path: Path, *, env: dict[str, str]) -> str | None:

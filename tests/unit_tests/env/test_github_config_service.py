@@ -228,3 +228,18 @@ def test_update_github_config_keeps_existing_token_when_request_omits_it(
         token_configured=True,
         webhook_base_url="https://agent-teams.example.com",
     )
+
+
+def test_reveal_github_token_returns_saved_secret(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    config_dir.mkdir(parents=True)
+    secret_store = _FakeGitHubSecretStore()
+    secret_store.set_token(config_dir, "ghp_existing")
+    service = GitHubConfigService(
+        config_dir=config_dir,
+        secret_store=secret_store,
+    )
+
+    assert service.reveal_github_token().model_dump(mode="json") == {
+        "token": "ghp_existing"
+    }

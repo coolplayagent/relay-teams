@@ -13,6 +13,7 @@ from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.environment_variable_service import EnvironmentVariableService
 from relay_teams.env.github_config_service import GitHubConfigService
+from relay_teams.env.localhost_run_tunnel_service import LocalhostRunTunnelService
 from relay_teams.external_agents import ExternalAgentConfigService
 from relay_teams.automation import AutomationService
 from relay_teams.env.proxy_config_service import ProxyConfigService
@@ -136,6 +137,10 @@ def get_clawhub_config_service(request: Request) -> ClawHubConfigService:
 
 def get_github_config_service(request: Request) -> GitHubConfigService:
     return get_container(request).github_config_service
+
+
+def get_localhost_run_tunnel_service(request: Request) -> LocalhostRunTunnelService:
+    return get_container(request).localhost_run_tunnel_service
 
 
 def get_ui_language_settings_service(request: Request) -> UiLanguageSettingsService:
