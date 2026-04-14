@@ -241,13 +241,14 @@ function renderNextDialog() {
                                     const showLabel = escapeHtml(field.showLabel || t('feedback.show_sensitive'));
                                     const hideLabel = escapeHtml(field.hideLabel || t('feedback.hide_sensitive'));
                                     const hasValue = String(fieldValue ?? '').trim().length > 0;
+                                    const allowEmptyReveal = field.allowEmptyReveal === true;
                                     return `
                                         <label class="feedback-dialog-input-wrap">
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             ${fieldCopy}
                                             <div class="secure-input-row feedback-dialog-secure-row">
                                                 <input type="password" class="feedback-dialog-input" data-feedback-form-input="${escapeHtml(fieldId)}" data-feedback-form-type="password" placeholder="${placeholder}" value="${escapeHtml(fieldValue)}" autocomplete="${escapeHtml(field.autocomplete || 'current-password')}" />
-                                                <button class="secure-input-btn feedback-dialog-secure-toggle" data-feedback-password-toggle="${escapeHtml(fieldId)}" data-feedback-show-label="${showLabel}" data-feedback-hide-label="${hideLabel}" type="button" title="${showLabel}" aria-label="${showLabel}"${hasValue ? '' : ' style="display:none;"'}>
+                                                <button class="secure-input-btn feedback-dialog-secure-toggle" data-feedback-password-toggle="${escapeHtml(fieldId)}" data-feedback-show-label="${showLabel}" data-feedback-hide-label="${hideLabel}" data-feedback-allow-empty-reveal="${allowEmptyReveal ? 'true' : 'false'}" type="button" title="${showLabel}" aria-label="${showLabel}"${hasValue || allowEmptyReveal ? '' : ' style="display:none;"'}>
                                                     ${renderSecureInputIcon()}
                                                 </button>
                                             </div>
@@ -528,10 +529,12 @@ function bindPasswordInputControls(dialogNode) {
         }
         const showLabel = String(toggleBtn.getAttribute('data-feedback-show-label') || t('feedback.show_sensitive')).trim();
         const hideLabel = String(toggleBtn.getAttribute('data-feedback-hide-label') || t('feedback.hide_sensitive')).trim();
+        const allowEmptyReveal = toggleBtn.getAttribute('data-feedback-allow-empty-reveal') === 'true';
         const renderToggle = () => {
             const hasValue = Boolean(String(matchedInput.value || '').trim());
             const revealed = toggleBtn.getAttribute('data-feedback-revealed') === 'true';
-            if (!hasValue) {
+            const shouldShow = hasValue || allowEmptyReveal;
+            if (!shouldShow) {
                 matchedInput.type = 'password';
                 toggleBtn.style.display = 'none';
                 toggleBtn.className = 'secure-input-btn feedback-dialog-secure-toggle';
@@ -547,7 +550,7 @@ function bindPasswordInputControls(dialogNode) {
             toggleBtn.setAttribute('aria-label', toggleBtn.title);
         };
         toggleBtn.onclick = () => {
-            if (!String(matchedInput.value || '').trim()) {
+            if (!String(matchedInput.value || '').trim() && !allowEmptyReveal) {
                 return;
             }
             const nextRevealed = toggleBtn.getAttribute('data-feedback-revealed') !== 'true';
@@ -556,7 +559,7 @@ function bindPasswordInputControls(dialogNode) {
             matchedInput.focus?.();
         };
         const handleInput = () => {
-            if (!String(matchedInput.value || '').trim()) {
+            if (!String(matchedInput.value || '').trim() && !allowEmptyReveal) {
                 toggleBtn.setAttribute('data-feedback-revealed', 'false');
             }
             renderToggle();

@@ -1809,6 +1809,7 @@ async function requestGitHubAccountInput(account = null) {
                 id: 'token',
                 label: t('settings.github.token'),
                 type: 'password',
+                allowEmptyReveal: true,
                 value: '',
                 placeholder: account
                     ? t('feature.automation.github_secret_keep')
@@ -1830,6 +1831,7 @@ async function requestGitHubAccountInput(account = null) {
                 id: 'webhook_secret',
                 label: t('feature.automation.github_webhook_secret'),
                 type: 'password',
+                allowEmptyReveal: true,
                 value: '',
                 placeholder: account
                     ? t('feature.automation.github_secret_keep')

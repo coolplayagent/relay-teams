@@ -469,14 +469,15 @@ await flushTasks();
 
 const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
 const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
-const secureFields = fields
-    .filter(field => field.id === "token" || field.id === "webhook_secret")
-    .map(field => ({
-        id: field.id,
-        type: field.type || "text",
-        showLabel: field.showLabel || "",
-        hideLabel: field.hideLabel || "",
-    }));
+    const secureFields = fields
+        .filter(field => field.id === "token" || field.id === "webhook_secret")
+        .map(field => ({
+            id: field.id,
+            type: field.type || "text",
+            allowEmptyReveal: field.allowEmptyReveal === true,
+            showLabel: field.showLabel || "",
+            hideLabel: field.hideLabel || "",
+        }));
 
 console.log(JSON.stringify({
     buttonFound: Boolean(editButton),
@@ -490,14 +491,72 @@ console.log(JSON.stringify({
         {
             "id": "token",
             "type": "password",
+            "allowEmptyReveal": True,
             "showLabel": "Show GitHub token",
             "hideLabel": "Hide GitHub token",
         },
         {
             "id": "webhook_secret",
             "type": "password",
+            "allowEmptyReveal": True,
             "showLabel": "Show Webhook Secret",
             "hideLabel": "Hide Webhook Secret",
+        },
+    ]
+
+
+def test_project_view_new_github_account_dialog_allows_empty_reveal(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationGitHubView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockGitHubAccounts = [];
+
+initializeProjectView();
+await openAutomationGitHubView();
+await flushTasks();
+await flushTasks();
+
+const createButton = document.querySelector('[data-github-account-create]');
+createButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+const secureFields = fields
+    .filter(field => field.id === "token" || field.id === "webhook_secret")
+    .map(field => ({
+        id: field.id,
+        type: field.type || "text",
+        allowEmptyReveal: field.allowEmptyReveal === true,
+    }));
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(createButton),
+    secureFields,
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["secureFields"] == [
+        {
+            "id": "token",
+            "type": "password",
+            "allowEmptyReveal": True,
+        },
+        {
+            "id": "webhook_secret",
+            "type": "password",
+            "allowEmptyReveal": True,
         },
     ]
 
