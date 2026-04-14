@@ -434,6 +434,89 @@ console.log(JSON.stringify({
     assert payload["loadCalls"] == 1
 
 
+def test_project_view_repo_detail_shows_full_github_rule_configuration(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationGitHubView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockGitHubAccounts = [
+    {
+        account_id: "ghta_1",
+        name: "github-main",
+        display_name: "GitHub Main",
+        status: "enabled",
+        token_configured: true,
+        webhook_secret_configured: true,
+    },
+];
+globalThis.__mockGitHubRepos = [
+    {
+        repo_subscription_id: "ghrs_1",
+        account_id: "ghta_1",
+        owner: "octocat",
+        repo_name: "Hello-World",
+        full_name: "octocat/Hello-World",
+        callback_url: "https://example.com/github/webhook",
+        webhook_status: "registered",
+        enabled: true,
+        subscribed_events: ["pull_request"],
+    },
+];
+globalThis.__mockGitHubRules = [
+    {
+        trigger_rule_id: "trg_1",
+        repo_subscription_id: "ghrs_1",
+        name: "pr-opened",
+        enabled: true,
+        match_config: {
+            event_name: "pull_request",
+            actions: ["opened", "edited"],
+            draft_pr: false,
+            base_branches: ["main", "release/*"],
+        },
+        dispatch_config: {
+            target_type: "run_template",
+            run_template: {
+                workspace_id: "rule-workspace",
+                prompt_template: "Review the PR\\nand summarize impact.",
+            },
+        },
+    },
+];
+
+initializeProjectView();
+await openAutomationGitHubView("repo:ghrs_1");
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    contentHtml: els.projectViewContent.innerHTML,
+}));
+""".strip(),
+    )
+
+    assert "Workspace ID" in str(payload["contentHtml"])
+    assert "rule-workspace" in str(payload["contentHtml"])
+    assert "Subscribed Event" in str(payload["contentHtml"])
+    assert "Pull Request" in str(payload["contentHtml"])
+    assert "Actions" in str(payload["contentHtml"])
+    assert "opened, edited" in str(payload["contentHtml"])
+    assert "Draft Pull Request" in str(payload["contentHtml"])
+    assert "Ready for review only" in str(payload["contentHtml"])
+    assert "Base Branches" in str(payload["contentHtml"])
+    assert "main, release/*" in str(payload["contentHtml"])
+    assert "Task Prompt" in str(payload["contentHtml"])
+    assert "Review the PR" in str(payload["contentHtml"])
+    assert "summarize impact." in str(payload["contentHtml"])
+
+
 def test_project_view_github_account_dialog_uses_secure_fields(
     tmp_path: Path,
 ) -> None:
@@ -3226,6 +3309,12 @@ export const state = {
         "feature.automation.github_actions": "Actions",
         "feature.automation.github_actions_placeholder": "Select actions",
         "feature.automation.github_actions_copy": "Select one or more GitHub actions. Pull Request options include opened, reopened, edited, synchronize, and review_requested. Issues typically use opened, reopened, and edited.",
+        "feature.automation.github_draft_pr": "Draft Pull Request",
+        "feature.automation.github_draft_pr_any": "Any",
+        "feature.automation.github_draft_pr_false": "Ready for review only",
+        "feature.automation.github_draft_pr_true": "Draft only",
+        "feature.automation.github_base_branches": "Base Branches",
+        "feature.automation.github_base_branches_all": "All branches",
         "feature.automation.github_webhook_registered": "Registered",
         "feature.automation.github_webhook_unregistered": "Unregistered",
         "feature.automation.github_webhook_error": "Error",
@@ -3273,6 +3362,8 @@ export const state = {
         "automation.action.disable": "Disable",
         "automation.action.enable": "Enable",
         "automation.detail.configuration": "Configuration",
+        "automation.detail.none": "None",
+        "automation.detail.prompt": "Task Prompt",
         "automation.detail.overview_copy": "Review schedule and recent runs.",
         "automation.detail.schedule": "Schedule",
         "automation.detail.timezone": "Timezone",

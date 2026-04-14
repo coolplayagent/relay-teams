@@ -3380,8 +3380,14 @@ function renderGitHubRepoDetail(repo) {
                                         </div>
                                     </div>
                                     <div class="automation-run-copy github-rule-copy">
-                                        <span>${escapeHtml(formatGitHubRuleSummary(rule))}</span>
-                                        <span>${escapeHtml(formatGitHubRuleWorkspaceSummary(rule))}</span>
+                                        <div class="feature-meta-list github-rule-meta-list">
+                                            <div><span>${escapeHtml(t('settings.triggers.workspace'))}</span><strong>${escapeHtml(formatGitHubRuleWorkspaceSummary(rule))}</strong></div>
+                                            <div><span>${escapeHtml(t('feature.automation.github_event_subscription'))}</span><strong>${escapeHtml(resolveGitHubRuleEventLabel(rule))}</strong></div>
+                                            <div><span>${escapeHtml(t('feature.automation.github_actions'))}</span><strong>${escapeHtml(resolveGitHubRuleActionsLabel(rule))}</strong></div>
+                                            <div><span>${escapeHtml(t('feature.automation.github_draft_pr'))}</span><strong>${escapeHtml(resolveGitHubRuleDraftPrLabel(rule))}</strong></div>
+                                            <div><span>${escapeHtml(t('feature.automation.github_base_branches'))}</span><strong>${escapeHtml(resolveGitHubRuleBaseBranchesLabel(rule))}</strong></div>
+                                            <div class="github-rule-prompt-row"><span>${escapeHtml(t('automation.detail.prompt'))}</span><code class="github-rule-prompt">${escapeHtml(resolveGitHubRulePromptTemplate(rule))}</code></div>
+                                        </div>
                                     </div>
                                 </article>
                             `;
@@ -3417,13 +3423,48 @@ function formatGitHubRuleSummary(rule) {
 }
 
 function formatGitHubRuleWorkspaceSummary(rule) {
-    return formatMessage('feature.automation.github_rule_workspace_summary', {
-        workspace: resolveGitHubWorkspaceLabel(resolveGitHubRuleWorkspaceId(rule)),
-    });
+    return resolveGitHubWorkspaceLabel(resolveGitHubRuleWorkspaceId(rule));
 }
 
 function resolveGitHubRuleWorkspaceId(rule) {
     return String(rule?.dispatch_config?.run_template?.workspace_id || '').trim();
+}
+
+function resolveGitHubRuleEventLabel(rule) {
+    const eventName = String(rule?.match_config?.event_name || '').trim();
+    return resolveOptionLabel(getGitHubRuleEventOptions(), eventName, eventName || t('automation.detail.none'));
+}
+
+function resolveGitHubRuleActionsLabel(rule) {
+    const actions = Array.isArray(rule?.match_config?.actions)
+        ? rule.match_config.actions.map(action => String(action || '').trim()).filter(Boolean)
+        : [];
+    return actions.length > 0 ? actions.join(', ') : t('automation.detail.none');
+}
+
+function resolveGitHubRuleDraftPrLabel(rule) {
+    const draftPrValue = resolveGitHubDraftPrFieldValue(rule?.match_config?.draft_pr);
+    return resolveOptionLabel(getGitHubDraftPrOptions(), draftPrValue, t('automation.detail.none'));
+}
+
+function resolveGitHubRuleBaseBranchesLabel(rule) {
+    const branches = Array.isArray(rule?.match_config?.base_branches)
+        ? rule.match_config.base_branches.map(branch => String(branch || '').trim()).filter(Boolean)
+        : [];
+    return branches.length > 0 ? branches.join(', ') : t('feature.automation.github_base_branches_all');
+}
+
+function resolveGitHubRulePromptTemplate(rule) {
+    const promptTemplate = String(rule?.dispatch_config?.run_template?.prompt_template || '').trim();
+    return promptTemplate || t('automation.detail.none');
+}
+
+function resolveOptionLabel(options, value, fallback = '') {
+    const normalizedValue = String(value || '').trim();
+    const match = (Array.isArray(options) ? options : []).find(
+        option => String(option?.value || '').trim() === normalizedValue,
+    );
+    return String(match?.label || fallback || normalizedValue || '').trim();
 }
 
 function resolveGitHubWorkspaceLabel(workspaceId) {
