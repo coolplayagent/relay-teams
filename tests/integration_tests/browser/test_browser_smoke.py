@@ -1469,6 +1469,9 @@ def test_browser_workspace_and_automation_project_views(
         expect(page.locator('[role="alertdialog"]')).to_be_visible(
             timeout=_WAIT_TIMEOUT_MS
         )
+        expect(
+            page.locator('[data-feedback-form-input="remove_directory"]')
+        ).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
         page.locator("[data-feedback-confirm]").click()
     expect(_project_card(page, workspace_id)).to_have_count(0, timeout=_WAIT_TIMEOUT_MS)
 

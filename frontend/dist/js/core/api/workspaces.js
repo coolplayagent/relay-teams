@@ -80,12 +80,12 @@ export async function forkWorkspace(workspaceId, name) {
 }
 
 export async function deleteWorkspace(workspaceId, options = {}) {
-    const removeWorktree = options?.removeWorktree === true;
-    const query = removeWorktree ? '?remove_worktree=true' : '';
+    const removeDirectory = options?.removeDirectory === true || options?.removeWorktree === true;
+    const query = removeDirectory ? '?remove_directory=true' : '';
     const requestOptions = {
         method: 'DELETE',
     };
-    if (removeWorktree) {
+    if (removeDirectory) {
         requestOptions.headers = { 'Content-Type': 'application/json' };
         requestOptions.body = JSON.stringify({ force: true });
     }

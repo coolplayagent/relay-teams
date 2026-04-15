@@ -251,7 +251,7 @@ def test_workspace_service_deletes_git_worktree_when_requested(tmp_path: Path) -
 
     deleted = service.delete_workspace_with_options(
         workspace_id="alpha-project-fork",
-        remove_worktree=True,
+        remove_directory=True,
     )
 
     assert deleted.workspace_id == "alpha-project-fork"
@@ -259,6 +259,7 @@ def test_workspace_service_deletes_git_worktree_when_requested(tmp_path: Path) -
         ((tmp_path / "workspace-root").resolve(), root_path.resolve())
     ]
     assert git_client.prune_calls == [(tmp_path / "workspace-root").resolve()]
+    assert root_path.exists() is False
     assert service.list_workspaces() == ()
 
 
@@ -275,7 +276,67 @@ def test_workspace_service_deletes_workspace(tmp_path: Path) -> None:
 
     service.delete_workspace("project-alpha")
 
+    assert root_path.exists() is True
     assert service.list_workspaces() == ()
+
+
+def test_workspace_service_deletes_workspace_directory_when_requested(
+    tmp_path: Path,
+) -> None:
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    deleted = service.delete_workspace_with_options(
+        workspace_id="project-alpha",
+        remove_directory=True,
+    )
+
+    assert deleted.workspace_id == "project-alpha"
+    assert root_path.exists() is False
+    assert service.list_workspaces() == ()
+
+
+def test_workspace_service_keeps_record_when_directory_removal_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    original_rmtree = shutil.rmtree
+
+    def fail_rmtree(path: Path, ignore_errors: bool = False) -> None:
+        _ = ignore_errors
+        if Path(path) == root_path:
+            raise PermissionError("permission denied")
+        original_rmtree(path)
+
+    monkeypatch.setattr(shutil, "rmtree", fail_rmtree)
+
+    with pytest.raises(RuntimeError, match="Failed to remove workspace path"):
+        _ = service.delete_workspace_with_options(
+            workspace_id="project-alpha",
+            remove_directory=True,
+        )
+
+    assert root_path.exists() is True
+    assert [workspace.workspace_id for workspace in service.list_workspaces()] == [
+        "project-alpha"
+    ]
 
 
 def test_workspace_service_returns_progressive_snapshot_and_tree_listing(

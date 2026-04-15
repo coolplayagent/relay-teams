@@ -475,7 +475,7 @@ def test_delete_workspace_requires_force_for_remove_worktree(tmp_path: Path) -> 
 
     assert response.status_code == 409
     assert response.json() == {
-        "detail": "Cannot remove workspace git worktree without force"
+        "detail": "Cannot remove workspace directory without force"
     }
     assert git_client.remove_calls == []
 
@@ -515,3 +515,68 @@ def test_delete_workspace_supports_remove_worktree_query(tmp_path: Path) -> None
         ((tmp_path / "workspace-root").resolve(), root_path.resolve())
     ]
     assert service.list_workspaces() == ()
+
+
+def test_delete_workspace_supports_remove_directory_query(tmp_path: Path) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspaces_router.db")
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+    client, _ = _create_test_client(tmp_path, service=service)
+
+    response = client.request(
+        "DELETE",
+        "/api/workspaces/project-alpha?remove_directory=true",
+        json={"force": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert root_path.exists() is False
+    assert service.list_workspaces() == ()
+
+
+def test_delete_workspace_returns_conflict_when_directory_removal_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspaces_router.db")
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+    client, _ = _create_test_client(tmp_path, service=service)
+
+    original_rmtree = shutil.rmtree
+
+    def fail_rmtree(path: Path, ignore_errors: bool = False) -> None:
+        _ = ignore_errors
+        if Path(path) == root_path:
+            raise PermissionError("permission denied")
+        original_rmtree(path)
+
+    monkeypatch.setattr(shutil, "rmtree", fail_rmtree)
+
+    response = client.request(
+        "DELETE",
+        "/api/workspaces/project-alpha?remove_directory=true",
+        json={"force": True},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": f"Failed to remove workspace path: {root_path}"
+    }
+    assert root_path.exists() is True
+    assert [workspace.workspace_id for workspace in service.list_workspaces()] == [
+        "project-alpha"
+    ]

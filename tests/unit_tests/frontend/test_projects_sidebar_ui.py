@@ -1521,7 +1521,7 @@ import {
 } from "./sidebar.mjs";
 
 installGlobals(createDomEnvironment());
-globalThis.__confirmDialogResponses = [true, false];
+globalThis.__showFormDialogResult = { remove_directory: false };
 
 await loadProjects();
 let projectsList = document.getElementById("projects-list");
@@ -1547,7 +1547,12 @@ console.log(JSON.stringify({
     forkCalls: globalThis.__forkCalls,
     deleteWorkspaceCalls: globalThis.__deleteWorkspaceCalls,
     createdSessionWorkspaceIds: globalThis.__createdSessionWorkspaceIds,
-    confirmDialogTitles: globalThis.__confirmDialogCalls.map(item => item.title),
+    confirmDialogCalls: globalThis.__confirmDialogCalls,
+    showFormDialogCalls: globalThis.__showFormDialogCalls.map(item => ({
+        title: item.title,
+        fieldId: item.fields?.[0]?.id || null,
+        fieldLabel: item.fields?.[0]?.label || null,
+    })),
 }));
 """.strip(),
     )
@@ -1561,13 +1566,107 @@ console.log(JSON.stringify({
     assert payload["deleteWorkspaceCalls"] == [
         {
             "workspaceId": "alpha-project-fork",
-            "options": {"removeWorktree": False},
+            "options": {"removeDirectory": False},
         }
     ]
     assert payload["createdSessionWorkspaceIds"] == ["alpha-project-fork"]
-    assert payload["confirmDialogTitles"] == [
-        "Remove Workspace",
-        "Remove Project Worktree",
+    assert payload["confirmDialogCalls"] == []
+    assert payload["showFormDialogCalls"] == [
+        {
+            "title": "Remove Workspace",
+            "fieldId": "remove_directory",
+            "fieldLabel": "Also delete git worktree",
+        }
+    ]
+
+
+def test_projects_sidebar_can_keep_directory_when_removing_workspace(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+globalThis.__showFormDialogResult = { remove_directory: false };
+
+await loadProjects();
+let projectsList = document.getElementById("projects-list");
+let firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+firstProject.querySelector(".project-options-btn").onclick({ stopPropagation() {} });
+await flushTasks();
+projectsList = document.getElementById("projects-list");
+firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+firstProject.querySelector(".project-remove-btn").onclick({ stopPropagation() {} });
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    deleteWorkspaceCalls: globalThis.__deleteWorkspaceCalls,
+    confirmDialogCalls: globalThis.__confirmDialogCalls,
+    showFormDialogCalls: globalThis.__showFormDialogCalls.map(item => ({
+        title: item.title,
+        fieldId: item.fields?.[0]?.id || null,
+        fieldLabel: item.fields?.[0]?.label || null,
+    })),
+}));
+""".strip(),
+    )
+
+    assert payload["deleteWorkspaceCalls"] == [
+        {
+            "workspaceId": "alpha-project",
+            "options": {"removeDirectory": False},
+        }
+    ]
+    assert payload["confirmDialogCalls"] == []
+    assert payload["showFormDialogCalls"] == [
+        {
+            "title": "Remove Workspace",
+            "fieldId": "remove_directory",
+            "fieldLabel": "Also delete directory",
+        }
+    ]
+
+
+def test_projects_sidebar_can_delete_directory_when_removing_workspace(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+globalThis.__showFormDialogResult = { remove_directory: true };
+
+await loadProjects();
+let projectsList = document.getElementById("projects-list");
+let firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+firstProject.querySelector(".project-options-btn").onclick({ stopPropagation() {} });
+await flushTasks();
+projectsList = document.getElementById("projects-list");
+firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+firstProject.querySelector(".project-remove-btn").onclick({ stopPropagation() {} });
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    deleteWorkspaceCalls: globalThis.__deleteWorkspaceCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["deleteWorkspaceCalls"] == [
+        {
+            "workspaceId": "alpha-project",
+            "options": {"removeDirectory": True},
+        }
     ]
 
 
@@ -2161,10 +2260,10 @@ const translations = {
     "sidebar.fork_project_placeholder": "Forked project name",
     "sidebar.remove_workspace": "Remove Workspace",
     "sidebar.remove_workspace_message": "Remove workspace {workspace}? This will also delete its sessions from the sidebar.",
-    "sidebar.remove_project_worktree": "Remove Project Worktree",
-    "sidebar.remove_project_worktree_message": "Delete the git worktree for {workspace} too? Choose Cancel to keep the worktree on disk.",
-    "sidebar.delete_worktree": "Delete Worktree",
-    "sidebar.keep_worktree": "Keep Worktree",
+    "sidebar.remove_workspace_delete_directory_label": "Also delete directory",
+    "sidebar.remove_workspace_delete_directory_message": "Leave unchecked to remove only the workspace record and keep files on disk.",
+    "sidebar.remove_workspace_delete_worktree_label": "Also delete git worktree",
+    "sidebar.remove_workspace_delete_worktree_message": "Leave unchecked to remove only the workspace record and keep the worktree on disk.",
     "sidebar.error.loading_projects": "Failed to load projects: {error}",
     "sidebar.rename_session_title": "Rename Session",
     "sidebar.rename_session_message": "Enter a new name for this session.",

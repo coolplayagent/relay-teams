@@ -1790,16 +1790,17 @@ Rules:
 Deletes one registered execution workspace.
 
 Query:
-- `remove_worktree`: `true|false`
+- `remove_directory`: `true|false`
+- `remove_worktree`: `true|false` (deprecated alias for `remove_directory`)
 
 Request body:
-- optional `force`: required when `remove_worktree=true`
+- optional `force`: required when `remove_directory=true` or `remove_worktree=true`
 
 Rules:
-- `remove_worktree=true` only affects workspaces with `file_scope.backend = "git_worktree"`.
-- When `remove_worktree=true` and `force` is omitted or `false`, the backend returns `409` instead of removing the worktree.
-- When `remove_worktree=true`, the backend runs `git worktree remove --force` before deleting the workspace record.
-- When `remove_worktree=false`, the backend deletes only the workspace record.
+- When `remove_directory=false`, the backend deletes only the workspace record.
+- When `remove_directory=true` and `force` is omitted or `false`, the backend returns `409` instead of removing the directory.
+- When `remove_directory=true` for `file_scope.backend = "git_worktree"`, the backend runs `git worktree remove --force` before deleting the workspace record.
+- When `remove_directory=true` for other workspace types, the backend deletes `root_path` before deleting the workspace record.
 
 ## Prompt APIs
 

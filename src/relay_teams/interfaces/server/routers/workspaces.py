@@ -195,19 +195,21 @@ def get_workspace_preview_file(
 @router.delete("/{workspace_id}")
 def delete_workspace(
     workspace_id: RequiredIdentifierStr,
+    remove_directory: Annotated[bool, Query()] = False,
     remove_worktree: Annotated[bool, Query()] = False,
     req: DeleteRequest | None = Body(default=None),
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> dict[str, str]:
     try:
-        if remove_worktree:
+        should_remove_directory = remove_directory or remove_worktree
+        if should_remove_directory:
             require_force_delete(
                 req.force if req is not None else False,
-                message="Cannot remove workspace git worktree without force",
+                message="Cannot remove workspace directory without force",
             )
         service.delete_workspace_with_options(
             workspace_id=workspace_id,
-            remove_worktree=remove_worktree,
+            remove_directory=should_remove_directory,
         )
         return {"status": "ok"}
     except KeyError as exc:

@@ -85,6 +85,58 @@ def test_get_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
+def test_delete_workspace_calls_expected_endpoint(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.delete_workspace("project-alpha")
+
+    assert response == {"status": "ok"}
+    assert captured == {
+        "method": "DELETE",
+        "path": "/api/workspaces/project-alpha",
+        "payload": None,
+    }
+
+
+def test_delete_workspace_supports_remove_directory(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.delete_workspace("project-alpha", remove_directory=True)
+
+    assert response == {"status": "ok"}
+    assert captured == {
+        "method": "DELETE",
+        "path": "/api/workspaces/project-alpha?remove_directory=true",
+        "payload": {"force": True},
+    }
+
+
 def test_get_web_config_calls_expected_endpoint(monkeypatch) -> None:
     client = AgentTeamsClient()
     captured: dict[str, object] = {}
