@@ -10,6 +10,7 @@ tools:
   - glob
   - read
   - edit
+  - notebook_edit
   - write
   - shell
   - list_background_tasks

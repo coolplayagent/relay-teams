@@ -14,6 +14,7 @@ tools:
   - glob
   - read
   - edit
+  - notebook_edit
   - write
   - shell
   - spawn_subagent

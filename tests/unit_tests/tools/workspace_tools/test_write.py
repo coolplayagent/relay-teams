@@ -384,3 +384,162 @@ async def test_write_tmp_tool_rejects_paths_outside_workspace_tmp_directory(
 
     with pytest.raises(ValueError, match="outside workspace tmp directory"):
         await tool(ctx, path="../outside.md", content="should fail\n")
+
+
+@pytest.mark.asyncio
+async def test_write_tool_rejects_existing_notebook_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import write as write_module
+
+    fake_agent = _FakeAgent()
+    register_write(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["write"],
+    )
+    file_path = tmp_path / "demo.ipynb"
+    file_path.write_text(
+        '{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}',
+        encoding="utf-8",
+    )
+    ctx = SimpleNamespace(deps=SimpleNamespace(workspace=_FakeWorkspace(tmp_path)))
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    monkeypatch.setattr(write_module, "execute_tool", _fake_execute_tool)
+
+    with pytest.raises(ValueError, match="Use notebook_edit"):
+        await tool(
+            ctx,
+            path="demo.ipynb",
+            content='{"cells": [{}], "metadata": {}, "nbformat": 4}',
+        )
+
+
+@pytest.mark.asyncio
+async def test_write_tool_rejects_bom_prefixed_existing_notebook_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import write as write_module
+
+    fake_agent = _FakeAgent()
+    register_write(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["write"],
+    )
+    file_path = tmp_path / "demo.ipynb"
+    file_path.write_text(
+        '{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}',
+        encoding="utf-8-sig",
+    )
+    ctx = SimpleNamespace(deps=SimpleNamespace(workspace=_FakeWorkspace(tmp_path)))
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    monkeypatch.setattr(write_module, "execute_tool", _fake_execute_tool)
+
+    with pytest.raises(ValueError, match="Use notebook_edit"):
+        await tool(
+            ctx,
+            path="demo.ipynb",
+            content='{"cells": [{}], "metadata": {}, "nbformat": 4}',
+        )
+
+
+@pytest.mark.asyncio
+async def test_write_tool_allows_repairing_invalid_notebook_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import write as write_module
+
+    fake_agent = _FakeAgent()
+    register_write(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["write"],
+    )
+    file_path = tmp_path / "demo.ipynb"
+    file_path.write_text("not notebook json", encoding="utf-8")
+    ctx = SimpleNamespace(deps=SimpleNamespace(workspace=_FakeWorkspace(tmp_path)))
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    monkeypatch.setattr(write_module, "execute_tool", _fake_execute_tool)
+
+    content = '{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}'
+    result = await tool(ctx, path="demo.ipynb", content=content)
+
+    assert result["created"] is False
+    assert file_path.read_text(encoding="utf-8") == content
+
+
+@pytest.mark.asyncio
+async def test_write_tool_allows_repairing_notebook_with_non_object_cell(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import write as write_module
+
+    fake_agent = _FakeAgent()
+    register_write(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["write"],
+    )
+    file_path = tmp_path / "demo.ipynb"
+    file_path.write_text(
+        '{"cells": [null], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}',
+        encoding="utf-8",
+    )
+    ctx = SimpleNamespace(deps=SimpleNamespace(workspace=_FakeWorkspace(tmp_path)))
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    monkeypatch.setattr(write_module, "execute_tool", _fake_execute_tool)
+
+    content = '{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}'
+    result = await tool(ctx, path="demo.ipynb", content=content)
+
+    assert result["created"] is False
+    assert file_path.read_text(encoding="utf-8") == content

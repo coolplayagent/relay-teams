@@ -1,0 +1,2 @@
+Edit a Jupyter notebook (.ipynb) at the cell level. Supports edit_mode replace, insert, and delete.
+Use read first. Do not edit notebook JSON directly with the generic edit tool.

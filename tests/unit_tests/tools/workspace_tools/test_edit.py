@@ -184,3 +184,18 @@ def test_project_edit_result_keeps_only_output_visible() -> None:
         "diff": "@@ -1 +1 @@",
         "diff_summary": "  ~ 1: 1 line(s) changed",
     }
+
+
+def test_apply_edit_rejects_existing_notebook_file(tmp_path: Path) -> None:
+    file_path = tmp_path / "demo.ipynb"
+    file_path.write_text(
+        '{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Use notebook_edit"):
+        apply_edit(
+            file_path=file_path,
+            old_string="[]",
+            new_string="[{}]",
+        )
