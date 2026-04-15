@@ -360,6 +360,7 @@ class WorkspaceService:
         return resolved_root
 
     def _remove_workspace_directory(self, record: WorkspaceRecord) -> None:
+        removal_target = record.root_path
         if record.profile.file_scope.backend == FileScopeBackend.GIT_WORKTREE:
             repository_root = self._resolve_worktree_repository_root(record)
             self._git_worktree_client.remove_worktree(
@@ -367,15 +368,21 @@ class WorkspaceService:
                 target_path=record.root_path,
             )
             self._git_worktree_client.prune(repository_root)
-            shutil.rmtree(
-                self._workspace_storage_dir(record.workspace_id),
-                ignore_errors=True,
-            )
+            removal_target = self._workspace_storage_dir(record.workspace_id)
+        try:
+            self._remove_filesystem_path(removal_target)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Failed to remove workspace path: {removal_target}"
+            ) from exc
+
+    def _remove_filesystem_path(self, target_path: Path) -> None:
+        if not path_exists(target_path):
             return
-        if path_is_file(record.root_path):
-            unlink_path(record.root_path, missing_ok=True)
+        if path_is_file(target_path):
+            unlink_path(target_path, missing_ok=True)
             return
-        shutil.rmtree(record.root_path, ignore_errors=True)
+        shutil.rmtree(target_path)
 
     def _find_workspace_by_root(self, root_path: Path) -> WorkspaceRecord | None:
         for workspace in self._repository.list_all():
