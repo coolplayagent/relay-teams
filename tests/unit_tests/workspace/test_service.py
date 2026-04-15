@@ -251,7 +251,7 @@ def test_workspace_service_deletes_git_worktree_when_requested(tmp_path: Path) -
 
     deleted = service.delete_workspace_with_options(
         workspace_id="alpha-project-fork",
-        remove_worktree=True,
+        remove_directory=True,
     )
 
     assert deleted.workspace_id == "alpha-project-fork"
@@ -259,6 +259,7 @@ def test_workspace_service_deletes_git_worktree_when_requested(tmp_path: Path) -
         ((tmp_path / "workspace-root").resolve(), root_path.resolve())
     ]
     assert git_client.prune_calls == [(tmp_path / "workspace-root").resolve()]
+    assert root_path.exists() is False
     assert service.list_workspaces() == ()
 
 
@@ -275,6 +276,30 @@ def test_workspace_service_deletes_workspace(tmp_path: Path) -> None:
 
     service.delete_workspace("project-alpha")
 
+    assert root_path.exists() is True
+    assert service.list_workspaces() == ()
+
+
+def test_workspace_service_deletes_workspace_directory_when_requested(
+    tmp_path: Path,
+) -> None:
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    deleted = service.delete_workspace_with_options(
+        workspace_id="project-alpha",
+        remove_directory=True,
+    )
+
+    assert deleted.workspace_id == "project-alpha"
+    assert root_path.exists() is False
     assert service.list_workspaces() == ()
 
 

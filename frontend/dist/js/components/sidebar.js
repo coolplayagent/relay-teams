@@ -1207,24 +1207,29 @@ export async function handleRemoveWorkspaceClick(workspace) {
     const workspaceId = String(workspace?.workspace_id || '').trim();
     if (!workspaceId) return;
     const workspaceLabel = formatWorkspaceLabel(workspace);
-    const shouldDelete = await showConfirmDialog({
+    const isWorktreeWorkspace = isForkedWorkspace(workspace);
+    const values = await showFormDialog({
         title: t('sidebar.remove_workspace'),
         message: t('sidebar.remove_workspace_message').replace('{workspace}', workspaceLabel),
         tone: 'warning',
         confirmLabel: t('sidebar.remove'),
         cancelLabel: t('settings.action.cancel'),
+        fields: [
+            {
+                id: 'remove_directory',
+                label: isWorktreeWorkspace
+                    ? t('sidebar.remove_workspace_delete_worktree_label')
+                    : t('sidebar.remove_workspace_delete_directory_label'),
+                type: 'checkbox',
+                value: false,
+                description: isWorktreeWorkspace
+                    ? t('sidebar.remove_workspace_delete_worktree_message')
+                    : t('sidebar.remove_workspace_delete_directory_message'),
+            },
+        ],
     });
-    if (!shouldDelete) return;
-    let removeWorktree = false;
-    if (isForkedWorkspace(workspace)) {
-        removeWorktree = await showConfirmDialog({
-            title: t('sidebar.remove_project_worktree'),
-            message: t('sidebar.remove_project_worktree_message').replace('{workspace}', workspaceLabel),
-            tone: 'warning',
-            confirmLabel: t('sidebar.delete_worktree'),
-            cancelLabel: t('sidebar.keep_worktree'),
-        });
-    }
+    if (!values) return;
+    const removeDirectory = values.remove_directory === true;
     try {
         const sessions = await fetchSessions();
         const workspaceSessions = Array.isArray(sessions) ? sessions.filter(session => String(session?.workspace_id || '') === workspaceId) : [];
@@ -1234,7 +1239,7 @@ export async function handleRemoveWorkspaceClick(workspace) {
         for (const session of workspaceSessions) {
             await deleteSession(session.session_id);
         }
-        await deleteWorkspace(workspaceId, { removeWorktree });
+        await deleteWorkspace(workspaceId, { removeDirectory });
         expandedProjectIds.delete(groupKey('workspace', workspaceId));
         expandedProjectSessionIds.delete(groupKey('workspace', workspaceId));
         initializedProjectIds.delete(groupKey('workspace', workspaceId));

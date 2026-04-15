@@ -16,6 +16,7 @@ from relay_teams.paths import (
     path_is_dir,
     path_is_file,
     read_bytes_file,
+    unlink_path,
 )
 from relay_teams.workspace.git_worktree import GitWorktreeClient
 from relay_teams.workspace.workspace_models import (
@@ -267,27 +268,18 @@ class WorkspaceService:
     def delete_workspace(self, workspace_id: str) -> None:
         _ = self.delete_workspace_with_options(
             workspace_id=workspace_id,
-            remove_worktree=False,
+            remove_directory=False,
         )
 
     def delete_workspace_with_options(
         self,
         *,
         workspace_id: str,
-        remove_worktree: bool,
+        remove_directory: bool,
     ) -> WorkspaceRecord:
         record = self._repository.get(workspace_id)
-        if (
-            remove_worktree
-            and record.profile.file_scope.backend == FileScopeBackend.GIT_WORKTREE
-        ):
-            repository_root = self._resolve_worktree_repository_root(record)
-            self._git_worktree_client.remove_worktree(
-                repository_root=repository_root,
-                target_path=record.root_path,
-            )
-            self._git_worktree_client.prune(repository_root)
-            shutil.rmtree(self._workspace_storage_dir(workspace_id), ignore_errors=True)
+        if remove_directory:
+            self._remove_workspace_directory(record)
         self._repository.delete(workspace_id)
         return record
 
@@ -366,6 +358,24 @@ class WorkspaceService:
         if not path_is_dir(resolved_root):
             raise ValueError(f"Workspace root is not a directory: {resolved_root}")
         return resolved_root
+
+    def _remove_workspace_directory(self, record: WorkspaceRecord) -> None:
+        if record.profile.file_scope.backend == FileScopeBackend.GIT_WORKTREE:
+            repository_root = self._resolve_worktree_repository_root(record)
+            self._git_worktree_client.remove_worktree(
+                repository_root=repository_root,
+                target_path=record.root_path,
+            )
+            self._git_worktree_client.prune(repository_root)
+            shutil.rmtree(
+                self._workspace_storage_dir(record.workspace_id),
+                ignore_errors=True,
+            )
+            return
+        if path_is_file(record.root_path):
+            unlink_path(record.root_path, missing_ok=True)
+            return
+        shutil.rmtree(record.root_path, ignore_errors=True)
 
     def _find_workspace_by_root(self, root_path: Path) -> WorkspaceRecord | None:
         for workspace in self._repository.list_all():

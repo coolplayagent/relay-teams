@@ -645,8 +645,21 @@ class AgentTeamsClient:
             f"/api/workspaces/{workspace_id}/diff?path={quote(path, safe='')}",
         )
 
-    def delete_workspace(self, workspace_id: str) -> dict[str, JsonValue]:
-        return self._request_json("DELETE", f"/api/workspaces/{workspace_id}")
+    def delete_workspace(
+        self,
+        workspace_id: str,
+        *,
+        remove_directory: bool = False,
+    ) -> dict[str, JsonValue]:
+        query = "?remove_directory=true" if remove_directory else ""
+        payload: dict[str, JsonValue] | None = (
+            {"force": True} if remove_directory else None
+        )
+        return self._request_json(
+            "DELETE",
+            f"/api/workspaces/{workspace_id}{query}",
+            payload,
+        )
 
     def list_automation_projects(self) -> list[dict[str, JsonValue]]:
         data = self._request_json("GET", "/api/automation/projects")
