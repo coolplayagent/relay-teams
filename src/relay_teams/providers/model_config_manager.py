@@ -832,10 +832,21 @@ def _prepare_profile_api_key_for_storage(
     current_secret: str | None,
 ) -> tuple[dict[str, JsonValue], str | None, bool]:
     merged_profile = dict(next_profile)
-    if isinstance(existing_profile, dict) and "is_default" not in merged_profile:
-        existing_is_default = existing_profile.get("is_default")
-        if isinstance(existing_is_default, bool):
-            merged_profile["is_default"] = existing_is_default
+    if isinstance(existing_profile, dict):
+        if "is_default" not in merged_profile:
+            existing_is_default = existing_profile.get("is_default")
+            if isinstance(existing_is_default, bool):
+                merged_profile["is_default"] = existing_is_default
+        if "fallback_policy_id" not in merged_profile:
+            existing_fallback_policy_id = existing_profile.get("fallback_policy_id")
+            if isinstance(existing_fallback_policy_id, str):
+                merged_profile["fallback_policy_id"] = existing_fallback_policy_id
+        if "fallback_priority" not in merged_profile:
+            existing_fallback_priority = existing_profile.get("fallback_priority")
+            if isinstance(existing_fallback_priority, int) and not isinstance(
+                existing_fallback_priority, bool
+            ):
+                merged_profile["fallback_priority"] = existing_fallback_priority
     next_api_key = merged_profile.get("api_key")
     if isinstance(next_api_key, str) and next_api_key.strip():
         normalized_api_key = next_api_key.strip()

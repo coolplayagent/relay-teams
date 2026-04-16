@@ -218,6 +218,50 @@ def test_get_model_profiles_returns_fallback_settings(tmp_path: Path) -> None:
     assert profiles["default"]["fallback_priority"] == 7
 
 
+def test_save_model_profile_preserves_existing_fallback_settings_when_omitted(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "default": {
+                    "provider": "openai_compatible",
+                    "model": "gpt-4o-mini",
+                    "base_url": "https://example.test/v1",
+                    "fallback_policy_id": "same_provider_then_other_provider",
+                    "fallback_priority": 7,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager.save_model_profile(
+        "default",
+        {
+            "provider": "openai_compatible",
+            "model": "gpt-4.1",
+            "base_url": "https://example.test/v1",
+            "temperature": 0.2,
+            "top_p": 1.0,
+        },
+    )
+
+    profiles = manager.get_model_profiles()
+    saved_payload = json.loads(model_file.read_text(encoding="utf-8"))
+
+    assert profiles["default"]["fallback_policy_id"] == (
+        "same_provider_then_other_provider"
+    )
+    assert profiles["default"]["fallback_priority"] == 7
+    assert saved_payload["default"]["fallback_policy_id"] == (
+        "same_provider_then_other_provider"
+    )
+    assert saved_payload["default"]["fallback_priority"] == 7
+
+
 def test_get_model_profiles_infers_known_context_window_when_missing(
     tmp_path: Path,
 ) -> None:
