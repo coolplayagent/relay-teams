@@ -10,6 +10,7 @@ tools:
 - glob
 - grep
 - read
+- notebook_edit
 - shell
 - list_background_tasks
 - wait_background_task

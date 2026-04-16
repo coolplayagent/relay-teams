@@ -419,6 +419,10 @@ def apply_edit(
         raise ValueError(f"File not found: {file_path}")
     if path_is_dir(file_path):
         raise ValueError(f"Path is a directory: {file_path}")
+    if file_path.suffix.lower() == ".ipynb":
+        raise ValueError(
+            "File is a Jupyter notebook. Use notebook_edit to modify notebook cells."
+        )
 
     old_content = read_text_preserve_line_endings(file_path)
     ending = detect_line_ending(old_content)
