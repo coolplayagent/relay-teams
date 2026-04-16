@@ -147,16 +147,7 @@ def create_provider_factory(
             )
         profile_fallback_middleware: (
             LlmFallbackMiddleware | DisabledLlmFallbackMiddleware
-        )
-        if (
-            session_id is not None
-            and session_model_profile_lookup is not None
-            and session_override is not None
-        ):
-            profile_name_to_use = None
-            profile_fallback_middleware = DisabledLlmFallbackMiddleware()
-        else:
-            profile_fallback_middleware = fallback_middleware
+        ) = fallback_middleware
 
         provider_registry = create_default_provider_registry(
             openai_compatible_builder=lambda config: OpenAICompatibleProvider(

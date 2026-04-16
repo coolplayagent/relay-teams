@@ -818,6 +818,86 @@ async def test_maybe_fallback_after_retry_exhausted_switches_profile() -> None:
 
 
 @pytest.mark.asyncio
+async def test_maybe_fallback_after_non_retryable_quota_error_switches_profile() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    primary_config = ModelEndpointConfig(
+        model="primary-model",
+        base_url="https://example.test/v1",
+        api_key="primary-key",
+        fallback_policy_id="same_provider_then_other_provider",
+    )
+    fallback_config = ModelEndpointConfig(
+        model="fallback-model",
+        base_url="https://fallback.test/v1",
+        api_key="fallback-key",
+        fallback_priority=10,
+    )
+    session.__dict__["_config"] = primary_config
+    session.__dict__["_profile_name"] = "primary"
+    session.__dict__["_retry_config"] = LlmRetryConfig(max_retries=3)
+
+    class _FallbackMiddleware:
+        def has_enabled_policy(self, config: ModelEndpointConfig) -> bool:
+            return config.fallback_policy_id == "same_provider_then_other_provider"
+
+        def select_fallback(self, **kwargs: object) -> LlmFallbackDecision:
+            _ = kwargs
+            return LlmFallbackDecision(
+                policy_id="same_provider_then_other_provider",
+                from_profile_name="primary",
+                to_profile_name="secondary",
+                from_provider=primary_config.provider,
+                to_provider=fallback_config.provider,
+                from_model=primary_config.model,
+                to_model=fallback_config.model,
+                hop=1,
+                reason="insufficient_quota",
+                cooldown_until=datetime.now(UTC),
+                target_config=fallback_config,
+            )
+
+    session.__dict__["_fallback_middleware"] = _FallbackMiddleware()
+    session.__dict__["_handle_fallback_activated"] = lambda **kwargs: None
+    session.__dict__["_handle_fallback_exhausted"] = lambda **kwargs: None
+
+    class _FallbackSession:
+        async def _generate_async(
+            self,
+            request: LLMRequest,
+            **kwargs: object,
+        ) -> str:
+            _ = (request, kwargs)
+            return "fallback-response"
+
+    session.__dict__["_clone_with_config"] = lambda **kwargs: _FallbackSession()
+
+    result = await AgentLlmSession._maybe_fallback_after_retry_exhausted(
+        session,
+        request=_build_request(),
+        retry_number=0,
+        total_attempts=4,
+        retry_error=LlmRetryErrorInfo(
+            message="quota exceeded",
+            status_code=400,
+            error_code="insufficient_quota",
+            retryable=False,
+            rate_limited=True,
+        ),
+        fallback_state=_FallbackAttemptState.initial("primary"),
+        attempt_text_emitted=False,
+        attempt_tool_call_event_emitted=False,
+        attempt_tool_outcome_event_emitted=False,
+        attempt_messages_committed=False,
+        skip_initial_user_prompt_persist=False,
+    )
+
+    assert result.response == "fallback-response"
+    assert result.status == _FallbackAttemptStatus.RECOVERED
+
+
+@pytest.mark.asyncio
 async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhausted() -> (
     None
 ):

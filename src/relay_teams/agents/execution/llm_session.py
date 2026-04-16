@@ -1725,11 +1725,14 @@ class AgentLlmSession:
         attempt_tool_outcome_event_emitted: bool,
         attempt_messages_committed: bool,
     ) -> bool:
+        retries_exhausted = (
+            not self._retry_config.enabled
+            or not retry_error.retryable
+            or retry_number >= self._retry_config.max_retries
+        )
         return (
-            retry_error.retryable
-            and retry_error.rate_limited
-            and self._retry_config.enabled
-            and retry_number >= self._retry_config.max_retries
+            retry_error.rate_limited
+            and retries_exhausted
             and not attempt_text_emitted
             and not attempt_tool_call_event_emitted
             and not attempt_tool_outcome_event_emitted

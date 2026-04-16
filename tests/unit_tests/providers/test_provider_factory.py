@@ -21,6 +21,7 @@ from relay_teams.providers.provider_contracts import (
     MisconfiguredProvider,
 )
 from relay_teams.providers.model_config import ModelEndpointConfig, ProviderType
+from relay_teams.providers.model_fallback import LlmFallbackMiddleware
 from relay_teams.providers.provider_factory import create_provider_factory
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
@@ -129,9 +130,11 @@ def _build_factory(
         background_task_service=None,
         workspace_manager=cast(WorkspaceManager, object()),
         media_asset_service=cast(MediaAssetService, object()),
-        tool_registry=cast(ToolRegistry, object()),
-        mcp_registry=cast(McpRegistry, object()),
-        skill_registry=cast(SkillRegistry, object()),
+        tool_registry=ToolRegistry({}),
+        mcp_registry=McpRegistry(),
+        skill_registry=SkillRegistry(
+            directory=SkillsDirectory(base_dir=Path.cwd() / ".missing-skills")
+        ),
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
         role_registry=cast(RoleRegistry, object()),
@@ -277,9 +280,11 @@ def test_create_provider_factory_uses_session_override_for_default_profile(
         background_task_service=None,
         workspace_manager=cast(WorkspaceManager, object()),
         media_asset_service=cast(MediaAssetService, object()),
-        tool_registry=cast(ToolRegistry, object()),
-        mcp_registry=cast(McpRegistry, object()),
-        skill_registry=cast(SkillRegistry, object()),
+        tool_registry=ToolRegistry({}),
+        mcp_registry=McpRegistry(),
+        skill_registry=SkillRegistry(
+            directory=SkillsDirectory(base_dir=Path.cwd() / ".missing-skills")
+        ),
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
         role_registry=cast(RoleRegistry, object()),
@@ -299,6 +304,80 @@ def test_create_provider_factory_uses_session_override_for_default_profile(
 
     assert isinstance(provider, EchoProvider)
     assert provider_registry.created_config is override_config
+
+
+def test_create_provider_factory_keeps_fallback_middleware_for_session_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    default_config = ModelEndpointConfig(
+        provider=ProviderType.OPENAI_COMPATIBLE,
+        model="default-model",
+        base_url="https://default.example/v1",
+        api_key="default-key",
+        fallback_policy_id="same_provider_then_other_provider",
+    )
+    override_config = ModelEndpointConfig(
+        provider=ProviderType.OPENAI_COMPATIBLE,
+        model="override-model",
+        base_url="https://override.example/v1",
+        api_key="override-key",
+        fallback_policy_id="same_provider_then_other_provider",
+    )
+    monkeypatch.setattr(
+        runtime_factory_module,
+        "OpenAICompatibleProvider",
+        _CapturingOpenAICompatibleProvider,
+    )
+    monkeypatch.setattr(
+        runtime_factory_module,
+        "create_default_provider_registry",
+        lambda **kwargs: _BuilderCallingProviderRegistry(
+            kwargs["openai_compatible_builder"]
+        ),
+    )
+    factory = create_provider_factory(
+        runtime=_build_runtime(
+            profiles={"default": default_config},
+            default_model_profile="default",
+        ),
+        task_repo=cast(TaskRepository, object()),
+        shared_store=cast(SharedStateRepository, object()),
+        event_log=cast(EventLog, object()),
+        injection_manager=cast(RunInjectionManager, object()),
+        run_event_hub=cast(RunEventHub, object()),
+        agent_repo=cast(AgentInstanceRepository, object()),
+        approval_ticket_repo=cast(ApprovalTicketRepository, object()),
+        run_runtime_repo=cast(RunRuntimeRepository, object()),
+        run_intent_repo=cast(RunIntentRepository, object()),
+        background_task_service=None,
+        workspace_manager=cast(WorkspaceManager, object()),
+        media_asset_service=cast(MediaAssetService, object()),
+        tool_registry=ToolRegistry({}),
+        mcp_registry=McpRegistry(),
+        skill_registry=SkillRegistry(
+            directory=SkillsDirectory(base_dir=Path.cwd() / ".missing-skills")
+        ),
+        message_repo=cast(MessageRepository, object()),
+        session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
+        role_registry=cast(RoleRegistry, object()),
+        get_task_service=lambda: cast(TaskOrchestrationService, object()),
+        run_control_manager=cast(RunControlManager, object()),
+        tool_approval_manager=cast(ToolApprovalManager, object()),
+        tool_approval_policy=cast(ToolApprovalPolicy, object()),
+        notification_service=cast(NotificationService | None, None),
+        get_task_execution_service=lambda: cast(TaskExecutionService, object()),
+        token_usage_repo=cast(TokenUsageRepository | None, None),
+        external_agent_session_manager=None,
+        session_model_profile_lookup=lambda session_id: (
+            override_config if session_id == "session-1" else None
+        ),
+    )
+
+    provider = factory(_build_role(model_profile="default"), "session-1")
+
+    assert isinstance(provider, _CapturingOpenAICompatibleProvider)
+    assert provider.kwargs["profile_name"] == "default"
+    assert isinstance(provider.kwargs["fallback_middleware"], LlmFallbackMiddleware)
 
 
 @pytest.mark.asyncio
