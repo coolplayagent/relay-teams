@@ -144,7 +144,7 @@ def test_windows_runtime_launch_app_records_real_command(
 ) -> None:
     runtime = WindowsDesktopRuntime(project_root=tmp_path)
     spawned_commands: list[list[str]] = []
-    activated_titles: list[str] = []
+    activated_window_ids: list[str] = []
     matched_window = ComputerWindow(
         window_id="0x20",
         app_name="Calculator",
@@ -183,8 +183,8 @@ def test_windows_runtime_launch_app_records_real_command(
         assert allow_existing_matches is False
         return matched_window
 
-    def fake_activate_window(window_title: str) -> None:
-        activated_titles.append(window_title)
+    def fake_activate_window(window_id: str) -> None:
+        activated_window_ids.append(window_id)
 
     def fake_build_observation(
         *,
@@ -206,7 +206,7 @@ def test_windows_runtime_launch_app_records_real_command(
     result = asyncio.run(runtime.launch_app(app_name="Calculator"))
 
     assert spawned_commands == [["calc.exe"]]
-    assert activated_titles == ["Calculator"]
+    assert activated_window_ids == ["0x20"]
     assert result.observation is not None
     assert result.observation.focused_window == "Calculator"
     assert result.action.target.app_name == "Calculator"
@@ -306,6 +306,19 @@ def test_windows_runtime_build_launch_window_queries_normalizes_path_command(
         "app.exe",
         "app",
     )
+
+
+def test_windows_runtime_build_list_windows_script_uses_hwnd_enumeration(
+    tmp_path: Path,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    script = runtime._build_list_windows_script()
+
+    assert "EnumWindows" in script
+    assert "GetWindowThreadProcessId" in script
+    assert "GetWindowTextLength" in script
+    assert "MainWindowHandle" not in script
 
 
 def test_windows_runtime_wait_for_window_match_ignores_existing_launch_match(

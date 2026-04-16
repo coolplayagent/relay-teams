@@ -64,6 +64,7 @@ _VK_BACK = 0x08
 _VK_LWIN = 0x5B
 _SM_XVIRTUALSCREEN = 76
 _SM_YVIRTUALSCREEN = 77
+_SW_RESTORE = 9
 
 _PROCESS_CREATION_FLAGS = getattr(
     subprocess,
@@ -257,7 +258,7 @@ class WindowsDesktopRuntime:
 
     def _focus_window_sync(self, window_title: str) -> ComputerActionResult:
         matched_window = self._find_window(window_title)
-        self._activate_window(matched_window.title)
+        self._activate_window(matched_window.window_id)
         self._sleep(_WINDOW_ACTIVATE_DELAY_SECONDS)
         observation = self._build_observation(
             require_windows=True,
@@ -402,7 +403,7 @@ class WindowsDesktopRuntime:
         )
         if matched_window is None:
             raise RuntimeError(f"App window did not appear within timeout: {app_name}")
-        self._activate_window(matched_window.title)
+        self._activate_window(matched_window.window_id)
         self._sleep(_WINDOW_ACTIVATE_DELAY_SECONDS)
         observation = self._build_observation(
             require_windows=True,
@@ -683,25 +684,62 @@ class WindowsDesktopRuntime:
             [
                 "Add-Type @'",
                 "using System;",
+                "using System.Collections.Generic;",
                 "using System.Runtime.InteropServices;",
+                "using System.Text;",
                 "public static class RelayTeamsWin32 {",
+                "    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);",
+                '    [DllImport("user32.dll")]',
+                "    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);",
                 '    [DllImport("user32.dll")]',
                 "    public static extern IntPtr GetForegroundWindow();",
+                '    [DllImport("user32.dll")]',
+                "    public static extern bool IsWindowVisible(IntPtr hWnd);",
+                '    [DllImport("user32.dll", CharSet = CharSet.Unicode)]',
+                "    public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);",
+                '    [DllImport("user32.dll", CharSet = CharSet.Unicode)]',
+                "    public static extern int GetWindowTextLength(IntPtr hWnd);",
+                '    [DllImport("user32.dll")]',
+                "    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);",
                 "}",
                 "'@",
                 "$foreground = [int64][RelayTeamsWin32]::GetForegroundWindow()",
-                (
-                    "$windows = Get-Process | Where-Object { "
-                    "$_.MainWindowHandle -ne 0 -and $_.MainWindowTitle "
-                    "} | Sort-Object Id | ForEach-Object {"
-                ),
-                "    [pscustomobject]@{",
-                "        window_id = ('0x{0:x}' -f [int64]$_.MainWindowHandle)",
-                "        app_name = $_.ProcessName",
-                "        title = $_.MainWindowTitle",
-                "        focused = ([int64]$_.MainWindowHandle -eq $foreground)",
+                "$windows = New-Object 'System.Collections.Generic.List[object]'",
+                "$callback = [RelayTeamsWin32+EnumWindowsProc] {",
+                "    param([IntPtr]$hWnd, [IntPtr]$lParam)",
+                "    if (-not [RelayTeamsWin32]::IsWindowVisible($hWnd)) {",
+                "        return $true",
                 "    }",
+                "    $length = [RelayTeamsWin32]::GetWindowTextLength($hWnd)",
+                "    if ($length -le 0) {",
+                "        return $true",
+                "    }",
+                "    $builder = New-Object System.Text.StringBuilder ($length + 1)",
+                "    [void][RelayTeamsWin32]::GetWindowText($hWnd, $builder, $builder.Capacity)",
+                "    $title = $builder.ToString()",
+                "    if ([string]::IsNullOrWhiteSpace($title)) {",
+                "        return $true",
+                "    }",
+                "    $processId = [uint32]0",
+                "    [void][RelayTeamsWin32]::GetWindowThreadProcessId($hWnd, [ref]$processId)",
+                "    $processName = ''",
+                "    if ($processId -ne 0) {",
+                "        try {",
+                "            $processName = (Get-Process -Id $processId -ErrorAction Stop).ProcessName",
+                "        } catch {",
+                "            $processName = ''",
+                "        }",
+                "    }",
+                "    $windows.Add([pscustomobject]@{",
+                "        window_id = ('0x{0:x}' -f [int64]$hWnd)",
+                "        app_name = $processName",
+                "        title = $title",
+                "        focused = ([int64]$hWnd -eq $foreground)",
+                "    })",
+                "    return $true",
                 "}",
+                "[void][RelayTeamsWin32]::EnumWindows($callback, [IntPtr]::Zero)",
+                "$windows = $windows | Sort-Object window_id",
                 "$windows | ConvertTo-Json -Depth 3 -Compress",
             ]
         )
@@ -814,18 +852,30 @@ class WindowsDesktopRuntime:
             or normalized_query in window.app_name.casefold()
         )
 
-    def _activate_window(self, window_title: str) -> None:
-        literal_title = self._powershell_literal(window_title)
-        self._run_powershell(
-            "\n".join(
-                [
-                    "$wshell = New-Object -ComObject WScript.Shell",
-                    f"if (-not $wshell.AppActivate({literal_title})) {{",
-                    f"    throw {self._powershell_literal(f'Window not found: {window_title}')}",
-                    "}",
-                ]
-            )
-        )
+    def _activate_window(self, window_id: str) -> None:
+        handle = self._parse_window_id(window_id)
+        user32 = self._load_user32()
+        user32.IsWindow.argtypes = (wintypes.HWND,)
+        user32.IsWindow.restype = wintypes.BOOL
+        user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
+        user32.ShowWindow.restype = wintypes.BOOL
+        user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+        if not user32.IsWindow(handle):
+            raise RuntimeError(f"Window not found: {window_id}")
+        user32.ShowWindow(handle, _SW_RESTORE)
+        if not user32.SetForegroundWindow(handle):
+            raise RuntimeError(f"Windows desktop activation failed: {window_id}")
+
+    def _parse_window_id(self, window_id: str) -> wintypes.HWND:
+        normalized = window_id.strip()
+        if not normalized:
+            raise ValueError("window_id is required")
+        try:
+            handle_value = int(normalized, 16)
+        except ValueError as exc:
+            raise ValueError(f"Unsupported window_id: {window_id}") from exc
+        return wintypes.HWND(handle_value)
 
     def _resolve_launch_command(self, app_name: str) -> list[str]:
         normalized = app_name.strip()
