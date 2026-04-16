@@ -535,6 +535,11 @@ class RunManager:
                 active_run_id in self._running_run_ids
                 or self._injection_manager.is_active(active_run_id)
             ):
+                self._update_run_yolo(
+                    run_id=active_run_id,
+                    session_id=session_id,
+                    yolo=intent.yolo,
+                )
                 self._append_followup_to_coordinator(
                     active_run_id,
                     intent.intent,

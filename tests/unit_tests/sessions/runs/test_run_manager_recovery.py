@@ -264,6 +264,52 @@ def test_create_run_injects_into_active_run(tmp_path: Path) -> None:
     assert queued[0].content == "follow up"
 
 
+def test_create_run_updates_active_run_yolo(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_active_yolo.db"
+    manager = _build_manager(db_path)
+    _upsert_coordinator(AgentInstanceRepository(db_path))
+    _create_root_task(TaskRepository(db_path))
+    existing_intent = IntentInput(
+        session_id="session-1",
+        input=content_parts_from_text("initial"),
+        yolo=False,
+    )
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    RunIntentRepository(db_path).upsert(
+        run_id="run-existing",
+        session_id="session-1",
+        intent=existing_intent,
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+    manager._running_run_ids.add("run-existing")
+    manager._injection_manager.activate("run-existing")
+
+    run_id, session_id = manager.create_run(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("follow up"),
+            yolo=True,
+        )
+    )
+
+    persisted = RunIntentRepository(db_path).get("run-existing")
+    assert run_id == "run-existing"
+    assert session_id == "session-1"
+    assert persisted.yolo is True
+    queued = manager._injection_manager.drain_at_boundary("run-existing", "inst-1")
+    assert len(queued) == 1
+    assert queued[0].content == "follow up"
+
+
 def test_background_task_completion_enqueues_to_running_origin_instance(
     tmp_path: Path,
 ) -> None:
