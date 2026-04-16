@@ -378,6 +378,10 @@ def test_create_provider_factory_keeps_fallback_middleware_for_session_override(
     assert isinstance(provider, _CapturingOpenAICompatibleProvider)
     assert provider.kwargs["profile_name"] == "default"
     assert isinstance(provider.kwargs["fallback_middleware"], LlmFallbackMiddleware)
+    fallback_middleware = cast(
+        LlmFallbackMiddleware, provider.kwargs["fallback_middleware"]
+    )
+    assert fallback_middleware._get_profiles()["default"] is override_config
 
 
 @pytest.mark.asyncio

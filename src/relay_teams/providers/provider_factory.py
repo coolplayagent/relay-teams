@@ -26,6 +26,7 @@ from relay_teams.providers.model_config import ModelEndpointConfig
 from relay_teams.providers.model_fallback import (
     DisabledLlmFallbackMiddleware,
     LlmFallbackMiddleware,
+    ProfileCooldownRegistry,
 )
 from relay_teams.providers.openai_compatible import OpenAICompatibleProvider
 from relay_teams.providers.provider_registry import create_default_provider_registry
@@ -102,10 +103,20 @@ def create_provider_factory(
     session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
     | None = None,
 ) -> Callable[[RoleDefinition, str | None], LLMProvider]:
-    fallback_middleware = LlmFallbackMiddleware(
-        get_fallback_config=lambda: runtime.model_fallback,
-        get_profiles=lambda: runtime.llm_profiles,
-    )
+    fallback_cooldown_registry = ProfileCooldownRegistry()
+
+    def build_fallback_middleware(
+        runtime_to_use: RuntimeConfig,
+    ) -> LlmFallbackMiddleware:
+        return LlmFallbackMiddleware(
+            get_fallback_config=lambda runtime_to_use=runtime_to_use: (
+                runtime_to_use.model_fallback
+            ),
+            get_profiles=lambda runtime_to_use=runtime_to_use: (
+                runtime_to_use.llm_profiles
+            ),
+            cooldown_registry=fallback_cooldown_registry,
+        )
 
     def provider_factory(
         role: RoleDefinition, session_id: str | None = None
@@ -147,7 +158,7 @@ def create_provider_factory(
             )
         profile_fallback_middleware: (
             LlmFallbackMiddleware | DisabledLlmFallbackMiddleware
-        ) = fallback_middleware
+        ) = build_fallback_middleware(runtime_to_use)
 
         provider_registry = create_default_provider_registry(
             openai_compatible_builder=lambda config: OpenAICompatibleProvider(
