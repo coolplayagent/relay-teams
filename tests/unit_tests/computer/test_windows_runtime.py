@@ -28,9 +28,25 @@ def test_windows_runtime_capture_screen_reads_generated_png(
     def fake_capture_screenshot_bytes(
         *,
         required: bool,
-    ) -> tuple[bytes | None, str, str | None, int | None, int | None]:
+    ) -> tuple[
+        bytes | None,
+        str,
+        str | None,
+        int | None,
+        int | None,
+        int | None,
+        int | None,
+    ]:
         assert required is True
-        return (b"\x89PNG\r\n\x1a\nwindows", "desktop.png", "image/png", 1440, 900)
+        return (
+            b"\x89PNG\r\n\x1a\nwindows",
+            "desktop.png",
+            "image/png",
+            -1920,
+            -40,
+            1440,
+            900,
+        )
 
     def fake_list_windows_snapshot(
         *,
@@ -52,9 +68,13 @@ def test_windows_runtime_capture_screen_reads_generated_png(
     assert result.observation is not None
     assert result.observation.screenshot_bytes == b"\x89PNG\r\n\x1a\nwindows"
     assert result.observation.screenshot_mime_type == "image/png"
+    assert result.observation.screenshot_origin_x == -1920
+    assert result.observation.screenshot_origin_y == -40
     assert result.observation.screenshot_width == 1440
     assert result.observation.screenshot_height == 900
     assert result.data["runtime_mode"] == "windows"
+    assert result.data["virtual_screen_origin_x"] == -1920
+    assert result.data["virtual_screen_origin_y"] == -40
 
 
 def test_windows_runtime_list_windows_marks_active_window(
@@ -89,7 +109,15 @@ def test_windows_runtime_list_windows_marks_active_window(
     def fail_capture_screenshot_bytes(
         *,
         required: bool,
-    ) -> tuple[bytes | None, str, str | None, int | None, int | None]:
+    ) -> tuple[
+        bytes | None,
+        str,
+        str | None,
+        int | None,
+        int | None,
+        int | None,
+        int | None,
+    ]:
         raise AssertionError(f"unexpected screenshot capture: {required}")
 
     monkeypatch.setattr(

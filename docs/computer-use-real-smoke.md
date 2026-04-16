@@ -79,4 +79,5 @@ Keep the existing fake model server setup if you want a deterministic tool seque
 
 - The OS really launches Calculator instead of only appending a fake window entry.
 - The run timeline contains a real screenshot from the desktop session.
+- Windows screenshot observations include the virtual-screen origin so multi-monitor coordinate picks stay aligned with pointer actions.
 - The `launch_app` tool result includes `data.launched_command`, which shows the resolved executable used by the OS backend, such as `calc.exe` on Windows or `gnome-calculator` on Linux.

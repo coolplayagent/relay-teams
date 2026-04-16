@@ -230,6 +230,8 @@ class WindowsDesktopRuntime:
             data={
                 "window_count": len(observation.windows),
                 "runtime_mode": "windows",
+                "virtual_screen_origin_x": observation.screenshot_origin_x,
+                "virtual_screen_origin_y": observation.screenshot_origin_y,
             },
         )
 
@@ -509,6 +511,8 @@ class WindowsDesktopRuntime:
         screenshot_bytes: bytes | None = None
         screenshot_name = ""
         screenshot_mime_type: str | None = None
+        screenshot_origin_x: int | None = None
+        screenshot_origin_y: int | None = None
         screenshot_width: int | None = None
         screenshot_height: int | None = None
         if require_screenshot:
@@ -516,6 +520,8 @@ class WindowsDesktopRuntime:
                 screenshot_bytes,
                 screenshot_name,
                 screenshot_mime_type,
+                screenshot_origin_x,
+                screenshot_origin_y,
                 screenshot_width,
                 screenshot_height,
             ) = self._capture_screenshot_bytes(required=True)
@@ -534,6 +540,8 @@ class WindowsDesktopRuntime:
             screenshot_bytes=screenshot_bytes,
             screenshot_mime_type=screenshot_mime_type,
             screenshot_name=screenshot_name,
+            screenshot_origin_x=screenshot_origin_x,
+            screenshot_origin_y=screenshot_origin_y,
             screenshot_width=screenshot_width,
             screenshot_height=screenshot_height,
         )
@@ -542,7 +550,15 @@ class WindowsDesktopRuntime:
         self,
         *,
         required: bool,
-    ) -> tuple[bytes | None, str, str | None, int | None, int | None]:
+    ) -> tuple[
+        bytes | None,
+        str,
+        str | None,
+        int | None,
+        int | None,
+        int | None,
+        int | None,
+    ]:
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
             screenshot_path = Path(handle.name)
 
@@ -551,12 +567,16 @@ class WindowsDesktopRuntime:
                 self._build_capture_screenshot_script(screenshot_path)
             )
             if screenshot_path.exists() and screenshot_path.stat().st_size > 0:
+                origin_x = self._read_json_int(payload, "left")
+                origin_y = self._read_json_int(payload, "top")
                 width = self._read_json_int(payload, "width")
                 height = self._read_json_int(payload, "height")
                 return (
                     screenshot_path.read_bytes(),
                     screenshot_path.name,
                     "image/png",
+                    origin_x,
+                    origin_y,
                     width,
                     height,
                 )
@@ -568,7 +588,7 @@ class WindowsDesktopRuntime:
                 "Skipping Windows desktop screenshot because no screenshot was "
                 "produced."
             )
-            return None, "", None, None, None
+            return None, "", None, None, None, None, None
         except RuntimeError:
             if required:
                 raise
@@ -576,7 +596,7 @@ class WindowsDesktopRuntime:
                 "Skipping Windows desktop screenshot because screenshot capture "
                 "failed.",
             )
-            return None, "", None, None, None
+            return None, "", None, None, None, None, None
         finally:
             screenshot_path.unlink(missing_ok=True)
 
@@ -601,7 +621,12 @@ class WindowsDesktopRuntime:
                 "$graphics.Dispose()",
                 "$bitmap.Dispose()",
                 (
-                    "[pscustomobject]@{ width = $bounds.Width; height = $bounds.Height } "
+                    "[pscustomobject]@{ "
+                    "left = $bounds.Left; "
+                    "top = $bounds.Top; "
+                    "width = $bounds.Width; "
+                    "height = $bounds.Height "
+                    "} "
                     "| ConvertTo-Json -Compress"
                 ),
             ]
