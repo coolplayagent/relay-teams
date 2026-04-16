@@ -8,6 +8,7 @@ from pathlib import Path
 
 from relay_teams.providers.model_config import (
     ModelConfigPayload,
+    ModelFallbackConfig,
     ProviderModelInfo,
     ProviderType,
 )
@@ -19,6 +20,9 @@ from relay_teams.providers.model_connectivity import (
     ModelDiscoveryResult,
 )
 from relay_teams.providers.model_config_manager import ModelConfigManager
+from relay_teams.providers.model_fallback_config_manager import (
+    ModelFallbackConfigManager,
+)
 from relay_teams.providers.provider_registry import list_provider_models
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig, load_runtime_config
 
@@ -31,6 +35,7 @@ class ModelConfigService:
         roles_dir: Path,
         db_path: Path,
         model_config_manager: ModelConfigManager,
+        model_fallback_config_manager: ModelFallbackConfigManager,
         get_runtime: Callable[[], RuntimeConfig],
         on_runtime_reloaded: Callable[[RuntimeConfig], None],
     ) -> None:
@@ -38,6 +43,7 @@ class ModelConfigService:
         self._roles_dir: Path = roles_dir
         self._db_path: Path = db_path
         self._model_config_manager: ModelConfigManager = model_config_manager
+        self._model_fallback_config_manager = model_fallback_config_manager
         self._get_runtime: Callable[[], RuntimeConfig] = get_runtime
         self._on_runtime_reloaded: Callable[[RuntimeConfig], None] = on_runtime_reloaded
         self._model_connectivity_probe_service = ModelConnectivityProbeService(
@@ -54,6 +60,9 @@ class ModelConfigService:
     def get_model_profiles(self) -> dict[str, dict[str, JsonValue]]:
         return self._model_config_manager.get_model_profiles()
 
+    def get_model_fallback_config(self) -> ModelFallbackConfig:
+        return self._model_fallback_config_manager.get_model_fallback_config()
+
     def get_provider_models(
         self,
         *,
@@ -68,6 +77,7 @@ class ModelConfigService:
         *,
         source_name: str | None = None,
     ) -> None:
+        self._validate_profile_fallback_policy(profile)
         self._model_config_manager.save_model_profile(
             name,
             profile,
@@ -80,9 +90,15 @@ class ModelConfigService:
         self.reload_model_config()
 
     def save_model_config(self, config: ModelConfigPayload) -> None:
-        self._model_config_manager.save_model_config(
-            config.model_dump(mode="json", exclude_unset=True)
-        )
+        normalized_config = config.model_dump(mode="json", exclude_unset=True)
+        for profile in normalized_config.values():
+            if isinstance(profile, dict):
+                self._validate_profile_fallback_policy(profile)
+        self._model_config_manager.save_model_config(normalized_config)
+        self.reload_model_config()
+
+    def save_model_fallback_config(self, config: ModelFallbackConfig) -> None:
+        self._model_fallback_config_manager.save_model_fallback_config(config)
         self.reload_model_config()
 
     def probe_connectivity(
@@ -104,3 +120,16 @@ class ModelConfigService:
             db_path=self._db_path,
         )
         self._on_runtime_reloaded(runtime)
+
+    def _validate_profile_fallback_policy(
+        self,
+        profile: dict[str, JsonValue],
+    ) -> None:
+        raw_policy_id = profile.get("fallback_policy_id")
+        if raw_policy_id is None:
+            return
+        if not isinstance(raw_policy_id, str) or not raw_policy_id.strip():
+            raise ValueError("fallback_policy_id must be a non-empty string.")
+        fallback_config = self.get_model_fallback_config()
+        if fallback_config.get_policy(raw_policy_id) is None:
+            raise ValueError(f"Unknown fallback policy: {raw_policy_id}")

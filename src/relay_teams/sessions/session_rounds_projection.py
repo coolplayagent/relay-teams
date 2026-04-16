@@ -121,6 +121,7 @@ def build_session_rounds(
         if event_type == RunEventType.LLM_RETRY_SCHEDULED.value:
             payload = _parse_event_payload(event.get("payload_json"))
             active_retry_by_run[run_id] = {
+                "kind": "retry",
                 "occurred_at": str(event.get("occurred_at") or ""),
                 "instance_id": payload.get("instance_id", ""),
                 "role_id": payload.get("role_id", ""),
@@ -136,6 +137,7 @@ def build_session_rounds(
         if event_type == RunEventType.LLM_RETRY_EXHAUSTED.value:
             payload = _parse_event_payload(event.get("payload_json"))
             active_retry_by_run[run_id] = {
+                "kind": "retry",
                 "occurred_at": str(event.get("occurred_at") or ""),
                 "instance_id": payload.get("instance_id", ""),
                 "role_id": payload.get("role_id", ""),
@@ -146,6 +148,50 @@ def build_session_rounds(
                 "is_active": False,
                 "error_code": payload.get("error_code", ""),
                 "error_message": payload.get("error_message", ""),
+            }
+            continue
+        if event_type == RunEventType.LLM_FALLBACK_ACTIVATED.value:
+            payload = _parse_event_payload(event.get("payload_json"))
+            active_retry_by_run[run_id] = {
+                "kind": "fallback",
+                "occurred_at": str(event.get("occurred_at") or ""),
+                "instance_id": payload.get("instance_id", ""),
+                "role_id": payload.get("role_id", ""),
+                "attempt_number": payload.get("attempt_number", 0),
+                "total_attempts": payload.get("total_attempts", 0),
+                "retry_in_ms": 0,
+                "phase": "activated",
+                "is_active": False,
+                "error_code": payload.get("reason", ""),
+                "error_message": "",
+                "from_profile_id": payload.get("from_profile_id", ""),
+                "to_profile_id": payload.get("to_profile_id", ""),
+                "from_provider": payload.get("from_provider", ""),
+                "to_provider": payload.get("to_provider", ""),
+                "from_model": payload.get("from_model", ""),
+                "to_model": payload.get("to_model", ""),
+                "hop": payload.get("hop", 0),
+                "strategy_id": payload.get("strategy_id", ""),
+            }
+            continue
+        if event_type == RunEventType.LLM_FALLBACK_EXHAUSTED.value:
+            payload = _parse_event_payload(event.get("payload_json"))
+            active_retry_by_run[run_id] = {
+                "kind": "fallback",
+                "occurred_at": str(event.get("occurred_at") or ""),
+                "instance_id": payload.get("instance_id", ""),
+                "role_id": payload.get("role_id", ""),
+                "attempt_number": payload.get("attempt_number", 0),
+                "total_attempts": payload.get("total_attempts", 0),
+                "retry_in_ms": 0,
+                "phase": "failed",
+                "is_active": False,
+                "error_code": payload.get("error_code", ""),
+                "error_message": payload.get("error_message", ""),
+                "from_profile_id": payload.get("from_profile_id", ""),
+                "from_provider": payload.get("from_provider", ""),
+                "from_model": payload.get("from_model", ""),
+                "hop": payload.get("hop", 0),
             }
             continue
         if event_type == RunEventType.RUN_COMPLETED.value:
@@ -166,8 +212,14 @@ def build_session_rounds(
                 microcompact_by_run[run_id] = projected_microcompact
             elif _payload_reports_microcompact_state(payload):
                 microcompact_by_run.pop(run_id, None)
-        if event_type in retry_clear_events:
+        active_event = active_retry_by_run.get(run_id)
+        if (
+            active_event is not None
+            and active_event.get("kind") == "retry"
+            and event_type in retry_clear_events
+        ):
             active_retry_by_run.pop(run_id, None)
+            continue
     for run_id, retry_event in active_retry_by_run.items():
         retry_events_by_run[run_id] = [retry_event]
 

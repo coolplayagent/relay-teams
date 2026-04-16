@@ -140,6 +140,7 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
     session_history_marker_repo = SessionHistoryMarkerRepository(db_path)
     return OpenAICompatibleProvider(
         config,
+        profile_name=None,
         task_repo=cast(TaskRepository, cast(object, _FakeTaskRepository())),
         shared_store=shared_store,
         event_bus=cast(EventLog, cast(object, _FakeEventLog())),

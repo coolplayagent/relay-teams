@@ -23,6 +23,10 @@ from relay_teams.providers.provider_contracts import (
     MisconfiguredProvider,
 )
 from relay_teams.providers.model_config import ModelEndpointConfig
+from relay_teams.providers.model_fallback import (
+    DisabledLlmFallbackMiddleware,
+    LlmFallbackMiddleware,
+)
 from relay_teams.providers.openai_compatible import OpenAICompatibleProvider
 from relay_teams.providers.provider_registry import create_default_provider_registry
 from relay_teams.roles.memory_service import RoleMemoryService
@@ -98,6 +102,11 @@ def create_provider_factory(
     session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
     | None = None,
 ) -> Callable[[RoleDefinition, str | None], LLMProvider]:
+    fallback_middleware = LlmFallbackMiddleware(
+        get_fallback_config=lambda: runtime.model_fallback,
+        get_profiles=lambda: runtime.llm_profiles,
+    )
+
     def provider_factory(
         role: RoleDefinition, session_id: str | None = None
     ) -> LLMProvider:
@@ -112,15 +121,21 @@ def create_provider_factory(
                 session_manager=external_agent_session_manager,
             )
         runtime_to_use = runtime
+        session_override: ModelEndpointConfig | None = None
         if (
             session_id is not None
             and session_model_profile_lookup is not None
-            and (override := session_model_profile_lookup(session_id)) is not None
+            and (session_override := session_model_profile_lookup(session_id))
+            is not None
         ):
             runtime_to_use = apply_default_model_profile_override(
-                runtime=runtime, override=override
+                runtime=runtime, override=session_override
             )
         config_to_use = resolve_model_profile_config(
+            runtime=runtime_to_use,
+            profile_name=role.model_profile,
+        )
+        profile_name_to_use = resolve_model_profile_name(
             runtime=runtime_to_use,
             profile_name=role.model_profile,
         )
@@ -130,10 +145,23 @@ def create_provider_factory(
                 "Configure at least one profile in "
                 f"{format_app_config_file_reference('model.json', config_dir=runtime_to_use.paths.config_dir)}."
             )
+        profile_fallback_middleware: (
+            LlmFallbackMiddleware | DisabledLlmFallbackMiddleware
+        )
+        if (
+            session_id is not None
+            and session_model_profile_lookup is not None
+            and session_override is not None
+        ):
+            profile_name_to_use = None
+            profile_fallback_middleware = DisabledLlmFallbackMiddleware()
+        else:
+            profile_fallback_middleware = fallback_middleware
 
         provider_registry = create_default_provider_registry(
             openai_compatible_builder=lambda config: OpenAICompatibleProvider(
                 config,
+                profile_name=profile_name_to_use,
                 task_repo=task_repo,
                 shared_store=shared_store,
                 event_bus=event_log,
@@ -182,6 +210,7 @@ def create_provider_factory(
                 token_usage_repo=token_usage_repo,
                 metric_recorder=metric_recorder,
                 retry_config=runtime_to_use.llm_retry,
+                fallback_middleware=profile_fallback_middleware,
                 im_tool_service=im_tool_service,
             ),
         )
@@ -229,3 +258,16 @@ def resolve_model_profile_config(
     if runtime.default_model_profile is None:
         return None
     return runtime.llm_profiles.get(runtime.default_model_profile)
+
+
+def resolve_model_profile_name(
+    *,
+    runtime: RuntimeConfig,
+    profile_name: str,
+) -> str | None:
+    normalized_name = profile_name.strip()
+    if normalized_name == "default":
+        return runtime.default_model_profile
+    if normalized_name in runtime.llm_profiles:
+        return normalized_name
+    return runtime.default_model_profile

@@ -57,6 +57,8 @@ def test_save_model_profile_and_get_model_profiles(tmp_path: Path) -> None:
     assert profiles["default"]["temperature"] == 0.25
     assert profiles["default"]["max_tokens"] == 2000
     assert profiles["default"]["context_window"] == 128000
+    assert profiles["default"]["fallback_policy_id"] is None
+    assert profiles["default"]["fallback_priority"] == 0
     assert profiles["default"]["connect_timeout_seconds"] == 45.0
     model_payload = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
     assert "api_key" not in model_payload["default"]
@@ -187,6 +189,33 @@ def test_get_model_profiles_uses_default_connect_timeout_when_missing(
         == DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS
     )
     assert profiles["default"]["max_tokens"] is None
+
+
+def test_get_model_profiles_returns_fallback_settings(tmp_path: Path) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "default": {
+                    "provider": "openai_compatible",
+                    "model": "gpt-4o-mini",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "secret-key",
+                    "fallback_policy_id": "same_provider_then_other_provider",
+                    "fallback_priority": 7,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = manager.get_model_profiles()
+
+    assert profiles["default"]["fallback_policy_id"] == (
+        "same_provider_then_other_provider"
+    )
+    assert profiles["default"]["fallback_priority"] == 7
 
 
 def test_get_model_profiles_infers_known_context_window_when_missing(

@@ -7,6 +7,8 @@ import { scheduleSessionTokenUsageRefresh } from '../../components/sessionTokenU
 import { state } from '../state.js';
 import { sysLog } from '../../utils/logger.js';
 import {
+    handleLlmFallbackActivated,
+    handleLlmFallbackExhausted,
     handleLlmRetryExhausted,
     handleLlmRetryScheduled,
     handleModelStepFinished,
@@ -116,6 +118,10 @@ export function routeEvent(evType, payload, eventMeta) {
         handleLlmRetryScheduled(payload, eventMeta);
     } else if (evType === 'llm_retry_exhausted') {
         handleLlmRetryExhausted(payload, eventMeta);
+    } else if (evType === 'llm_fallback_activated') {
+        handleLlmFallbackActivated(payload, eventMeta);
+    } else if (evType === 'llm_fallback_exhausted') {
+        handleLlmFallbackExhausted(payload, eventMeta);
     } else if (evType === 'text_delta') {
         handleTextDelta(payload, eventMeta, instanceId, roleId);
     } else if (evType === 'output_delta') {
@@ -214,6 +220,8 @@ function scheduleContinuityRefreshForEvent(evType) {
     if (
         evType === 'llm_retry_scheduled'
         || evType === 'llm_retry_exhausted'
+        || evType === 'llm_fallback_activated'
+        || evType === 'llm_fallback_exhausted'
         || evType === 'tool_result'
         || evType === 'output_delta'
         || evType === 'generation_progress'

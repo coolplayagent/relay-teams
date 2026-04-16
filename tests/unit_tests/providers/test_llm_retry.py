@@ -48,6 +48,7 @@ def test_extract_retry_error_info_reads_status_code_and_retry_after() -> None:
     assert info.status_code == 429
     assert info.error_code == "rate_limited"
     assert info.retry_after_ms == 7000
+    assert info.rate_limited is True
 
 
 def test_extract_retry_error_info_reads_provider_code_without_status() -> None:
@@ -65,6 +66,7 @@ def test_extract_retry_error_info_reads_provider_code_without_status() -> None:
     assert info.error_code == "2062"
     assert info.message == "busy"
     assert info.retryable is False
+    assert info.rate_limited is False
 
 
 def test_extract_retry_error_info_marks_408_and_409_as_retryable() -> None:

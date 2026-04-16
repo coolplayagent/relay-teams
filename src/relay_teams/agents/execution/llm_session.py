@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 import asyncio
 import json
@@ -43,6 +43,11 @@ from relay_teams.providers.llm_retry import (
     extract_retry_error_info,
 )
 from relay_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
+from relay_teams.providers.model_fallback import (
+    DisabledLlmFallbackMiddleware,
+    LlmFallbackDecision,
+    LlmFallbackMiddleware,
+)
 from relay_teams.providers.openai_model_profiles import (
     resolve_openai_chat_model_profile,
 )
@@ -175,6 +180,31 @@ class _PreparedPromptContext(BaseModel):
     estimated_history_tokens_after_microcompact: int = 0
     microcompact_compacted_message_count: int = 0
     microcompact_compacted_part_count: int = 0
+
+
+class _FallbackAttemptState(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    hop: int = Field(default=0, ge=0)
+    visited_profiles: tuple[str, ...] = ()
+
+    @classmethod
+    def initial(cls, profile_name: str | None) -> "_FallbackAttemptState":
+        if profile_name is None or not profile_name.strip():
+            return cls()
+        return cls(visited_profiles=(profile_name.strip(),))
+
+    def with_profile(self, profile_name: str, *, hop: int) -> "_FallbackAttemptState":
+        normalized_name = profile_name.strip()
+        visited = list(self.visited_profiles)
+        if normalized_name and normalized_name not in visited:
+            visited.append(normalized_name)
+        return self.model_copy(
+            update={
+                "hop": hop,
+                "visited_profiles": tuple(visited),
+            }
+        )
 
 
 class _AgentRunResult(Protocol):
@@ -339,6 +369,7 @@ class AgentLlmSession:
         self,
         config: ModelEndpointConfig,
         *,
+        profile_name: str | None,
         task_repo: TaskRepository,
         shared_store: SharedStateRepository,
         event_bus: EventLog,
@@ -373,11 +404,19 @@ class AgentLlmSession:
         token_usage_repo: TokenUsageRepository | None = None,
         metric_recorder: MetricRecorder | None = None,
         retry_config: LlmRetryConfig | None = None,
+        fallback_middleware: LlmFallbackMiddleware
+        | DisabledLlmFallbackMiddleware
+        | None = None,
         im_tool_service: "ImToolService | None" = None,
         computer_runtime: "ComputerRuntime | None" = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
     ) -> None:
         self._config = config
+        self._profile_name = (
+            profile_name.strip()
+            if profile_name is not None and profile_name.strip()
+            else None
+        )
         self._task_repo = task_repo
         self._shared_store = shared_store
         self._event_bus = event_bus
@@ -412,6 +451,11 @@ class AgentLlmSession:
         self._token_usage_repo = token_usage_repo
         self._metric_recorder = metric_recorder
         self._retry_config = retry_config or LlmRetryConfig()
+        self._fallback_middleware = (
+            fallback_middleware
+            if fallback_middleware is not None
+            else DisabledLlmFallbackMiddleware()
+        )
         self._im_tool_service = im_tool_service
         self._computer_runtime = computer_runtime
         self._shell_approval_repo = shell_approval_repo
@@ -427,7 +471,13 @@ class AgentLlmSession:
         retry_number: int = 0,
         total_attempts: int | None = None,
         skip_initial_user_prompt_persist: bool = False,
+        fallback_state: _FallbackAttemptState | None = None,
     ) -> str:
+        resolved_fallback_state = (
+            _FallbackAttemptState.initial(getattr(self, "_profile_name", None))
+            if fallback_state is None
+            else fallback_state
+        )
         resolved_workspace_id = request.workspace_id
         resolved_conversation_id = request.conversation_id or build_conversation_id(
             request.session_id,
@@ -979,8 +1029,22 @@ class AgentLlmSession:
                     request,
                     retry_number=next_retry_number,
                     total_attempts=total_attempts,
+                    fallback_state=resolved_fallback_state,
                 )
             if retry_error is not None and retry_error.retryable:
+                recovered_with_fallback = await self._maybe_fallback_after_retry_exhausted(
+                    request=request,
+                    retry_number=retry_number,
+                    total_attempts=total_attempts,
+                    retry_error=retry_error,
+                    fallback_state=resolved_fallback_state,
+                    attempt_text_emitted=attempt_text_emitted or printed_any,
+                    attempt_tool_event_emitted=attempt_tool_event_emitted,
+                    attempt_messages_committed=attempt_messages_committed,
+                    skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
+                )
+                if recovered_with_fallback is not None:
+                    return recovered_with_fallback
                 if (
                     self._retry_config.enabled
                     and retry_number >= self._retry_config.max_retries
@@ -1053,6 +1117,7 @@ class AgentLlmSession:
                     request,
                     retry_number=next_retry_number,
                     total_attempts=total_attempts,
+                    fallback_state=resolved_fallback_state,
                 )
             if retry_error is not None:
                 log_event(
@@ -1068,6 +1133,19 @@ class AgentLlmSession:
                     },
                     exc_info=exc,
                 )
+                recovered_with_fallback = await self._maybe_fallback_after_retry_exhausted(
+                    request=request,
+                    retry_number=retry_number,
+                    total_attempts=total_attempts,
+                    retry_error=retry_error,
+                    fallback_state=resolved_fallback_state,
+                    attempt_text_emitted=attempt_text_emitted or printed_any,
+                    attempt_tool_event_emitted=attempt_tool_event_emitted,
+                    attempt_messages_committed=attempt_messages_committed,
+                    skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
+                )
+                if recovered_with_fallback is not None:
+                    return recovered_with_fallback
                 if retry_error.retryable and (
                     self._retry_config.enabled
                     and retry_number >= self._retry_config.max_retries
@@ -1246,6 +1324,158 @@ class AgentLlmSession:
         status_code = retry_error.status_code
         return status_code is not None and status_code >= 500
 
+    def _can_attempt_fallback(
+        self,
+        *,
+        retry_error: LlmRetryErrorInfo,
+        retry_number: int,
+        attempt_text_emitted: bool,
+        attempt_tool_event_emitted: bool,
+        attempt_messages_committed: bool,
+    ) -> bool:
+        return (
+            retry_error.retryable
+            and retry_error.rate_limited
+            and self._retry_config.enabled
+            and retry_number >= self._retry_config.max_retries
+            and not attempt_text_emitted
+            and not attempt_tool_event_emitted
+            and not attempt_messages_committed
+        )
+
+    async def _maybe_fallback_after_retry_exhausted(
+        self,
+        *,
+        request: LLMRequest,
+        retry_number: int,
+        total_attempts: int,
+        retry_error: LlmRetryErrorInfo,
+        fallback_state: _FallbackAttemptState,
+        attempt_text_emitted: bool,
+        attempt_tool_event_emitted: bool,
+        attempt_messages_committed: bool,
+        skip_initial_user_prompt_persist: bool,
+    ) -> str | None:
+        if not self._can_attempt_fallback(
+            retry_error=retry_error,
+            retry_number=retry_number,
+            attempt_text_emitted=attempt_text_emitted,
+            attempt_tool_event_emitted=attempt_tool_event_emitted,
+            attempt_messages_committed=attempt_messages_committed,
+        ):
+            return None
+        fallback_middleware = getattr(
+            self,
+            "_fallback_middleware",
+            DisabledLlmFallbackMiddleware(),
+        )
+        if not fallback_middleware.has_enabled_policy(self._config):
+            return None
+        decision = fallback_middleware.select_fallback(
+            current_profile_name=self._profile_name,
+            current_config=self._config,
+            error=retry_error,
+            visited_profiles=fallback_state.visited_profiles,
+            hop=fallback_state.hop,
+        )
+        if decision is None:
+            self._handle_fallback_exhausted(
+                request=request,
+                retry_number=retry_number,
+                total_attempts=total_attempts,
+                error=retry_error,
+                fallback_state=fallback_state,
+            )
+            return None
+        self._handle_fallback_activated(
+            request=request,
+            retry_number=retry_number,
+            total_attempts=total_attempts,
+            decision=decision,
+        )
+        next_session = self._clone_with_config(
+            config=decision.target_config,
+            profile_name=decision.to_profile_name,
+        )
+        next_fallback_state = fallback_state.with_profile(
+            decision.to_profile_name,
+            hop=decision.hop,
+        )
+        return await next_session._generate_async(
+            request,
+            retry_number=0,
+            total_attempts=None,
+            skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
+            fallback_state=next_fallback_state,
+        )
+
+    def _clone_with_config(
+        self,
+        *,
+        config: ModelEndpointConfig,
+        profile_name: str | None,
+    ) -> "AgentLlmSession":
+        return AgentLlmSession(
+            config=config,
+            profile_name=profile_name,
+            task_repo=self._task_repo,
+            shared_store=self._shared_store,
+            event_bus=self._event_bus,
+            injection_manager=self._injection_manager,
+            run_event_hub=self._run_event_hub,
+            agent_repo=self._agent_repo,
+            approval_ticket_repo=self._approval_ticket_repo,
+            run_runtime_repo=self._run_runtime_repo,
+            run_intent_repo=self._run_intent_repo,
+            background_task_service=self._background_task_service,
+            monitor_service=self._monitor_service,
+            workspace_manager=self._workspace_manager,
+            media_asset_service=self._media_asset_service,
+            role_memory_service=self._role_memory_service,
+            subagent_reflection_service=(
+                self._subagent_reflection_service.with_config(
+                    config,
+                    profile_name=profile_name,
+                )
+                if self._subagent_reflection_service is not None
+                else None
+            ),
+            conversation_compaction_service=(
+                self._conversation_compaction_service.with_config(
+                    config,
+                    profile_name=profile_name,
+                )
+                if self._conversation_compaction_service is not None
+                else None
+            ),
+            conversation_microcompact_service=self._conversation_microcompact_service,
+            tool_registry=self._tool_registry,
+            mcp_registry=self._mcp_registry,
+            skill_registry=self._skill_registry,
+            allowed_tools=self._allowed_tools,
+            allowed_mcp_servers=self._allowed_mcp_servers,
+            allowed_skills=self._allowed_skills,
+            message_repo=self._message_repo,
+            role_registry=self._role_registry,
+            task_execution_service=self._task_execution_service,
+            task_service=self._task_service,
+            run_control_manager=self._run_control_manager,
+            tool_approval_manager=self._tool_approval_manager,
+            tool_approval_policy=self._tool_approval_policy,
+            notification_service=self._notification_service,
+            token_usage_repo=self._token_usage_repo,
+            metric_recorder=self._metric_recorder,
+            retry_config=self._retry_config,
+            fallback_middleware=getattr(
+                self,
+                "_fallback_middleware",
+                DisabledLlmFallbackMiddleware(),
+            ),
+            im_tool_service=self._im_tool_service,
+            computer_runtime=self._computer_runtime,
+            shell_approval_repo=self._shell_approval_repo,
+        )
+
     def _build_recoverable_pause_error(
         self,
         *,
@@ -1349,6 +1579,92 @@ class AgentLlmSession:
                 "status_code": error.status_code,
                 "error_code": error.error_code,
             },
+        )
+
+    def _handle_fallback_activated(
+        self,
+        *,
+        request: LLMRequest,
+        retry_number: int,
+        total_attempts: int,
+        decision: LlmFallbackDecision,
+    ) -> None:
+        payload = {
+            "role_id": request.role_id,
+            "instance_id": request.instance_id,
+            "attempt_number": retry_number + 1,
+            "total_attempts": total_attempts,
+            "strategy_id": decision.policy_id,
+            "from_profile_id": decision.from_profile_name,
+            "to_profile_id": decision.to_profile_name,
+            "from_provider": decision.from_provider.value,
+            "to_provider": decision.to_provider.value,
+            "from_model": decision.from_model,
+            "to_model": decision.to_model,
+            "hop": decision.hop,
+            "reason": decision.reason,
+        }
+        self._run_event_hub.publish(
+            RunEvent(
+                session_id=request.session_id,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                event_type=RunEventType.LLM_FALLBACK_ACTIVATED,
+                payload_json=dumps(payload),
+            )
+        )
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="llm.request.fallback_activated",
+            message="LLM request fallback activated after rate limit exhaustion",
+            payload=payload,
+        )
+
+    def _handle_fallback_exhausted(
+        self,
+        *,
+        request: LLMRequest,
+        retry_number: int,
+        total_attempts: int,
+        error: LlmRetryErrorInfo,
+        fallback_state: _FallbackAttemptState,
+    ) -> None:
+        payload = {
+            "role_id": request.role_id,
+            "instance_id": request.instance_id,
+            "attempt_number": retry_number + 1,
+            "total_attempts": total_attempts,
+            "from_profile_id": self._profile_name or "",
+            "from_provider": self._config.provider.value,
+            "from_model": self._config.model,
+            "hop": fallback_state.hop,
+            "visited_profiles": list(fallback_state.visited_profiles),
+            "error_code": error.error_code or "",
+            "error_message": error.message,
+            "status_code": error.status_code,
+        }
+        self._run_event_hub.publish(
+            RunEvent(
+                session_id=request.session_id,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                event_type=RunEventType.LLM_FALLBACK_EXHAUSTED,
+                payload_json=dumps(payload),
+            )
+        )
+        log_event(
+            LOGGER,
+            logging.ERROR,
+            event="llm.request.fallback_exhausted",
+            message="No fallback candidate succeeded after LLM rate limit exhaustion",
+            payload=payload,
         )
 
     def _usage_field_int(self, usage_obj: object, field_name: str) -> int:

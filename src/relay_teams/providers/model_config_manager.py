@@ -83,6 +83,8 @@ class ModelConfigManager:
                 "top_p": normalized_profile.get("top_p", 1.0),
                 "max_tokens": normalized_profile.get("max_tokens"),
                 "context_window": normalized_profile.get("context_window"),
+                "fallback_policy_id": normalized_profile.get("fallback_policy_id"),
+                "fallback_priority": normalized_profile.get("fallback_priority", 0),
                 "is_default": name == default_profile_name,
                 "connect_timeout_seconds": normalized_profile.get(
                     "connect_timeout_seconds",
