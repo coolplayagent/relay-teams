@@ -255,19 +255,27 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
         body = getattr(exc, "body", None)
         error_payload = _extract_error_payload(body)
         fallback = _parse_message_metadata(str(exc))
+        resolved_error_code = (
+            error_payload.error_code
+            or _optional_str(getattr(exc, "code", None))
+            or (fallback.error_code if fallback is not None else None)
+        )
         status_code = fallback.status_code if fallback is not None else None
+        if status_code is None:
+            status_code = _status_code_from_error_code(resolved_error_code)
         retry_override = _explicit_retry_override(getattr(exc, "headers", None))
         return LlmRetryErrorInfo(
             message=error_payload.message or str(exc),
             status_code=status_code,
-            error_code=error_payload.error_code
-            or _optional_str(getattr(exc, "code", None))
-            or (fallback.error_code if fallback is not None else None),
+            error_code=resolved_error_code,
             error_type=error_payload.error_type,
             retryable=(
                 retry_override
                 if retry_override is not None
-                else _is_retryable_status_code(status_code)
+                else (
+                    _is_retryable_status_code(status_code)
+                    or _is_retryable_error_code(resolved_error_code)
+                )
             ),
             rate_limited=_is_rate_limited_error(
                 status_code=status_code,
@@ -318,15 +326,44 @@ def _extract_error_payload(body: object) -> _ParsedErrorPayload:
     error_payload = body.get("error")
     if isinstance(error_payload, dict):
         return _ParsedErrorPayload(
-            message=_optional_str(error_payload.get("message")),
-            error_code=_optional_str(error_payload.get("code")),
+            message=_optional_str(error_payload.get("message"))
+            or _optional_str(error_payload.get("error_msg")),
+            error_code=_optional_str(error_payload.get("code"))
+            or _optional_str(error_payload.get("error_code")),
             error_type=_optional_str(error_payload.get("type")),
         )
     return _ParsedErrorPayload(
-        message=_optional_str(body.get("message")) or _optional_str(body.get("detail")),
-        error_code=_optional_str(body.get("code")),
+        message=_optional_str(body.get("message"))
+        or _optional_str(body.get("detail"))
+        or _optional_str(body.get("error_msg")),
+        error_code=_optional_str(body.get("code"))
+        or _optional_str(body.get("error_code")),
         error_type=_optional_str(body.get("type")),
     )
+
+
+def _status_code_from_error_code(error_code: str | None) -> int | None:
+    normalized = _optional_str(error_code)
+    if normalized is None:
+        return None
+    matched = re.search(r"(?<!\d)(\d{3})(?!\d)$", normalized)
+    if matched is None:
+        return None
+    status_code = int(matched.group(1))
+    if 400 <= status_code <= 599:
+        return status_code
+    return None
+
+
+def _is_retryable_error_code(error_code: str | None) -> bool:
+    normalized = _optional_str(error_code)
+    if normalized is None:
+        return False
+    lowered = normalized.lower()
+    if lowered in {"rate_limited", "rate_limit_exceeded"}:
+        return True
+    derived_status_code = _status_code_from_error_code(normalized)
+    return _is_retryable_status_code(derived_status_code)
 
 
 def _parse_message_metadata(message: str) -> _ParsedMessageMetadata | None:

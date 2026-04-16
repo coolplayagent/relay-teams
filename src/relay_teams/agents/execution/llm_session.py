@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from enum import StrEnum
 from json import dumps
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from pydantic_ai._agent_graph import ModelRequestNode
 from pydantic_ai.exceptions import ModelAPIError
@@ -165,6 +165,12 @@ _BUILTIN_TOOL_CONTEXT_CHARS = 200
 _EXTERNAL_TOOL_CONTEXT_CHARS = 600
 _SKILL_CONTEXT_CHARS = 800
 _MCP_SERVER_CONTEXT_FALLBACK_CHARS = 1_200
+_RETRY_SUPERSEDED_TOOL_CALL_ERROR_CODE = "tool_call_superseded_by_retry"
+_RETRY_SUPERSEDED_TOOL_CALL_MESSAGE = "This tool call was superseded by an automatic model retry before tool execution started."
+_RESUME_SUPERSEDED_TOOL_CALL_ERROR_CODE = "tool_call_superseded_by_resume"
+_RESUME_SUPERSEDED_TOOL_CALL_MESSAGE = (
+    "This tool call was superseded by automatic recovery after a model request failure."
+)
 
 
 class _PreparedPromptContext(BaseModel):
@@ -234,6 +240,33 @@ class _FallbackAttemptOutcome(BaseModel):
             status=_FallbackAttemptStatus.RECOVERED,
             response=response,
         )
+
+
+class _AttemptRecoveryOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    response: str | None = None
+    fallback_status: _FallbackAttemptStatus = _FallbackAttemptStatus.SKIPPED
+
+    @classmethod
+    def no_recovery(cls) -> "_AttemptRecoveryOutcome":
+        return cls()
+
+    @classmethod
+    def recovered(
+        cls,
+        response: str,
+        *,
+        fallback_status: _FallbackAttemptStatus = _FallbackAttemptStatus.SKIPPED,
+    ) -> "_AttemptRecoveryOutcome":
+        return cls(
+            response=response,
+            fallback_status=fallback_status,
+        )
+
+    @classmethod
+    def fallback_exhausted(cls) -> "_AttemptRecoveryOutcome":
+        return cls(fallback_status=_FallbackAttemptStatus.EXHAUSTED)
 
 
 class _AgentRunResult(Protocol):
@@ -613,8 +646,10 @@ class AgentLlmSession:
 
         printed_any = False
         emitted_text_chunks: list[str] = []
+        active_retry_number = retry_number
         attempt_text_emitted = False
-        attempt_tool_event_emitted = False
+        attempt_tool_call_event_emitted = False
+        attempt_tool_outcome_event_emitted = False
         attempt_messages_committed = False
         published_tool_call_ids: set[str] = set()
         log_event(
@@ -699,6 +734,8 @@ class AgentLlmSession:
                                         if text_emitted:
                                             printed_any = True
                                             attempt_text_emitted = True
+                                            if active_retry_number > 0:
+                                                active_retry_number = 0
                                 else:
                                     async for text_delta in stream.stream_text(
                                         delta=True
@@ -710,6 +747,8 @@ class AgentLlmSession:
                                             )
                                             printed_any = True
                                             attempt_text_emitted = True
+                                            if active_retry_number > 0:
+                                                active_retry_number = 0
                                             emitted_text_chunks.append(text_delta)
                                             self._publish_text_delta_event(
                                                 request=request,
@@ -764,6 +803,8 @@ class AgentLlmSession:
                             streamed_text=streamed_node_text,
                         )
                         if new_to_process:
+                            if active_retry_number > 0:
+                                active_retry_number = 0
                             tool_call_events_emitted = (
                                 self._publish_tool_call_events_from_messages(
                                     request=request,
@@ -772,7 +813,7 @@ class AgentLlmSession:
                                 )
                             )
                             if tool_call_events_emitted:
-                                attempt_tool_event_emitted = True
+                                attempt_tool_call_event_emitted = True
                             self._normalize_tool_call_args_for_replay(new_to_process)
                             buffered_messages.extend(new_to_process)
                             previous_history_size = len(history)
@@ -787,7 +828,7 @@ class AgentLlmSession:
                                 pending_messages=buffered_messages,
                             )
                             if committed_tool_events_published:
-                                attempt_tool_event_emitted = True
+                                attempt_tool_outcome_event_emitted = True
                             if len(history) > previous_history_size:
                                 attempt_messages_committed = True
                             if committed_tool_validation_failures:
@@ -899,7 +940,7 @@ class AgentLlmSession:
                             )
                         )
                         if tool_call_events_emitted:
-                            attempt_tool_event_emitted = True
+                            attempt_tool_call_event_emitted = True
                         self._normalize_tool_call_args_for_replay(to_save)
                         buffered_messages.extend(to_save)
                     previous_history_size = len(history)
@@ -914,7 +955,7 @@ class AgentLlmSession:
                         pending_messages=buffered_messages,
                     )
                     if committed_tool_events_published:
-                        attempt_tool_event_emitted = True
+                        attempt_tool_outcome_event_emitted = True
                     if len(history) > previous_history_size:
                         attempt_messages_committed = True
                     # Record and publish token usage
@@ -1002,206 +1043,76 @@ class AgentLlmSession:
                     )
                     break  # done
         except ModelAPIError as exc:
-            log_event(
-                LOGGER,
-                logging.ERROR,
-                event="llm.request.failed",
-                message="LLM provider request failed",
-                payload={
-                    "model": self._config.model,
-                    "base_url": self._config.base_url,
-                    "role_id": request.role_id,
-                    "instance_id": request.instance_id,
-                },
-                exc_info=exc,
-            )
-            recovered = await self._maybe_recover_from_tool_args_parse_failure(
+            self._log_provider_request_failed(request=request, error=exc)
+            retry_error = extract_retry_error_info(exc)
+            error_message = self._build_model_api_error_message(exc)
+            recovery_outcome = await self._handle_generate_attempt_failure(
                 request=request,
-                retry_number=retry_number,
+                error=exc,
+                retry_error=retry_error,
+                error_message=error_message,
+                diagnostics_kind="model_api_error",
+                retry_number=active_retry_number,
                 total_attempts=total_attempts,
+                history=history,
+                pending_messages=buffered_messages,
                 emitted_text_chunks=emitted_text_chunks,
                 published_tool_call_ids=published_tool_call_ids,
                 streamed_tool_calls=streamed_tool_calls,
-                error_message=self._build_model_api_error_message(exc),
-            )
-            if recovered is not None:
-                return recovered
-            retry_error = extract_retry_error_info(exc)
-            should_retry = self._should_retry_request(
-                retry_error=retry_error,
-                retry_number=retry_number,
                 attempt_text_emitted=attempt_text_emitted or printed_any,
-                attempt_tool_event_emitted=attempt_tool_event_emitted,
+                attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
+                attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
                 attempt_messages_committed=attempt_messages_committed,
+                fallback_state=resolved_fallback_state,
+                skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
             )
-            if should_retry:
-                resolved_retry_error = retry_error
-                assert resolved_retry_error is not None
-                next_retry_number = retry_number + 1
-                delay_ms = compute_retry_delay_ms(
-                    config=self._retry_config,
-                    retry_number=next_retry_number,
-                    retry_after_ms=resolved_retry_error.retry_after_ms,
-                )
-                await self._handle_retry_scheduled(
-                    request=request,
-                    schedule=LlmRetrySchedule(
-                        retry_number=next_retry_number,
-                        next_attempt_number=next_retry_number + 1,
-                        total_attempts=total_attempts,
-                        delay_ms=delay_ms,
-                        error=resolved_retry_error,
-                    ),
-                )
-                await asyncio.sleep(delay_ms / 1000)
-                return await self._generate_async(
-                    request,
-                    retry_number=next_retry_number,
-                    total_attempts=total_attempts,
-                    fallback_state=resolved_fallback_state,
-                )
-            if retry_error is not None and retry_error.retryable:
-                fallback_outcome = await self._maybe_fallback_after_retry_exhausted(
-                    request=request,
-                    retry_number=retry_number,
-                    total_attempts=total_attempts,
-                    retry_error=retry_error,
-                    fallback_state=resolved_fallback_state,
-                    attempt_text_emitted=attempt_text_emitted or printed_any,
-                    attempt_tool_event_emitted=attempt_tool_event_emitted,
-                    attempt_messages_committed=attempt_messages_committed,
-                    skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
-                )
-                if fallback_outcome.response is not None:
-                    return fallback_outcome.response
-                if (
-                    fallback_outcome.status != _FallbackAttemptStatus.EXHAUSTED
-                    and self._retry_config.enabled
-                    and retry_number >= self._retry_config.max_retries
-                ):
-                    self._handle_retry_exhausted(
-                        request=request,
-                        retry_number=retry_number,
-                        total_attempts=total_attempts,
-                        error=retry_error,
-                    )
-                self._raise_assistant_run_error(
-                    request=request,
-                    error_code=retry_error.error_code,
-                    error_message=self._build_model_api_error_message(exc),
-                )
-            self._raise_assistant_run_error(
+            if recovery_outcome.response is not None:
+                return recovery_outcome.response
+            self._raise_terminal_model_api_failure(
                 request=request,
-                error_code=(
-                    retry_error.error_code
-                    if retry_error is not None
-                    else getattr(exc, "model_name", None)
-                ),
-                error_message=self._build_model_api_error_message(exc),
+                error=exc,
+                retry_error=retry_error,
+                retry_number=active_retry_number,
+                total_attempts=total_attempts,
+                error_message=error_message,
+                fallback_status=recovery_outcome.fallback_status,
             )
         except Exception as exc:
             retry_error = extract_retry_error_info(exc)
-            recovered = await self._maybe_recover_from_tool_args_parse_failure(
+            error_message = (
+                retry_error.message
+                if retry_error is not None
+                else (str(exc) or exc.__class__.__name__)
+            )
+            recovery_outcome = await self._handle_generate_attempt_failure(
                 request=request,
-                retry_number=retry_number,
+                error=exc,
+                retry_error=retry_error,
+                error_message=error_message,
+                diagnostics_kind="generic_exception",
+                retry_number=active_retry_number,
                 total_attempts=total_attempts,
+                history=history,
+                pending_messages=buffered_messages,
                 emitted_text_chunks=emitted_text_chunks,
                 published_tool_call_ids=published_tool_call_ids,
                 streamed_tool_calls=streamed_tool_calls,
-                error_message=(
-                    retry_error.message
-                    if retry_error is not None
-                    else (str(exc) or exc.__class__.__name__)
-                ),
-            )
-            if recovered is not None:
-                return recovered
-            should_retry = self._should_retry_request(
-                retry_error=retry_error,
-                retry_number=retry_number,
                 attempt_text_emitted=attempt_text_emitted or printed_any,
-                attempt_tool_event_emitted=attempt_tool_event_emitted,
+                attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
+                attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
                 attempt_messages_committed=attempt_messages_committed,
+                fallback_state=resolved_fallback_state,
+                skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
             )
-            if should_retry:
-                resolved_retry_error = retry_error
-                assert resolved_retry_error is not None
-                next_retry_number = retry_number + 1
-                delay_ms = compute_retry_delay_ms(
-                    config=self._retry_config,
-                    retry_number=next_retry_number,
-                    retry_after_ms=resolved_retry_error.retry_after_ms,
-                )
-                await self._handle_retry_scheduled(
-                    request=request,
-                    schedule=LlmRetrySchedule(
-                        retry_number=next_retry_number,
-                        next_attempt_number=next_retry_number + 1,
-                        total_attempts=total_attempts,
-                        delay_ms=delay_ms,
-                        error=resolved_retry_error,
-                    ),
-                )
-                await asyncio.sleep(delay_ms / 1000)
-                return await self._generate_async(
-                    request,
-                    retry_number=next_retry_number,
-                    total_attempts=total_attempts,
-                    fallback_state=resolved_fallback_state,
-                )
-            if retry_error is not None:
-                log_event(
-                    LOGGER,
-                    logging.ERROR,
-                    event="llm.request.failed",
-                    message="LLM provider request failed",
-                    payload={
-                        "model": self._config.model,
-                        "base_url": self._config.base_url,
-                        "role_id": request.role_id,
-                        "instance_id": request.instance_id,
-                    },
-                    exc_info=exc,
-                )
-                fallback_outcome = await self._maybe_fallback_after_retry_exhausted(
-                    request=request,
-                    retry_number=retry_number,
-                    total_attempts=total_attempts,
-                    retry_error=retry_error,
-                    fallback_state=resolved_fallback_state,
-                    attempt_text_emitted=attempt_text_emitted or printed_any,
-                    attempt_tool_event_emitted=attempt_tool_event_emitted,
-                    attempt_messages_committed=attempt_messages_committed,
-                    skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
-                )
-                if fallback_outcome.response is not None:
-                    return fallback_outcome.response
-                if retry_error.retryable and (
-                    fallback_outcome.status != _FallbackAttemptStatus.EXHAUSTED
-                    and self._retry_config.enabled
-                    and retry_number >= self._retry_config.max_retries
-                ):
-                    self._handle_retry_exhausted(
-                        request=request,
-                        retry_number=retry_number,
-                        total_attempts=total_attempts,
-                        error=retry_error,
-                    )
-                if retry_error.retryable:
-                    self._raise_assistant_run_error(
-                        request=request,
-                        error_code=retry_error.error_code,
-                        error_message=retry_error.message,
-                    )
-                self._raise_assistant_run_error(
-                    request=request,
-                    error_code=retry_error.error_code,
-                    error_message=retry_error.message,
-                )
-            self._raise_assistant_run_error(
+            if recovery_outcome.response is not None:
+                return recovery_outcome.response
+            self._raise_terminal_generic_failure(
                 request=request,
-                error_code="internal_execution_error",
-                error_message=str(exc) or exc.__class__.__name__,
+                error=exc,
+                retry_error=retry_error,
+                retry_number=active_retry_number,
+                total_attempts=total_attempts,
+                fallback_status=recovery_outcome.fallback_status,
             )
 
         assert result is not None
@@ -1321,13 +1232,318 @@ class AgentLlmSession:
             },
         )
 
+    def _log_provider_request_failed(
+        self,
+        *,
+        request: LLMRequest,
+        error: BaseException,
+    ) -> None:
+        log_event(
+            LOGGER,
+            logging.ERROR,
+            event="llm.request.failed",
+            message="LLM provider request failed",
+            payload={
+                "model": self._config.model,
+                "base_url": self._config.base_url,
+                "role_id": request.role_id,
+                "instance_id": request.instance_id,
+            },
+            exc_info=error,
+        )
+
+    async def _handle_generate_attempt_failure(
+        self,
+        *,
+        request: LLMRequest,
+        error: BaseException,
+        retry_error: LlmRetryErrorInfo | None,
+        error_message: str,
+        diagnostics_kind: Literal["model_api_error", "generic_exception"],
+        retry_number: int,
+        total_attempts: int,
+        history: list[ModelRequest | ModelResponse],
+        pending_messages: list[ModelRequest | ModelResponse],
+        emitted_text_chunks: list[str],
+        published_tool_call_ids: set[str],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
+        attempt_text_emitted: bool,
+        attempt_tool_call_event_emitted: bool,
+        attempt_tool_outcome_event_emitted: bool,
+        attempt_messages_committed: bool,
+        fallback_state: _FallbackAttemptState,
+        skip_initial_user_prompt_persist: bool,
+    ) -> _AttemptRecoveryOutcome:
+        """Handle recovery paths for a failed `_generate_async()` attempt.
+
+        This method centralizes the shared failure flow used by both
+        `ModelAPIError` and generic exception branches. It tries, in order, to
+        recover from tool-args parse failures, emit diagnostics, then execute
+        retry, resume, or fallback recovery when those paths are allowed.
+
+        Returns:
+            The recovery result for this failed attempt, including whether a
+            fallback path was exhausted and already published terminal events.
+        """
+        recovered = await self._maybe_recover_from_tool_args_parse_failure(
+            request=request,
+            retry_number=retry_number,
+            total_attempts=total_attempts,
+            emitted_text_chunks=emitted_text_chunks,
+            published_tool_call_ids=published_tool_call_ids,
+            streamed_tool_calls=streamed_tool_calls,
+            error_message=error_message,
+        )
+        if recovered is not None:
+            return _AttemptRecoveryOutcome.recovered(recovered)
+        should_retry = self._should_retry_request(
+            retry_error=retry_error,
+            retry_number=retry_number,
+            attempt_text_emitted=attempt_text_emitted,
+            attempt_tool_outcome_event_emitted=attempt_tool_outcome_event_emitted,
+            attempt_messages_committed=attempt_messages_committed,
+        )
+        should_resume_after_tool_outcomes = self._should_resume_after_tool_outcomes(
+            retry_error=retry_error,
+            retry_number=retry_number,
+            attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
+        )
+        closed_pending_tool_call_count = 0
+        if should_retry:
+            closed_pending_tool_call_count = self._close_pending_tool_calls_for_retry(
+                request=request,
+                pending_messages=pending_messages,
+                attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
+                attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
+                attempt_messages_committed=attempt_messages_committed,
+            )
+        self._log_generate_failure_diagnostics(
+            request=request,
+            error=error,
+            retry_error=retry_error,
+            diagnostics_kind=diagnostics_kind,
+            retry_number=retry_number,
+            attempt_text_emitted=attempt_text_emitted,
+            attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
+            attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
+            attempt_messages_committed=attempt_messages_committed,
+            should_retry=should_retry,
+            should_resume_after_tool_outcomes=(should_resume_after_tool_outcomes),
+            closed_pending_tool_call_count=closed_pending_tool_call_count,
+        )
+        return await self._execute_attempt_recovery(
+            request=request,
+            retry_error=retry_error,
+            retry_number=retry_number,
+            total_attempts=total_attempts,
+            history=history,
+            pending_messages=pending_messages,
+            should_retry=should_retry,
+            should_resume_after_tool_outcomes=(should_resume_after_tool_outcomes),
+            attempt_text_emitted=attempt_text_emitted,
+            attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
+            attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
+            attempt_messages_committed=attempt_messages_committed,
+            fallback_state=fallback_state,
+            skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
+        )
+
+    async def _execute_attempt_recovery(
+        self,
+        *,
+        request: LLMRequest,
+        retry_error: LlmRetryErrorInfo | None,
+        retry_number: int,
+        total_attempts: int,
+        history: list[ModelRequest | ModelResponse],
+        pending_messages: list[ModelRequest | ModelResponse],
+        should_retry: bool,
+        should_resume_after_tool_outcomes: bool,
+        attempt_text_emitted: bool,
+        attempt_tool_call_event_emitted: bool,
+        attempt_tool_outcome_event_emitted: bool,
+        attempt_messages_committed: bool,
+        fallback_state: _FallbackAttemptState,
+        skip_initial_user_prompt_persist: bool,
+    ) -> _AttemptRecoveryOutcome:
+        if should_retry:
+            resolved_retry_error = retry_error
+            assert resolved_retry_error is not None
+            next_retry_number = retry_number + 1
+            delay_ms = compute_retry_delay_ms(
+                config=self._retry_config,
+                retry_number=next_retry_number,
+                retry_after_ms=resolved_retry_error.retry_after_ms,
+            )
+            await self._handle_retry_scheduled(
+                request=request,
+                schedule=LlmRetrySchedule(
+                    retry_number=next_retry_number,
+                    next_attempt_number=next_retry_number + 1,
+                    total_attempts=total_attempts,
+                    delay_ms=delay_ms,
+                    error=resolved_retry_error,
+                ),
+            )
+            await asyncio.sleep(delay_ms / 1000)
+            return _AttemptRecoveryOutcome.recovered(
+                await self._generate_async(
+                    request,
+                    retry_number=next_retry_number,
+                    total_attempts=total_attempts,
+                    fallback_state=fallback_state,
+                )
+            )
+        if should_resume_after_tool_outcomes:
+            return _AttemptRecoveryOutcome.recovered(
+                await self._resume_after_tool_outcomes(
+                    request=request,
+                    retry_number=retry_number,
+                    total_attempts=total_attempts,
+                    history=history,
+                    pending_messages=pending_messages,
+                    fallback_state=fallback_state,
+                )
+            )
+        if retry_error is not None:
+            fallback_outcome = await self._maybe_fallback_after_retry_exhausted(
+                request=request,
+                retry_number=retry_number,
+                total_attempts=total_attempts,
+                retry_error=retry_error,
+                fallback_state=fallback_state,
+                attempt_text_emitted=attempt_text_emitted,
+                attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
+                attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
+                attempt_messages_committed=attempt_messages_committed,
+                skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
+            )
+            if fallback_outcome.response is not None:
+                return _AttemptRecoveryOutcome.recovered(
+                    fallback_outcome.response,
+                    fallback_status=fallback_outcome.status,
+                )
+            if fallback_outcome.status == _FallbackAttemptStatus.EXHAUSTED:
+                return _AttemptRecoveryOutcome.fallback_exhausted()
+        return _AttemptRecoveryOutcome.no_recovery()
+
+    def _log_generate_failure_diagnostics(
+        self,
+        *,
+        request: LLMRequest,
+        error: BaseException,
+        retry_error: LlmRetryErrorInfo | None,
+        diagnostics_kind: Literal["model_api_error", "generic_exception"],
+        retry_number: int,
+        attempt_text_emitted: bool,
+        attempt_tool_call_event_emitted: bool,
+        attempt_tool_outcome_event_emitted: bool,
+        attempt_messages_committed: bool,
+        should_retry: bool,
+        should_resume_after_tool_outcomes: bool,
+        closed_pending_tool_call_count: int,
+    ) -> None:
+        if diagnostics_kind == "model_api_error":
+            assert isinstance(error, ModelAPIError)
+            event = "llm.request.model_api_error.diagnostics"
+            message = "ModelAPIError retry diagnostics"
+            payload = self._model_api_error_diagnostics_payload(
+                error=error,
+                retry_error=retry_error,
+                retry_number=retry_number,
+                attempt_text_emitted=attempt_text_emitted,
+                attempt_tool_call_event_emitted=(attempt_tool_call_event_emitted),
+                attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
+                attempt_messages_committed=attempt_messages_committed,
+                should_retry=should_retry,
+                should_resume_after_tool_outcomes=(should_resume_after_tool_outcomes),
+                closed_pending_tool_call_count=closed_pending_tool_call_count,
+            )
+        else:
+            event = "llm.request.exception.diagnostics"
+            message = "Unhandled exception retry diagnostics"
+            payload = self._exception_retry_diagnostics_payload(
+                error=error,
+                retry_error=retry_error,
+                retry_number=retry_number,
+                attempt_text_emitted=attempt_text_emitted,
+                attempt_tool_call_event_emitted=(attempt_tool_call_event_emitted),
+                attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
+                attempt_messages_committed=attempt_messages_committed,
+                should_retry=should_retry,
+                should_resume_after_tool_outcomes=(should_resume_after_tool_outcomes),
+                closed_pending_tool_call_count=closed_pending_tool_call_count,
+            )
+        log_event(
+            LOGGER,
+            logging.ERROR,
+            event=event,
+            message=message,
+            payload=cast(
+                dict[str, JsonValue],
+                self._to_json_compatible(payload),
+            ),
+        )
+
+    def _publish_synthetic_tool_results_for_pending_calls(
+        self,
+        *,
+        request: LLMRequest,
+        pending_messages: Sequence[ModelRequest | ModelResponse],
+        error_code: str,
+        message: str,
+    ) -> int:
+        pending_tool_calls = self._collect_pending_tool_calls(pending_messages)
+        if not pending_tool_calls:
+            return 0
+        synthetic_request = ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    content=build_tool_error_result(
+                        error_code=error_code,
+                        message=message,
+                    ),
+                )
+                for tool_call_id, tool_name in pending_tool_calls
+            ]
+        )
+        self._publish_committed_tool_outcome_events_from_messages(
+            request=request,
+            messages=[synthetic_request],
+        )
+        return len(pending_tool_calls)
+
+    def _close_pending_tool_calls_for_retry(
+        self,
+        *,
+        request: LLMRequest,
+        pending_messages: Sequence[ModelRequest | ModelResponse],
+        attempt_tool_call_event_emitted: bool,
+        attempt_tool_outcome_event_emitted: bool,
+        attempt_messages_committed: bool,
+    ) -> int:
+        if (
+            not attempt_tool_call_event_emitted
+            or attempt_tool_outcome_event_emitted
+            or attempt_messages_committed
+        ):
+            return 0
+        return self._publish_synthetic_tool_results_for_pending_calls(
+            request=request,
+            pending_messages=pending_messages,
+            error_code=_RETRY_SUPERSEDED_TOOL_CALL_ERROR_CODE,
+            message=_RETRY_SUPERSEDED_TOOL_CALL_MESSAGE,
+        )
+
     def _should_retry_request(
         self,
         *,
         retry_error: LlmRetryErrorInfo | None,
         retry_number: int,
         attempt_text_emitted: bool,
-        attempt_tool_event_emitted: bool,
+        attempt_tool_outcome_event_emitted: bool,
         attempt_messages_committed: bool,
     ) -> bool:
         allow_after_text = self._should_retry_after_text_side_effect(
@@ -1339,8 +1555,152 @@ class AgentLlmSession:
             and self._retry_config.enabled
             and retry_number < self._retry_config.max_retries
             and (not attempt_text_emitted or allow_after_text)
-            and not attempt_tool_event_emitted
+            and not attempt_tool_outcome_event_emitted
             and not attempt_messages_committed
+        )
+
+    def _should_resume_after_tool_outcomes(
+        self,
+        *,
+        retry_error: LlmRetryErrorInfo | None,
+        retry_number: int,
+        attempt_tool_outcome_event_emitted: bool,
+    ) -> bool:
+        return (
+            retry_error is not None
+            and retry_error.retryable
+            and self._retry_config.enabled
+            and retry_number < self._retry_config.max_retries
+            and attempt_tool_outcome_event_emitted
+        )
+
+    async def _resume_after_tool_outcomes(
+        self,
+        *,
+        request: LLMRequest,
+        retry_number: int,
+        total_attempts: int,
+        history: list[ModelRequest | ModelResponse],
+        pending_messages: list[ModelRequest | ModelResponse],
+        fallback_state: _FallbackAttemptState,
+    ) -> str:
+        next_retry_number = retry_number + 1
+        (
+            next_history,
+            remaining_pending_messages,
+            _committed_tool_events_published,
+            _committed_tool_validation_failures,
+        ) = self._commit_all_safe_messages(
+            request=request,
+            history=history,
+            pending_messages=pending_messages,
+        )
+        closed_pending_tool_call_count = (
+            self._publish_synthetic_tool_results_for_pending_calls(
+                request=request,
+                pending_messages=remaining_pending_messages,
+                error_code=_RESUME_SUPERSEDED_TOOL_CALL_ERROR_CODE,
+                message=_RESUME_SUPERSEDED_TOOL_CALL_MESSAGE,
+            )
+        )
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="llm.request.resuming_after_tool_outcomes",
+            message=(
+                "Resuming LLM request from the latest committed tool outcomes "
+                "after a retryable provider failure"
+            ),
+            payload={
+                "run_id": request.run_id,
+                "task_id": request.task_id,
+                "role_id": request.role_id,
+                "instance_id": request.instance_id,
+                "retry_number": retry_number,
+                "next_attempt_number": next_retry_number + 1,
+                "history_message_count": len(next_history),
+                "dropped_pending_message_count": len(remaining_pending_messages),
+                "closed_pending_tool_call_count": closed_pending_tool_call_count,
+            },
+        )
+        return await self._generate_async(
+            request,
+            retry_number=next_retry_number,
+            total_attempts=total_attempts,
+            skip_initial_user_prompt_persist=True,
+            fallback_state=fallback_state,
+        )
+
+    def _raise_terminal_model_api_failure(
+        self,
+        *,
+        request: LLMRequest,
+        error: ModelAPIError,
+        retry_error: LlmRetryErrorInfo | None,
+        retry_number: int,
+        total_attempts: int,
+        error_message: str,
+        fallback_status: _FallbackAttemptStatus,
+    ) -> None:
+        if retry_error is not None and retry_error.retryable:
+            if (
+                fallback_status != _FallbackAttemptStatus.EXHAUSTED
+                and self._retry_config.enabled
+                and retry_number >= self._retry_config.max_retries
+            ):
+                self._handle_retry_exhausted(
+                    request=request,
+                    retry_number=retry_number,
+                    total_attempts=total_attempts,
+                    error=retry_error,
+                )
+            self._raise_assistant_run_error(
+                request=request,
+                error_code=retry_error.error_code,
+                error_message=error_message,
+            )
+        self._raise_assistant_run_error(
+            request=request,
+            error_code=(
+                retry_error.error_code
+                if retry_error is not None
+                else getattr(error, "model_name", None)
+            ),
+            error_message=error_message,
+        )
+
+    def _raise_terminal_generic_failure(
+        self,
+        *,
+        request: LLMRequest,
+        error: BaseException,
+        retry_error: LlmRetryErrorInfo | None,
+        retry_number: int,
+        total_attempts: int,
+        fallback_status: _FallbackAttemptStatus,
+    ) -> None:
+        if retry_error is not None:
+            self._log_provider_request_failed(request=request, error=error)
+            if retry_error.retryable and (
+                fallback_status != _FallbackAttemptStatus.EXHAUSTED
+                and self._retry_config.enabled
+                and retry_number >= self._retry_config.max_retries
+            ):
+                self._handle_retry_exhausted(
+                    request=request,
+                    retry_number=retry_number,
+                    total_attempts=total_attempts,
+                    error=retry_error,
+                )
+            self._raise_assistant_run_error(
+                request=request,
+                error_code=retry_error.error_code,
+                error_message=retry_error.message,
+            )
+        self._raise_assistant_run_error(
+            request=request,
+            error_code="internal_execution_error",
+            error_message=str(error) or error.__class__.__name__,
         )
 
     def _should_retry_after_text_side_effect(
@@ -1353,7 +1713,7 @@ class AgentLlmSession:
         if retry_error.transport_error:
             return True
         status_code = retry_error.status_code
-        return status_code is not None and status_code >= 500
+        return status_code is not None and (status_code == 429 or status_code >= 500)
 
     def _can_attempt_fallback(
         self,
@@ -1361,7 +1721,8 @@ class AgentLlmSession:
         retry_error: LlmRetryErrorInfo,
         retry_number: int,
         attempt_text_emitted: bool,
-        attempt_tool_event_emitted: bool,
+        attempt_tool_call_event_emitted: bool,
+        attempt_tool_outcome_event_emitted: bool,
         attempt_messages_committed: bool,
     ) -> bool:
         return (
@@ -1370,7 +1731,8 @@ class AgentLlmSession:
             and self._retry_config.enabled
             and retry_number >= self._retry_config.max_retries
             and not attempt_text_emitted
-            and not attempt_tool_event_emitted
+            and not attempt_tool_call_event_emitted
+            and not attempt_tool_outcome_event_emitted
             and not attempt_messages_committed
         )
 
@@ -1383,7 +1745,8 @@ class AgentLlmSession:
         retry_error: LlmRetryErrorInfo,
         fallback_state: _FallbackAttemptState,
         attempt_text_emitted: bool,
-        attempt_tool_event_emitted: bool,
+        attempt_tool_call_event_emitted: bool,
+        attempt_tool_outcome_event_emitted: bool,
         attempt_messages_committed: bool,
         skip_initial_user_prompt_persist: bool,
     ) -> _FallbackAttemptOutcome:
@@ -1391,7 +1754,8 @@ class AgentLlmSession:
             retry_error=retry_error,
             retry_number=retry_number,
             attempt_text_emitted=attempt_text_emitted,
-            attempt_tool_event_emitted=attempt_tool_event_emitted,
+            attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
+            attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
             attempt_messages_committed=attempt_messages_committed,
         ):
             return _FallbackAttemptOutcome.skipped()
@@ -1761,6 +2125,111 @@ class AgentLlmSession:
             return error.message
         return f"{error.message} Root cause: {root_message}"
 
+    def _model_api_error_diagnostics_payload(
+        self,
+        *,
+        error: ModelAPIError,
+        retry_error: LlmRetryErrorInfo | None,
+        retry_number: int,
+        attempt_text_emitted: bool,
+        attempt_tool_call_event_emitted: bool,
+        attempt_tool_outcome_event_emitted: bool,
+        attempt_messages_committed: bool,
+        should_retry: bool,
+        should_resume_after_tool_outcomes: bool,
+        closed_pending_tool_call_count: int,
+    ) -> dict[str, object]:
+        chain = self._exception_chain(error)
+        response = getattr(error, "response", None)
+        response_headers = getattr(response, "headers", None)
+        direct_headers = getattr(error, "headers", None)
+        return {
+            "error_type": error.__class__.__name__,
+            "message": str(error),
+            "error_message": getattr(error, "message", str(error)),
+            "model_name": getattr(error, "model_name", None),
+            "status_code": getattr(error, "status_code", None),
+            "code": getattr(error, "code", None),
+            "body": self._diagnostic_value(getattr(error, "body", None)),
+            "headers": self._diagnostic_headers(direct_headers),
+            "response_headers": self._diagnostic_headers(response_headers),
+            "exception_chain": [
+                self._exception_diagnostic_item(item) for item in chain
+            ],
+            "retry_error": (
+                retry_error.model_dump(mode="json") if retry_error is not None else None
+            ),
+            "retry_number": retry_number,
+            "max_retries": self._retry_config.max_retries,
+            "retry_enabled": self._retry_config.enabled,
+            "attempt_text_emitted": attempt_text_emitted,
+            "attempt_tool_call_event_emitted": attempt_tool_call_event_emitted,
+            "attempt_tool_outcome_event_emitted": attempt_tool_outcome_event_emitted,
+            "tool_event_state": self._tool_event_state(
+                attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
+                attempt_tool_outcome_event_emitted=attempt_tool_outcome_event_emitted,
+            ),
+            "attempt_messages_committed": attempt_messages_committed,
+            "should_retry": should_retry,
+            "should_resume_after_tool_outcomes": should_resume_after_tool_outcomes,
+            "closed_pending_tool_call_count": closed_pending_tool_call_count,
+            "retry_blockers": self._retry_blockers(
+                retry_error=retry_error,
+                retry_number=retry_number,
+                attempt_text_emitted=attempt_text_emitted,
+                attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
+                attempt_messages_committed=attempt_messages_committed,
+            ),
+        }
+
+    def _exception_retry_diagnostics_payload(
+        self,
+        *,
+        error: BaseException,
+        retry_error: LlmRetryErrorInfo | None,
+        retry_number: int,
+        attempt_text_emitted: bool,
+        attempt_tool_call_event_emitted: bool,
+        attempt_tool_outcome_event_emitted: bool,
+        attempt_messages_committed: bool,
+        should_retry: bool,
+        should_resume_after_tool_outcomes: bool,
+        closed_pending_tool_call_count: int,
+    ) -> dict[str, object]:
+        chain = self._exception_chain(error)
+        return {
+            "error_type": error.__class__.__name__,
+            "message": str(error),
+            "args": [self._diagnostic_value(item) for item in error.args],
+            "exception_chain": [
+                self._exception_diagnostic_item(item) for item in chain
+            ],
+            "retry_error": (
+                retry_error.model_dump(mode="json") if retry_error is not None else None
+            ),
+            "retry_number": retry_number,
+            "max_retries": self._retry_config.max_retries,
+            "retry_enabled": self._retry_config.enabled,
+            "attempt_text_emitted": attempt_text_emitted,
+            "attempt_tool_call_event_emitted": attempt_tool_call_event_emitted,
+            "attempt_tool_outcome_event_emitted": attempt_tool_outcome_event_emitted,
+            "tool_event_state": self._tool_event_state(
+                attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
+                attempt_tool_outcome_event_emitted=attempt_tool_outcome_event_emitted,
+            ),
+            "attempt_messages_committed": attempt_messages_committed,
+            "should_retry": should_retry,
+            "should_resume_after_tool_outcomes": should_resume_after_tool_outcomes,
+            "closed_pending_tool_call_count": closed_pending_tool_call_count,
+            "retry_blockers": self._retry_blockers(
+                retry_error=retry_error,
+                retry_number=retry_number,
+                attempt_text_emitted=attempt_text_emitted,
+                attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
+                attempt_messages_committed=attempt_messages_committed,
+            ),
+        }
+
     def _exception_chain(self, error: BaseException) -> tuple[BaseException, ...]:
         chain: list[BaseException] = []
         seen_ids: set[int] = set()
@@ -1808,6 +2277,98 @@ class AgentLlmSession:
                 continue
             return message
         return None
+
+    def _exception_diagnostic_item(self, error: BaseException) -> dict[str, object]:
+        response = getattr(error, "response", None)
+        return {
+            "type": error.__class__.__name__,
+            "message": str(error),
+            "status_code": getattr(error, "status_code", None),
+            "code": getattr(error, "code", None),
+            "body": self._diagnostic_value(getattr(error, "body", None)),
+            "response_headers": self._diagnostic_headers(
+                getattr(response, "headers", None)
+            ),
+        }
+
+    def _diagnostic_value(self, value: object) -> object:
+        compatible = self._to_json_compatible(value)
+        serialized = json.dumps(compatible, ensure_ascii=False, default=str)
+        if len(serialized) <= 1_500:
+            return compatible
+        return f"{serialized[:1500]}...<truncated>"
+
+    def _diagnostic_headers(self, headers: object) -> dict[str, str]:
+        header_names = (
+            "retry-after",
+            "x-should-retry",
+            "x-request-id",
+            "request-id",
+            "content-type",
+        )
+        values: dict[str, str] = {}
+        for name in header_names:
+            value = self._header_value(headers, name)
+            if value:
+                values[name] = value
+        return values
+
+    def _header_value(self, headers: object, name: str) -> str:
+        raw_value: object | None = None
+        if isinstance(headers, dict):
+            raw_value = headers.get(name)
+            if raw_value is None:
+                raw_value = headers.get(name.title())
+        else:
+            getter = getattr(headers, "get", None)
+            if getter is None:
+                return ""
+            raw_value = getter(name)
+            if raw_value is None:
+                raw_value = getter(name.title())
+        if not isinstance(raw_value, str):
+            return ""
+        return raw_value.strip()
+
+    def _tool_event_state(
+        self,
+        *,
+        attempt_tool_call_event_emitted: bool,
+        attempt_tool_outcome_event_emitted: bool,
+    ) -> str:
+        if attempt_tool_outcome_event_emitted:
+            return "tool_outcomes_emitted"
+        if attempt_tool_call_event_emitted:
+            return "tool_call_events_only"
+        return "none"
+
+    def _retry_blockers(
+        self,
+        *,
+        retry_error: LlmRetryErrorInfo | None,
+        retry_number: int,
+        attempt_text_emitted: bool,
+        attempt_tool_outcome_event_emitted: bool,
+        attempt_messages_committed: bool,
+    ) -> tuple[str, ...]:
+        blockers: list[str] = []
+        if retry_error is None:
+            blockers.append("retry_error_unclassified")
+        elif not retry_error.retryable:
+            blockers.append("retry_error_marked_non_retryable")
+        if not self._retry_config.enabled:
+            blockers.append("retry_disabled")
+        if retry_number >= self._retry_config.max_retries:
+            blockers.append("max_retries_exhausted")
+        if attempt_text_emitted and not self._should_retry_after_text_side_effect(
+            retry_error=retry_error
+        ):
+            blockers.append("text_already_emitted")
+        if attempt_tool_outcome_event_emitted:
+            blockers.append("tool_outcomes_emitted")
+        if attempt_messages_committed:
+            blockers.append("messages_already_committed")
+        return tuple(blockers)
 
     def _extract_text(self, response: object) -> str:
         parts = getattr(response, "parts", None)

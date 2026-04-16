@@ -802,7 +802,8 @@ async def test_maybe_fallback_after_retry_exhausted_switches_profile() -> None:
         ),
         fallback_state=_FallbackAttemptState.initial("primary"),
         attempt_text_emitted=False,
-        attempt_tool_event_emitted=False,
+        attempt_tool_call_event_emitted=False,
+        attempt_tool_outcome_event_emitted=False,
         attempt_messages_committed=False,
         skip_initial_user_prompt_persist=False,
     )
