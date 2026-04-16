@@ -398,6 +398,7 @@ class WindowsDesktopRuntime:
         matched_window = self._wait_for_window_match(
             queries=window_queries,
             before_windows=before_windows,
+            allow_existing_matches=False,
         )
         if matched_window is None:
             raise RuntimeError(f"App window did not appear within timeout: {app_name}")
@@ -720,6 +721,7 @@ class WindowsDesktopRuntime:
         *,
         queries: tuple[str, ...] = (),
         before_windows: tuple[ComputerWindow, ...] = (),
+        allow_existing_matches: bool = True,
     ) -> ComputerWindow | None:
         normalized_queries = self._normalize_match_queries(*queries)
         before_ids = {window.window_id for window in before_windows}
@@ -736,9 +738,13 @@ class WindowsDesktopRuntime:
                     or self._window_matches_any(window, normalized_queries)
                 ):
                     return window
-                if normalized_queries and self._window_matches_any(
-                    window,
-                    normalized_queries,
+                if (
+                    allow_existing_matches
+                    and normalized_queries
+                    and self._window_matches_any(
+                        window,
+                        normalized_queries,
+                    )
                 ):
                     return window
             self._sleep(_POLL_INTERVAL_SECONDS)
@@ -861,22 +867,31 @@ class WindowsDesktopRuntime:
             if character == "\t":
                 inputs.extend(self._keyboard_inputs_for_virtual_key(_VK_TAB))
                 continue
-            codepoint = ord(character)
-            inputs.append(
-                self._keyboard_input(
-                    virtual_key=0,
-                    scan_code=codepoint,
-                    flags=_KEYEVENTF_UNICODE,
+            for scan_code in self._unicode_scan_codes(character):
+                inputs.append(
+                    self._keyboard_input(
+                        virtual_key=0,
+                        scan_code=scan_code,
+                        flags=_KEYEVENTF_UNICODE,
+                    )
                 )
-            )
-            inputs.append(
-                self._keyboard_input(
-                    virtual_key=0,
-                    scan_code=codepoint,
-                    flags=_KEYEVENTF_UNICODE | _KEYEVENTF_KEYUP,
+                inputs.append(
+                    self._keyboard_input(
+                        virtual_key=0,
+                        scan_code=scan_code,
+                        flags=_KEYEVENTF_UNICODE | _KEYEVENTF_KEYUP,
+                    )
                 )
-            )
         self._send_inputs(inputs)
+
+    def _unicode_scan_codes(self, text: str) -> tuple[int, ...]:
+        encoded = text.encode("utf-16-le")
+        scan_codes: list[int] = []
+        for index in range(0, len(encoded), 2):
+            scan_codes.append(
+                int.from_bytes(encoded[index : index + 2], byteorder="little")
+            )
+        return tuple(scan_codes)
 
     def _send_hotkey_inputs(
         self,

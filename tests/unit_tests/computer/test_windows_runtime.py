@@ -5,6 +5,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+import relay_teams.computer.windows_runtime as windows_runtime_module
 
 from relay_teams.computer import (
     ComputerObservation,
@@ -175,9 +176,11 @@ def test_windows_runtime_launch_app_records_real_command(
         *,
         queries: tuple[str, ...],
         before_windows: tuple[ComputerWindow, ...] = (),
+        allow_existing_matches: bool = True,
     ) -> ComputerWindow:
         assert queries == ("Calculator", "calc.exe", "calc")
         assert before_windows == ()
+        assert allow_existing_matches is False
         return matched_window
 
     def fake_activate_window(window_title: str) -> None:
@@ -303,6 +306,62 @@ def test_windows_runtime_build_launch_window_queries_normalizes_path_command(
         "app.exe",
         "app",
     )
+
+
+def test_windows_runtime_wait_for_window_match_ignores_existing_launch_match(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    existing_window = ComputerWindow(
+        window_id="0x10",
+        app_name="notepad",
+        title="notes.txt - Notepad",
+        focused=True,
+    )
+    times = iter((0.0, 0.0, 11.0))
+
+    monkeypatch.setattr(
+        runtime,
+        "_list_windows_snapshot",
+        lambda **kwargs: (existing_window,),
+    )
+    monkeypatch.setattr(runtime, "_time_monotonic", lambda: next(times))
+    monkeypatch.setattr(runtime, "_sleep", lambda seconds: None)
+
+    matched_window = runtime._wait_for_window_match(
+        queries=("notepad.exe", "notepad"),
+        before_windows=(existing_window,),
+        allow_existing_matches=False,
+    )
+
+    assert matched_window is None
+
+
+def test_windows_runtime_send_unicode_text_uses_utf16_surrogate_pairs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    captured_inputs: list[tuple[int, int]] = []
+
+    def fake_send_inputs(
+        inputs: list[windows_runtime_module._Input],
+    ) -> None:
+        captured_inputs.extend(
+            (int(item.ki.wScan), int(item.ki.dwFlags)) for item in inputs
+        )
+
+    monkeypatch.setattr(runtime, "_send_inputs", fake_send_inputs)
+
+    runtime._send_unicode_text("🙂")
+
+    assert captured_inputs == [
+        (0xD83D, 0x0004),
+        (0xD83D, 0x0006),
+        (0xDE42, 0x0004),
+        (0xDE42, 0x0006),
+    ]
 
 
 def test_windows_runtime_wait_for_window_requires_title(
