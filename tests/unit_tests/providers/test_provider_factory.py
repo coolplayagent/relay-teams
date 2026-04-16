@@ -384,6 +384,108 @@ def test_create_provider_factory_keeps_fallback_middleware_for_session_override(
     assert fallback_middleware._get_profiles()["default"] is override_config
 
 
+def test_create_provider_factory_scopes_cooldown_registry_to_effective_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    default_config = ModelEndpointConfig(
+        provider=ProviderType.OPENAI_COMPATIBLE,
+        model="default-model",
+        base_url="https://default.example/v1",
+        api_key="default-key",
+        fallback_policy_id="same_provider_then_other_provider",
+    )
+    override_alpha = ModelEndpointConfig(
+        provider=ProviderType.OPENAI_COMPATIBLE,
+        model="override-alpha",
+        base_url="https://override-alpha.example/v1",
+        api_key="override-alpha-key",
+        fallback_policy_id="same_provider_then_other_provider",
+    )
+    override_beta = ModelEndpointConfig(
+        provider=ProviderType.OPENAI_COMPATIBLE,
+        model="override-beta",
+        base_url="https://override-beta.example/v1",
+        api_key="override-beta-key",
+        fallback_policy_id="same_provider_then_other_provider",
+    )
+    monkeypatch.setattr(
+        runtime_factory_module,
+        "OpenAICompatibleProvider",
+        _CapturingOpenAICompatibleProvider,
+    )
+    monkeypatch.setattr(
+        runtime_factory_module,
+        "create_default_provider_registry",
+        lambda **kwargs: _BuilderCallingProviderRegistry(
+            kwargs["openai_compatible_builder"]
+        ),
+    )
+    factory = create_provider_factory(
+        runtime=_build_runtime(
+            profiles={"default": default_config},
+            default_model_profile="default",
+        ),
+        task_repo=cast(TaskRepository, object()),
+        shared_store=cast(SharedStateRepository, object()),
+        event_log=cast(EventLog, object()),
+        injection_manager=cast(RunInjectionManager, object()),
+        run_event_hub=cast(RunEventHub, object()),
+        agent_repo=cast(AgentInstanceRepository, object()),
+        approval_ticket_repo=cast(ApprovalTicketRepository, object()),
+        run_runtime_repo=cast(RunRuntimeRepository, object()),
+        run_intent_repo=cast(RunIntentRepository, object()),
+        background_task_service=None,
+        workspace_manager=cast(WorkspaceManager, object()),
+        media_asset_service=cast(MediaAssetService, object()),
+        tool_registry=ToolRegistry({}),
+        mcp_registry=McpRegistry(),
+        skill_registry=SkillRegistry(
+            directory=SkillsDirectory(base_dir=Path.cwd() / ".missing-skills")
+        ),
+        message_repo=cast(MessageRepository, object()),
+        session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
+        role_registry=cast(RoleRegistry, object()),
+        get_task_service=lambda: cast(TaskOrchestrationService, object()),
+        run_control_manager=cast(RunControlManager, object()),
+        tool_approval_manager=cast(ToolApprovalManager, object()),
+        tool_approval_policy=cast(ToolApprovalPolicy, object()),
+        notification_service=cast(NotificationService | None, None),
+        get_task_execution_service=lambda: cast(TaskExecutionService, object()),
+        token_usage_repo=cast(TokenUsageRepository | None, None),
+        external_agent_session_manager=None,
+        session_model_profile_lookup=lambda session_id: {
+            "session-alpha": override_alpha,
+            "session-alpha-copy": override_alpha.model_copy(),
+            "session-beta": override_beta,
+        }.get(session_id),
+    )
+
+    provider_alpha = cast(
+        _CapturingOpenAICompatibleProvider,
+        factory(_build_role(model_profile="default"), "session-alpha"),
+    )
+    provider_alpha_copy = cast(
+        _CapturingOpenAICompatibleProvider,
+        factory(_build_role(model_profile="default"), "session-alpha-copy"),
+    )
+    provider_beta = cast(
+        _CapturingOpenAICompatibleProvider,
+        factory(_build_role(model_profile="default"), "session-beta"),
+    )
+
+    fallback_alpha = cast(
+        LlmFallbackMiddleware, provider_alpha.kwargs["fallback_middleware"]
+    )
+    fallback_alpha_copy = cast(
+        LlmFallbackMiddleware, provider_alpha_copy.kwargs["fallback_middleware"]
+    )
+    fallback_beta = cast(
+        LlmFallbackMiddleware, provider_beta.kwargs["fallback_middleware"]
+    )
+    assert fallback_alpha._cooldown_registry is fallback_alpha_copy._cooldown_registry
+    assert fallback_alpha._cooldown_registry is not fallback_beta._cooldown_registry
+
+
 @pytest.mark.asyncio
 async def test_create_provider_factory_returns_misconfigured_provider_when_no_profiles(
     monkeypatch: pytest.MonkeyPatch,

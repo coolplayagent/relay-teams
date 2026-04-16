@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from hashlib import sha256
+import json
+from threading import Lock
 from typing import TYPE_CHECKING
 
 from relay_teams.external_agents.provider import (
@@ -103,7 +106,19 @@ def create_provider_factory(
     session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
     | None = None,
 ) -> Callable[[RoleDefinition, str | None], LLMProvider]:
-    fallback_cooldown_registry = ProfileCooldownRegistry()
+    fallback_cooldown_registries: dict[tuple[str, ...], ProfileCooldownRegistry] = {}
+    fallback_cooldown_registry_lock = Lock()
+
+    def resolve_fallback_cooldown_registry(
+        runtime_to_use: RuntimeConfig,
+    ) -> ProfileCooldownRegistry:
+        profile_set_key = _build_fallback_profile_set_key(runtime_to_use)
+        with fallback_cooldown_registry_lock:
+            registry = fallback_cooldown_registries.get(profile_set_key)
+            if registry is None:
+                registry = ProfileCooldownRegistry()
+                fallback_cooldown_registries[profile_set_key] = registry
+            return registry
 
     def build_fallback_middleware(
         runtime_to_use: RuntimeConfig,
@@ -115,7 +130,7 @@ def create_provider_factory(
             get_profiles=lambda runtime_to_use=runtime_to_use: (
                 runtime_to_use.llm_profiles
             ),
-            cooldown_registry=fallback_cooldown_registry,
+            cooldown_registry=resolve_fallback_cooldown_registry(runtime_to_use),
         )
 
     def provider_factory(
@@ -219,6 +234,19 @@ def create_provider_factory(
         return provider_registry.create(config_to_use)
 
     return provider_factory
+
+
+def _build_fallback_profile_set_key(runtime: RuntimeConfig) -> tuple[str, ...]:
+    entries: list[str] = []
+    for profile_name, config in sorted(runtime.llm_profiles.items()):
+        serialized_config = json.dumps(
+            config.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        fingerprint = sha256(serialized_config.encode("utf-8")).hexdigest()
+        entries.append(f"{profile_name}:{fingerprint}")
+    return tuple(entries)
 
 
 def apply_default_model_profile_override(
