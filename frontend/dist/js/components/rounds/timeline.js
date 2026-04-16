@@ -942,7 +942,7 @@ function renderRetryEventMarkup(event, nowMs) {
         <div class="round-retry-item${isActive ? ' round-retry-item-active' : ''}${phase === 'failed' ? ' round-retry-item-failed' : ''}">
             <div class="round-retry-main">
                 <span class="round-retry-label">${label}</span>
-                <span class="round-retry-copy">${copy}</span>
+                <span class="round-retry-copy">${esc(copy)}</span>
             </div>
             <div class="round-retry-meta">
                 ${errorCode ? `<span class="round-retry-code">${esc(errorCode)}</span>` : ''}
