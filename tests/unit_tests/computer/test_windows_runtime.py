@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from relay_teams.computer import (
     ComputerObservation,
     ComputerWindow,
@@ -189,6 +191,74 @@ def test_windows_runtime_resolves_calculator_candidates(tmp_path: Path) -> None:
     assert command == ["calc.exe"]
 
 
+def test_windows_runtime_click_translates_virtual_screen_origin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    cursor_positions: list[tuple[int, int]] = []
+    observation = ComputerObservation(text="Windows desktop runtime snapshot.")
+
+    monkeypatch.setattr(runtime, "_get_virtual_screen_origin", lambda: (-1920, -40))
+    monkeypatch.setattr(
+        runtime,
+        "_set_cursor_position",
+        lambda x, y: cursor_positions.append((x, y)),
+    )
+    monkeypatch.setattr(runtime, "_mouse_click", lambda *, repeat: None)
+    monkeypatch.setattr(runtime, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        runtime,
+        "_build_observation",
+        lambda **kwargs: observation,
+    )
+
+    result = asyncio.run(runtime.click_at(x=125, y=250))
+
+    assert cursor_positions == [(-1795, 210)]
+    assert result.action.target.x == 125
+    assert result.action.target.y == 250
+
+
+def test_windows_runtime_drag_translates_virtual_screen_origin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    cursor_positions: list[tuple[int, int]] = []
+    mouse_events: list[int] = []
+    observation = ComputerObservation(text="Windows desktop runtime snapshot.")
+
+    monkeypatch.setattr(runtime, "_get_virtual_screen_origin", lambda: (-1600, -120))
+    monkeypatch.setattr(
+        runtime,
+        "_set_cursor_position",
+        lambda x, y: cursor_positions.append((x, y)),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_send_mouse_event",
+        lambda flags, *, data=0: mouse_events.append(flags),
+    )
+    monkeypatch.setattr(runtime, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        runtime,
+        "_build_observation",
+        lambda **kwargs: observation,
+    )
+
+    result = asyncio.run(
+        runtime.drag_between(start_x=10, start_y=20, end_x=400, end_y=500)
+    )
+
+    assert cursor_positions == [(-1590, -100), (-1200, 380)]
+    assert mouse_events == [0x0002, 0x0004]
+    assert result.action.target.x == 10
+    assert result.action.target.y == 20
+    assert result.action.target.end_x == 400
+    assert result.action.target.end_y == 500
+
+
 def test_windows_runtime_build_launch_window_queries_normalizes_path_command(
     tmp_path: Path,
 ) -> None:
@@ -205,3 +275,12 @@ def test_windows_runtime_build_launch_window_queries_normalizes_path_command(
         "app.exe",
         "app",
     )
+
+
+def test_windows_runtime_wait_for_window_requires_title(
+    tmp_path: Path,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    with pytest.raises(ValueError, match="window_title is required"):
+        asyncio.run(runtime.wait_for_window(window_title="   "))

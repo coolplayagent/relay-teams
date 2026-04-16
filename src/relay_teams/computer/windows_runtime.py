@@ -62,6 +62,8 @@ _VK_NEXT = 0x22
 _VK_INSERT = 0x2D
 _VK_BACK = 0x08
 _VK_LWIN = 0x5B
+_SM_XVIRTUALSCREEN = 76
+_SM_YVIRTUALSCREEN = 77
 
 _PROCESS_CREATION_FLAGS = getattr(
     subprocess,
@@ -276,7 +278,8 @@ class WindowsDesktopRuntime:
         )
 
     def _click_at_sync(self, x: int, y: int) -> ComputerActionResult:
-        self._set_cursor_position(x, y)
+        translated_x, translated_y = self._translate_screenshot_coordinates(x, y)
+        self._set_cursor_position(translated_x, translated_y)
         self._mouse_click(repeat=1)
         self._sleep(_POINTER_SETTLE_SECONDS)
         return self._action_result(
@@ -288,7 +291,8 @@ class WindowsDesktopRuntime:
         )
 
     def _double_click_at_sync(self, x: int, y: int) -> ComputerActionResult:
-        self._set_cursor_position(x, y)
+        translated_x, translated_y = self._translate_screenshot_coordinates(x, y)
+        self._set_cursor_position(translated_x, translated_y)
         self._mouse_click(repeat=2)
         self._sleep(_POINTER_SETTLE_SECONDS)
         return self._action_result(
@@ -306,10 +310,18 @@ class WindowsDesktopRuntime:
         end_x: int,
         end_y: int,
     ) -> ComputerActionResult:
-        self._set_cursor_position(start_x, start_y)
+        translated_start_x, translated_start_y = self._translate_screenshot_coordinates(
+            start_x,
+            start_y,
+        )
+        translated_end_x, translated_end_y = self._translate_screenshot_coordinates(
+            end_x,
+            end_y,
+        )
+        self._set_cursor_position(translated_start_x, translated_start_y)
         self._send_mouse_event(_MOUSEEVENTF_LEFTDOWN)
         self._sleep(_POINTER_SETTLE_SECONDS)
-        self._set_cursor_position(end_x, end_y)
+        self._set_cursor_position(translated_end_x, translated_end_y)
         self._sleep(_POINTER_SETTLE_SECONDS)
         self._send_mouse_event(_MOUSEEVENTF_LEFTUP)
         self._sleep(_POINTER_SETTLE_SECONDS)
@@ -414,7 +426,10 @@ class WindowsDesktopRuntime:
         )
 
     def _wait_for_window_sync(self, window_title: str) -> ComputerActionResult:
-        matched_window = self._wait_for_window_match(queries=(window_title,))
+        normalized_title = window_title.strip()
+        if not normalized_title:
+            raise ValueError("window_title is required")
+        matched_window = self._wait_for_window_match(queries=(normalized_title,))
         if matched_window is None:
             raise RuntimeError(f"Window not found within timeout: {window_title}")
         observation = self._build_observation(
@@ -914,6 +929,19 @@ class WindowsDesktopRuntime:
                 flags=_KEYEVENTF_KEYUP,
             ),
         ]
+
+    def _translate_screenshot_coordinates(self, x: int, y: int) -> tuple[int, int]:
+        origin_x, origin_y = self._get_virtual_screen_origin()
+        return x + origin_x, y + origin_y
+
+    def _get_virtual_screen_origin(self) -> tuple[int, int]:
+        user32 = self._load_user32()
+        user32.GetSystemMetrics.argtypes = (ctypes.c_int,)
+        user32.GetSystemMetrics.restype = ctypes.c_int
+        return (
+            int(user32.GetSystemMetrics(_SM_XVIRTUALSCREEN)),
+            int(user32.GetSystemMetrics(_SM_YVIRTUALSCREEN)),
+        )
 
     def _keyboard_input(
         self,
