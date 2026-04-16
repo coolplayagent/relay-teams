@@ -139,6 +139,58 @@ console.log(JSON.stringify({
     ]
 
 
+def test_route_event_routes_fallback_events(tmp_path: Path) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+
+routeEvent('llm_fallback_activated', { from_profile_id: 'default', to_profile_id: 'secondary' }, { run_id: 'run-1', trace_id: 'run-1' });
+routeEvent('llm_fallback_exhausted', { from_profile_id: 'default' }, { run_id: 'run-1', trace_id: 'run-1' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    recoveryCalls: globalThis.__scheduleRecoveryContinuityRefreshCalls,
+    runEventCalls: globalThis.__runEventCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["recoveryCalls"] == [
+        {
+            "sessionId": "session-1",
+            "delayMs": 0,
+            "includeRounds": False,
+            "quiet": True,
+            "reason": "llm_fallback_activated",
+        },
+        {
+            "sessionId": "session-1",
+            "delayMs": 0,
+            "includeRounds": False,
+            "quiet": True,
+            "reason": "llm_fallback_exhausted",
+        },
+    ]
+    assert payload["runEventCalls"] == [
+        {
+            "name": "handleLlmFallbackActivated",
+            "args": [
+                {"from_profile_id": "default", "to_profile_id": "secondary"},
+                {"run_id": "run-1", "trace_id": "run-1"},
+            ],
+        },
+        {
+            "name": "handleLlmFallbackExhausted",
+            "args": [
+                {"from_profile_id": "default"},
+                {"run_id": "run-1", "trace_id": "run-1"},
+            ],
+        },
+    ]
+
+
 def test_handle_subagent_run_terminal_finalizes_with_run_id(
     tmp_path: Path,
 ) -> None:
@@ -611,6 +663,8 @@ function pushCall(name, args) {
 
 export function handleLlmRetryExhausted(...args) { pushCall('handleLlmRetryExhausted', args); }
 export function handleLlmRetryScheduled(...args) { pushCall('handleLlmRetryScheduled', args); }
+export function handleLlmFallbackActivated(...args) { pushCall('handleLlmFallbackActivated', args); }
+export function handleLlmFallbackExhausted(...args) { pushCall('handleLlmFallbackExhausted', args); }
 export function handleModelStepFinished(...args) { pushCall('handleModelStepFinished', args); }
 export function handleModelStepStarted(...args) { pushCall('handleModelStepStarted', args); }
 export function handleOutputDelta(...args) { pushCall('handleOutputDelta', args); }
