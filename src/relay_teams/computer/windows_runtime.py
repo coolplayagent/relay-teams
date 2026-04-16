@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import time
 from ctypes import wintypes
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from relay_teams.computer.models import (
     ComputerActionDescriptor,
@@ -736,7 +736,7 @@ class WindowsDesktopRuntime:
             normalized_token = token.strip().strip('"').strip("'")
             if not normalized_token:
                 continue
-            token_path = Path(normalized_token)
+            token_path = PureWindowsPath(normalized_token)
             candidate_queries.append(normalized_token)
             candidate_queries.append(token_path.name)
             if token_path.suffix:
