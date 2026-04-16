@@ -67,6 +67,29 @@ def test_extract_retry_error_info_reads_provider_code_without_status() -> None:
     assert info.retryable is False
 
 
+def test_extract_retry_error_info_marks_maas_stream_rate_limit_as_retryable() -> None:
+    request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+    exc = APIError(
+        "An error occurred during streaming",
+        request=request,
+        body={
+            "error_msg": "Too many requests, the rate limit is 8000000 tokens per minute.",
+            "error_code": "InferHub.ModelArts.81101.429",
+        },
+    )
+
+    info = extract_retry_error_info(exc)
+
+    assert info is not None
+    assert info.status_code == 429
+    assert info.error_code == "InferHub.ModelArts.81101.429"
+    assert (
+        info.message
+        == "Too many requests, the rate limit is 8000000 tokens per minute."
+    )
+    assert info.retryable is True
+
+
 def test_extract_retry_error_info_marks_408_and_409_as_retryable() -> None:
     request = httpx.Request("POST", "https://example.test/v1/chat/completions")
     response_408 = httpx.Response(408, request=request)
