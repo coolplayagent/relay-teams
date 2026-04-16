@@ -84,6 +84,17 @@ def test_windows_runtime_list_windows_marks_active_window(
         assert require_input is False
         return windows
 
+    def fail_capture_screenshot_bytes(
+        *,
+        required: bool,
+    ) -> tuple[bytes | None, str, str | None, int | None, int | None]:
+        raise AssertionError(f"unexpected screenshot capture: {required}")
+
+    monkeypatch.setattr(
+        runtime,
+        "_capture_screenshot_bytes",
+        fail_capture_screenshot_bytes,
+    )
     monkeypatch.setattr(runtime, "_list_windows_snapshot", fake_list_windows_snapshot)
 
     result = asyncio.run(runtime.list_windows())
@@ -132,10 +143,10 @@ def test_windows_runtime_launch_app_records_real_command(
 
     def fake_wait_for_window_match(
         *,
-        query: str,
+        queries: tuple[str, ...],
         before_windows: tuple[ComputerWindow, ...] = (),
     ) -> ComputerWindow:
-        assert query == "Calculator"
+        assert queries == ("Calculator", "calc.exe", "calc")
         assert before_windows == ()
         return matched_window
 
@@ -176,3 +187,21 @@ def test_windows_runtime_resolves_calculator_candidates(tmp_path: Path) -> None:
     command = runtime._resolve_launch_command("Calculator")
 
     assert command == ["calc.exe"]
+
+
+def test_windows_runtime_build_launch_window_queries_normalizes_path_command(
+    tmp_path: Path,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    queries = runtime._build_launch_window_queries(
+        app_name='"C:\\Program Files\\App\\app.exe" --flag',
+        command=["C:\\Program Files\\App\\app.exe", "--flag"],
+    )
+
+    assert queries == (
+        '"C:\\Program Files\\App\\app.exe" --flag',
+        "C:\\Program Files\\App\\app.exe",
+        "app.exe",
+        "app",
+    )

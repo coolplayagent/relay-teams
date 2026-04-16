@@ -377,8 +377,12 @@ class WindowsDesktopRuntime:
         )
         command = self._resolve_launch_command(app_name)
         self._spawn_process(command)
+        window_queries = self._build_launch_window_queries(
+            app_name=app_name,
+            command=command,
+        )
         matched_window = self._wait_for_window_match(
-            query=app_name,
+            queries=window_queries,
             before_windows=before_windows,
         )
         if matched_window is None:
@@ -410,7 +414,7 @@ class WindowsDesktopRuntime:
         )
 
     def _wait_for_window_sync(self, window_title: str) -> ComputerActionResult:
-        matched_window = self._wait_for_window_match(query=window_title)
+        matched_window = self._wait_for_window_match(queries=(window_title,))
         if matched_window is None:
             raise RuntimeError(f"Window not found within timeout: {window_title}")
         observation = self._build_observation(
@@ -487,13 +491,19 @@ class WindowsDesktopRuntime:
         require_input: bool,
         require_screenshot: bool,
     ) -> ComputerObservation:
-        (
-            screenshot_bytes,
-            screenshot_name,
-            screenshot_mime_type,
-            screenshot_width,
-            screenshot_height,
-        ) = self._capture_screenshot_bytes(required=require_screenshot)
+        screenshot_bytes: bytes | None = None
+        screenshot_name = ""
+        screenshot_mime_type: str | None = None
+        screenshot_width: int | None = None
+        screenshot_height: int | None = None
+        if require_screenshot:
+            (
+                screenshot_bytes,
+                screenshot_name,
+                screenshot_mime_type,
+                screenshot_width,
+                screenshot_height,
+            ) = self._capture_screenshot_bytes(required=True)
         windows = self._list_windows_snapshot(
             require_windows=require_windows,
             require_input=require_input,
@@ -668,10 +678,10 @@ class WindowsDesktopRuntime:
     def _wait_for_window_match(
         self,
         *,
-        query: str,
+        queries: tuple[str, ...] = (),
         before_windows: tuple[ComputerWindow, ...] = (),
     ) -> ComputerWindow | None:
-        normalized_query = query.strip()
+        normalized_queries = self._normalize_match_queries(*queries)
         before_ids = {window.window_id for window in before_windows}
         deadline = self._time_monotonic() + _WAIT_TIMEOUT_SECONDS
         while self._time_monotonic() < deadline:
@@ -682,14 +692,74 @@ class WindowsDesktopRuntime:
             for window in windows:
                 is_new_window = window.window_id not in before_ids
                 if is_new_window and (
-                    not normalized_query
-                    or self._window_matches(window, normalized_query)
+                    not normalized_queries
+                    or self._window_matches_any(window, normalized_queries)
                 ):
                     return window
-                if normalized_query and self._window_matches(window, normalized_query):
+                if normalized_queries and self._window_matches_any(
+                    window,
+                    normalized_queries,
+                ):
                     return window
             self._sleep(_POLL_INTERVAL_SECONDS)
         return None
+
+    def _build_launch_window_queries(
+        self,
+        *,
+        app_name: str,
+        command: list[str],
+    ) -> tuple[str, ...]:
+        raw_query = app_name.strip()
+        parsed_command = shlex.split(raw_query, posix=False)
+        first_input_token = parsed_command[0] if parsed_command else raw_query
+        command_token = self._launch_match_token(command)
+        candidate_queries: list[str] = [raw_query]
+        for token in (first_input_token, command_token):
+            if token is None:
+                continue
+            normalized_token = token.strip().strip('"').strip("'")
+            if not normalized_token:
+                continue
+            token_path = Path(normalized_token)
+            candidate_queries.append(normalized_token)
+            candidate_queries.append(token_path.name)
+            if token_path.suffix:
+                candidate_queries.append(token_path.stem)
+        return self._normalize_match_queries(*candidate_queries)
+
+    def _launch_match_token(self, command: list[str]) -> str | None:
+        if not command:
+            return None
+        if (
+            len(command) >= 5
+            and command[0].casefold() == "cmd"
+            and command[1].casefold() == "/c"
+            and command[2].casefold() == "start"
+        ):
+            return command[4]
+        return command[0]
+
+    def _normalize_match_queries(self, *queries: str) -> tuple[str, ...]:
+        normalized_queries: list[str] = []
+        seen_queries: set[str] = set()
+        for query in queries:
+            normalized_query = query.strip()
+            if not normalized_query:
+                continue
+            dedupe_key = normalized_query.casefold()
+            if dedupe_key in seen_queries:
+                continue
+            normalized_queries.append(normalized_query)
+            seen_queries.add(dedupe_key)
+        return tuple(normalized_queries)
+
+    def _window_matches_any(
+        self,
+        window: ComputerWindow,
+        queries: tuple[str, ...],
+    ) -> bool:
+        return any(self._window_matches(window, query) for query in queries)
 
     def _window_matches(self, window: ComputerWindow, query: str) -> bool:
         normalized_query = query.casefold()
