@@ -103,6 +103,7 @@ from relay_teams.providers.model_config import ModelEndpointConfig
 from relay_teams.providers.model_fallback_config_manager import (
     ModelFallbackConfigManager,
 )
+from relay_teams.providers.model_fallback import LlmFallbackMiddleware
 from relay_teams.net.llm_client import clear_llm_http_client_cache
 from relay_teams.providers.provider_factory import (
     apply_default_model_profile_override,
@@ -939,6 +940,10 @@ class ServerContainer:
             retry_config=self.runtime.llm_retry,
             message_repo=self.message_repo,
             role_memory_service=self.role_memory_service,
+            fallback_middleware=LlmFallbackMiddleware(
+                get_fallback_config=lambda: self.runtime.model_fallback,
+                get_profiles=lambda: self.runtime.llm_profiles,
+            ),
         )
 
     async def start(self) -> None:

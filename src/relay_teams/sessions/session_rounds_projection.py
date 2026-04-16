@@ -100,6 +100,7 @@ def build_session_rounds(
         messages_by_run[run_id].append(message)
 
     retry_events_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
+    fallback_events_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
     completed_output_by_run: dict[str, dict[str, str]] = {}
     microcompact_by_run: dict[str, dict[str, object]] = {}
     retry_clear_events = {
@@ -152,47 +153,51 @@ def build_session_rounds(
             continue
         if event_type == RunEventType.LLM_FALLBACK_ACTIVATED.value:
             payload = _parse_event_payload(event.get("payload_json"))
-            active_retry_by_run[run_id] = {
-                "kind": "fallback",
-                "occurred_at": str(event.get("occurred_at") or ""),
-                "instance_id": payload.get("instance_id", ""),
-                "role_id": payload.get("role_id", ""),
-                "attempt_number": payload.get("attempt_number", 0),
-                "total_attempts": payload.get("total_attempts", 0),
-                "retry_in_ms": 0,
-                "phase": "activated",
-                "is_active": False,
-                "error_code": payload.get("reason", ""),
-                "error_message": "",
-                "from_profile_id": payload.get("from_profile_id", ""),
-                "to_profile_id": payload.get("to_profile_id", ""),
-                "from_provider": payload.get("from_provider", ""),
-                "to_provider": payload.get("to_provider", ""),
-                "from_model": payload.get("from_model", ""),
-                "to_model": payload.get("to_model", ""),
-                "hop": payload.get("hop", 0),
-                "strategy_id": payload.get("strategy_id", ""),
-            }
+            fallback_events_by_run[run_id].append(
+                {
+                    "kind": "fallback",
+                    "occurred_at": str(event.get("occurred_at") or ""),
+                    "instance_id": payload.get("instance_id", ""),
+                    "role_id": payload.get("role_id", ""),
+                    "attempt_number": payload.get("attempt_number", 0),
+                    "total_attempts": payload.get("total_attempts", 0),
+                    "retry_in_ms": 0,
+                    "phase": "activated",
+                    "is_active": False,
+                    "error_code": payload.get("reason", ""),
+                    "error_message": "",
+                    "from_profile_id": payload.get("from_profile_id", ""),
+                    "to_profile_id": payload.get("to_profile_id", ""),
+                    "from_provider": payload.get("from_provider", ""),
+                    "to_provider": payload.get("to_provider", ""),
+                    "from_model": payload.get("from_model", ""),
+                    "to_model": payload.get("to_model", ""),
+                    "hop": payload.get("hop", 0),
+                    "strategy_id": payload.get("strategy_id", ""),
+                }
+            )
             continue
         if event_type == RunEventType.LLM_FALLBACK_EXHAUSTED.value:
             payload = _parse_event_payload(event.get("payload_json"))
-            active_retry_by_run[run_id] = {
-                "kind": "fallback",
-                "occurred_at": str(event.get("occurred_at") or ""),
-                "instance_id": payload.get("instance_id", ""),
-                "role_id": payload.get("role_id", ""),
-                "attempt_number": payload.get("attempt_number", 0),
-                "total_attempts": payload.get("total_attempts", 0),
-                "retry_in_ms": 0,
-                "phase": "failed",
-                "is_active": False,
-                "error_code": payload.get("error_code", ""),
-                "error_message": payload.get("error_message", ""),
-                "from_profile_id": payload.get("from_profile_id", ""),
-                "from_provider": payload.get("from_provider", ""),
-                "from_model": payload.get("from_model", ""),
-                "hop": payload.get("hop", 0),
-            }
+            fallback_events_by_run[run_id].append(
+                {
+                    "kind": "fallback",
+                    "occurred_at": str(event.get("occurred_at") or ""),
+                    "instance_id": payload.get("instance_id", ""),
+                    "role_id": payload.get("role_id", ""),
+                    "attempt_number": payload.get("attempt_number", 0),
+                    "total_attempts": payload.get("total_attempts", 0),
+                    "retry_in_ms": 0,
+                    "phase": "failed",
+                    "is_active": False,
+                    "error_code": payload.get("error_code", ""),
+                    "error_message": payload.get("error_message", ""),
+                    "from_profile_id": payload.get("from_profile_id", ""),
+                    "from_provider": payload.get("from_provider", ""),
+                    "from_model": payload.get("from_model", ""),
+                    "hop": payload.get("hop", 0),
+                }
+            )
             continue
         if event_type == RunEventType.RUN_COMPLETED.value:
             payload = _parse_event_payload(event.get("payload_json"))
@@ -220,8 +225,10 @@ def build_session_rounds(
         ):
             active_retry_by_run.pop(run_id, None)
             continue
+    for run_id, fallback_events in fallback_events_by_run.items():
+        retry_events_by_run[run_id].extend(fallback_events)
     for run_id, retry_event in active_retry_by_run.items():
-        retry_events_by_run[run_id] = [retry_event]
+        retry_events_by_run[run_id].append(retry_event)
 
     run_ids = set(root_task_by_run.keys())
     run_ids.update(messages_by_run.keys())

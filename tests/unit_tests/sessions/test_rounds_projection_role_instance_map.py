@@ -449,6 +449,71 @@ def test_build_session_rounds_keeps_fallback_event_after_run_completed() -> None
     assert retry_events[0]["phase"] == "activated"
 
 
+def test_build_session_rounds_keeps_fallback_history_when_retry_follows() -> None:
+    session_id = "session-1"
+    run_id = "run-1"
+    root_task = TaskRecord(
+        envelope=TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            objective="root",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        ),
+    )
+    runtime = RunRuntimeRecord(
+        run_id=run_id,
+        session_id=session_id,
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+    )
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=cast(AgentInstanceRepository, cast(object, _FakeAgentRepo())),
+        task_repo=cast(TaskRepository, cast(object, _FakeTaskRepo((root_task,)))),
+        approval_tickets_by_run={},
+        run_runtime_repo=cast(
+            RunRuntimeRepository,
+            cast(object, _FakeRunRuntimeRepo((runtime,))),
+        ),
+        get_session_messages=lambda _: [],
+        get_session_events=lambda _: [
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.LLM_FALLBACK_ACTIVATED.value,
+                "occurred_at": "2026-03-19T12:00:05Z",
+                "payload_json": (
+                    '{"from_profile_id":"primary","to_profile_id":"secondary",'
+                    '"strategy_id":"same_provider_then_other_provider","hop":1}'
+                ),
+            },
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.LLM_RETRY_SCHEDULED.value,
+                "occurred_at": "2026-03-19T12:00:06Z",
+                "payload_json": (
+                    '{"attempt_number":2,"total_attempts":6,"retry_in_ms":2000,'
+                    '"error_code":"network_error"}'
+                ),
+            },
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.RUN_COMPLETED.value,
+                "occurred_at": "2026-03-19T12:00:08Z",
+                "payload_json": '{"completion_reason":"assistant_response"}',
+            },
+        ],
+    )
+
+    retry_events = cast(list[dict[str, object]], rounds[0]["retry_events"])
+    assert len(retry_events) == 1
+    assert retry_events[0]["kind"] == "fallback"
+    assert retry_events[0]["to_profile_id"] == "secondary"
+    assert retry_events[0]["phase"] == "activated"
+
+
 def test_build_session_rounds_excludes_background_subagent_runs() -> None:
     session_id = "session-1"
     main_run_id = "run-1"
