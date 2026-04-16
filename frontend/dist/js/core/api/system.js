@@ -186,6 +186,14 @@ export async function fetchModelProfiles(options = {}) {
     );
 }
 
+export async function fetchModelFallbackConfig() {
+    return requestJson(
+        '/api/system/configs/model-fallback',
+        undefined,
+        'Failed to fetch model fallback config',
+    );
+}
+
 export async function probeModelConnection(payload) {
     return requestJson(
         '/api/system/configs/model:probe',

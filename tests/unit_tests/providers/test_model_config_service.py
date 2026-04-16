@@ -4,9 +4,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
-from relay_teams.providers.model_config import ModelConfigPayload
+from relay_teams.providers.model_config import (
+    ModelConfigPayload,
+    default_model_fallback_config,
+)
 from relay_teams.providers.model_config_manager import ModelConfigManager
 from relay_teams.providers.model_config_service import ModelConfigService
+from relay_teams.providers.model_fallback_config_manager import (
+    ModelFallbackConfigManager,
+)
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig
 
 
@@ -36,6 +42,15 @@ class _RecordingModelConfigManager:
         self.saved_config = config
 
 
+class _RecordingModelFallbackConfigManager:
+    def get_model_fallback_config(self) -> object:
+        return default_model_fallback_config()
+
+    def save_model_fallback_config(self, config: object) -> None:
+        _ = config
+        return None
+
+
 def test_save_model_config_preserves_omitted_optional_fields() -> None:
     manager = _RecordingModelConfigManager()
     service = ModelConfigService(
@@ -43,6 +58,10 @@ def test_save_model_config_preserves_omitted_optional_fields() -> None:
         roles_dir=Path("."),
         db_path=Path("relay-teams.db"),
         model_config_manager=cast(ModelConfigManager, manager),
+        model_fallback_config_manager=cast(
+            ModelFallbackConfigManager,
+            _RecordingModelFallbackConfigManager(),
+        ),
         get_runtime=lambda: RuntimeConfig.model_construct(),
         on_runtime_reloaded=lambda runtime: None,
     )

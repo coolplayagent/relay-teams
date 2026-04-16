@@ -50,6 +50,7 @@ export {
     deleteGitHubRepoSubscription,
     deleteGitHubTriggerRule,
     fetchModelConfig,
+    fetchModelFallbackConfig,
     fetchModelProfiles,
     fetchNotificationConfig,
     fetchOrchestrationConfig,

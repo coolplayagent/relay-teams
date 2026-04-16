@@ -100,6 +100,10 @@ from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
 from relay_teams.providers.model_config_manager import ModelConfigManager
 from relay_teams.providers.model_config_service import ModelConfigService
 from relay_teams.providers.model_config import ModelEndpointConfig
+from relay_teams.providers.model_fallback_config_manager import (
+    ModelFallbackConfigManager,
+)
+from relay_teams.providers.model_fallback import LlmFallbackMiddleware
 from relay_teams.net.llm_client import clear_llm_http_client_cache
 from relay_teams.providers.provider_factory import (
     apply_default_model_profile_override,
@@ -215,6 +219,9 @@ class ServerContainer:
         self._session_model_profile_lookup = session_model_profile_lookup
 
         self.model_config_manager: ModelConfigManager = ModelConfigManager(
+            config_dir=app_config_dir
+        )
+        self.model_fallback_config_manager = ModelFallbackConfigManager(
             config_dir=app_config_dir
         )
         self.notification_config_manager: NotificationConfigManager = (
@@ -771,6 +778,7 @@ class ServerContainer:
             roles_dir=self.runtime.paths.roles_dir,
             db_path=self.runtime.paths.db_path,
             model_config_manager=self.model_config_manager,
+            model_fallback_config_manager=self.model_fallback_config_manager,
             get_runtime=lambda: self.runtime,
             on_runtime_reloaded=self._on_runtime_reloaded,
         )
@@ -893,6 +901,13 @@ class ServerContainer:
             return profile
         return None
 
+    def _resolve_reflection_model_profile_name(self) -> str | None:
+        if self.runtime.default_model_profile is not None:
+            return self.runtime.default_model_profile
+        for profile_name in self.runtime.llm_profiles.keys():
+            return profile_name
+        return None
+
     def _resolve_external_agent_model_config(
         self,
         role: RoleDefinition,
@@ -921,9 +936,14 @@ class ServerContainer:
             return None
         return SubagentReflectionService(
             config=reflection_config,
+            profile_name=self._resolve_reflection_model_profile_name(),
             retry_config=self.runtime.llm_retry,
             message_repo=self.message_repo,
             role_memory_service=self.role_memory_service,
+            fallback_middleware=LlmFallbackMiddleware(
+                get_fallback_config=lambda: self.runtime.model_fallback,
+                get_profiles=lambda: self.runtime.llm_profiles,
+            ),
         )
 
     async def start(self) -> None:

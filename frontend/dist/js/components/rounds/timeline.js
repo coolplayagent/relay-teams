@@ -903,6 +903,7 @@ function renderRoundRetryEvents(section, retryEvents) {
 }
 
 function renderRetryEventMarkup(event, nowMs) {
+    const kind = String(event?.kind || 'retry').trim() || 'retry';
     const attemptNumber = Number(event?.attempt_number || 0);
     const totalAttempts = Number(event?.total_attempts || 0);
     const isActive = event?.is_active === true;
@@ -918,21 +919,30 @@ function renderRetryEventMarkup(event, nowMs) {
     const errorMessage = String(event?.error_message || '').trim();
     const occurredAt = String(event?.occurred_at || '').trim();
     const occurredLabel = occurredAt ? new Date(occurredAt).toLocaleTimeString() : '';
-    const copy = phase === 'retrying'
+    const fallbackTarget = String(event?.to_profile_id || event?.to_model || '').trim();
+    const fallbackCopy = phase === 'failed'
+        ? 'No fallback candidate succeeded'
+        : fallbackTarget
+            ? `Switched to ${fallbackTarget}`
+            : 'Fallback activated';
+    const retryCopy = phase === 'retrying'
         ? `Attempt ${attemptNumber}/${totalAttempts} in progress`
         : phase === 'failed'
             ? `Attempt ${attemptNumber}/${totalAttempts} failed`
             : `Attempt ${attemptNumber}/${totalAttempts} in ${retrySeconds}`;
-    const label = phase === 'retrying'
+    const copy = kind === 'fallback' ? fallbackCopy : retryCopy;
+    const fallbackLabel = phase === 'failed' ? 'Fallback failed' : 'Fallback';
+    const retryLabel = phase === 'retrying'
         ? 'Retrying'
         : phase === 'failed'
             ? 'Retry failed'
             : 'Retry scheduled';
+    const label = kind === 'fallback' ? fallbackLabel : retryLabel;
     return `
         <div class="round-retry-item${isActive ? ' round-retry-item-active' : ''}${phase === 'failed' ? ' round-retry-item-failed' : ''}">
             <div class="round-retry-main">
                 <span class="round-retry-label">${label}</span>
-                <span class="round-retry-copy">${copy}</span>
+                <span class="round-retry-copy">${esc(copy)}</span>
             </div>
             <div class="round-retry-meta">
                 ${errorCode ? `<span class="round-retry-code">${esc(errorCode)}</span>` : ''}

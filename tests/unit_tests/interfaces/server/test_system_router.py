@@ -73,6 +73,9 @@ from relay_teams.providers.model_connectivity import (
 from relay_teams.providers.model_config import (
     DEFAULT_MAAS_BASE_URL,
     ModelConfigPayload,
+    ModelFallbackConfig,
+    ModelFallbackPolicy,
+    ModelFallbackStrategy,
     ProviderModelInfo,
     ProviderType,
 )
@@ -91,6 +94,7 @@ class _FakeSystemService:
         self.saved_notification_config: dict[str, object] | None = None
         self.saved_orchestration_config: dict[str, object] | None = None
         self.saved_model_config: dict[str, object] | None = None
+        self.saved_model_fallback_config: dict[str, object] | None = None
         self.saved_model_profile: tuple[str, dict[str, object], str | None] | None = (
             None
         )
@@ -181,8 +185,21 @@ class _FakeSystemService:
                 "headers": [],
                 "is_default": True,
                 "context_window": 128000,
+                "fallback_policy_id": "same_provider_then_other_provider",
+                "fallback_priority": 3,
             }
         }
+
+    def get_model_fallback_config(self) -> ModelFallbackConfig:
+        return ModelFallbackConfig(
+            policies=(
+                ModelFallbackPolicy(
+                    policy_id="same_provider_then_other_provider",
+                    name="Same Provider Then Other Provider",
+                    strategy=(ModelFallbackStrategy.SAME_PROVIDER_THEN_OTHER_PROVIDER),
+                ),
+            )
+        )
 
     def save_model_profile(
         self,
@@ -204,6 +221,9 @@ class _FakeSystemService:
         if self.model_config_error is not None:
             raise self.model_config_error
         self.saved_model_config = config.model_dump(mode="json")
+
+    def save_model_fallback_config(self, config: ModelFallbackConfig) -> None:
+        self.saved_model_fallback_config = config.model_dump(mode="json")
 
     def reload_model_config(self) -> None:
         if self.model_reload_error is not None:
@@ -706,6 +726,8 @@ def test_save_model_profile_includes_connect_timeout_seconds() -> None:
             "top_p": 1.0,
             "max_tokens": 2048,
             "context_window": 128000,
+            "fallback_policy_id": "same_provider_then_other_provider",
+            "fallback_priority": 5,
             "connect_timeout_seconds": 25.0,
         },
     )
@@ -716,7 +738,76 @@ def test_save_model_profile_includes_connect_timeout_seconds() -> None:
     _, saved_profile, source_name = service.saved_model_profile
     assert saved_profile["connect_timeout_seconds"] == 25.0
     assert saved_profile["context_window"] == 128000
+    assert saved_profile["fallback_policy_id"] == ("same_provider_then_other_provider")
+    assert saved_profile["fallback_priority"] == 5
     assert source_name is None
+
+
+def test_save_model_profile_omits_fallback_settings_when_not_provided() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/default",
+        json={
+            "provider": "openai_compatible",
+            "model": "gpt-4o-mini",
+            "base_url": "https://example.test/v1",
+            "api_key": "secret",
+            "temperature": 0.2,
+            "top_p": 1.0,
+            "context_window": 128000,
+            "connect_timeout_seconds": 25.0,
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    assert "fallback_policy_id" not in saved_profile
+    assert "fallback_priority" not in saved_profile
+
+
+def test_get_model_fallback_config() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/configs/model-fallback")
+
+    assert response.status_code == 200
+    payload = response.json()
+    policies = cast(list[dict[str, object]], payload["policies"])
+    assert policies[0]["policy_id"] == "same_provider_then_other_provider"
+
+
+def test_save_model_fallback_config() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model-fallback",
+        json={
+            "policies": [
+                {
+                    "policy_id": "same_provider_then_other_provider",
+                    "name": "Same Provider Then Other Provider",
+                    "enabled": True,
+                    "trigger": "rate_limit_after_retries",
+                    "strategy": "same_provider_then_other_provider",
+                    "max_hops": 4,
+                    "cooldown_seconds": 90,
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.saved_model_fallback_config is not None
+    saved_policies = cast(
+        list[dict[str, object]],
+        service.saved_model_fallback_config["policies"],
+    )
+    assert saved_policies[0]["max_hops"] == 4
 
 
 def test_save_notification_config() -> None:
@@ -1144,23 +1235,23 @@ def test_save_model_config() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-    assert service.saved_model_config == {
-        "default": {
-            "provider": "openai_compatible",
-            "model": "gpt-4o-mini",
-            "base_url": "https://example.test/v1",
-            "api_key": "secret",
-            "headers": [],
-            "temperature": 0.2,
-            "top_p": 1.0,
-            "max_tokens": 2048,
-            "context_window": 128000,
-            "connect_timeout_seconds": 25.0,
-            "is_default": True,
-            "maas_auth": None,
-            "ssl_verify": None,
-        }
-    }
+    assert service.saved_model_config is not None
+    saved_default = cast(dict[str, object], service.saved_model_config["default"])
+    assert saved_default["provider"] == "openai_compatible"
+    assert saved_default["model"] == "gpt-4o-mini"
+    assert saved_default["base_url"] == "https://example.test/v1"
+    assert saved_default["api_key"] == "secret"
+    assert saved_default["headers"] == []
+    assert saved_default["temperature"] == 0.2
+    assert saved_default["top_p"] == 1.0
+    assert saved_default["max_tokens"] == 2048
+    assert saved_default["context_window"] == 128000
+    assert saved_default["connect_timeout_seconds"] == 25.0
+    assert saved_default["is_default"] is True
+    assert saved_default["fallback_policy_id"] is None
+    assert saved_default["fallback_priority"] == 0
+    assert saved_default["maas_auth"] is None
+    assert saved_default["ssl_verify"] is None
 
 
 def test_save_model_config_accepts_legacy_wrapper_payload() -> None:
@@ -1219,6 +1310,10 @@ def test_get_model_profiles_returns_api_key() -> None:
     assert payload["default"]["has_api_key"] is True
     assert payload["default"]["is_default"] is True
     assert payload["default"]["context_window"] == 128000
+    assert payload["default"]["fallback_policy_id"] == (
+        "same_provider_then_other_provider"
+    )
+    assert payload["default"]["fallback_priority"] == 3
 
 
 def test_get_model_profiles_returns_maas_password() -> None:

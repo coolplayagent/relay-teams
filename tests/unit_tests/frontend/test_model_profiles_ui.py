@@ -40,6 +40,23 @@ export async function fetchModelProfiles() {
     };
 }
 
+export async function fetchModelFallbackConfig() {
+    return {
+        policies: [
+            {
+                policy_id: "same_provider_then_other_provider",
+                name: "Same Provider Then Other Provider",
+                enabled: true,
+            },
+            {
+                policy_id: "other_provider_only",
+                name: "Other Provider Only",
+                enabled: true,
+            },
+        ],
+    };
+}
+
 export async function probeModelConnection(payload) {
     globalThis.__probePayload = payload;
     return {
@@ -131,6 +148,44 @@ console.log(JSON.stringify({
     assert saved_profile_body["provider"] == "openai_compatible"
     assert saved_profile_body["is_default"] is True
     assert saved_profile_body["context_window"] == 128000
+    assert saved_profile_body["fallback_policy_id"] is None
+    assert saved_profile_body["fallback_priority"] == 0
+
+
+def test_saving_model_profile_includes_fallback_settings(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-name").value = "fallback-profile";
+document.getElementById("profile-provider").value = "openai_compatible";
+document.getElementById("profile-model").value = "reasoning-model";
+document.getElementById("profile-base-url").value = "http://127.0.0.1:8001/v1";
+document.getElementById("profile-api-key").value = "test-api-key";
+document.getElementById("profile-fallback-policy").value = "other_provider_only";
+document.getElementById("profile-fallback-priority").value = "9";
+
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    savedProfile: globalThis.__savedProfile,
+}));
+""".strip(),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    assert saved_profile_body["fallback_policy_id"] == "other_provider_only"
+    assert saved_profile_body["fallback_priority"] == 9
 
 
 def test_draft_probe_updates_inline_status_and_payload(tmp_path: Path) -> None:
@@ -1805,7 +1860,15 @@ def _run_model_profiles_script(
     module_under_test_path = tmp_path / "modelProfiles.mjs"
     runner_path = tmp_path / "runner.mjs"
 
-    mock_api_path.write_text(mock_api_source, encoding="utf-8")
+    resolved_mock_api_source = mock_api_source
+    if "fetchModelFallbackConfig" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function fetchModelFallbackConfig() {\n"
+            "    return { policies: [] };\n"
+            "}\n"
+        )
+    mock_api_path.write_text(resolved_mock_api_source, encoding="utf-8")
     mock_logger_path.write_text(
         """
 export function errorToPayload(error, extra = {}) {
@@ -2008,6 +2071,8 @@ function createElements() {{
             ["profile-context-window", createElement("block", "profile-context-window")],
             ["profile-connect-timeout", createElement("block", "profile-connect-timeout")],
             ["profile-ssl-verify", createElement("block", "profile-ssl-verify")],
+            ["profile-fallback-policy", createElement("block", "profile-fallback-policy")],
+            ["profile-fallback-priority", createElement("block", "profile-fallback-priority")],
         ];
         const elements = new Map(entries);
         elements.get("profile-primary-credentials-row")?.appendChild(elements.get("profile-api-key-group"));
