@@ -9,6 +9,7 @@ import logging
 from copy import deepcopy
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
+from enum import StrEnum
 from json import dumps
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -204,6 +205,34 @@ class _FallbackAttemptState(BaseModel):
                 "hop": hop,
                 "visited_profiles": tuple(visited),
             }
+        )
+
+
+class _FallbackAttemptStatus(StrEnum):
+    SKIPPED = "skipped"
+    RECOVERED = "recovered"
+    EXHAUSTED = "exhausted"
+
+
+class _FallbackAttemptOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: _FallbackAttemptStatus
+    response: str | None = None
+
+    @classmethod
+    def skipped(cls) -> "_FallbackAttemptOutcome":
+        return cls(status=_FallbackAttemptStatus.SKIPPED)
+
+    @classmethod
+    def exhausted(cls) -> "_FallbackAttemptOutcome":
+        return cls(status=_FallbackAttemptStatus.EXHAUSTED)
+
+    @classmethod
+    def recovered(cls, response: str) -> "_FallbackAttemptOutcome":
+        return cls(
+            status=_FallbackAttemptStatus.RECOVERED,
+            response=response,
         )
 
 
@@ -1032,7 +1061,7 @@ class AgentLlmSession:
                     fallback_state=resolved_fallback_state,
                 )
             if retry_error is not None and retry_error.retryable:
-                recovered_with_fallback = await self._maybe_fallback_after_retry_exhausted(
+                fallback_outcome = await self._maybe_fallback_after_retry_exhausted(
                     request=request,
                     retry_number=retry_number,
                     total_attempts=total_attempts,
@@ -1043,10 +1072,11 @@ class AgentLlmSession:
                     attempt_messages_committed=attempt_messages_committed,
                     skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
                 )
-                if recovered_with_fallback is not None:
-                    return recovered_with_fallback
+                if fallback_outcome.response is not None:
+                    return fallback_outcome.response
                 if (
-                    self._retry_config.enabled
+                    fallback_outcome.status != _FallbackAttemptStatus.EXHAUSTED
+                    and self._retry_config.enabled
                     and retry_number >= self._retry_config.max_retries
                 ):
                     self._handle_retry_exhausted(
@@ -1133,7 +1163,7 @@ class AgentLlmSession:
                     },
                     exc_info=exc,
                 )
-                recovered_with_fallback = await self._maybe_fallback_after_retry_exhausted(
+                fallback_outcome = await self._maybe_fallback_after_retry_exhausted(
                     request=request,
                     retry_number=retry_number,
                     total_attempts=total_attempts,
@@ -1144,10 +1174,11 @@ class AgentLlmSession:
                     attempt_messages_committed=attempt_messages_committed,
                     skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
                 )
-                if recovered_with_fallback is not None:
-                    return recovered_with_fallback
+                if fallback_outcome.response is not None:
+                    return fallback_outcome.response
                 if retry_error.retryable and (
-                    self._retry_config.enabled
+                    fallback_outcome.status != _FallbackAttemptStatus.EXHAUSTED
+                    and self._retry_config.enabled
                     and retry_number >= self._retry_config.max_retries
                 ):
                     self._handle_retry_exhausted(
@@ -1355,7 +1386,7 @@ class AgentLlmSession:
         attempt_tool_event_emitted: bool,
         attempt_messages_committed: bool,
         skip_initial_user_prompt_persist: bool,
-    ) -> str | None:
+    ) -> _FallbackAttemptOutcome:
         if not self._can_attempt_fallback(
             retry_error=retry_error,
             retry_number=retry_number,
@@ -1363,14 +1394,14 @@ class AgentLlmSession:
             attempt_tool_event_emitted=attempt_tool_event_emitted,
             attempt_messages_committed=attempt_messages_committed,
         ):
-            return None
+            return _FallbackAttemptOutcome.skipped()
         fallback_middleware = getattr(
             self,
             "_fallback_middleware",
             DisabledLlmFallbackMiddleware(),
         )
         if not fallback_middleware.has_enabled_policy(self._config):
-            return None
+            return _FallbackAttemptOutcome.skipped()
         decision = fallback_middleware.select_fallback(
             current_profile_name=self._profile_name,
             current_config=self._config,
@@ -1386,7 +1417,7 @@ class AgentLlmSession:
                 error=retry_error,
                 fallback_state=fallback_state,
             )
-            return None
+            return _FallbackAttemptOutcome.exhausted()
         self._handle_fallback_activated(
             request=request,
             retry_number=retry_number,
@@ -1401,12 +1432,14 @@ class AgentLlmSession:
             decision.to_profile_name,
             hop=decision.hop,
         )
-        return await next_session._generate_async(
-            request,
-            retry_number=0,
-            total_attempts=None,
-            skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
-            fallback_state=next_fallback_state,
+        return _FallbackAttemptOutcome.recovered(
+            await next_session._generate_async(
+                request,
+                retry_number=0,
+                total_attempts=None,
+                skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
+                fallback_state=next_fallback_state,
+            )
         )
 
     def _clone_with_config(

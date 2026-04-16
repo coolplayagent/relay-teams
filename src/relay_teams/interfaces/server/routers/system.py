@@ -247,10 +247,12 @@ def save_model_profile(
             "temperature": req.temperature,
             "top_p": req.top_p,
             "context_window": req.context_window,
-            "fallback_policy_id": req.fallback_policy_id,
-            "fallback_priority": req.fallback_priority,
             "connect_timeout_seconds": req.connect_timeout_seconds,
         }
+        if "fallback_policy_id" in req.model_fields_set:
+            profile["fallback_policy_id"] = req.fallback_policy_id
+        if "fallback_priority" in req.model_fields_set:
+            profile["fallback_priority"] = req.fallback_priority
         if "max_tokens" in req.model_fields_set:
             profile["max_tokens"] = req.max_tokens
         if req.is_default is not None:

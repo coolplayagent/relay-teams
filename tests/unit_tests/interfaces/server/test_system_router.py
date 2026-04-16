@@ -743,6 +743,31 @@ def test_save_model_profile_includes_connect_timeout_seconds() -> None:
     assert source_name is None
 
 
+def test_save_model_profile_omits_fallback_settings_when_not_provided() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/default",
+        json={
+            "provider": "openai_compatible",
+            "model": "gpt-4o-mini",
+            "base_url": "https://example.test/v1",
+            "api_key": "secret",
+            "temperature": 0.2,
+            "top_p": 1.0,
+            "context_window": 128000,
+            "connect_timeout_seconds": 25.0,
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    assert "fallback_policy_id" not in saved_profile
+    assert "fallback_priority" not in saved_profile
+
+
 def test_get_model_fallback_config() -> None:
     client = _create_test_client(_FakeSystemService())
 

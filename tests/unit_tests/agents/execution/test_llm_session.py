@@ -13,6 +13,7 @@ from openai import APIStatusError
 from relay_teams.agents.execution.llm_session import (
     AgentLlmSession,
     _FallbackAttemptState,
+    _FallbackAttemptStatus,
 )
 from relay_teams.agents.execution.conversation_compaction import (
     ConversationCompactionService,
@@ -642,6 +643,8 @@ async def test_generate_async_passes_retry_after_to_retry_schedule() -> None:
     session.__dict__["_computer_runtime"] = None
     session.__dict__["_background_task_service"] = None
     session.__dict__["_monitor_service"] = None
+    session.__dict__["_metric_recorder"] = None
+    session.__dict__["_token_usage_repo"] = None
     session.__dict__["_role_registry"] = cast(object, None)
     session.__dict__["_mcp_registry"] = McpRegistry()
     session.__dict__["_task_service"] = cast(object, None)
@@ -804,9 +807,158 @@ async def test_maybe_fallback_after_retry_exhausted_switches_profile() -> None:
         skip_initial_user_prompt_persist=False,
     )
 
-    assert result == "fallback-response"
+    assert result.response == "fallback-response"
+    assert result.status == _FallbackAttemptStatus.RECOVERED
     assert len(activated) == 1
     assert activated[0].to_profile_name == "secondary"
     assert captured_generate_kwargs[0]["retry_number"] == 0
     next_fallback_state = captured_generate_kwargs[0]["fallback_state"]
     assert getattr(next_fallback_state, "hop") == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhausted() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="primary-model",
+        base_url="https://example.test/v1",
+        api_key="primary-key",
+        fallback_policy_id="same_provider_then_other_provider",
+    )
+    session.__dict__["_profile_name"] = "primary"
+    session.__dict__["_retry_config"] = LlmRetryConfig(max_retries=0)
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_skill_registry"] = cast(object, None)
+    session.__dict__["_allowed_tools"] = ()
+    session.__dict__["_allowed_mcp_servers"] = ()
+    session.__dict__["_allowed_skills"] = ()
+    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_shared_store"] = cast(object, None)
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_message_repo"] = cast(
+        MessageRepository, _FakeMessageRepo(history=[])
+    )
+    session.__dict__["_approval_ticket_repo"] = cast(object, None)
+    session.__dict__["_run_runtime_repo"] = cast(object, None)
+    session.__dict__["_injection_manager"] = type(
+        "_InjectionManager",
+        (),
+        {"drain_at_boundary": lambda self, run_id, instance_id: []},
+    )()
+    session.__dict__["_run_event_hub"] = type(
+        "_RunEventHub", (), {"publish": lambda self, event: None}
+    )()
+    session.__dict__["_agent_repo"] = cast(object, None)
+    session.__dict__["_workspace_manager"] = type(
+        "_WorkspaceManager",
+        (),
+        {"resolve": lambda self, **kwargs: cast(object, None)},
+    )()
+    session.__dict__["_role_memory_service"] = None
+    session.__dict__["_media_asset_service"] = None
+    session.__dict__["_computer_runtime"] = None
+    session.__dict__["_background_task_service"] = None
+    session.__dict__["_monitor_service"] = None
+    session.__dict__["_metric_recorder"] = None
+    session.__dict__["_token_usage_repo"] = None
+    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_mcp_registry"] = McpRegistry()
+    session.__dict__["_task_service"] = cast(object, None)
+    session.__dict__["_task_execution_service"] = cast(object, object())
+    session.__dict__["_tool_approval_manager"] = cast(object, None)
+    session.__dict__["_shell_approval_repo"] = None
+    session.__dict__["_notification_service"] = None
+    session.__dict__["_im_tool_service"] = None
+    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
+        object, None
+    )
+    session.__dict__["_build_model_api_error_message"] = lambda error: "rate limited"
+    session.__dict__["_persist_user_prompt_if_needed"] = lambda **kwargs: kwargs[
+        "history"
+    ]
+    session.__dict__["_run_control_manager"] = type(
+        "_RunControlManager",
+        (),
+        {
+            "context": lambda self, run_id, instance_id: type(
+                "_ControlContext",
+                (),
+                {"raise_if_cancelled": lambda self: None},
+            )()
+        },
+    )()
+
+    async def _no_recovery(**kwargs: object) -> None:
+        _ = kwargs
+        return None
+
+    session.__dict__["_maybe_recover_from_tool_args_parse_failure"] = _no_recovery
+    session.__dict__["_should_retry_request"] = lambda **kwargs: False
+    session.__dict__["_fallback_middleware"] = type(
+        "_FallbackMiddleware",
+        (),
+        {
+            "has_enabled_policy": lambda self, config: True,
+            "select_fallback": lambda self, **kwargs: None,
+        },
+    )()
+
+    retry_exhausted_calls: list[dict[str, object]] = []
+    fallback_exhausted_calls: list[dict[str, object]] = []
+    retry_scheduled_calls: list[dict[str, object]] = []
+
+    async def _capture_retry_scheduled(**kwargs: object) -> None:
+        retry_scheduled_calls.append(kwargs)
+
+    session.__dict__["_handle_retry_scheduled"] = _capture_retry_scheduled
+    session.__dict__["_handle_retry_exhausted"] = lambda **kwargs: (
+        retry_exhausted_calls.append(kwargs)
+    )
+    session.__dict__["_handle_fallback_exhausted"] = lambda **kwargs: (
+        fallback_exhausted_calls.append(kwargs)
+    )
+    session.__dict__["_raise_assistant_run_error"] = lambda **kwargs: (
+        _ for _ in ()
+    ).throw(RuntimeError("stop after fallback exhaustion"))
+
+    class _FailingAgentContext:
+        async def __aenter__(self) -> object:
+            request = httpx.Request("POST", "https://example.test/v1/chat/completions")
+            response = httpx.Response(
+                429,
+                headers={"Retry-After": "1"},
+                request=request,
+            )
+            raise APIStatusError(
+                "rate limited",
+                response=response,
+                body={"error": {"code": "rate_limit_exceeded", "message": "slow down"}},
+            )
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            _ = (exc_type, exc, tb)
+            return False
+
+    class _FailingAgent:
+        def iter(self, *_args: object, **_kwargs: object) -> _FailingAgentContext:
+            return _FailingAgentContext()
+
+    async def _build_agent_iteration_context(
+        **kwargs: object,
+    ) -> tuple[str, list[object], str, object]:
+        _ = kwargs
+        return "", [], "System prompt", _FailingAgent()
+
+    session.__dict__["_build_agent_iteration_context"] = _build_agent_iteration_context
+
+    with pytest.raises(RuntimeError, match="stop after fallback exhaustion"):
+        await AgentLlmSession._generate_async(
+            session,
+            _build_request(),
+        )
+
+    assert len(fallback_exhausted_calls) == 1
+    assert retry_scheduled_calls == []
+    assert retry_exhausted_calls == []
