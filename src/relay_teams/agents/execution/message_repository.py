@@ -345,6 +345,80 @@ class MessageRepository:
             operation_name="compact_conversation_history",
         )
 
+    def replace_pending_user_prompt(
+        self,
+        *,
+        session_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: str,
+        workspace_id: str,
+        conversation_id: str | None = None,
+        agent_role_id: str | None = None,
+    ) -> bool:
+        from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+        target = str(content or "").strip()
+        if not target:
+            return False
+        resolved_conversation_id = conversation_id or instance_id
+        message_json = _sanitize_message_json(
+            ModelMessagesTypeAdapter.dump_json(
+                [ModelRequest(parts=[UserPromptPart(content=target)])]
+            ).decode()
+        )
+
+        def operation() -> bool:
+            rows = self._conn.execute(
+                "SELECT id, session_id, role, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
+                (resolved_conversation_id, task_id),
+            ).fetchall()
+            active_rows = self._filter_rows_for_read(
+                rows,
+                include_cleared=False,
+                include_hidden_from_context=False,
+            )
+            if _task_history_has_response(active_rows):
+                return False
+            replacement_ids = [
+                int(row["id"])
+                for row in active_rows
+                if isinstance(row["id"], int)
+                and str(row["role"] or "") == "user"
+                and _row_is_user_prompt_only(row)
+            ]
+            if replacement_ids:
+                primary_id = replacement_ids[0]
+                self._conn.execute(
+                    "UPDATE messages SET message_json=? WHERE id=?",
+                    (message_json, primary_id),
+                )
+                stale_ids = replacement_ids[1:]
+                if stale_ids:
+                    placeholders = ",".join("?" for _ in stale_ids)
+                    self._conn.execute(
+                        f"DELETE FROM messages WHERE id IN ({placeholders})",
+                        stale_ids,
+                    )
+                return True
+            history = self.get_history_for_conversation_task(
+                resolved_conversation_id,
+                task_id,
+            )
+            if _history_ends_with_user_prompt(history, target):
+                return False
+            return False
+
+        return run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="MessageRepository",
+            operation_name="replace_pending_user_prompt",
+        )
+
     def append_user_prompt_if_missing(
         self,
         *,
@@ -423,6 +497,65 @@ class MessageRepository:
             lock=self._lock,
             repository_name="MessageRepository",
             operation_name="append_user_prompt_if_missing",
+        )
+
+    def append_system_prompt_if_missing(
+        self,
+        *,
+        session_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: str,
+        workspace_id: str,
+        conversation_id: str | None = None,
+        agent_role_id: str | None = None,
+    ) -> bool:
+        from pydantic_ai.messages import ModelRequest, SystemPromptPart
+
+        target = str(content or "").strip()
+        if not target:
+            return False
+        resolved_conversation_id = conversation_id or instance_id
+        message_json = _sanitize_message_json(
+            ModelMessagesTypeAdapter.dump_json(
+                [ModelRequest(parts=[SystemPromptPart(content=target)])]
+            ).decode()
+        )
+
+        def operation() -> bool:
+            history = self.get_history_for_conversation_task(
+                resolved_conversation_id,
+                task_id,
+            )
+            if _history_ends_with_system_prompt(history, target):
+                return False
+            now = self._next_created_at(session_id=session_id)
+            self._conn.execute(
+                "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    workspace_id,
+                    resolved_conversation_id,
+                    agent_role_id or "",
+                    instance_id,
+                    task_id,
+                    trace_id,
+                    "system",
+                    message_json,
+                    now,
+                ),
+            )
+            return True
+
+        return run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="MessageRepository",
+            operation_name="append_system_prompt_if_missing",
         )
 
     def get_history_for_task(
@@ -783,6 +916,54 @@ def _history_ends_with_user_prompt(
     if not isinstance(last, ModelRequest):
         return False
     prompt_parts = [part for part in last.parts if isinstance(part, UserPromptPart)]
+    if len(prompt_parts) != len(last.parts):
+        return False
+    combined = "\n".join(
+        str(part.content or "").strip() for part in prompt_parts
+    ).strip()
+    return combined == target
+
+
+def _task_history_has_response(rows: Sequence[sqlite3.Row]) -> bool:
+    from pydantic_ai.messages import ModelResponse
+
+    for row in rows:
+        messages = ModelMessagesTypeAdapter.validate_json(
+            _sanitize_message_json(str(row["message_json"]))
+        )
+        if any(isinstance(message, ModelResponse) for message in messages):
+            return True
+    return False
+
+
+def _row_is_user_prompt_only(row: sqlite3.Row) -> bool:
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    messages = ModelMessagesTypeAdapter.validate_json(
+        _sanitize_message_json(str(row["message_json"]))
+    )
+    if len(messages) != 1:
+        return False
+    message = messages[0]
+    if not isinstance(message, ModelRequest):
+        return False
+    prompt_parts = [part for part in message.parts if isinstance(part, UserPromptPart)]
+    return bool(prompt_parts) and len(prompt_parts) == len(message.parts)
+
+
+def _history_ends_with_system_prompt(
+    history: Sequence[ModelMessage],
+    content: str,
+) -> bool:
+    from pydantic_ai.messages import ModelRequest, SystemPromptPart
+
+    target = str(content or "").strip()
+    if not target or not history:
+        return False
+    last = history[-1]
+    if not isinstance(last, ModelRequest):
+        return False
+    prompt_parts = [part for part in last.parts if isinstance(part, SystemPromptPart)]
     if len(prompt_parts) != len(last.parts):
         return False
     combined = "\n".join(

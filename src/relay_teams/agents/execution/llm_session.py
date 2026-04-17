@@ -140,6 +140,12 @@ from relay_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
 )
+from relay_teams.hooks import (
+    HookDecisionType,
+    HookEventName,
+    HookService,
+    UserPromptSubmitInput,
+)
 
 if TYPE_CHECKING:
     from relay_teams.agents.orchestration.task_execution_service import (
@@ -376,6 +382,7 @@ class AgentLlmSession:
         im_tool_service: "ImToolService | None" = None,
         computer_runtime: "ComputerRuntime | None" = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
+        hook_service: HookService | None = None,
     ) -> None:
         self._config = config
         self._task_repo = task_repo
@@ -415,6 +422,7 @@ class AgentLlmSession:
         self._im_tool_service = im_tool_service
         self._computer_runtime = computer_runtime
         self._shell_approval_repo = shell_approval_repo
+        self._hook_service = hook_service
         self._mcp_tool_context_token_cache: dict[str, int] = {}
 
     async def run(self, request: LLMRequest) -> str:
@@ -435,6 +443,17 @@ class AgentLlmSession:
         )
         total_attempts = total_attempts or (self._retry_config.max_retries + 1)
         agent_system_prompt = request.system_prompt
+        hook_service = getattr(self, "_hook_service", None)
+        hook_runtime_env = (
+            hook_service.get_run_env(request.run_id) if hook_service is not None else {}
+        )
+        if not skip_initial_user_prompt_persist:
+            request, hook_system_contexts = await self._apply_user_prompt_hooks(request)
+            if hook_system_contexts:
+                self._persist_hook_system_context_if_needed(
+                    request=request,
+                    contexts=hook_system_contexts,
+                )
         if self._metric_recorder is not None:
             record_session_step(
                 self._metric_recorder,
@@ -526,6 +545,8 @@ class AgentLlmSession:
             metric_recorder=self._metric_recorder,
             notification_service=self._notification_service,
             im_tool_service=self._im_tool_service,
+            hook_service=getattr(self, "_hook_service", None),
+            hook_runtime_env=hook_runtime_env,
         )
         control_ctx = self._run_control_manager.context(
             run_id=request.run_id,
@@ -564,11 +585,28 @@ class AgentLlmSession:
             },
         )
         if not skip_initial_user_prompt_persist:
-            history = self._persist_user_prompt_if_needed(
+            persisted_history, rebuild_context = self._persist_user_prompt_if_needed(
                 request=request,
                 history=history,
                 content=request.user_prompt,
             )
+            if rebuild_context:
+                (
+                    prepared_prompt,
+                    history,
+                    agent_system_prompt,
+                    agent,
+                ) = await self._build_agent_iteration_context(
+                    request=request,
+                    conversation_id=resolved_conversation_id,
+                    system_prompt=agent_system_prompt,
+                    reserve_user_prompt_tokens=(retry_number == 0),
+                    allowed_tools=allowed_tools,
+                    allowed_mcp_servers=self._allowed_mcp_servers,
+                    allowed_skills=self._allowed_skills,
+                )
+            else:
+                history = persisted_history
         seen_count = 0
         buffered_messages: list[ModelRequest | ModelResponse] = []
         restarted = False
@@ -2195,6 +2233,7 @@ class AgentLlmSession:
             allowed_mcp_servers=allowed_mcp_servers,
             allowed_skills=allowed_skills,
         )
+        hook_service = getattr(self, "_hook_service", None)
         agent = cast(
             _CoordinationAgent,
             build_coordination_agent(
@@ -2213,6 +2252,18 @@ class AgentLlmSession:
                 ),
                 ssl_verify=self._config.ssl_verify,
                 connect_timeout_seconds=self._config.connect_timeout_seconds,
+                merged_env=(
+                    resolved_hook_env
+                    if (
+                        hook_service is not None
+                        and (
+                            resolved_hook_env := hook_service.get_run_env(
+                                request.run_id
+                            )
+                        )
+                    )
+                    else None
+                ),
                 allowed_mcp_servers=allowed_mcp_servers,
                 allowed_skills=allowed_skills,
                 tool_registry=self._tool_registry,
@@ -2634,22 +2685,132 @@ class AgentLlmSession:
             return system_prompt
         return f"{system_prompt.rstrip()}\n\n{prompt_section}".strip()
 
+    async def _apply_user_prompt_hooks(
+        self,
+        request: LLMRequest,
+    ) -> tuple[LLMRequest, tuple[str, ...]]:
+        hook_service = getattr(self, "_hook_service", None)
+        if hook_service is None:
+            return request, ()
+        prompt_text = self._resolve_hook_prompt_text(request)
+        if not prompt_text:
+            return request, ()
+        bundle = await hook_service.execute(
+            event_input=UserPromptSubmitInput(
+                event_name=HookEventName.USER_PROMPT_SUBMIT,
+                session_id=request.session_id,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                user_prompt=prompt_text,
+                input_parts=tuple(
+                    part.model_dump(mode="json") for part in request.input
+                ),
+                run_kind=request.run_kind.value,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+        if bundle.decision == HookDecisionType.DENY:
+            message = bundle.reason or "The prompt was blocked by runtime hooks."
+            raise AssistantRunError(
+                AssistantRunErrorPayload(
+                    trace_id=request.trace_id,
+                    session_id=request.session_id,
+                    task_id=request.task_id,
+                    instance_id=request.instance_id,
+                    role_id=request.role_id,
+                    conversation_id=self._conversation_id(request),
+                    assistant_message=message,
+                    error_code="prompt_denied",
+                    error_message=message,
+                )
+            )
+        next_request = request
+        if bundle.updated_input is not None and isinstance(bundle.updated_input, str):
+            next_request = request.model_copy(
+                update={
+                    "user_prompt": bundle.updated_input,
+                    "input": (),
+                }
+            )
+        return next_request, bundle.additional_context
+
+    def _resolve_hook_prompt_text(self, request: LLMRequest) -> str:
+        prompt_text = request.prompt_text.strip()
+        if prompt_text:
+            return prompt_text
+        history = self._message_repo.get_history_for_conversation(
+            self._conversation_id(request)
+        )
+        for message in reversed(history):
+            if not isinstance(message, ModelRequest):
+                continue
+            resolved = self._extract_user_prompt_text(message)
+            if resolved:
+                return resolved
+        return ""
+
+    def _persist_hook_system_context_if_needed(
+        self,
+        *,
+        request: LLMRequest,
+        contexts: tuple[str, ...],
+    ) -> None:
+        conversation_id = self._conversation_id(request)
+        for context in contexts:
+            text = str(context).strip()
+            if not text:
+                continue
+            self._message_repo.append_system_prompt_if_missing(
+                session_id=request.session_id,
+                workspace_id=request.workspace_id,
+                conversation_id=conversation_id,
+                agent_role_id=request.role_id,
+                instance_id=request.instance_id,
+                task_id=request.task_id,
+                trace_id=request.trace_id,
+                content=text,
+            )
+
     def _persist_user_prompt_if_needed(
         self,
         *,
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
         content: str | None,
-    ) -> list[ModelRequest | ModelResponse]:
+    ) -> tuple[list[ModelRequest | ModelResponse], bool]:
         prompt = str(content or "").strip()
         if not prompt:
-            return history
+            return history, False
         if self._history_ends_with_user_prompt(history, prompt):
-            return history
+            return history, False
         self._message_repo.prune_conversation_history_to_safe_boundary(
             self._conversation_id(request)
         )
+        replaced = self._message_repo.replace_pending_user_prompt(
+            session_id=request.session_id,
+            workspace_id=self._workspace_id(request),
+            conversation_id=self._conversation_id(request),
+            agent_role_id=request.role_id,
+            instance_id=request.instance_id,
+            task_id=request.task_id,
+            trace_id=request.trace_id,
+            content=prompt,
+        )
         prompt_message = ModelRequest(parts=[UserPromptPart(content=prompt)])
+        if replaced:
+            return (
+                self._filter_model_messages(
+                    [
+                        *self._message_repo.get_history_for_conversation(
+                            self._conversation_id(request)
+                        )
+                    ]
+                ),
+                True,
+            )
         self._message_repo.append(
             session_id=request.session_id,
             workspace_id=self._workspace_id(request),
@@ -2662,7 +2823,7 @@ class AgentLlmSession:
         )
         next_history = list(history)
         next_history.append(prompt_message)
-        return next_history
+        return next_history, False
 
     def _history_ends_with_user_prompt(
         self,

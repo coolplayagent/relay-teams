@@ -12,8 +12,9 @@ from relay_teams.agents.execution.system_prompts import (
     RuntimePromptBuilder,
 )
 from relay_teams.agents.tasks.models import TaskEnvelope
+from relay_teams.media import ContentPart
 from relay_teams.roles.role_models import RoleDefinition
-from relay_teams.sessions.runs.run_models import RunThinkingConfig
+from relay_teams.sessions.runs.run_models import RunKind, RunThinkingConfig
 
 
 class SubAgentRequest(BaseModel):
@@ -29,7 +30,13 @@ class SubAgentRequest(BaseModel):
     role_id: str
     system_prompt: str
     user_prompt: str | None
+    input: tuple[ContentPart, ...] = ()
+    run_kind: RunKind = RunKind.CONVERSATION
     thinking: RunThinkingConfig = RunThinkingConfig()
+
+    @property
+    def prompt_text(self) -> str:
+        return str(self.user_prompt or "").strip()
 
 
 class SubAgentRunner(BaseModel):
@@ -49,6 +56,7 @@ class SubAgentRunner(BaseModel):
         shared_state_snapshot: tuple[tuple[str, str], ...],
         thinking: RunThinkingConfig | None = None,
         system_prompt_override: str | None = None,
+        user_prompt: str | None = None,
     ) -> str:
         system_prompt = system_prompt_override
         if system_prompt is None:
@@ -75,7 +83,7 @@ class SubAgentRunner(BaseModel):
                 instance_id=instance_id,
                 role_id=self.role.role_id,
                 system_prompt=system_prompt,
-                user_prompt=None,
+                user_prompt=user_prompt,
                 thinking=thinking or RunThinkingConfig(),
             )
         )

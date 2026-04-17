@@ -5,7 +5,7 @@ import json
 
 import httpx
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from openai import APIStatusError
@@ -25,6 +25,8 @@ from relay_teams.providers.llm_retry import LlmRetrySchedule
 from relay_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from relay_teams.sessions.runs.assistant_errors import AssistantRunError
+from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventName
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -172,6 +174,30 @@ class _FakeMessageRepo:
             trace_id,
         )
         self.append_calls.append(list(messages))
+
+    def replace_pending_user_prompt(
+        self,
+        *,
+        session_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: str,
+        workspace_id: str,
+        conversation_id: str | None = None,
+        agent_role_id: str | None = None,
+    ) -> bool:
+        _ = (
+            session_id,
+            instance_id,
+            task_id,
+            trace_id,
+            content,
+            workspace_id,
+            conversation_id,
+            agent_role_id,
+        )
+        return False
 
 
 class _FakeMicrocompactService:
@@ -557,7 +583,7 @@ def test_persist_user_prompt_keeps_microcompacted_history_in_memory() -> None:
     message_repo = _FakeMessageRepo(history=[])
     session._message_repo = cast(MessageRepository, message_repo)
 
-    next_history = AgentLlmSession._persist_user_prompt_if_needed(
+    next_history, rebuild_context = AgentLlmSession._persist_user_prompt_if_needed(
         session,
         request=_build_request(user_prompt="new prompt"),
         history=list(compacted_history),
@@ -567,6 +593,7 @@ def test_persist_user_prompt_keeps_microcompacted_history_in_memory() -> None:
     assert message_repo.pruned_conversation_ids == ["conv-1"]
     assert len(message_repo.append_calls) == 1
     assert next_history[:-1] == compacted_history
+    assert rebuild_context is False
     appended_message = next_history[-1]
     assert isinstance(appended_message, ModelRequest)
     appended_part = appended_message.parts[0]
@@ -665,9 +692,10 @@ async def test_generate_async_passes_retry_after_to_retry_schedule() -> None:
         raise RuntimeError("stop after scheduling retry")
 
     session.__dict__["_handle_retry_scheduled"] = _capture_retry_scheduled
-    session.__dict__["_persist_user_prompt_if_needed"] = lambda **kwargs: kwargs[
-        "history"
-    ]
+    session.__dict__["_persist_user_prompt_if_needed"] = lambda **kwargs: (
+        kwargs["history"],
+        False,
+    )
     session.__dict__["_run_control_manager"] = type(
         "_RunControlManager",
         (),
@@ -719,3 +747,163 @@ async def test_generate_async_passes_retry_after_to_retry_schedule() -> None:
     assert len(captured_schedules) == 1
     schedule = captured_schedules[0]
     assert schedule.delay_ms == 7000
+
+
+class _FakePromptHookService:
+    def __init__(self, bundle: HookDecisionBundle) -> None:
+        self.bundle = bundle
+        self.events: list[HookEventName] = []
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(cast(HookEventName, getattr(event_input, "event_name")))
+        return self.bundle
+
+
+class _FakeRunEnvHookService:
+    def __init__(self, run_env: dict[str, str]) -> None:
+        self._run_env = run_env
+
+    def get_run_env(self, run_id: str) -> dict[str, str]:
+        _ = run_id
+        return dict(self._run_env)
+
+
+@pytest.mark.asyncio
+async def test_build_agent_iteration_context_does_not_override_proxy_env_when_hook_run_env_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="glm-5.1",
+        base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        api_key="test-key",
+    )
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_mcp_registry"] = McpRegistry()
+    session.__dict__["_skill_registry"] = cast(object, None)
+    session.__dict__["_hook_service"] = _FakeRunEnvHookService({})
+
+    async def _prepare_prompt_context(**_kwargs: object) -> object:
+        return type(
+            "_PreparedPrompt",
+            (),
+            {"history": (), "system_prompt": "Prepared system prompt"},
+        )()
+
+    async def _build_model_settings(**_kwargs: object) -> object:
+        return object()
+
+    session.__dict__["_prepare_prompt_context"] = _prepare_prompt_context
+    session.__dict__["_build_model_settings"] = _build_model_settings
+
+    captured: dict[str, object] = {}
+
+    def _fake_build_coordination_agent(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(
+        "relay_teams.agents.execution.llm_session.build_coordination_agent",
+        _fake_build_coordination_agent,
+    )
+
+    _ = await AgentLlmSession._build_agent_iteration_context(
+        session,
+        request=_build_request(),
+        conversation_id="conv-1",
+        system_prompt="System prompt",
+        reserve_user_prompt_tokens=False,
+        allowed_tools=(),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+
+    assert captured["merged_env"] is None
+
+
+@pytest.mark.asyncio
+async def test_apply_user_prompt_hooks_rewrites_prompt_and_adds_context() -> None:
+    session = object.__new__(AgentLlmSession)
+    hook_service = _FakePromptHookService(
+        HookDecisionBundle(
+            decision=HookDecisionType.UPDATED_INPUT,
+            updated_input="Rewritten prompt",
+            additional_context=("Hook context",),
+        )
+    )
+    setattr(session, "_hook_service", cast(Any, hook_service))
+    setattr(session, "_run_event_hub", cast(Any, None))
+
+    request, context = await AgentLlmSession._apply_user_prompt_hooks(
+        session,
+        _build_request(user_prompt="Original prompt"),
+    )
+
+    assert request.user_prompt == "Rewritten prompt"
+    assert request.input == ()
+    assert context == ("Hook context",)
+    assert hook_service.events == [HookEventName.USER_PROMPT_SUBMIT]
+
+
+@pytest.mark.asyncio
+async def test_apply_user_prompt_hooks_uses_latest_persisted_prompt_when_request_is_empty() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    hook_service = _FakePromptHookService(
+        HookDecisionBundle(
+            decision=HookDecisionType.UPDATED_INPUT,
+            updated_input="Rewritten prompt",
+        )
+    )
+    setattr(session, "_hook_service", cast(Any, hook_service))
+    setattr(session, "_run_event_hub", cast(Any, None))
+    setattr(
+        session,
+        "_message_repo",
+        cast(
+            MessageRepository,
+            _FakeMessageRepo(
+                history=[
+                    ModelRequest(
+                        parts=[UserPromptPart(content="Original persisted prompt")]
+                    )
+                ]
+            ),
+        ),
+    )
+
+    request, context = await AgentLlmSession._apply_user_prompt_hooks(
+        session,
+        _build_request(user_prompt=None),
+    )
+
+    assert request.user_prompt == "Rewritten prompt"
+    assert context == ()
+    assert hook_service.events == [HookEventName.USER_PROMPT_SUBMIT]
+
+
+@pytest.mark.asyncio
+async def test_apply_user_prompt_hooks_raises_when_prompt_denied() -> None:
+    session = object.__new__(AgentLlmSession)
+    hook_service = _FakePromptHookService(
+        HookDecisionBundle(
+            decision=HookDecisionType.DENY,
+            reason="Prompt blocked by policy.",
+        )
+    )
+    setattr(session, "_hook_service", cast(Any, hook_service))
+    setattr(session, "_run_event_hub", cast(Any, None))
+
+    with pytest.raises(AssistantRunError) as exc_info:
+        await AgentLlmSession._apply_user_prompt_hooks(
+            session,
+            _build_request(user_prompt="Blocked prompt"),
+        )
+
+    assert exc_info.value.payload.error_code == "prompt_denied"
+    assert exc_info.value.payload.error_message == "Prompt blocked by policy."

@@ -6,7 +6,7 @@ import logging
 from concurrent.futures import Future as ThreadFuture
 from enum import StrEnum
 from json import dumps, loads
-from typing import TYPE_CHECKING, Awaitable, Callable, TypeVar, cast
+from typing import TYPE_CHECKING, Awaitable, Callable, Coroutine, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai.messages import (
@@ -105,6 +105,16 @@ from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.ids import new_task_id
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.workspace import build_conversation_id
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookService,
+    SessionEndInput,
+    SessionStartInput,
+    StopFailureInput,
+    StopInput,
+)
 
 if TYPE_CHECKING:
     from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
@@ -242,6 +252,7 @@ class RunManager:
         media_asset_service: MediaAssetService | None = None,
         runtime_role_resolver: RuntimeRoleResolver | None = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
+        hook_service: HookService | None = None,
     ) -> None:
         self._meta_agent: MetaAgent = meta_agent
         self._provider_factory = provider_factory or (
@@ -272,6 +283,7 @@ class RunManager:
         self._media_asset_service = media_asset_service
         self._runtime_role_resolver = runtime_role_resolver
         self._shell_approval_repo = shell_approval_repo
+        self._hook_service = hook_service
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
@@ -291,6 +303,190 @@ class RunManager:
 
     def bind_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._event_loop = loop
+
+    def _run_hook_sync(
+        self,
+        coroutine: Coroutine[object, object, HookDecisionBundle],
+    ) -> HookDecisionBundle:
+        current_loop: asyncio.AbstractEventLoop | None = None
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if (
+            self._event_loop is not None
+            and self._event_loop.is_running()
+            and self._event_loop is not current_loop
+        ):
+            future = asyncio.run_coroutine_threadsafe(coroutine, self._event_loop)
+            return future.result()
+        if current_loop is None:
+            return asyncio.run(coroutine)
+        raise RuntimeError(
+            "Cannot synchronously execute runtime hooks on the active event loop thread"
+        )
+
+    async def _execute_session_start_hooks(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        intent: IntentInput,
+    ) -> None:
+        if self._hook_service is None:
+            return
+        session = self._session_repo.get(session_id)
+        _ = await self._hook_service.execute(
+            event_input=SessionStartInput(
+                event_name=HookEventName.SESSION_START,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                session_mode=(
+                    intent.session_mode.value if intent.session_mode is not None else ""
+                ),
+                run_kind=intent.run_kind.value,
+                workspace_id=session.workspace_id,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+
+    async def _execute_session_end_hooks(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        status: str,
+        completion_reason: str,
+        output_text: str,
+        root_task_id: str | None = None,
+    ) -> None:
+        if self._hook_service is None:
+            return
+        _ = await self._hook_service.execute(
+            event_input=SessionEndInput(
+                event_name=HookEventName.SESSION_END,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=root_task_id,
+                status=status,
+                completion_reason=completion_reason,
+                output_text=output_text,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+
+    async def _execute_stop_hooks(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        completion_reason: str,
+        output_text: str,
+        root_task_id: str | None = None,
+    ) -> bool:
+        if self._hook_service is None:
+            return False
+        bundle = await self._hook_service.execute(
+            event_input=StopInput(
+                event_name=HookEventName.STOP,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=root_task_id,
+                completion_reason=completion_reason,
+                output_text=output_text,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+        if bundle.additional_context:
+            self._append_followup_to_coordinator(
+                run_id,
+                "\n\n".join(bundle.additional_context),
+                enqueue=True,
+                source=InjectionSource.SYSTEM,
+            )
+        return bundle.decision == HookDecisionType.RETRY
+
+    async def _execute_stop_failure_hooks(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        completion_reason: str,
+        error_code: str,
+        error_message: str,
+        root_task_id: str | None = None,
+    ) -> None:
+        if self._hook_service is None:
+            return
+        _ = await self._hook_service.execute(
+            event_input=StopFailureInput(
+                event_name=HookEventName.STOP_FAILURE,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=root_task_id,
+                completion_reason=completion_reason,
+                error_code=error_code,
+                error_message=error_message,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+
+    async def _run_result_through_stop_hooks(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        result: RunResult,
+    ) -> RunResult:
+        current_result = self._normalize_terminal_run_result(result)
+        if current_result.completion_reason == RunCompletionReason.ASSISTANT_ERROR:
+            await self._execute_stop_failure_hooks(
+                run_id=run_id,
+                session_id=session_id,
+                completion_reason=current_result.completion_reason.value,
+                error_code=current_result.error_code or "assistant_error",
+                error_message=(
+                    current_result.error_message or current_result.output_text
+                ),
+                root_task_id=current_result.root_task_id,
+            )
+            return current_result
+        while (
+            current_result.completion_reason == RunCompletionReason.ASSISTANT_RESPONSE
+        ):
+            should_retry = await self._execute_stop_hooks(
+                run_id=run_id,
+                session_id=session_id,
+                completion_reason=current_result.completion_reason.value,
+                output_text=current_result.output_text,
+                root_task_id=current_result.root_task_id,
+            )
+            if not should_retry:
+                return current_result
+            current_result = self._normalize_terminal_run_result(
+                await self._run_with_auto_recovery(
+                    run_id=run_id,
+                    session_id=session_id,
+                    runner=lambda: self._resume_existing_run(run_id),
+                )
+            )
+            if current_result.completion_reason == RunCompletionReason.ASSISTANT_ERROR:
+                await self._execute_stop_failure_hooks(
+                    run_id=run_id,
+                    session_id=session_id,
+                    completion_reason=current_result.completion_reason.value,
+                    error_code=current_result.error_code or "assistant_error",
+                    error_message=(
+                        current_result.error_message or current_result.output_text
+                    ),
+                    root_task_id=current_result.root_task_id,
+                )
+                return current_result
+        return current_result
 
     def _ensure_session(self, session_id: str) -> str:
         _ = self._session_repo.get(session_id)
@@ -349,6 +545,8 @@ class RunManager:
         self._run_control_manager.assert_session_allows_main_input(session_id)
         _ = self._session_repo.mark_started(session_id)
         run_id = new_trace_id().value
+        if self._hook_service is not None:
+            self._hook_service.snapshot_run(run_id)
         if self._run_runtime_repo is not None:
             self._run_runtime_repo.ensure(
                 run_id=run_id,
@@ -373,16 +571,25 @@ class RunManager:
             self._injection_manager.activate(run_id)
             self._running_run_ids.add(run_id)
             try:
-                result = (
-                    await self._run_media_generation(run_id=run_id, intent=intent)
-                    if intent.run_kind != RunKind.CONVERSATION
-                    else await self._run_with_auto_recovery(
-                        run_id=run_id,
-                        session_id=session_id,
-                        runner=lambda: self._meta_agent.handle_intent(
-                            intent, trace_id=run_id
-                        ),
-                    )
+                await self._execute_session_start_hooks(
+                    run_id=run_id,
+                    session_id=session_id,
+                    intent=intent,
+                )
+                result = await self._run_result_through_stop_hooks(
+                    run_id=run_id,
+                    session_id=session_id,
+                    result=(
+                        await self._run_media_generation(run_id=run_id, intent=intent)
+                        if intent.run_kind != RunKind.CONVERSATION
+                        else await self._run_with_auto_recovery(
+                            run_id=run_id,
+                            session_id=session_id,
+                            runner=lambda: self._meta_agent.handle_intent(
+                                intent, trace_id=run_id
+                            ),
+                        )
+                    ),
                 )
                 if self._run_runtime_repo is not None:
                     self._run_runtime_repo.update(
@@ -403,6 +610,14 @@ class RunManager:
                     message="Direct run completed",
                     payload={"root_task_id": result.root_task_id},
                 )
+                await self._execute_session_end_hooks(
+                    run_id=run_id,
+                    session_id=session_id,
+                    status=result.status,
+                    completion_reason=result.completion_reason.value,
+                    output_text=result.output_text,
+                    root_task_id=result.root_task_id,
+                )
                 return result
             except Exception as exc:
                 if isinstance(exc, RecoverableRunPauseError):
@@ -420,11 +635,15 @@ class RunManager:
                             last_error=payload.error_message,
                         )
                     raise
-                result = self._build_completed_error_run_result(
+                result = await self._run_result_through_stop_hooks(
                     run_id=run_id,
                     session_id=session_id,
-                    error_code="run_start_failed",
-                    error_message=str(exc),
+                    result=self._build_completed_error_run_result(
+                        run_id=run_id,
+                        session_id=session_id,
+                        error_code="run_start_failed",
+                        error_message=str(exc),
+                    ),
                 )
                 if self._run_runtime_repo is not None:
                     self._run_runtime_repo.update(
@@ -438,10 +657,17 @@ class RunManager:
                         active_subagent_instance_id=None,
                         last_error=result.error_message,
                     )
+                await self._execute_session_end_hooks(
+                    run_id=run_id,
+                    session_id=session_id,
+                    status=result.status,
+                    completion_reason=result.completion_reason.value,
+                    output_text=result.output_text,
+                    root_task_id=result.root_task_id,
+                )
                 return result
             finally:
-                self._injection_manager.deactivate(run_id)
-                self._running_run_ids.discard(run_id)
+                self._safe_finalize_run(run_id=run_id, session_id=session_id)
 
     def create_run(
         self,
@@ -595,6 +821,8 @@ class RunManager:
         intent: IntentInput,
     ) -> tuple[str, str]:
         run_id = new_trace_id().value
+        if self._hook_service is not None:
+            self._hook_service.snapshot_run(run_id)
         self._pending_runs[run_id] = intent
         if self._run_runtime_repo is not None:
             self._run_runtime_repo.ensure(
@@ -1049,12 +1277,30 @@ class RunManager:
                 message="Run worker started",
             )
         try:
-            raw_result = await self._run_with_auto_recovery(
+            runtime_intent = None
+            if self._run_intent_repo is not None:
+                try:
+                    runtime_intent = self._run_intent_repo.get(
+                        run_id,
+                        fallback_session_id=session_id,
+                    )
+                except KeyError:
+                    runtime_intent = None
+            if runtime_intent is not None:
+                await self._execute_session_start_hooks(
+                    run_id=run_id,
+                    session_id=session_id,
+                    intent=runtime_intent,
+                )
+            result = await self._run_result_through_stop_hooks(
                 run_id=run_id,
                 session_id=session_id,
-                runner=runner,
+                result=await self._run_with_auto_recovery(
+                    run_id=run_id,
+                    session_id=session_id,
+                    runner=runner,
+                ),
             )
-            result = self._normalize_terminal_run_result(raw_result)
             completion_reason = result.completion_reason
             failed = result.status == "failed"
             terminal_status = (
@@ -1124,6 +1370,14 @@ class RunManager:
                 trace_id=result.trace_id,
                 title=notification_title,
                 body=notification_body,
+            )
+            await self._execute_session_end_hooks(
+                run_id=run_id,
+                session_id=session_id,
+                status=result.status,
+                completion_reason=completion_reason.value,
+                output_text=output_text,
+                root_task_id=result.root_task_id,
             )
         except RecoverableRunPauseError as exc:
             payload = exc.payload
@@ -1196,14 +1450,24 @@ class RunManager:
                 title="Run Stopped",
                 body=f"Run {run_id} was stopped by user.",
             )
-        except Exception as exc:
-            result = self._build_completed_error_run_result(
+            await self._execute_session_end_hooks(
                 run_id=run_id,
                 session_id=session_id,
-                error_code="run_worker_failed",
-                error_message=str(exc),
+                status="stopped",
+                completion_reason="stopped_by_user",
+                output_text="",
             )
-            result = self._normalize_terminal_run_result(result)
+        except Exception as exc:
+            result = await self._run_result_through_stop_hooks(
+                run_id=run_id,
+                session_id=session_id,
+                result=self._build_completed_error_run_result(
+                    run_id=run_id,
+                    session_id=session_id,
+                    error_code="run_worker_failed",
+                    error_message=str(exc),
+                ),
+            )
             failed = result.status == "failed"
             output_text = result.output_text or str(result.error_message or "").strip()
             self._safe_runtime_update(
@@ -1298,6 +1562,8 @@ class RunManager:
         if runtime is not None and runtime.is_recoverable:
             self._remember_active_run(session_id, run_id)
             return
+        if self._hook_service is not None:
+            self._hook_service.clear_run(run_id)
         self._auto_recovery_attempts = {
             key: value
             for key, value in self._auto_recovery_attempts.items()

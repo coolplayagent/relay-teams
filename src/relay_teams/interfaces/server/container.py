@@ -182,6 +182,9 @@ from relay_teams.gateway.wechat import (
     WeChatInboundQueueRepository,
     get_wechat_secret_store,
 )
+from relay_teams.hooks import HookLoader, HookRuntimeState, HookService
+from relay_teams.hooks.executors.command_executor import CommandHookExecutor
+from relay_teams.hooks.executors.http_executor import HttpHookExecutor
 from relay_teams.workspace import (
     WorkspaceManager,
     WorkspaceRepository,
@@ -226,6 +229,14 @@ class ServerContainer:
         self.proxy_config_service: ProxyConfigService = ProxyConfigService(
             config_dir=app_config_dir,
             on_proxy_reloaded=self._on_proxy_reloaded,
+        )
+        self.hook_service = HookService(
+            loader=HookLoader(app_config_dir=app_config_dir, project_root=Path.cwd()),
+            runtime_state=HookRuntimeState(),
+            command_executor=CommandHookExecutor(),
+            http_executor=HttpHookExecutor(
+                get_proxy_config=self.proxy_config_service.get_proxy_config
+            ),
         )
         self.web_config_service: WebConfigService = WebConfigService(
             config_dir=app_config_dir
@@ -588,6 +599,7 @@ class ServerContainer:
             media_asset_service=self.media_asset_service,
             runtime_role_resolver=self.runtime_role_resolver,
             shell_approval_repo=self.shell_approval_repo,
+            hook_service=self.hook_service,
         )
         self.monitor_service.bind_action_sink(self.run_service)
         self.session_service: SessionService = SessionService(
@@ -851,6 +863,7 @@ class ServerContainer:
             im_tool_service=self.im_tool_service,
             external_agent_session_manager=self.external_acp_session_manager,
             session_model_profile_lookup=self._session_model_profile_lookup,
+            hook_service=self.hook_service,
         )
         self.task_execution_service = create_task_execution_service(
             role_registry=self.role_registry,

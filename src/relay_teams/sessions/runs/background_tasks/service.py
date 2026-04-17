@@ -51,6 +51,7 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.workspace import WorkspaceHandle
+from relay_teams.tools.runtime.hook_runtime_env import merge_tool_hook_runtime_env
 
 LOGGER = get_logger(__name__)
 _COMPLETION_RETRY_INITIAL_DELAY_SECONDS = 1.0
@@ -260,6 +261,7 @@ class BackgroundTaskService:
         background: bool,
     ) -> tuple[BackgroundTaskRecord, bool]:
         manager = self._require_manager()
+        env = merge_tool_hook_runtime_env(env)
         timeout = (
             None if background and timeout_ms is None else normalize_timeout(timeout_ms)
         )

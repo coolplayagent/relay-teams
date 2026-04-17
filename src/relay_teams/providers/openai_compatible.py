@@ -78,6 +78,7 @@ if TYPE_CHECKING:
     )
     from relay_teams.workspace import WorkspaceManager
     from relay_teams.gateway.im import ImToolService
+    from relay_teams.hooks import HookService
 
 
 @final
@@ -122,9 +123,11 @@ class OpenAICompatibleProvider(LLMProvider):
         retry_config: LlmRetryConfig | None = None,
         im_tool_service: ImToolService | None = None,
         computer_runtime: ComputerRuntime | None = None,
+        hook_service: HookService | None = None,
     ) -> None:
         self._config_ref = config
         self._media_asset_service = media_asset_service
+        self._hook_service = hook_service
         self._session = AgentLlmSession(
             config=config,
             task_repo=task_repo,
@@ -169,6 +172,7 @@ class OpenAICompatibleProvider(LLMProvider):
             retry_config=retry_config,
             im_tool_service=im_tool_service,
             computer_runtime=computer_runtime,
+            hook_service=hook_service,
         )
 
     @override
@@ -309,7 +313,7 @@ class OpenAICompatibleProvider(LLMProvider):
         return getattr(self._session, name)
 
     def __setattr__(self, name: str, value: object) -> None:
-        if name in {"_session", "_config_ref", "_media_asset_service"}:
+        if name in {"_session", "_config_ref", "_media_asset_service", "_hook_service"}:
             object.__setattr__(self, name, value)
             return
         if "_session" not in self.__dict__:
@@ -328,6 +332,18 @@ class OpenAICompatibleProvider(LLMProvider):
         source: str,
     ) -> tuple[ContentPart, ...]:
         client = build_llm_http_client(
+            merged_env=(
+                resolved_hook_env
+                if (
+                    self._hook_service is not None
+                    and (
+                        resolved_hook_env := self._hook_service.get_run_env(
+                            request.run_id
+                        )
+                    )
+                )
+                else None
+            ),
             ssl_verify=self._config.ssl_verify,
             connect_timeout_seconds=self._config.connect_timeout_seconds,
         )

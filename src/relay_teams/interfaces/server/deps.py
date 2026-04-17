@@ -47,6 +47,7 @@ from relay_teams.tools.registry import ToolRegistry
 from relay_teams.triggers import GitHubTriggerService
 from relay_teams.gateway.wechat import WeChatGatewayService
 from relay_teams.workspace import WorkspaceManager, WorkspaceService
+from relay_teams.hooks import HookService
 
 
 def get_container(request: Request) -> ServerContainer:
@@ -201,3 +202,7 @@ def get_wechat_gateway_service(request: Request) -> WeChatGatewayService:
 
 def get_github_trigger_service(request: Request) -> GitHubTriggerService:
     return get_container(request).github_trigger_service
+
+
+def get_hook_service(request: Request) -> HookService:
+    return get_container(request).hook_service

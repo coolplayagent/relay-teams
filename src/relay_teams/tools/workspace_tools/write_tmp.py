@@ -11,7 +11,7 @@ from relay_teams.tools.runtime import (
     ToolContext,
     ToolDeps,
     ToolResultProjection,
-    execute_tool,
+    execute_tool_call,
 )
 from relay_teams.tools.workspace_tools.path_utils import resolve_workspace_tmp_path
 from relay_teams.tools.workspace_tools.write import (
@@ -59,7 +59,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         path: str,
         content: str,
     ) -> dict[str, JsonValue]:
-        async def _action() -> ToolResultProjection:
+        async def _action(path: str, content: str) -> ToolResultProjection:
             relative_tmp_path = _normalize_tmp_relative_path(path)
             file_path = resolve_workspace_tmp_path(
                 ctx.deps.workspace,
@@ -84,7 +84,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 created=created,
             )
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="write_tmp",
             args_summary={
@@ -92,4 +92,5 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "content_len": len(content),
             },
             action=_action,
+            raw_args=locals(),
         )

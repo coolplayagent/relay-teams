@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import cast
+import inspect
+from types import SimpleNamespace
+from typing import Awaitable, Callable, cast
 
 import httpx
+from pydantic_ai import Agent
 import pytest
 
 from relay_teams.env.web_config_models import (
@@ -12,7 +15,7 @@ from relay_teams.env.web_config_models import (
     WebFallbackProvider,
     WebProvider,
 )
-from relay_teams.tools.runtime import ToolExecutionError
+from relay_teams.tools.runtime import ToolDeps, ToolExecutionError
 from relay_teams.tools.web_tools import websearch
 
 
@@ -657,3 +660,85 @@ def test_is_exa_fallback_error_accepts_quota_style_403_errors() -> None:
             details={"status_code": 403},
         )
     )
+
+
+class _FakeAgent:
+    def __init__(self) -> None:
+        self.tools: dict[str, Callable[..., object]] = {}
+
+    def tool(
+        self, *, description: str
+    ) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        del description
+
+        def decorator(func: Callable[..., object]) -> Callable[..., object]:
+            self.tools[func.__name__] = func
+            return func
+
+        return decorator
+
+
+@pytest.mark.asyncio
+async def test_register_websearch_uses_default_proxy_env_when_hook_runtime_env_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_agent = _FakeAgent()
+    websearch.register(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]], fake_agent.tools["websearch"]
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeAsyncClient:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            _ = (exc_type, exc, tb)
+            return False
+
+    def _fake_create_async_http_client(**kwargs: object) -> _FakeAsyncClient:
+        captured.update(kwargs)
+        return _FakeAsyncClient()
+
+    async def _fake_execute_search(**kwargs: object) -> object:
+        _ = kwargs
+        return websearch.SearchExecutionResult(
+            provider=websearch.WebProvider.SEARXNG,
+            endpoint_host="example.test",
+            upstream_tool="search",
+            hits=(),
+            internal_data={},
+        )
+
+    async def _fake_execute_tool(ctx, **kwargs: object) -> dict[str, object]:
+        _ = ctx
+        action = cast(
+            Callable[..., Awaitable[dict[str, object]]],
+            kwargs["action"],
+        )
+        raw_args = cast(dict[str, object], kwargs["raw_args"])
+        tool_args = {
+            name: raw_args[name]
+            for name in inspect.signature(action).parameters
+            if name in raw_args
+        }
+        return await action(**tool_args)
+
+    monkeypatch.setattr(
+        websearch, "create_async_http_client", _fake_create_async_http_client
+    )
+    monkeypatch.setattr(websearch, "execute_search", _fake_execute_search)
+    monkeypatch.setattr(websearch, "execute_tool_call", _fake_execute_tool)
+    monkeypatch.setattr(websearch, "load_runtime_web_config", lambda: WebConfig())
+
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            hook_runtime_env={},
+        ),
+    )
+
+    _ = await tool(ctx, query="python")
+
+    assert "merged_env" not in captured

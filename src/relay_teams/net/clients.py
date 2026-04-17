@@ -12,6 +12,7 @@ from relay_teams.env.proxy_env import (
     resolve_ssl_verify,
 )
 from relay_teams.env.runtime_env import load_merged_env_vars
+from relay_teams.tools.runtime.hook_runtime_env import merge_tool_hook_runtime_env
 from relay_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 from relay_teams.net.proxy_transports import (
     AsyncProxyRoutingTransport,
@@ -86,5 +87,8 @@ def _resolve_proxy_config(
 ) -> ProxyEnvConfig:
     if proxy_config is not None:
         return proxy_config
-    resolved_env = load_merged_env_vars() if merged_env is None else merged_env
+    base_env = load_merged_env_vars() if merged_env is None else merged_env
+    resolved_env = merge_tool_hook_runtime_env(base_env)
+    if resolved_env is None:
+        return resolve_proxy_env_config(base_env)
     return resolve_proxy_env_config(resolved_env)

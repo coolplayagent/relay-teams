@@ -8,7 +8,7 @@ from pydantic_ai import Agent
 from relay_teams.agents.orchestration.task_orchestration_service import TaskUpdate
 
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool_call
 
 DESCRIPTION = load_tool_description(__file__)
 
@@ -23,7 +23,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Update a task contract that is still in the created state."""
 
-        def _action() -> dict[str, JsonValue]:
+        def _action(
+            task_id: str,
+            objective: str | None = None,
+            title: str | None = None,
+        ) -> dict[str, JsonValue]:
             return ctx.deps.task_service.update_task(
                 run_id=ctx.deps.run_id,
                 task_id=task_id,
@@ -33,7 +37,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 ),
             )
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="update_task",
             args_summary={
@@ -42,4 +46,5 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "has_title": title is not None,
             },
             action=_action,
+            raw_args=locals(),
         )

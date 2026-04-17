@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -7,7 +6,6 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from relay_teams.interfaces.cli import app as cli_app
 from relay_teams.env import env_cli
 
 runner = CliRunner()
@@ -28,8 +26,8 @@ def test_env_list_masks_sensitive_values_by_default(
     monkeypatch.setenv("OPENAI_API_KEY", "process-secret")
 
     result = runner.invoke(
-        cli_app.app,
-        ["env", "list", "--format", "json", "--prefix", "OPENAI_API_KEY"],
+        env_cli.env_app,
+        ["list", "--format", "json", "--prefix", "OPENAI_API_KEY"],
     )
 
     assert result.exit_code == 0
@@ -55,9 +53,8 @@ def test_env_list_can_show_sensitive_values(monkeypatch, tmp_path: Path) -> None
     monkeypatch.setenv("OPENAI_API_KEY", "process-secret")
 
     result = runner.invoke(
-        cli_app.app,
+        env_cli.env_app,
         [
-            "env",
             "list",
             "--format",
             "json",
@@ -89,7 +86,7 @@ def test_env_list_table_output_is_pretty(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(env_cli, "get_project_env_file_path", lambda: project_env_file)
     monkeypatch.setenv("PUBLIC_SETTING", "enabled")
 
-    result = runner.invoke(cli_app.app, ["env", "list", "--prefix", "PUBLIC_SETTING"])
+    result = runner.invoke(env_cli.env_app, ["list", "--prefix", "PUBLIC_SETTING"])
 
     assert result.exit_code == 0
     assert "Environment Variables (" in result.output
@@ -109,9 +106,7 @@ def test_env_list_defaults_to_table_format(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(env_cli, "get_project_env_file_path", lambda: project_env_file)
     monkeypatch.setenv("AT_UT_FORMAT_SWITCH", "enabled")
 
-    result = runner.invoke(
-        cli_app.app, ["env", "list", "--prefix", "AT_UT_FORMAT_SWITCH"]
-    )
+    result = runner.invoke(env_cli.env_app, ["list", "--prefix", "AT_UT_FORMAT_SWITCH"])
 
     assert result.exit_code == 0
     assert result.output.startswith("Environment Variables (")
@@ -131,9 +126,8 @@ def test_env_list_supports_json_format(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AT_UT_FORMAT_SWITCH", "enabled")
 
     result = runner.invoke(
-        cli_app.app,
+        env_cli.env_app,
         [
-            "env",
             "list",
             "--format",
             "json",
@@ -174,7 +168,7 @@ def test_env_proxy_reload_calls_server(monkeypatch) -> None:
 
     monkeypatch.setattr(env_cli, "_request_json", fake_request_json)
 
-    result = runner.invoke(cli_app.app, ["env", "proxy-reload"])
+    result = runner.invoke(env_cli.env_app, ["proxy-reload"])
 
     assert result.exit_code == 0
     assert calls == [("POST", "/api/system/configs/proxy:reload", None)]
@@ -203,8 +197,8 @@ def test_env_probe_web_supports_json_output(monkeypatch) -> None:
     )
 
     result = runner.invoke(
-        cli_app.app,
-        ["env", "probe-web", "https://example.com", "--format", "json"],
+        env_cli.env_app,
+        ["probe-web", "https://example.com", "--format", "json"],
     )
 
     assert result.exit_code == 0

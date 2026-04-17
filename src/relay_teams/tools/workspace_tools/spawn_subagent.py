@@ -10,7 +10,7 @@ from relay_teams.tools.runtime import (
     ToolContext,
     ToolDeps,
     ToolResultProjection,
-    execute_tool,
+    execute_tool_call,
 )
 from relay_teams.tools.workspace_tools.background_task_tool_support import (
     project_background_task_tool_result,
@@ -32,7 +32,12 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         prompt: str,
         background: bool = False,
     ) -> dict[str, JsonValue]:
-        async def _action():
+        async def _action(
+            role_id: str,
+            description: str,
+            prompt: str,
+            background: bool = False,
+        ) -> ToolResultProjection:
             service = require_background_task_service(ctx)
             resolved_role_id = ctx.deps.role_registry.resolve_subagent_role_id(role_id)
             if background:
@@ -77,7 +82,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 },
             )
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="spawn_subagent",
             args_summary={
@@ -87,6 +92,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "prompt_len": len(prompt),
             },
             action=_action,
+            raw_args=locals(),
         )
 
 

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.profiles.openai import OpenAIModelProfile
@@ -37,6 +39,7 @@ def build_coordination_agent(
     model_profile: OpenAIModelProfile | None = None,
     ssl_verify: bool | None = None,
     connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+    merged_env: Mapping[str, str] | None = None,
     allowed_mcp_servers: tuple[str, ...] = (),
     allowed_skills: tuple[str, ...] = (),
     tool_registry: ToolRegistry,
@@ -68,6 +71,7 @@ def build_coordination_agent(
         skill_tools = skill_registry.get_toolset_tools(resolved_skills)
 
     llm_http_client = build_llm_http_client(
+        merged_env=merged_env,
         connect_timeout_seconds=connect_timeout_seconds,
         ssl_verify=ssl_verify,
     )

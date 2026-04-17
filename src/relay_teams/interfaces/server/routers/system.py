@@ -69,6 +69,7 @@ from relay_teams.interfaces.server.deps import (
     get_skills_config_reload_service,
     get_ui_language_settings_service,
     get_web_config_service,
+    get_hook_service,
 )
 from relay_teams.interfaces.server.ui_language_models import UiLanguageSettings
 from relay_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
@@ -107,6 +108,7 @@ from relay_teams.skills.clawhub_models import (
 )
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.triggers import GitHubTriggerService
+from relay_teams.hooks import HookService, HooksConfig
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/system", tags=["System"])
@@ -792,3 +794,33 @@ def reload_skills_config(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/configs/hooks")
+def get_hooks_config(
+    service: HookService = Depends(get_hook_service),
+) -> HooksConfig:
+    return service.get_user_config()
+
+
+@router.put("/configs/hooks")
+def save_hooks_config(
+    req: HooksConfig,
+    service: HookService = Depends(get_hook_service),
+) -> HooksConfig:
+    try:
+        return service.save_user_config(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/configs/hooks:validate")
+def validate_hooks_config(
+    req: HooksConfig,
+    service: HookService = Depends(get_hook_service),
+) -> dict[str, str]:
+    try:
+        _ = service.validate_config(req)
+        return {"status": "ok"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

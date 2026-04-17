@@ -25,7 +25,7 @@ from relay_teams.tools.runtime import (
     ToolContext,
     ToolDeps,
     ToolResultProjection,
-    execute_tool,
+    execute_tool_call,
 )
 from relay_teams.tools.workspace_tools.edit_state import record_file_read
 
@@ -232,7 +232,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             limit: Maximum number of lines or entries to return.
         """
 
-        async def _action() -> ToolResultProjection:
+        async def _action(
+            path: str,
+            offset: int = 1,
+            limit: int = DEFAULT_READ_LIMIT,
+        ) -> ToolResultProjection:
             file_path = ctx.deps.workspace.resolve_read_path(path)
 
             if not path_exists(file_path):
@@ -327,9 +331,10 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 next_offset=continuation_offset,
             )
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="read",
             args_summary={"path": path, "offset": offset, "limit": limit},
             action=_action,
+            raw_args=locals(),
         )

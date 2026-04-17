@@ -80,3 +80,42 @@ async def test_subagent_runner_builds_runtime_request() -> None:
         system_prompt="role=researcher;task=task-1;shared=context",
         user_prompt=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_subagent_runner_passes_user_prompt_when_provided() -> None:
+    provider = _CapturingProvider()
+    runner = SubAgentRunner(
+        role=RoleDefinition(
+            role_id="researcher",
+            name="Researcher",
+            description="Researches implementation details.",
+            version="1",
+            system_prompt="You are a researcher.",
+        ),
+        prompt_builder=_FixedPromptBuilder(),
+        provider=provider,
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        role_id="researcher",
+        objective="Investigate the issue.",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+
+    result = await runner.run(
+        task=task,
+        instance_id="instance-1",
+        workspace_id="workspace-1",
+        working_directory=Path("/tmp/workspace-root"),
+        conversation_id="conversation-1",
+        shared_state_snapshot=(("context", "available"),),
+        user_prompt="rewritten from hook",
+    )
+
+    assert result == "done"
+    assert provider.request is not None
+    assert provider.request.user_prompt == "rewritten from hook"
+    assert provider.request.prompt_text == "rewritten from hook"

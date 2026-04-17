@@ -16,7 +16,7 @@ from relay_teams.tools.runtime import (
     ToolContext,
     ToolDeps,
     ToolResultProjection,
-    execute_tool,
+    execute_tool_call,
 )
 from relay_teams.tools.workspace_tools.edit_state import (
     assert_file_unchanged_since_read,
@@ -494,7 +494,12 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         new_string: str,
         replace_all: bool = False,
     ) -> dict[str, JsonValue]:
-        async def _action() -> ToolResultProjection:
+        async def _action(
+            path: str,
+            old_string: str,
+            new_string: str,
+            replace_all: bool = False,
+        ) -> ToolResultProjection:
             file_path = ctx.deps.workspace.resolve_path(path, write=True)
             result = edit_file_with_guard(
                 shared_store=ctx.deps.shared_store,
@@ -506,7 +511,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             )
             return _project_edit_result(result)
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="edit",
             args_summary={
@@ -516,4 +521,5 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "replace_all": replace_all,
             },
             action=_action,
+            raw_args=locals(),
         )
