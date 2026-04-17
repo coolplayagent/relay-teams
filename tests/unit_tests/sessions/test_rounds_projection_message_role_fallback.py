@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
+import pytest
 from typing import cast
 
 from pydantic_ai.messages import (
@@ -315,6 +317,7 @@ def test_build_session_rounds_clears_stale_microcompact_badge_on_later_false_eve
     assert round_item["microcompact"] is None
 
 
+@pytest.mark.timeout(5)
 def test_build_session_rounds_preserves_background_task_notification_intent(
     tmp_path: Path,
 ) -> None:

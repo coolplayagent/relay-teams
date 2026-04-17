@@ -630,6 +630,7 @@ class _FakeDeps:
         self.tool_approval_policy = _FakePolicy()
         self.run_runtime_repo = _FakeRunRuntimeRepo()
         self.notification_service = None
+        self.hook_runtime_env: dict[str, str] = {}
         self.shared_store = SharedStateRepository(Path(mkdtemp()) / "state.db")
 
 

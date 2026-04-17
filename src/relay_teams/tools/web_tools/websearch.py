@@ -33,7 +33,7 @@ from relay_teams.tools.runtime import (
     ToolDeps,
     ToolExecutionError,
     ToolResultProjection,
-    execute_tool,
+    execute_tool_call,
 )
 from relay_teams.tools.web_tools.common import load_runtime_web_config
 
@@ -347,7 +347,12 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Search the web and return structured search hits, or retrieve code-oriented context."""
 
-        async def _action() -> ToolResultProjection:
+        async def _action(
+            query: str,
+            num_results: int | None = None,
+            allowed_domains: list[str] | None = None,
+            blocked_domains: list[str] | None = None,
+        ) -> ToolResultProjection:
             config = load_runtime_web_config()
             started = time.perf_counter()
             request = WebSearchRequest(
@@ -385,7 +390,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 duration_ms=duration_ms,
             )
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="websearch",
             args_summary={
@@ -397,6 +402,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "tokens_num": tokens_num,
             },
             action=_action,
+            raw_args=locals(),
         )
 
 

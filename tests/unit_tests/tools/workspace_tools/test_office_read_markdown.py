@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -14,6 +15,19 @@ from relay_teams.tools.runtime import ToolResultProjection
 from relay_teams.tools.runtime.context import ToolDeps
 from relay_teams.tools.workspace_tools import register_office_read_markdown
 from relay_teams.tools.workspace_tools.edit_state import load_file_read_state
+
+
+async def _invoke_tool_action(
+    action: Callable[..., Awaitable[ToolResultProjection]],
+    raw_args: dict[str, object] | None,
+) -> ToolResultProjection:
+    resolved_raw_args = {} if raw_args is None else raw_args
+    tool_args = {
+        name: resolved_raw_args[name]
+        for name in inspect.signature(action).parameters
+        if name in resolved_raw_args
+    }
+    return await action(**tool_args)
 
 
 class _FakeAgent:
@@ -138,16 +152,20 @@ async def test_office_read_markdown_tool_converts_supported_pdf(
         )
     )
 
-    async def _fake_execute_tool(
+    async def _fake_execute_tool_call(
         ctx,
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
         approval_request=None,
     ) -> dict[str, object]:
         del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).internal_data)
+        return cast(
+            dict[str, object],
+            (await _invoke_tool_action(action, raw_args)).internal_data,
+        )
 
     def _fake_convert(file_path: Path) -> OfficeConversionResult:
         return OfficeConversionResult(
@@ -160,8 +178,8 @@ async def test_office_read_markdown_tool_converts_supported_pdf(
 
     monkeypatch.setattr(
         office_read_markdown_module,
-        "execute_tool",
-        _fake_execute_tool,
+        "execute_tool_call",
+        _fake_execute_tool_call,
     )
     monkeypatch.setattr(
         office_read_markdown_module,
@@ -243,16 +261,20 @@ async def test_office_read_markdown_preserves_markdown_tables(
         )
     )
 
-    async def _fake_execute_tool(
+    async def _fake_execute_tool_call(
         ctx,
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
         approval_request=None,
     ) -> dict[str, object]:
         del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).internal_data)
+        return cast(
+            dict[str, object],
+            (await _invoke_tool_action(action, raw_args)).internal_data,
+        )
 
     def _fake_convert(file_path: Path) -> OfficeConversionResult:
         return OfficeConversionResult(
@@ -270,8 +292,8 @@ async def test_office_read_markdown_preserves_markdown_tables(
 
     monkeypatch.setattr(
         office_read_markdown_module,
-        "execute_tool",
-        _fake_execute_tool,
+        "execute_tool_call",
+        _fake_execute_tool_call,
     )
     monkeypatch.setattr(
         office_read_markdown_module,
@@ -323,16 +345,20 @@ async def test_office_read_markdown_allows_explicit_line_numbers(
         )
     )
 
-    async def _fake_execute_tool(
+    async def _fake_execute_tool_call(
         ctx,
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
         approval_request=None,
     ) -> dict[str, object]:
         del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).internal_data)
+        return cast(
+            dict[str, object],
+            (await _invoke_tool_action(action, raw_args)).internal_data,
+        )
 
     def _fake_convert(file_path: Path) -> OfficeConversionResult:
         return OfficeConversionResult(
@@ -344,8 +370,8 @@ async def test_office_read_markdown_allows_explicit_line_numbers(
 
     monkeypatch.setattr(
         office_read_markdown_module,
-        "execute_tool",
-        _fake_execute_tool,
+        "execute_tool_call",
+        _fake_execute_tool_call,
     )
     monkeypatch.setattr(
         office_read_markdown_module,
@@ -389,16 +415,20 @@ async def test_office_read_markdown_surfaces_office_ocr_error(
         )
     )
 
-    async def _fake_execute_tool(
+    async def _fake_execute_tool_call(
         ctx,
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
         approval_request=None,
     ) -> dict[str, object]:
         del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).internal_data)
+        return cast(
+            dict[str, object],
+            (await _invoke_tool_action(action, raw_args)).internal_data,
+        )
 
     def _raise_ocr_error(file_path: Path) -> object:
         raise OfficeConversionRequiresOcrError(
@@ -407,8 +437,8 @@ async def test_office_read_markdown_surfaces_office_ocr_error(
 
     monkeypatch.setattr(
         office_read_markdown_module,
-        "execute_tool",
-        _fake_execute_tool,
+        "execute_tool_call",
+        _fake_execute_tool_call,
     )
     monkeypatch.setattr(
         office_read_markdown_module,
@@ -447,21 +477,25 @@ async def test_office_read_markdown_rejects_non_office_files(
         )
     )
 
-    async def _fake_execute_tool(
+    async def _fake_execute_tool_call(
         ctx,
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
         approval_request=None,
     ) -> dict[str, object]:
         del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).internal_data)
+        return cast(
+            dict[str, object],
+            (await _invoke_tool_action(action, raw_args)).internal_data,
+        )
 
     monkeypatch.setattr(
         office_read_markdown_module,
-        "execute_tool",
-        _fake_execute_tool,
+        "execute_tool_call",
+        _fake_execute_tool_call,
     )
 
     with pytest.raises(
@@ -498,24 +532,28 @@ async def test_office_read_markdown_rejects_non_positive_limit_before_conversion
         )
     )
 
-    async def _fake_execute_tool(
+    async def _fake_execute_tool_call(
         ctx,
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
         approval_request=None,
     ) -> dict[str, object]:
         del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).internal_data)
+        return cast(
+            dict[str, object],
+            (await _invoke_tool_action(action, raw_args)).internal_data,
+        )
 
     def _unexpected_convert(file_path: Path) -> object:
         raise AssertionError(f"unexpected conversion for {file_path}")
 
     monkeypatch.setattr(
         office_read_markdown_module,
-        "execute_tool",
-        _fake_execute_tool,
+        "execute_tool_call",
+        _fake_execute_tool_call,
     )
     monkeypatch.setattr(
         office_read_markdown_module,

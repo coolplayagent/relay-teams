@@ -87,6 +87,7 @@ exclude = [
   "**/__pycache__",
   "**/node_modules",
   "frontend/dist",
+  ".tmp",
   "src/relay_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx",
 ]
 

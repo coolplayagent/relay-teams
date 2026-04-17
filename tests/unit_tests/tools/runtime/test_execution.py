@@ -11,12 +11,15 @@ from pathlib import Path
 from tempfile import mkdtemp
 from typing import cast
 
+import pytest
+
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.notifications import NotificationService, default_notification_config
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
-from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
+from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventName
 from relay_teams.sessions.runs.event_stream import RunEventHub
 
 from relay_teams.tools.runtime.approval_ticket_repo import (
@@ -45,6 +48,34 @@ class _FakeRunEventHub:
 
     def publish(self, event) -> None:
         self.events.append(event)
+
+
+class _FakeInjectionRecord:
+    def __init__(self, *, source: InjectionSource, content: str) -> None:
+        self.source = source
+        self.content = content
+
+
+class _FakeInjectionManager:
+    def __init__(self) -> None:
+        self.records: list[_FakeInjectionRecord] = []
+
+    def is_active(self, run_id: str) -> bool:
+        _ = run_id
+        return True
+
+    def enqueue(
+        self,
+        run_id: str,
+        recipient_instance_id: str,
+        *,
+        source: InjectionSource,
+        content: str,
+    ) -> _FakeInjectionRecord:
+        _ = (run_id, recipient_instance_id)
+        record = _FakeInjectionRecord(source=source, content=content)
+        self.records.append(record)
+        return record
 
 
 class _FakeApprovalManager:
@@ -113,6 +144,9 @@ class _FakeDeps:
         self.tool_approval_manager = manager
         self.tool_approval_policy = policy
         self.notification_service = _build_notification_service(self.run_event_hub)
+        self.hook_service: object | None = None
+        self.hook_runtime_env: dict[str, str] = {}
+        self.injection_manager = _FakeInjectionManager()
         self.approval_ticket_repo = ApprovalTicketRepository(db_path)
         self.run_runtime_repo = RunRuntimeRepository(db_path)
         self.shared_store = SharedStateRepository(Path(mkdtemp()) / "state.db")
@@ -167,6 +201,7 @@ def _tool_result_payloads(deps: _FakeDeps) -> list[dict[str, object]]:
     ]
 
 
+@pytest.mark.timeout(5)
 def test_execute_tool_returns_standard_envelope() -> None:
     deps = _FakeDeps(
         manager=_FakeApprovalManager(wait_result=("approve", "")),
@@ -760,3 +795,203 @@ def test_execute_tool_marks_sqlite_lock_error_as_retryable() -> None:
     assert result["ok"] is False
     assert error["type"] == "internal_error"
     assert error["retryable"] is True
+
+
+class _FakeHookService:
+    def __init__(
+        self,
+        decision: HookDecisionType | None = None,
+        *,
+        reason: str = "",
+        bundles: dict[HookEventName, HookDecisionBundle] | None = None,
+    ) -> None:
+        self.decision = decision or HookDecisionType.ALLOW
+        self.reason = reason
+        self.bundles = bundles or {}
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        event_name = cast(HookEventName, getattr(event_input, "event_name"))
+        if event_name in self.bundles:
+            return self.bundles[event_name]
+        return HookDecisionBundle(decision=self.decision, reason=self.reason)
+
+
+def test_execute_tool_denies_pre_tool_use_when_hook_blocks_call() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.hook_service = _FakeHookService(
+        HookDecisionType.DENY,
+        reason="Shell commands are blocked in this workspace.",
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-hook-deny-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="shell",
+            args_summary={"command": "rm -rf ."},
+            action=lambda: "should_not_run",
+        )
+    )
+
+    error = cast(dict[str, JsonValue], result["error"])
+    assert result["ok"] is False
+    assert error["type"] == "hook_denied"
+    assert "blocked" in str(error["message"]).lower()
+
+
+def test_execute_tool_allows_permission_request_when_hook_overrides_approval() -> None:
+    manager = _FakeApprovalManager(wait_result=("approve", ""))
+    deps = _FakeDeps(
+        manager=manager,
+        policy=_FakePolicy(needs_approval=True),
+    )
+    deps.hook_service = _FakeHookService(
+        bundles={
+            HookEventName.PRE_TOOL_USE: HookDecisionBundle(
+                decision=HookDecisionType.ALLOW,
+            ),
+            HookEventName.PERMISSION_REQUEST: HookDecisionBundle(
+                decision=HookDecisionType.ALLOW,
+            ),
+        }
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-hook-allow-approval"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="write",
+            args_summary={"path": "a.txt"},
+            action=lambda: "written",
+        )
+    )
+
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-hook-allow-approval",
+    )
+    assert result["ok"] is True
+    assert result["data"] == "written"
+    assert state is not None
+    assert state.approval_mode == ToolApprovalMode.POLICY_EXEMPT
+    assert manager.last_open is None
+    assert not any(
+        event.event_type == RunEventType.TOOL_APPROVAL_REQUESTED
+        for event in deps.run_event_hub.events
+    )
+
+
+def test_execute_tool_records_post_tool_hook_metadata() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.hook_service = _FakeHookService(
+        bundles={
+            HookEventName.POST_TOOL_USE: HookDecisionBundle(
+                decision=HookDecisionType.CONTINUE,
+                additional_context=("summarize result",),
+                deferred_action="schedule_follow_up",
+            ),
+        }
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-hook-post-success"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: "hello",
+        )
+    )
+
+    meta = cast(dict[str, JsonValue], result["meta"])
+    assert result["ok"] is True
+    assert meta["hook_additional_context"] == ["summarize result"]
+    assert meta["hook_deferred_action"] == "schedule_follow_up"
+
+
+def test_execute_tool_enqueues_post_tool_hook_additional_context() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.hook_service = _FakeHookService(
+        bundles={
+            HookEventName.POST_TOOL_USE: HookDecisionBundle(
+                decision=HookDecisionType.CONTINUE,
+                additional_context=("summarize result", "capture side effects"),
+            ),
+        }
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-hook-post-context"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: "hello",
+        )
+    )
+
+    meta = cast(dict[str, JsonValue], result["meta"])
+    assert result["ok"] is True
+    assert meta["hook_additional_context"] == [
+        "summarize result",
+        "capture side effects",
+    ]
+    assert [record.content for record in deps.injection_manager.records] == [
+        "summarize result\n\ncapture side effects"
+    ]
+
+
+def test_execute_tool_records_failure_hook_deferred_event_source() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.hook_service = _FakeHookService(
+        bundles={
+            HookEventName.POST_TOOL_USE_FAILURE: HookDecisionBundle(
+                decision=HookDecisionType.CONTINUE,
+                deferred_action="recover from failure",
+            ),
+        }
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-hook-post-failure"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: (_ for _ in ()).throw(ValueError("boom")),
+        )
+    )
+
+    assert result["ok"] is False
+    hook_events = [
+        event
+        for event in deps.run_event_hub.events
+        if event.event_type == RunEventType.HOOK_DEFERRED
+    ]
+    assert len(hook_events) == 1
+    payload = cast(dict[str, object], json.loads(hook_events[0].payload_json))
+    assert payload["hook_event"] == HookEventName.POST_TOOL_USE_FAILURE.value
+    assert [record.content for record in deps.injection_manager.records] == [
+        "recover from failure"
+    ]

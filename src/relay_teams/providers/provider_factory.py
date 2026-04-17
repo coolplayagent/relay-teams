@@ -62,6 +62,7 @@ from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
 )
 from relay_teams.workspace import WorkspaceManager
+from relay_teams.hooks import HookService
 
 if TYPE_CHECKING:
     from relay_teams.gateway.im import ImToolService
@@ -105,6 +106,7 @@ def create_provider_factory(
     external_agent_session_manager: ExternalAcpSessionManager | None = None,
     session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
     | None = None,
+    hook_service: HookService | None = None,
 ) -> Callable[[RoleDefinition, str | None], LLMProvider]:
     fallback_cooldown_registries: dict[tuple[str, ...], ProfileCooldownRegistry] = {}
     fallback_cooldown_registry_lock = Lock()
@@ -229,6 +231,7 @@ def create_provider_factory(
                 retry_config=runtime_to_use.llm_retry,
                 fallback_middleware=profile_fallback_middleware,
                 im_tool_service=im_tool_service,
+                hook_service=hook_service,
             ),
         )
         return provider_registry.create(config_to_use)

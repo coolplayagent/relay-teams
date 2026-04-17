@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+import inspect
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
-
 import pytest
 from pydantic_ai import Agent
 
@@ -283,13 +283,18 @@ async def test_read_tool_reads_notebook_cell_without_outputs(
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
         approval_request=None,
+        **kwargs: object,
     ) -> dict[str, object]:
-        del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).internal_data)
+        del ctx, tool_name, approval_request, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value for key, value in args_summary.items() if key in parameter_names
+        }
+        return cast(dict[str, object], (await action(**action_args)).internal_data)
 
-    monkeypatch.setattr(read_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(read_module, "execute_tool_call", _fake_execute_tool)
 
     result = await tool(
         ctx,
@@ -435,13 +440,18 @@ async def test_read_tool_rejects_office_documents(
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
         approval_request=None,
+        **kwargs: object,
     ) -> dict[str, object]:
-        del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).internal_data)
+        del ctx, tool_name, approval_request, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value for key, value in args_summary.items() if key in parameter_names
+        }
+        return cast(dict[str, object], (await action(**action_args)).internal_data)
 
-    monkeypatch.setattr(read_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(read_module, "execute_tool_call", _fake_execute_tool)
 
     with pytest.raises(ValueError, match="Cannot read binary file: src/report.pdf"):
         await tool(ctx, path="src/report.pdf")

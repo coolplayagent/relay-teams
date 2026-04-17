@@ -14,7 +14,12 @@ from relay_teams.tools.office_tools import (
     SUPPORTED_OFFICE_EXTENSIONS,
     convert_office_document,
 )
-from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from relay_teams.tools.runtime import (
+    ToolContext,
+    ToolDeps,
+    ToolResultProjection,
+    execute_tool_call,
+)
 from relay_teams.tools.workspace_tools.edit_state import record_file_read
 from relay_teams.tools.workspace_tools.read_support import (
     DEFAULT_READ_LIMIT,
@@ -94,7 +99,12 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Convert an Office document or PDF to Markdown and page the result."""
 
-        async def _action():
+        async def _action(
+            path: str,
+            offset: int = 1,
+            limit: int = DEFAULT_READ_LIMIT,
+            line_numbers: bool = False,
+        ) -> ToolResultProjection:
             validate_pagination_args(offset=offset, limit=limit)
             file_path = ctx.deps.workspace.resolve_read_path(path)
 
@@ -180,7 +190,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 ),
             )
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="office_read_markdown",
             args_summary={
@@ -190,4 +200,5 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "line_numbers": line_numbers,
             },
             action=_action,
+            raw_args=locals(),
         )

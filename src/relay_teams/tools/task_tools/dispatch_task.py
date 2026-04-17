@@ -6,7 +6,7 @@ from pydantic import JsonValue
 from pydantic_ai import Agent
 
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool_call
 
 DESCRIPTION = load_tool_description(__file__)
 
@@ -21,7 +21,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Dispatch a task to a role with an execution prompt."""
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="dispatch_task",
             args_summary={
@@ -29,10 +29,13 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "role_id": role_id,
                 "prompt_len": len(prompt),
             },
-            action=lambda: ctx.deps.task_service.dispatch_task(
-                run_id=ctx.deps.run_id,
-                task_id=task_id,
-                role_id=role_id,
-                prompt=prompt,
+            action=lambda task_id, role_id, prompt="": (
+                ctx.deps.task_service.dispatch_task(
+                    run_id=ctx.deps.run_id,
+                    task_id=task_id,
+                    role_id=role_id,
+                    prompt=prompt,
+                )
             ),
+            raw_args=locals(),
         )
