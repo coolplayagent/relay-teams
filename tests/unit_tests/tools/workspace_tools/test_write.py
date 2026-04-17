@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import inspect
 from collections.abc import Awaitable, Callable
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -441,13 +441,21 @@ async def test_write_tool_rejects_existing_notebook_file(
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
         approval_request=None,
+        raw_args: dict[str, object] | None = None,
+        **kwargs: object,
     ) -> dict[str, object]:
-        del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).internal_data)
+        del ctx, tool_name, args_summary, approval_request, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value
+            for key, value in dict(raw_args or {}).items()
+            if key != "ctx" and not key.startswith("_") and key in parameter_names
+        }
+        return cast(dict[str, object], (await action(**action_args)).internal_data)
 
-    monkeypatch.setattr(write_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(write_module, "execute_tool_call", _fake_execute_tool)
 
     with pytest.raises(ValueError, match="Use notebook_edit"):
         await tool(
@@ -482,13 +490,21 @@ async def test_write_tool_rejects_bom_prefixed_existing_notebook_file(
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
         approval_request=None,
+        raw_args: dict[str, object] | None = None,
+        **kwargs: object,
     ) -> dict[str, object]:
-        del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).internal_data)
+        del ctx, tool_name, args_summary, approval_request, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value
+            for key, value in dict(raw_args or {}).items()
+            if key != "ctx" and not key.startswith("_") and key in parameter_names
+        }
+        return cast(dict[str, object], (await action(**action_args)).internal_data)
 
-    monkeypatch.setattr(write_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(write_module, "execute_tool_call", _fake_execute_tool)
 
     with pytest.raises(ValueError, match="Use notebook_edit"):
         await tool(
@@ -520,13 +536,21 @@ async def test_write_tool_allows_repairing_invalid_notebook_file(
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
         approval_request=None,
+        raw_args: dict[str, object] | None = None,
+        **kwargs: object,
     ) -> dict[str, object]:
-        del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).internal_data)
+        del ctx, tool_name, args_summary, approval_request, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value
+            for key, value in dict(raw_args or {}).items()
+            if key != "ctx" and not key.startswith("_") and key in parameter_names
+        }
+        return cast(dict[str, object], (await action(**action_args)).internal_data)
 
-    monkeypatch.setattr(write_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(write_module, "execute_tool_call", _fake_execute_tool)
 
     content = '{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}'
     result = await tool(ctx, path="demo.ipynb", content=content)
@@ -560,13 +584,21 @@ async def test_write_tool_allows_repairing_notebook_with_non_object_cell(
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
         approval_request=None,
+        raw_args: dict[str, object] | None = None,
+        **kwargs: object,
     ) -> dict[str, object]:
-        del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).internal_data)
+        del ctx, tool_name, args_summary, approval_request, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value
+            for key, value in dict(raw_args or {}).items()
+            if key != "ctx" and not key.startswith("_") and key in parameter_names
+        }
+        return cast(dict[str, object], (await action(**action_args)).internal_data)
 
-    monkeypatch.setattr(write_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(write_module, "execute_tool_call", _fake_execute_tool)
 
     content = '{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}'
     result = await tool(ctx, path="demo.ipynb", content=content)
