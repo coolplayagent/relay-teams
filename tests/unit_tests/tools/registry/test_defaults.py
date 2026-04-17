@@ -36,6 +36,7 @@ def test_registry_contains_registered_local_tools() -> None:
         "list_monitors",
         "list_windows",
         "notebook_edit",
+        "office_read_markdown",
         "read",
         "scroll_view",
         "shell",
@@ -74,6 +75,7 @@ def test_default_registry_rejects_unknown_tools_for_explicit_validation() -> Non
     registry.validate_known(("shell",))
     registry.validate_known(("list_background_tasks",))
     registry.validate_known(("notebook_edit",))
+    registry.validate_known(("office_read_markdown",))
     with pytest.raises(ValueError, match="Unknown tools"):
         registry.validate_known(("unknown_tool",))
     with pytest.raises(ValueError, match="Unknown tools"):

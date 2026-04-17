@@ -6,11 +6,6 @@ from pathlib import Path
 from pydantic import JsonValue
 from pydantic_ai import Agent
 
-from relay_teams.agents.execution.prompt_instruction_state import (
-    filter_unloaded_prompt_instruction_paths,
-    record_prompt_instruction_paths_loaded,
-)
-from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from relay_teams.paths import (
     iter_dir_paths,
     open_binary_file,
@@ -31,12 +26,17 @@ from relay_teams.tools.workspace_tools.edit_state import record_file_read
 from relay_teams.tools.workspace_tools.notebook import (
     read_notebook_for_tool,
 )
+from relay_teams.tools.workspace_tools.read_support import (
+    DEFAULT_READ_LIMIT,
+    MAX_BYTES,
+    MAX_BYTES_LABEL,
+    MAX_LINE_LENGTH,
+    MAX_LINE_SUFFIX,
+    _project_read_result,
+    resolve_read_instruction_sections,
+    validate_pagination_args,
+)
 
-DEFAULT_READ_LIMIT = 2000
-MAX_LINE_LENGTH = 2000
-MAX_LINE_SUFFIX = "... (line truncated)"
-MAX_BYTES = 50 * 1024
-MAX_BYTES_LABEL = "50 KB"
 DESCRIPTION = load_tool_description(__file__)
 
 BINARY_EXTENSIONS = {
@@ -120,6 +120,7 @@ async def read_file_content(
     max_bytes: int = MAX_BYTES,
 ) -> tuple[list[str], int, bool, bool]:
     """Read file content with line and byte limits."""
+    validate_pagination_args(offset=offset, limit=limit)
     lines: list[str] = []
     total_lines = 0
     bytes_count = 0
@@ -158,6 +159,7 @@ def read_directory(
     limit: int = DEFAULT_READ_LIMIT,
 ) -> tuple[list[str], int, bool]:
     """Read directory entries with offset and limit pagination."""
+    validate_pagination_args(offset=offset, limit=limit)
     entries = []
 
     for entry in iter_dir_paths(dir_path):
@@ -192,49 +194,6 @@ def _inject_instruction_sections(
     return "\n".join([*instructions, output])
 
 
-def _project_read_result(
-    *,
-    output: str,
-    truncated: bool,
-    next_offset: int | None,
-) -> ToolResultProjection:
-    visible_data: dict[str, JsonValue] = {
-        "output": output,
-        "truncated": truncated,
-        "next_offset": next_offset,
-    }
-    return ToolResultProjection(
-        visible_data=visible_data,
-        internal_data=dict(visible_data),
-    )
-
-
-async def resolve_read_instruction_sections(
-    *,
-    deps: ToolDeps,
-    file_path: Path,
-) -> tuple[str, ...]:
-    resolver = PromptInstructionResolver()
-    candidate_paths = resolver.resolve_dynamic_paths(
-        file_path=file_path,
-        workspace_root=deps.workspace.scope_root,
-    )
-    unresolved_paths = filter_unloaded_prompt_instruction_paths(
-        shared_store=deps.shared_store,
-        task_id=deps.task_id,
-        paths=candidate_paths,
-    )
-    if not unresolved_paths:
-        return ()
-    loaded = await resolver.load_paths(unresolved_paths)
-    record_prompt_instruction_paths_loaded(
-        shared_store=deps.shared_store,
-        task_id=deps.task_id,
-        paths=loaded.local_paths,
-    )
-    return loaded.sections
-
-
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
     async def read(
@@ -260,6 +219,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             path: str,
             offset: int = 1,
             limit: int = DEFAULT_READ_LIMIT,
+            cell_id: str | None = None,
+            include_outputs: bool = True,
         ) -> ToolResultProjection:
             file_path = ctx.deps.workspace.resolve_read_path(path)
 

@@ -13,6 +13,7 @@ tools:
   - grep
   - glob
   - read
+  - office_read_markdown
   - edit
   - notebook_edit
   - write

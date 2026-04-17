@@ -1,0 +1,13 @@
+Convert an Office document or PDF to Markdown and page the result.
+
+Usage:
+- `path` may be absolute or relative and may point anywhere on disk.
+- Relative paths are resolved from the workspace execution root.
+- Supported file types are `.pdf`, `.docx`, `.pptx`, and `.xlsx`.
+- The tool converts the source document to Markdown before paging the result.
+- Markdown is returned without line prefixes by default so tables remain intact.
+- Set `line_numbers=true` when you need numbered Markdown lines for discussion.
+- Use `offset` and `limit` to page through large converted documents.
+- The response includes conversion metadata such as format, converter, quality, and warnings.
+- OCR-dependent or unsupported documents surface conversion errors instead of falling back to raw binary reads.
+- Use the generic `read` tool for plain text files and directories.

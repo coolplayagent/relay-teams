@@ -10,6 +10,7 @@ tools:
 - glob
 - grep
 - read
+- office_read_markdown
 - notebook_edit
 - shell
 - list_background_tasks

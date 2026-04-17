@@ -9,6 +9,7 @@ tools:
   - grep
   - glob
   - read
+  - office_read_markdown
   - write_tmp
 ---
 

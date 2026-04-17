@@ -139,6 +139,16 @@ class TestReadFileContent:
         assert lines == []
         assert total == 0
 
+    @pytest.mark.asyncio
+    async def test_read_file_rejects_non_positive_limit(self, tmp_path):
+        from relay_teams.tools.workspace_tools.read import read_file_content
+
+        test_file = tmp_path / "test.py"
+        test_file.write_text("line1\nline2\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="limit must be greater than 0"):
+            await read_file_content(test_file, limit=0)
+
 
 class TestReadDirectory:
     def test_read_directory(self, tmp_path):
@@ -182,6 +192,14 @@ class TestReadDirectory:
         assert entries[0] == "a.txt"
         assert entries[1] == "m.txt"
         assert entries[2] == "z.txt"
+
+    def test_read_directory_rejects_non_positive_offset(self, tmp_path):
+        from relay_teams.tools.workspace_tools.read import read_directory
+
+        (tmp_path / "a.txt").touch()
+
+        with pytest.raises(ValueError, match="offset must be greater than 0"):
+            read_directory(tmp_path, offset=0, limit=1)
 
 
 def test_project_read_result_keeps_output_first_shape() -> None:
@@ -390,3 +408,50 @@ async def test_resolve_read_instruction_sections_skips_preloaded_paths(
     )
 
     assert sections == ()
+
+
+@pytest.mark.asyncio
+async def test_read_tool_rejects_office_documents(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    file_path = source_dir / "report.pdf"
+    file_path.write_bytes(b"%PDF-1.7")
+    fake_agent = _FakeAgent()
+    register_read(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["read"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=SharedStateRepository(tmp_path / "state.db"),
+            task_id="task-1",
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        approval_request=None,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        del ctx, tool_name, approval_request, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value for key, value in args_summary.items() if key in parameter_names
+        }
+        return cast(dict[str, object], (await action(**action_args)).internal_data)
+
+    monkeypatch.setattr(read_module, "execute_tool_call", _fake_execute_tool)
+
+    with pytest.raises(ValueError, match="Cannot read binary file: src/report.pdf"):
+        await tool(ctx, path="src/report.pdf")

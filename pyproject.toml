@@ -19,6 +19,7 @@ dependencies = [
   "httpx>=0.27.0",
   "json-repair>=0.58.7",
   "lark-oapi==1.5.3",
+  "markitdown[pdf,docx,pptx,xlsx]>=0.1.5,<0.2",
   "markdownify>=1.2.0",
   "defusedxml>=0.7.1",
   "qrcode>=8.0",
@@ -92,4 +93,3 @@ exclude = [
 
 [tool.ruff]
 extend-exclude = ["src/relay_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx"]
-
