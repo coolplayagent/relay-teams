@@ -749,7 +749,7 @@ async def test_execute_attempt_recovery_clears_cached_transport_before_retry(
     cleared: list[str] = []
 
     async def _reset_llm_http_client_cache_entry(**kwargs: object) -> None:
-        _ = kwargs
+        assert kwargs["cache_scope"] == "run-1"
         cleared.append("cleared")
 
     monkeypatch.setattr(
@@ -829,7 +829,7 @@ async def test_execute_attempt_recovery_keeps_cached_transport_for_non_transport
     cleared: list[str] = []
 
     async def _reset_llm_http_client_cache_entry(**kwargs: object) -> None:
-        _ = kwargs
+        assert kwargs["cache_scope"] == "run-1"
         cleared.append("cleared")
 
     monkeypatch.setattr(
@@ -905,7 +905,7 @@ async def test_execute_attempt_recovery_clears_cached_transport_before_resume(
     cleared: list[str] = []
 
     async def _reset_llm_http_client_cache_entry(**kwargs: object) -> None:
-        _ = kwargs
+        assert kwargs["cache_scope"] == "run-1"
         cleared.append("cleared")
 
     monkeypatch.setattr(

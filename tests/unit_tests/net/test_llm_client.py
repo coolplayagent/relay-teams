@@ -245,3 +245,59 @@ async def test_reset_llm_http_client_cache_entry_closes_targeted_client(
 
     assert rebuilt_client is not first_client
     assert len(created_clients) == 3
+
+
+@pytest.mark.asyncio
+async def test_reset_llm_http_client_cache_entry_isolated_by_cache_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeAsyncClient:
+        def __init__(self) -> None:
+            self.is_closed = False
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            self.is_closed = True
+
+    created_clients: list[_FakeAsyncClient] = []
+
+    def _create_async_http_client(**_: object) -> _FakeAsyncClient:
+        client = _FakeAsyncClient()
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        llm_client,
+        "create_async_http_client",
+        _create_async_http_client,
+    )
+
+    run_a_client = cast(
+        _FakeAsyncClient,
+        llm_client.build_llm_http_client(
+            merged_env={"HTTPS_PROXY": "http://proxy.internal:8443"},
+            connect_timeout_seconds=42.5,
+            cache_scope="run-a",
+            ssl_verify=False,
+        ),
+    )
+    run_b_client = cast(
+        _FakeAsyncClient,
+        llm_client.build_llm_http_client(
+            merged_env={"HTTPS_PROXY": "http://proxy.internal:8443"},
+            connect_timeout_seconds=42.5,
+            cache_scope="run-b",
+            ssl_verify=False,
+        ),
+    )
+
+    await llm_client.reset_llm_http_client_cache_entry(
+        merged_env={"HTTPS_PROXY": "http://proxy.internal:8443"},
+        connect_timeout_seconds=42.5,
+        cache_scope="run-a",
+        ssl_verify=False,
+    )
+
+    assert run_a_client.close_calls == 1
+    assert run_b_client.close_calls == 0

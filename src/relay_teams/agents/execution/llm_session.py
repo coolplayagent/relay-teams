@@ -1368,7 +1368,10 @@ class AgentLlmSession:
         skip_initial_user_prompt_persist: bool,
     ) -> _AttemptRecoveryOutcome:
         if should_retry:
-            await self._reset_cached_transport_for_retry(retry_error=retry_error)
+            await self._reset_cached_transport_for_retry(
+                request=request,
+                retry_error=retry_error,
+            )
             resolved_retry_error = retry_error
             assert resolved_retry_error is not None
             next_retry_number = retry_number + 1
@@ -1397,7 +1400,10 @@ class AgentLlmSession:
                 )
             )
         if should_resume_after_tool_outcomes:
-            await self._reset_cached_transport_for_retry(retry_error=retry_error)
+            await self._reset_cached_transport_for_retry(
+                request=request,
+                retry_error=retry_error,
+            )
             return _AttemptRecoveryOutcome.recovered(
                 await self._resume_after_tool_outcomes(
                     request=request,
@@ -1433,6 +1439,7 @@ class AgentLlmSession:
     async def _reset_cached_transport_for_retry(
         self,
         *,
+        request: LLMRequest,
         retry_error: LlmRetryErrorInfo | None,
     ) -> None:
         if retry_error is None or not retry_error.transport_error:
@@ -1440,6 +1447,7 @@ class AgentLlmSession:
         await reset_llm_http_client_cache_entry(
             ssl_verify=self._config.ssl_verify,
             connect_timeout_seconds=self._config.connect_timeout_seconds,
+            cache_scope=request.run_id,
         )
 
     def _log_generate_failure_diagnostics(
@@ -3141,6 +3149,7 @@ class AgentLlmSession:
                 ),
                 ssl_verify=self._config.ssl_verify,
                 connect_timeout_seconds=self._config.connect_timeout_seconds,
+                llm_http_client_cache_scope=request.run_id,
                 allowed_mcp_servers=allowed_mcp_servers,
                 allowed_skills=allowed_skills,
                 tool_registry=self._tool_registry,
