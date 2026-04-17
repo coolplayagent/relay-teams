@@ -1672,6 +1672,18 @@ Rules:
 
 Returns one registered execution workspace.
 
+### `POST /workspaces/{workspace_id}:open-root`
+
+Opens the workspace root directory in the native file manager on the machine
+running the backend.
+
+Rules:
+- The workspace must exist and its `root_path` must still exist on disk.
+- The action is best-effort and returns `503` when the runtime cannot launch a
+  native file manager.
+- This endpoint performs a local side effect and is intended for local desktop
+  operator flows, not remote browser clients.
+
 ### `GET /workspaces/{workspace_id}/snapshot`
 
 Returns the fast project snapshot used for initial project-view rendering.

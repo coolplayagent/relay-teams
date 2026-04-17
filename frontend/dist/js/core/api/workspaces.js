@@ -26,6 +26,16 @@ export async function fetchWorkspaceSnapshot(workspaceId) {
     );
 }
 
+export async function openWorkspaceRoot(workspaceId) {
+    return requestJson(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}:open-root`,
+        {
+            method: 'POST',
+        },
+        'Failed to open project folder',
+    );
+}
+
 export async function fetchWorkspaceTree(workspaceId, path = '.') {
     const query = new URLSearchParams({ path: String(path || '.').trim() || '.' });
     return requestJson(

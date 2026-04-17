@@ -127,6 +127,7 @@ export {
     fetchWorkspaces,
     forkWorkspace,
     openWorkspace,
+    openWorkspaceRoot,
     pickWorkspace,
     deleteExternalAgent,
     createAutomationProject,
