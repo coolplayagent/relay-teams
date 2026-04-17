@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+import json
 from typing import cast
 
 import httpx
 import pytest
+from pydantic import JsonValue
+from pydantic_ai import Agent
 
 from relay_teams.env.web_config_models import (
     DEFAULT_SEARXNG_INSTANCE_URL,
@@ -12,8 +16,26 @@ from relay_teams.env.web_config_models import (
     WebFallbackProvider,
     WebProvider,
 )
-from relay_teams.tools.runtime import ToolExecutionError
+from relay_teams.tools.runtime import ToolContext, ToolDeps, ToolExecutionError
 from relay_teams.tools.web_tools import websearch
+
+RegisteredWebSearch = Callable[..., Awaitable[dict[str, JsonValue]]]
+
+
+class _ToolCaptureAgent:
+    def __init__(self) -> None:
+        self.registered: RegisteredWebSearch | None = None
+
+    def tool(
+        self, *, description: str
+    ) -> Callable[[RegisteredWebSearch], RegisteredWebSearch]:
+        assert description
+
+        def _decorator(func: RegisteredWebSearch) -> RegisteredWebSearch:
+            self.registered = func
+            return func
+
+        return _decorator
 
 
 def test_web_search_request_normalizes_domain_filters() -> None:
@@ -32,6 +54,97 @@ def test_web_search_request_rejects_mixed_domain_filters() -> None:
             query="latest ai news",
             allowed_domains=("docs.python.org",),
             blocked_domains=("example.com",),
+        )
+
+
+def test_web_search_description_covers_code_context_queries() -> None:
+    description = websearch.DESCRIPTION.lower()
+
+    assert "sdk" in description
+    assert "api" in description
+    assert "library" in description
+    assert "framework" in description
+    assert "code example" in description
+    assert 'search_mode="code"' in description
+
+
+def test_web_search_auto_mode_defaults_to_web_until_code_mode_is_explicit() -> None:
+    assert (
+        websearch.resolve_search_mode(
+            websearch.WebSearchRequest(query="React useState hook examples")
+        )
+        == "web"
+    )
+    assert (
+        websearch.resolve_search_mode(
+            websearch.WebSearchRequest(
+                query="React useState hook examples",
+                search_mode="code",
+            )
+        )
+        == "code"
+    )
+
+
+def test_web_search_request_accepts_code_mode_and_tokens() -> None:
+    request = websearch.WebSearchRequest(
+        query=" React useState examples ",
+        search_mode="code",
+        tokens_num=8000,
+    )
+
+    assert request.query == "React useState examples"
+    assert request.search_mode == "code"
+    assert request.tokens_num == 8000
+
+
+def test_web_search_request_rejects_invalid_code_context_options() -> None:
+    with pytest.raises(ValueError):
+        websearch.WebSearchRequest(query="python", search_mode="code", tokens_num=0)
+
+    with pytest.raises(ValueError):
+        websearch.WebSearchRequest(query="python", search_mode="code", tokens_num=999)
+
+    with pytest.raises(ValueError):
+        websearch.WebSearchRequest(
+            query="python",
+            search_mode="code",
+            tokens_num=50001,
+        )
+
+    with pytest.raises(ValueError, match="Domain filters"):
+        websearch.WebSearchRequest(
+            query="python docs",
+            search_mode="code",
+            allowed_domains=("docs.python.org",),
+        )
+
+
+@pytest.mark.asyncio
+async def test_registered_websearch_preserves_explicit_invalid_search_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _execute_tool(_ctx: object, **kwargs: object) -> dict[str, JsonValue]:
+        action = cast(Callable[[], Awaitable[object]], kwargs["action"])
+        await action()
+        raise AssertionError("expected invalid search_mode to fail validation")
+
+    monkeypatch.setattr(websearch, "execute_tool", _execute_tool)
+    monkeypatch.setattr(
+        websearch,
+        "load_runtime_web_config",
+        lambda: WebConfig(provider=WebProvider.EXA, exa_api_key="secret"),
+    )
+    agent = _ToolCaptureAgent()
+    websearch.register(cast(Agent[ToolDeps, str], agent))
+    registered = agent.registered
+    assert registered is not None
+
+    with pytest.raises(ValueError):
+        await registered(
+            cast(ToolContext, cast(object, object())),
+            query="python",
+            search_mode=cast(websearch.WebSearchRequestMode, ""),
         )
 
 
@@ -76,6 +189,45 @@ def test_build_provider_search_request_uses_exa_provider_adapter() -> None:
     assert "excludeDomains" not in arguments
 
 
+def test_build_exa_code_context_request_uses_exa_code_tool() -> None:
+    payload = websearch.build_exa_code_context_request(
+        query="Next.js partial prerendering config",
+        tokens_num=8000,
+    )
+
+    params = cast(dict[str, object], payload["params"])
+    assert params["name"] == "get_code_context_exa"
+    arguments = cast(dict[str, object], params["arguments"])
+    assert arguments == {
+        "query": "Next.js partial prerendering config",
+        "tokensNum": 8000,
+    }
+
+
+def test_build_provider_code_context_request_uses_exa_provider_config() -> None:
+    prepared = websearch.build_provider_code_context_request(
+        config=WebConfig(provider=WebProvider.EXA, exa_api_key="secret"),
+        request=websearch.WebSearchRequest(
+            query="React useState examples",
+            search_mode="code",
+        ),
+    )
+
+    assert prepared.provider == WebProvider.EXA
+    assert (
+        prepared.endpoint
+        == "https://mcp.exa.ai/mcp?exaApiKey=secret&tools=get_code_context_exa"
+    )
+    assert prepared.endpoint_host == "mcp.exa.ai"
+    assert prepared.upstream_tool == "get_code_context_exa"
+    params = cast(dict[str, object], prepared.payload["params"])
+    arguments = cast(dict[str, object], params["arguments"])
+    assert arguments == {
+        "query": "React useState examples",
+        "tokensNum": 5000,
+    }
+
+
 def test_build_search_result_projection_keeps_sanitized_internal_metadata() -> None:
     projection = websearch.build_search_result_projection(
         query="latest ai news",
@@ -101,6 +253,7 @@ def test_build_search_result_projection_keeps_sanitized_internal_metadata() -> N
     assert projection.visible_data == {
         "query": "latest ai news",
         "provider": "searxng",
+        "search_mode": "web",
         "hits": [
             {
                 "title": "Python Docs",
@@ -398,6 +551,191 @@ async def test_fetch_exa_search_response_classifies_http_errors() -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_search_auto_mode_uses_web_path_for_code_like_query() -> None:
+    requests: list[dict[str, object]] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            request=request,
+            text=(
+                "event: message\n"
+                'data: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\\"results\\":[{\\"title\\":\\"React Docs\\",\\"url\\":\\"https://react.dev/reference/react/useState\\",\\"summary\\":\\"useState reference\\"}]}"}]}}\n'
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        result = await websearch.execute_search(
+            client=client,
+            config=WebConfig(provider=WebProvider.EXA),
+            request=websearch.WebSearchRequest(query="React useState hook examples"),
+        )
+    finally:
+        await client.aclose()
+
+    params = cast(dict[str, object], requests[0]["params"])
+    assert params["name"] == "web_search_advanced_exa"
+    assert result.search_mode == "web"
+    assert result.upstream_tool == "web_search_advanced_exa"
+    assert result.hits == (
+        websearch.WebSearchHit(
+            title="React Docs",
+            url="https://react.dev/reference/react/useState",
+            summary="useState reference",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_search_code_mode_returns_exa_code_context() -> None:
+    requests: list[dict[str, object]] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            request=request,
+            text=(
+                "event: message\n"
+                'data: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"Use useState for local state."}]}}\n'
+            ),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        result = await websearch.execute_search(
+            client=client,
+            config=WebConfig(provider=WebProvider.EXA, exa_api_key="secret"),
+            request=websearch.WebSearchRequest(
+                query="React useState examples",
+                search_mode="code",
+                tokens_num=3000,
+            ),
+        )
+    finally:
+        await client.aclose()
+
+    assert result.provider == WebProvider.EXA
+    assert result.search_mode == "code"
+    assert result.endpoint_host == "mcp.exa.ai"
+    assert result.upstream_tool == "get_code_context_exa"
+    assert result.context == "Use useState for local state."
+    assert result.tokens_num == 3000
+    params = cast(dict[str, object], requests[0]["params"])
+    arguments = cast(dict[str, object], params["arguments"])
+    assert arguments == {
+        "query": "React useState examples",
+        "tokensNum": 3000,
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_search_falls_back_after_exa_sse_json_rpc_rate_limit_error() -> (
+    None
+):
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        if "mcp.exa.ai" in str(request.url):
+            return httpx.Response(
+                200,
+                request=request,
+                text=(
+                    "event: message\n"
+                    'data: {"jsonrpc":"2.0","error":{"code":-32000,"message":"free MCP rate limit reached"},"id":null}\n'
+                ),
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "results": [
+                    {
+                        "title": "Python Docs",
+                        "url": "https://docs.python.org/3/",
+                        "content": "Reference",
+                    }
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        result = await websearch.execute_search(
+            client=client,
+            config=WebConfig(
+                provider=WebProvider.EXA,
+                fallback_provider=WebFallbackProvider.SEARXNG,
+                searxng_instance_url="https://search.example.test/",
+            ),
+            request=websearch.WebSearchRequest(query="python"),
+        )
+    finally:
+        await client.aclose()
+
+    assert result.provider == WebProvider.SEARXNG
+    assert result.internal_data == {
+        "searxng_instance_url": "https://search.example.test/",
+        "instance_source": "configured",
+        "fallback_from": "exa",
+        "primary_error_type": "rate_limited",
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_search_falls_back_after_exa_network_error() -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        if "mcp.exa.ai" in str(request.url):
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "results": [
+                    {
+                        "title": "Python Release Notes",
+                        "url": "https://docs.python.org/3/whatsnew/",
+                        "content": "Latest release notes",
+                    }
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        result = await websearch.execute_search(
+            client=client,
+            config=WebConfig(
+                provider=WebProvider.EXA,
+                fallback_provider=WebFallbackProvider.SEARXNG,
+                searxng_instance_url="https://search.example.test/",
+            ),
+            request=websearch.WebSearchRequest(
+                query="latest Python release notes",
+                search_mode="web",
+            ),
+        )
+    finally:
+        await client.aclose()
+
+    assert result.provider == WebProvider.SEARXNG
+    assert result.endpoint_host == "search.example.test"
+    assert result.internal_data == {
+        "searxng_instance_url": "https://search.example.test/",
+        "instance_source": "configured",
+        "fallback_from": "exa",
+        "primary_error_type": "network_error",
+    }
+    assert result.hits == (
+        websearch.WebSearchHit(
+            title="Python Release Notes",
+            url="https://docs.python.org/3/whatsnew/",
+            text="Latest release notes",
+        ),
+    )
+
+
+@pytest.mark.asyncio
 async def test_execute_search_falls_back_to_searxng_after_exa_rate_limit() -> None:
     async def _handler(request: httpx.Request) -> httpx.Response:
         if "mcp.exa.ai" in str(request.url):
@@ -646,6 +984,25 @@ async def test_execute_search_does_not_fallback_when_explicitly_disabled() -> No
         "status_code": 429,
     }
     assert request_hosts == ["mcp.exa.ai"]
+
+
+def test_is_exa_fallback_error_accepts_network_failures() -> None:
+    assert websearch.is_exa_fallback_error(
+        ToolExecutionError(
+            error_type="network_error",
+            message="Exa web search request failed",
+            retryable=True,
+            details={},
+        )
+    )
+    assert websearch.is_exa_fallback_error(
+        ToolExecutionError(
+            error_type="network_timeout",
+            message="Exa web search timed out",
+            retryable=True,
+            details={},
+        )
+    )
 
 
 def test_is_exa_fallback_error_accepts_quota_style_403_errors() -> None:
