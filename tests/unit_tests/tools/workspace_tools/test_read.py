@@ -140,6 +140,35 @@ class TestReadFileContent:
         assert total == 0
 
 
+class TestPaginateTextContent:
+    def test_paginate_text_content_respects_offset_and_limit(self) -> None:
+        from relay_teams.tools.workspace_tools.read import paginate_text_content
+
+        lines, total, truncated_lines, truncated_bytes = paginate_text_content(
+            "line1\nline2\nline3\nline4",
+            offset=2,
+            limit=2,
+        )
+
+        assert lines == ["line2", "line3"]
+        assert total == 4
+        assert truncated_lines is True
+        assert truncated_bytes is False
+
+    def test_paginate_text_content_respects_byte_limit(self) -> None:
+        from relay_teams.tools.workspace_tools.read import paginate_text_content
+
+        lines, total, truncated_lines, truncated_bytes = paginate_text_content(
+            "alpha\nbeta\ngamma",
+            max_bytes=8,
+        )
+
+        assert lines == ["alpha"]
+        assert total == 2
+        assert truncated_lines is False
+        assert truncated_bytes is True
+
+
 class TestReadDirectory:
     def test_read_directory(self, tmp_path):
         from relay_teams.tools.workspace_tools.read import read_directory
@@ -385,3 +414,324 @@ async def test_resolve_read_instruction_sections_skips_preloaded_paths(
     )
 
     assert sections == ()
+
+
+@pytest.mark.asyncio
+async def test_read_tool_converts_supported_pdf_to_markdown(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.office_tools import (
+        OfficeConversionQuality,
+        OfficeConversionResult,
+    )
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    instruction_path = source_dir / "AGENTS.md"
+    instruction_path.write_text("PDF instructions.", encoding="utf-8")
+    file_path = source_dir / "report.pdf"
+    file_path.write_bytes(b"%PDF-1.7")
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    fake_agent = _FakeAgent()
+    register_read(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["read"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=shared_store,
+            task_id="task-1",
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    def _fake_convert(file_path: Path) -> OfficeConversionResult:
+        return OfficeConversionResult(
+            markdown="# Report\nConverted PDF body",
+            converter_name="markitdown",
+            source_extension=file_path.suffix.lower(),
+            quality=OfficeConversionQuality(level="medium", preserves_tables=False),
+            warnings=("PDF layout reconstruction may be approximate.",),
+        )
+
+    monkeypatch.setattr(read_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(read_module, "convert_office_document", _fake_convert)
+
+    result = await tool(ctx, path="src/report.pdf")
+
+    output = cast(str, result["output"])
+    assert result["truncated"] is False
+    assert result["next_offset"] is None
+    assert result["content_format"] == "markdown"
+    assert result["line_numbers"] is False
+    assert result["conversion_quality"] == "medium"
+    assert result["preserves_tables"] is False
+    assert result["warnings"] == ["PDF layout reconstruction may be approximate."]
+    assert "<type>file</type>" in output
+    assert "<content_format>markdown</content_format>" in output
+    assert "<line_numbers>false</line_numbers>" in output
+    assert "<conversion_quality>medium</conversion_quality>" in output
+    assert "<preserves_tables>false</preserves_tables>" in output
+    assert "<warnings>" in output
+    assert "<instructions>" in output
+    assert "PDF instructions." in output
+    assert "# Report" in output
+    assert "Converted PDF body" in output
+    assert "1: # Report" not in output
+    assert "End of file - total 2 lines" in output
+    assert (
+        load_file_read_state(
+            shared_store=shared_store,
+            task_id="task-1",
+            path=file_path,
+        )
+        is not None
+    )
+    from relay_teams.agents.execution.prompt_instruction_state import (
+        is_prompt_instruction_loaded,
+    )
+
+    assert is_prompt_instruction_loaded(
+        shared_store=shared_store,
+        task_id="task-1",
+        path=instruction_path,
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_tool_preserves_markdown_tables_for_office_documents(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.office_tools import (
+        OfficeConversionQuality,
+        OfficeConversionResult,
+    )
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    file_path = source_dir / "table.xlsx"
+    file_path.write_bytes(b"placeholder")
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    fake_agent = _FakeAgent()
+    register_read(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["read"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=shared_store,
+            task_id="task-1",
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    def _fake_convert(file_path: Path) -> OfficeConversionResult:
+        return OfficeConversionResult(
+            markdown=(
+                "## Sheet1\n"
+                "| Name | Score |\n"
+                "| --- | --- |\n"
+                "| Alice | 95 |\n"
+                "| Bob | 88 |"
+            ),
+            converter_name="markitdown",
+            source_extension=file_path.suffix.lower(),
+            quality=OfficeConversionQuality(level="high", preserves_tables=True),
+        )
+
+    monkeypatch.setattr(read_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(read_module, "convert_office_document", _fake_convert)
+
+    result = await tool(ctx, path="src/table.xlsx")
+
+    output = cast(str, result["output"])
+    assert result["content_format"] == "markdown"
+    assert result["line_numbers"] is False
+    assert result["conversion_quality"] == "high"
+    assert result["preserves_tables"] is True
+    assert result["warnings"] == []
+    assert "| Name | Score |" in output
+    assert "| --- | --- |" in output
+    assert "| Alice | 95 |" in output
+    assert "2: | Name | Score |" not in output
+
+
+@pytest.mark.asyncio
+async def test_read_tool_allows_explicit_line_numbers_for_office_documents(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.office_tools import (
+        OfficeConversionQuality,
+        OfficeConversionResult,
+    )
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    file_path = source_dir / "table.xlsx"
+    file_path.write_bytes(b"placeholder")
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    fake_agent = _FakeAgent()
+    register_read(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["read"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=shared_store,
+            task_id="task-1",
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    def _fake_convert(file_path: Path) -> OfficeConversionResult:
+        return OfficeConversionResult(
+            markdown=("## Sheet1\n| Name | Score |\n| --- | --- |\n| Alice | 95 |"),
+            converter_name="markitdown",
+            source_extension=file_path.suffix.lower(),
+            quality=OfficeConversionQuality(level="high", preserves_tables=True),
+        )
+
+    monkeypatch.setattr(read_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(read_module, "convert_office_document", _fake_convert)
+
+    result = await tool(ctx, path="src/table.xlsx", line_numbers=True)
+
+    output = cast(str, result["output"])
+    assert result["line_numbers"] is True
+    assert "<line_numbers>true</line_numbers>" in output
+    assert "2: | Name | Score |" in output
+
+
+@pytest.mark.asyncio
+async def test_read_tool_surfaces_office_ocr_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.office_tools import OfficeConversionRequiresOcrError
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    file_path = source_dir / "scanned.pdf"
+    file_path.write_bytes(b"%PDF-1.7")
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    fake_agent = _FakeAgent()
+    register_read(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["read"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=shared_store,
+            task_id="task-1",
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    def _raise_ocr_error(file_path: Path) -> object:
+        raise OfficeConversionRequiresOcrError(
+            f"PDF requires OCR before it can be read as markdown: {file_path.name}"
+        )
+
+    monkeypatch.setattr(read_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(read_module, "convert_office_document", _raise_ocr_error)
+
+    with pytest.raises(OfficeConversionRequiresOcrError, match="requires OCR"):
+        await tool(ctx, path="src/scanned.pdf")
+
+
+@pytest.mark.asyncio
+async def test_read_tool_still_rejects_legacy_binary_doc(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    file_path = source_dir / "legacy.doc"
+    file_path.write_bytes(b"legacy")
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    fake_agent = _FakeAgent()
+    register_read(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["read"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=shared_store,
+            task_id="task-1",
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    monkeypatch.setattr(read_module, "execute_tool", _fake_execute_tool)
+
+    with pytest.raises(ValueError, match="Cannot read binary file: src/legacy.doc"):
+        await tool(ctx, path="src/legacy.doc")

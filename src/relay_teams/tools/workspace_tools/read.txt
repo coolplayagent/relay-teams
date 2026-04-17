@@ -4,12 +4,14 @@ Usage:
 - `path` may be absolute or relative and may point anywhere on disk.
 - Relative paths are resolved from the workspace execution root.
 - Use `tmp/...` to read files from the managed workspace tmp directory.
-- Files are returned with line numbers in the format `<line>: <content>`.
+- Files are returned with line numbers in the format `<line>: <content>` unless `line_numbers=false`.
 - Directories are returned as one entry per line, with `/` appended for subdirectories.
+- Supported Office document types (`.pdf`, `.docx`, `.pptx`, `.xlsx`) are converted to Markdown before paging and preserve raw Markdown by default so tables are not broken by line prefixes.
+- For supported Office documents, line numbers default to `false`; for other file types they default to `true`.
 - Use `offset` and `limit` to page through large files or directories.
 - Jupyter notebooks (`.ipynb`) are returned as structured cells instead of raw JSON.
 - For notebooks, use optional `cell_id` and `include_outputs` to inspect a specific cell or omit outputs.
 - Text output is capped by line length, line count, and total bytes; the response tells you how to continue.
-- Binary files are rejected.
+- Other binary files are rejected.
 - Use `glob` to find candidate file paths and `grep` to locate specific content before reading large files.
 - Read larger windows instead of many tiny slices when you need surrounding context.
