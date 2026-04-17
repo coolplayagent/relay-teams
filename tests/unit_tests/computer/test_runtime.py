@@ -7,6 +7,7 @@ from relay_teams.computer import (
     DisabledComputerRuntime,
     LinuxDesktopRuntime,
     ScriptedComputerRuntime,
+    WindowsDesktopRuntime,
     build_default_computer_runtime,
 )
 
@@ -28,7 +29,7 @@ def test_build_default_computer_runtime_returns_scripted_runtime_in_fake_mode(
     assert result.observation.screenshot_bytes == b"\x89PNG\r\n\x1a\nfake"
 
 
-def test_build_default_computer_runtime_returns_disabled_runtime_by_default(
+def test_build_default_computer_runtime_auto_detects_windows_runtime(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -40,7 +41,7 @@ def test_build_default_computer_runtime_returns_disabled_runtime_by_default(
 
     runtime = build_default_computer_runtime(project_root=tmp_path)
 
-    assert isinstance(runtime, DisabledComputerRuntime)
+    assert isinstance(runtime, WindowsDesktopRuntime)
 
 
 def test_build_default_computer_runtime_auto_detects_linux_runtime(
