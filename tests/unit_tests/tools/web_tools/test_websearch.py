@@ -2,17 +2,16 @@
 from __future__ import annotations
 
 import inspect
-from types import SimpleNamespace
-from typing import Awaitable, Callable, cast
-from collections.abc import Awaitable, Callable
 import json
+from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import cast
 
 import httpx
-from pydantic_ai import Agent
 import pytest
 from pydantic import JsonValue
 from pydantic_ai import Agent
+
 
 from relay_teams.env.web_config_models import (
     DEFAULT_SEARXNG_INSTANCE_URL,
@@ -20,7 +19,6 @@ from relay_teams.env.web_config_models import (
     WebFallbackProvider,
     WebProvider,
 )
-from relay_teams.tools.runtime import ToolDeps, ToolExecutionError
 from relay_teams.tools.runtime import ToolContext, ToolDeps, ToolExecutionError
 from relay_teams.tools.web_tools import websearch
 
