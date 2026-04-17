@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 from openai import APIStatusError
 
+import relay_teams.agents.execution.llm_session as llm_module
 from relay_teams.agents.execution.llm_session import (
     AgentLlmSession,
     _FallbackAttemptState,
@@ -726,6 +727,192 @@ async def test_generate_async_passes_retry_after_to_retry_schedule() -> None:
     assert len(captured_schedules) == 1
     schedule = captured_schedules[0]
     assert schedule.delay_ms == 7000
+
+
+@pytest.mark.asyncio
+async def test_execute_attempt_recovery_clears_cached_transport_before_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_retry_config"] = LlmRetryConfig(
+        jitter=False,
+        max_retries=1,
+        initial_delay_ms=1,
+    )
+
+    cleared: list[str] = []
+    monkeypatch.setattr(
+        llm_module,
+        "clear_llm_http_client_cache",
+        lambda: cleared.append("cleared"),
+    )
+    monkeypatch.setattr(llm_module, "compute_retry_delay_ms", lambda **_: 0)
+
+    async def _fast_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fast_sleep)
+
+    scheduled: list[LlmRetrySchedule] = []
+
+    async def _capture_retry_scheduled(**kwargs: object) -> None:
+        scheduled.append(cast(LlmRetrySchedule, kwargs["schedule"]))
+
+    session.__dict__["_handle_retry_scheduled"] = _capture_retry_scheduled
+
+    async def _generate_async(
+        request: LLMRequest,
+        **kwargs: object,
+    ) -> str:
+        _ = (request, kwargs)
+        assert cleared == ["cleared"]
+        return "after retry"
+
+    session.__dict__["_generate_async"] = _generate_async
+
+    result = await AgentLlmSession._execute_attempt_recovery(
+        session,
+        request=_build_request(),
+        retry_error=LlmRetryErrorInfo(
+            message="TLS handshake failed",
+            error_code="network_error",
+            retryable=True,
+            transport_error=True,
+        ),
+        retry_number=0,
+        total_attempts=2,
+        history=[],
+        pending_messages=[],
+        should_retry=True,
+        should_resume_after_tool_outcomes=False,
+        attempt_text_emitted=False,
+        attempt_tool_call_event_emitted=False,
+        attempt_tool_outcome_event_emitted=False,
+        attempt_messages_committed=False,
+        fallback_state=_FallbackAttemptState.initial("default"),
+        skip_initial_user_prompt_persist=False,
+    )
+
+    assert result.response == "after retry"
+    assert scheduled[0].delay_ms == 0
+    assert cleared == ["cleared"]
+
+
+@pytest.mark.asyncio
+async def test_execute_attempt_recovery_keeps_cached_transport_for_non_transport_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_retry_config"] = LlmRetryConfig(
+        jitter=False,
+        max_retries=1,
+        initial_delay_ms=1,
+    )
+
+    cleared: list[str] = []
+    monkeypatch.setattr(
+        llm_module,
+        "clear_llm_http_client_cache",
+        lambda: cleared.append("cleared"),
+    )
+    monkeypatch.setattr(llm_module, "compute_retry_delay_ms", lambda **_: 0)
+
+    async def _fast_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fast_sleep)
+
+    async def _ignore_retry_schedule(**kwargs: object) -> None:
+        _ = kwargs
+        return None
+
+    session.__dict__["_handle_retry_scheduled"] = _ignore_retry_schedule
+
+    async def _generate_async(
+        request: LLMRequest,
+        **kwargs: object,
+    ) -> str:
+        _ = (request, kwargs)
+        assert cleared == []
+        return "after retry"
+
+    session.__dict__["_generate_async"] = _generate_async
+
+    result = await AgentLlmSession._execute_attempt_recovery(
+        session,
+        request=_build_request(),
+        retry_error=LlmRetryErrorInfo(
+            message="slow down",
+            status_code=429,
+            error_code="rate_limited",
+            retryable=True,
+            rate_limited=True,
+            transport_error=False,
+        ),
+        retry_number=0,
+        total_attempts=2,
+        history=[],
+        pending_messages=[],
+        should_retry=True,
+        should_resume_after_tool_outcomes=False,
+        attempt_text_emitted=False,
+        attempt_tool_call_event_emitted=False,
+        attempt_tool_outcome_event_emitted=False,
+        attempt_messages_committed=False,
+        fallback_state=_FallbackAttemptState.initial("default"),
+        skip_initial_user_prompt_persist=False,
+    )
+
+    assert result.response == "after retry"
+    assert cleared == []
+
+
+@pytest.mark.asyncio
+async def test_execute_attempt_recovery_clears_cached_transport_before_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_retry_config"] = LlmRetryConfig(max_retries=1)
+
+    cleared: list[str] = []
+    monkeypatch.setattr(
+        llm_module,
+        "clear_llm_http_client_cache",
+        lambda: cleared.append("cleared"),
+    )
+
+    async def _resume_after_tool_outcomes(**kwargs: object) -> str:
+        _ = kwargs
+        assert cleared == ["cleared"]
+        return "resumed"
+
+    session.__dict__["_resume_after_tool_outcomes"] = _resume_after_tool_outcomes
+
+    result = await AgentLlmSession._execute_attempt_recovery(
+        session,
+        request=_build_request(),
+        retry_error=LlmRetryErrorInfo(
+            message="TLS handshake failed",
+            error_code="network_error",
+            retryable=True,
+            transport_error=True,
+        ),
+        retry_number=0,
+        total_attempts=2,
+        history=[],
+        pending_messages=[],
+        should_retry=False,
+        should_resume_after_tool_outcomes=True,
+        attempt_text_emitted=False,
+        attempt_tool_call_event_emitted=False,
+        attempt_tool_outcome_event_emitted=False,
+        attempt_messages_committed=False,
+        fallback_state=_FallbackAttemptState.initial("default"),
+        skip_initial_user_prompt_persist=False,
+    )
+
+    assert result.response == "resumed"
+    assert cleared == ["cleared"]
 
 
 @pytest.mark.asyncio
