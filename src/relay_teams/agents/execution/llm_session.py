@@ -579,123 +579,127 @@ class AgentLlmSession:
                 ),
             )
         )
-        (
-            prepared_prompt,
-            history,
-            agent_system_prompt,
-            agent,
-        ) = await self._build_agent_iteration_context(
-            request=request,
-            conversation_id=resolved_conversation_id,
-            system_prompt=agent_system_prompt,
-            reserve_user_prompt_tokens=(
-                not skip_initial_user_prompt_persist and retry_number == 0
-            ),
-            allowed_tools=allowed_tools,
-            allowed_mcp_servers=self._allowed_mcp_servers,
-            allowed_skills=self._allowed_skills,
-        )
-        deps = ToolDeps(
-            task_repo=self._task_repo,
-            shared_store=self._shared_store,
-            event_bus=self._event_bus,
-            message_repo=self._message_repo,
-            approval_ticket_repo=self._approval_ticket_repo,
-            run_runtime_repo=self._run_runtime_repo,
-            injection_manager=self._injection_manager,
-            run_event_hub=self._run_event_hub,
-            agent_repo=self._agent_repo,
-            workspace=self._workspace_manager.resolve(
+        try:
+            (
+                prepared_prompt,
+                history,
+                agent_system_prompt,
+                agent,
+            ) = await self._build_agent_iteration_context(
+                request=request,
+                conversation_id=resolved_conversation_id,
+                system_prompt=agent_system_prompt,
+                reserve_user_prompt_tokens=(
+                    not skip_initial_user_prompt_persist and retry_number == 0
+                ),
+                allowed_tools=allowed_tools,
+                allowed_mcp_servers=self._allowed_mcp_servers,
+                allowed_skills=self._allowed_skills,
+            )
+            deps = ToolDeps(
+                task_repo=self._task_repo,
+                shared_store=self._shared_store,
+                event_bus=self._event_bus,
+                message_repo=self._message_repo,
+                approval_ticket_repo=self._approval_ticket_repo,
+                run_runtime_repo=self._run_runtime_repo,
+                injection_manager=self._injection_manager,
+                run_event_hub=self._run_event_hub,
+                agent_repo=self._agent_repo,
+                workspace=self._workspace_manager.resolve(
+                    session_id=request.session_id,
+                    role_id=request.role_id,
+                    instance_id=request.instance_id,
+                    workspace_id=resolved_workspace_id,
+                    conversation_id=resolved_conversation_id,
+                ),
+                role_memory=self._role_memory_service,
+                media_asset_service=self._media_asset_service,
+                computer_runtime=self._computer_runtime,
+                background_task_service=self._background_task_service,
+                monitor_service=self._monitor_service,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
                 session_id=request.session_id,
-                role_id=request.role_id,
-                instance_id=request.instance_id,
                 workspace_id=resolved_workspace_id,
                 conversation_id=resolved_conversation_id,
-            ),
-            role_memory=self._role_memory_service,
-            media_asset_service=self._media_asset_service,
-            computer_runtime=self._computer_runtime,
-            background_task_service=self._background_task_service,
-            monitor_service=self._monitor_service,
-            run_id=request.run_id,
-            trace_id=request.trace_id,
-            task_id=request.task_id,
-            session_id=request.session_id,
-            workspace_id=resolved_workspace_id,
-            conversation_id=resolved_conversation_id,
-            instance_id=request.instance_id,
-            role_id=request.role_id,
-            role_registry=self._role_registry,
-            runtime_role_resolver=getattr(
-                self._task_execution_service, "runtime_role_resolver", None
-            ),
-            mcp_registry=self._mcp_registry,
-            task_service=self._task_service,
-            task_execution_service=self._task_execution_service,
-            run_control_manager=self._run_control_manager,
-            tool_approval_manager=self._tool_approval_manager,
-            tool_approval_policy=self._resolve_tool_approval_policy(request.run_id),
-            shell_approval_repo=self._shell_approval_repo,
-            metric_recorder=self._metric_recorder,
-            notification_service=self._notification_service,
-            im_tool_service=self._im_tool_service,
-        )
-        control_ctx = self._run_control_manager.context(
-            run_id=request.run_id,
-            instance_id=request.instance_id,
-        )
-
-        printed_any = False
-        emitted_text_chunks: list[str] = []
-        active_retry_number = retry_number
-        attempt_text_emitted = False
-        attempt_tool_call_event_emitted = False
-        attempt_tool_outcome_event_emitted = False
-        attempt_messages_committed = False
-        published_tool_call_ids: set[str] = set()
-        log_event(
-            LOGGER,
-            logging.DEBUG,
-            event="llm.system_prompt.prepared",
-            message=f"LLM system prompt prepared\n{agent_system_prompt}",
-            payload={
-                "role_id": request.role_id,
-                "instance_id": request.instance_id,
-                "task_id": request.task_id,
-                "length": len(agent_system_prompt),
-            },
-        )
-        log_event(
-            LOGGER,
-            logging.INFO,
-            event="llm.request.started",
-            message="LLM request started",
-            payload={
-                "model": self._config.model,
-                "base_url": self._config.base_url,
-                "role_id": request.role_id,
-                "instance_id": request.instance_id,
-                "task_id": request.task_id,
-            },
-        )
-        if not skip_initial_user_prompt_persist:
-            history = self._persist_user_prompt_if_needed(
-                request=request,
-                history=history,
-                content=request.user_prompt,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                role_registry=self._role_registry,
+                runtime_role_resolver=getattr(
+                    self._task_execution_service, "runtime_role_resolver", None
+                ),
+                mcp_registry=self._mcp_registry,
+                task_service=self._task_service,
+                task_execution_service=self._task_execution_service,
+                run_control_manager=self._run_control_manager,
+                tool_approval_manager=self._tool_approval_manager,
+                tool_approval_policy=self._resolve_tool_approval_policy(request.run_id),
+                shell_approval_repo=self._shell_approval_repo,
+                metric_recorder=self._metric_recorder,
+                notification_service=self._notification_service,
+                im_tool_service=self._im_tool_service,
             )
-        seen_count = 0
-        buffered_messages: list[ModelRequest | ModelResponse] = []
-        restarted = False
-        result: _AgentRunResult | None = None
-        request_level_input_tokens = 0
-        request_level_cached_input_tokens = 0
-        request_level_output_tokens = 0
-        request_level_reasoning_output_tokens = 0
-        request_level_requests = 0
-        saw_request_level_usage = False
-        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta] = {}
-        latest_streamed_text = ""
+            control_ctx = self._run_control_manager.context(
+                run_id=request.run_id,
+                instance_id=request.instance_id,
+            )
+
+            printed_any = False
+            emitted_text_chunks: list[str] = []
+            active_retry_number = retry_number
+            attempt_text_emitted = False
+            attempt_tool_call_event_emitted = False
+            attempt_tool_outcome_event_emitted = False
+            attempt_messages_committed = False
+            published_tool_call_ids: set[str] = set()
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="llm.system_prompt.prepared",
+                message=f"LLM system prompt prepared\n{agent_system_prompt}",
+                payload={
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                    "task_id": request.task_id,
+                    "length": len(agent_system_prompt),
+                },
+            )
+            log_event(
+                LOGGER,
+                logging.INFO,
+                event="llm.request.started",
+                message="LLM request started",
+                payload={
+                    "model": self._config.model,
+                    "base_url": self._config.base_url,
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                    "task_id": request.task_id,
+                },
+            )
+            if not skip_initial_user_prompt_persist:
+                history = self._persist_user_prompt_if_needed(
+                    request=request,
+                    history=history,
+                    content=request.user_prompt,
+                )
+            seen_count = 0
+            buffered_messages: list[ModelRequest | ModelResponse] = []
+            restarted = False
+            result: _AgentRunResult | None = None
+            request_level_input_tokens = 0
+            request_level_cached_input_tokens = 0
+            request_level_output_tokens = 0
+            request_level_reasoning_output_tokens = 0
+            request_level_requests = 0
+            saw_request_level_usage = False
+            streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta] = {}
+            latest_streamed_text = ""
+        except BaseException:
+            await self._close_run_scoped_llm_http_client(request=request)
+            raise
 
         try:
             try:
