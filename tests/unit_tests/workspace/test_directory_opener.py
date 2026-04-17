@@ -9,6 +9,25 @@ import pytest
 from relay_teams.workspace import directory_opener
 
 
+class _FakeProcess:
+    def __init__(
+        self,
+        *,
+        returncode: int | None = None,
+        timeout: BaseException | None = None,
+    ) -> None:
+        self._returncode = returncode
+        self._timeout = timeout
+
+    def wait(self, *, timeout: float) -> int:
+        _ = timeout
+        if self._timeout is not None:
+            raise self._timeout
+        if self._returncode is None:
+            raise AssertionError("returncode must be set when no timeout is configured")
+        return self._returncode
+
+
 def test_open_workspace_directory_uses_explorer_on_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -21,7 +40,9 @@ def test_open_workspace_directory_uses_explorer_on_windows(
     def fake_popen(command: list[str], **kwargs: object) -> object:
         captured_command[:] = command
         captured_kwargs.update(kwargs)
-        return object()
+        return _FakeProcess(
+            timeout=directory_opener.subprocess.TimeoutExpired(command, timeout=1.0)
+        )
 
     monkeypatch.setattr(directory_opener.platform, "system", lambda: "Windows")
     monkeypatch.setattr(
@@ -89,7 +110,9 @@ def test_open_workspace_directory_falls_back_to_gio_on_linux(
     def fake_popen(command: list[str], **kwargs: object) -> object:
         captured_command[:] = command
         captured_kwargs.update(kwargs)
-        return object()
+        return _FakeProcess(
+            timeout=directory_opener.subprocess.TimeoutExpired(command, timeout=1.0)
+        )
 
     monkeypatch.setattr(directory_opener.platform, "system", lambda: "Linux")
     monkeypatch.setattr(
@@ -126,7 +149,9 @@ def test_open_workspace_directory_uses_open_on_macos(
     def fake_popen(command: list[str], **kwargs: object) -> object:
         captured_command[:] = command
         captured_kwargs.update(kwargs)
-        return object()
+        return _FakeProcess(
+            timeout=directory_opener.subprocess.TimeoutExpired(command, timeout=1.0)
+        )
 
     monkeypatch.setattr(directory_opener.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(
@@ -184,4 +209,31 @@ def test_open_workspace_directory_raises_when_launch_fails(
     monkeypatch.setattr(directory_opener.subprocess, "Popen", fail_popen)
 
     with pytest.raises(RuntimeError, match="Failed to launch native file manager"):
+        directory_opener.open_workspace_directory(target_path)
+
+
+def test_open_workspace_directory_raises_when_opener_exits_immediately(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_path = tmp_path / "workspace-root"
+    target_path.mkdir()
+
+    monkeypatch.setattr(directory_opener.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(
+        directory_opener.shutil,
+        "which",
+        lambda name: "/usr/bin/xdg-open" if name == "xdg-open" else None,
+    )
+
+    def fake_popen(command: list[str], **kwargs: object) -> _FakeProcess:
+        _ = (command, kwargs)
+        return _FakeProcess(returncode=3)
+
+    monkeypatch.setattr(directory_opener.subprocess, "Popen", fake_popen)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Failed to launch native file manager: opener exited before startup completed",
+    ):
         directory_opener.open_workspace_directory(target_path)

@@ -8,6 +8,7 @@ import subprocess
 
 
 _OPEN_DIRECTORY_ERROR_MESSAGE = "Native file manager is unavailable"
+_OPEN_DIRECTORY_START_TIMEOUT_SECONDS = 1.0
 
 
 def open_workspace_directory(path: Path) -> None:
@@ -92,7 +93,7 @@ def _start_detached_process(command: list[str], *, platform_name: str) -> None:
                 | int(getattr(subprocess, "DETACHED_PROCESS", 0))
                 | int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
             )
-            subprocess.Popen(
+            process = subprocess.Popen(
                 command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -100,17 +101,30 @@ def _start_detached_process(command: list[str], *, platform_name: str) -> None:
                 creationflags=creationflags,
                 startupinfo=startupinfo,
             )
+            _ensure_process_started(process)
             return
 
-        subprocess.Popen(
+        process = subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
+        _ensure_process_started(process)
     except OSError as exc:
         raise RuntimeError(f"Failed to launch native file manager: {exc}") from exc
+
+
+def _ensure_process_started(process: subprocess.Popen[bytes]) -> None:
+    try:
+        returncode = process.wait(timeout=_OPEN_DIRECTORY_START_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return
+    if returncode != 0:
+        raise RuntimeError(
+            "Failed to launch native file manager: opener exited before startup completed"
+        )
 
 
 def _escape_powershell_string(value: str) -> str:
