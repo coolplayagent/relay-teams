@@ -14,7 +14,8 @@ from relay_teams.tools.runtime import (
     ToolContext,
     ToolDeps,
     ToolExecutionError,
-    execute_tool,
+    ToolResultProjection,
+    execute_tool_call,
 )
 from relay_teams.tools.workspace_tools.background_task_tool_support import (
     project_background_task_tool_result,
@@ -45,34 +46,30 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         tty: bool = False,
     ) -> dict[str, JsonValue]:
         blocked_error: ToolExecutionError | None = None
-        shell_policy: ShellPolicyDecision | None = None
-        cwd: Path | None = None
         try:
-            shell_policy, cwd = prepare_shell_execution(
+            _ = prepare_shell_execution(
                 ctx,
                 command=command,
                 workdir=workdir,
             )
         except ToolExecutionError as exc:
             blocked_error = exc
-        approval_request = (
-            build_shell_blocked_approval_request()
-            if blocked_error is not None
-            else build_shell_approval_request(
-                ctx,
-                shell_policy=_require_shell_policy(shell_policy),
-                command=command,
-                workdir=workdir,
-                tty=tty,
-                background=background,
-            )
-        )
 
-        async def _action():
+        async def _action(
+            command: str,
+            background: bool = False,
+            yield_time_ms: int | None = None,
+            timeout_ms: int | None = None,
+            workdir: str | None = None,
+            tty: bool = False,
+        ) -> ToolResultProjection:
             if blocked_error is not None:
                 raise blocked_error
-            if cwd is None:
-                raise RuntimeError("shell execution cwd was not prepared")
+            _, resolved_cwd = prepare_shell_execution(
+                ctx,
+                command=command,
+                workdir=workdir,
+            )
             service = require_background_task_service(ctx)
             record, completed = await service.execute_command(
                 run_id=ctx.deps.run_id,
@@ -82,7 +79,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 tool_call_id=ctx.tool_call_id,
                 workspace=ctx.deps.workspace,
                 command=command,
-                cwd=cwd,
+                cwd=resolved_cwd,
                 yield_time_ms=yield_time_ms,
                 timeout_ms=timeout_ms,
                 env={CURRENT_ROLE_ENV_KEY: ctx.deps.role_id},
@@ -95,7 +92,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 include_task_id=background,
             )
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="shell",
             args_summary={
@@ -107,7 +104,41 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "tty": tty,
             },
             action=_action,
-            approval_request=approval_request,
+            raw_args=locals(),
+            approval_request_factory=lambda tool_input: (
+                build_shell_blocked_approval_request()
+                if blocked_error is not None
+                else build_shell_approval_request(
+                    ctx,
+                    shell_policy=_require_shell_policy(
+                        prepare_shell_execution(
+                            ctx,
+                            command=str(tool_input.get("command") or command),
+                            workdir=(
+                                str(tool_input.get("workdir") or workdir)
+                                if tool_input.get("workdir") is not None
+                                else workdir
+                            ),
+                        )[0]
+                    ),
+                    command=str(tool_input.get("command") or command),
+                    workdir=(
+                        str(tool_input.get("workdir") or workdir)
+                        if tool_input.get("workdir") is not None
+                        else workdir
+                    ),
+                    tty=bool(
+                        tool_input.get("tty")
+                        if tool_input.get("tty") is not None
+                        else tty
+                    ),
+                    background=bool(
+                        tool_input.get("background")
+                        if tool_input.get("background") is not None
+                        else background
+                    ),
+                )
+            ),
         )
 
 

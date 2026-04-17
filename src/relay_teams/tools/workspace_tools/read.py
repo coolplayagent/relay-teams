@@ -25,7 +25,7 @@ from relay_teams.tools.runtime import (
     ToolContext,
     ToolDeps,
     ToolResultProjection,
-    execute_tool,
+    execute_tool_call,
 )
 from relay_teams.tools.workspace_tools.edit_state import record_file_read
 from relay_teams.tools.workspace_tools.notebook import (
@@ -256,7 +256,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             include_outputs: Whether notebook code cell outputs are included.
         """
 
-        async def _action() -> ToolResultProjection:
+        async def _action(
+            path: str,
+            offset: int = 1,
+            limit: int = DEFAULT_READ_LIMIT,
+        ) -> ToolResultProjection:
             file_path = ctx.deps.workspace.resolve_read_path(path)
 
             if not path_exists(file_path):
@@ -380,7 +384,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 next_offset=continuation_offset,
             )
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="read",
             args_summary={
@@ -391,4 +395,5 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "include_outputs": include_outputs,
             },
             action=_action,
+            raw_args=locals(),
         )

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
 import asyncio
 import inspect
@@ -9,9 +9,10 @@ import json
 import logging
 import sqlite3
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
+from enum import Enum
 from json import dumps
-from typing import Protocol, cast
+from typing import Protocol, cast, get_args, get_origin
 from uuid import uuid4
 
 from relay_teams.logger import get_logger, log_event, log_tool_error
@@ -21,7 +22,7 @@ from relay_teams.persistence import is_retryable_sqlite_error
 from relay_teams.agents.tasks.task_status_sanitizer import (
     sanitize_task_status_payload,
 )
-from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.run_models import RunEvent
 
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketStatus
@@ -44,6 +45,19 @@ from relay_teams.tools.runtime.persisted_state import (
     ToolExecutionStatus,
     merge_tool_call_state,
 )
+from relay_teams.tools.runtime.hook_runtime_env import (
+    reset_tool_hook_runtime_env,
+    set_tool_hook_runtime_env,
+)
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    PermissionRequestInput,
+    PostToolUseFailureInput,
+    PostToolUseInput,
+    PreToolUseInput,
+)
 
 LOGGER = get_logger(__name__)
 
@@ -53,9 +67,20 @@ async def execute_tool(
     *,
     tool_name: str,
     args_summary: dict[str, JsonValue],
-    action: Callable[[], object | Awaitable[object]] | object,
+    action: Callable[[dict[str, JsonValue]], object | Awaitable[object]]
+    | Callable[[], object | Awaitable[object]]
+    | object,
+    tool_input: dict[str, JsonValue] | None = None,
     approval_request: ToolApprovalRequest | None = None,
+    approval_request_factory: Callable[
+        [dict[str, JsonValue]], ToolApprovalRequest | None
+    ]
+    | None = None,
     approval_args_summary: dict[str, JsonValue] | None = None,
+    approval_args_summary_factory: Callable[
+        [dict[str, JsonValue]], dict[str, JsonValue] | None
+    ]
+    | None = None,
     keep_approval_ticket_reusable: bool = False,
 ) -> dict[str, JsonValue]:
     """Run a tool action with approval, logging, and normalized envelopes."""
@@ -88,16 +113,44 @@ async def execute_tool(
         )
 
         meta: dict[str, JsonValue] = {}
+        effective_tool_input = dict(args_summary if tool_input is None else tool_input)
         _raise_if_stopped(ctx)
-        approval_ticket_id, approval_error = await _handle_tool_approval(
+        force_approval = False
+        (
+            effective_tool_input,
+            pre_tool_error,
+            force_approval,
+        ) = await _apply_pre_tool_hooks(
             ctx=ctx,
             tool_name=tool_name,
-            args_summary=args_summary,
-            approval_args_summary=approval_args_summary,
-            meta=meta,
             tool_call_id=tool_call_id,
-            approval_request=approval_request,
+            tool_input=effective_tool_input,
         )
+        args_summary = dict(effective_tool_input)
+        resolved_approval_request = (
+            approval_request_factory(effective_tool_input)
+            if approval_request_factory is not None
+            else approval_request
+        )
+        resolved_approval_args_summary = (
+            approval_args_summary_factory(effective_tool_input)
+            if approval_args_summary_factory is not None
+            else approval_args_summary
+        )
+        if pre_tool_error is not None:
+            approval_ticket_id = None
+            approval_error = pre_tool_error
+        else:
+            approval_ticket_id, approval_error = await _handle_tool_approval(
+                ctx=ctx,
+                tool_name=tool_name,
+                args_summary=args_summary,
+                approval_args_summary=resolved_approval_args_summary,
+                meta=meta,
+                tool_call_id=tool_call_id,
+                approval_request=resolved_approval_request,
+                force_approval=force_approval,
+            )
         if approval_error is not None:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             meta["duration_ms"] = elapsed_ms
@@ -155,9 +208,16 @@ async def execute_tool(
 
         try:
             _raise_if_stopped(ctx)
-            result = action() if callable(action) else action
-            if inspect.isawaitable(result):
-                result = await result
+            hook_env_token = set_tool_hook_runtime_env(ctx.deps.hook_runtime_env)
+            try:
+                result = _invoke_tool_action(
+                    action=action,
+                    tool_input=effective_tool_input,
+                )
+                if inspect.isawaitable(result):
+                    result = await result
+            finally:
+                reset_tool_hook_runtime_env(hook_env_token)
             _raise_if_stopped(ctx)
             visible_data, internal_data = _normalize_result_payload(result)
 
@@ -178,6 +238,13 @@ async def execute_tool(
                 ok=True,
                 data=visible_data,
                 meta=meta,
+            )
+            envelope = await _apply_post_tool_hooks(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                args_summary=args_summary,
+                envelope=envelope,
             )
             _persist_tool_record(
                 ctx=ctx,
@@ -240,6 +307,13 @@ async def execute_tool(
                 error=error,
                 meta=meta,
             )
+            envelope = await _apply_post_tool_failure_hooks(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                args_summary=args_summary,
+                envelope=envelope,
+            )
             _persist_tool_record(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
@@ -265,6 +339,60 @@ async def execute_tool(
             if approval_ticket_id and not keep_approval_ticket_reusable:
                 ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
             return envelope
+
+
+async def execute_tool_call(
+    ctx: ToolContext,
+    *,
+    tool_name: str,
+    args_summary: dict[str, JsonValue],
+    action: Callable[..., object | Awaitable[object]] | object,
+    raw_args: Mapping[str, object] | None = None,
+    args_exclude: tuple[str, ...] = ("ctx",),
+    approval_request: ToolApprovalRequest | None = None,
+    approval_request_factory: Callable[
+        [dict[str, JsonValue]], ToolApprovalRequest | None
+    ]
+    | None = None,
+    approval_args_summary: dict[str, JsonValue] | None = None,
+    approval_args_summary_factory: Callable[
+        [dict[str, JsonValue]], dict[str, JsonValue] | None
+    ]
+    | None = None,
+    keep_approval_ticket_reusable: bool = False,
+) -> dict[str, JsonValue]:
+    """Run a tool through the hook-aware runtime using natural Python params.
+
+    Tool authors should prefer this wrapper for new tools:
+    - keep ``action`` as a normal callable with named parameters that match the tool
+    - pass ``raw_args=locals()`` from the tool body so hooks can rewrite the live input
+    - keep ``args_summary`` limited to approval and observability data, not full payloads
+
+    ``execute_tool()`` remains available for compatibility, but ``execute_tool_call()``
+    is the default authoring path because it centralizes hook input capture, argument
+    binding, and runtime env propagation.
+    """
+    tool_input = (
+        None
+        if raw_args is None
+        else _capture_tool_input(
+            raw_args=raw_args,
+            action=action,
+            exclude=args_exclude,
+        )
+    )
+    return await execute_tool(
+        ctx,
+        tool_name=tool_name,
+        args_summary=args_summary,
+        action=action,
+        tool_input=tool_input,
+        approval_request=approval_request,
+        approval_request_factory=approval_request_factory,
+        approval_args_summary=approval_args_summary,
+        approval_args_summary_factory=approval_args_summary_factory,
+        keep_approval_ticket_reusable=keep_approval_ticket_reusable,
+    )
 
 
 def _record_tool_metrics(
@@ -382,10 +510,17 @@ def _safe_json(value: object) -> str:
 
 
 def _normalize_json_value(value: object) -> JsonValue:
+    if isinstance(value, Enum):
+        return _normalize_json_value(value.value)
+    if isinstance(value, BaseModel):
+        return cast(JsonValue, value.model_dump(mode="json"))
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     if isinstance(value, list):
         items = cast(list[object], value)
+        return [_normalize_json_value(item) for item in items]
+    if isinstance(value, tuple):
+        items = cast(tuple[object, ...], value)
         return [_normalize_json_value(item) for item in items]
     if isinstance(value, dict):
         entries = cast(dict[object, object], value)
@@ -396,10 +531,519 @@ def _normalize_json_value(value: object) -> JsonValue:
     return str(value)
 
 
+def _invoke_tool_action(
+    *,
+    action: Callable[..., object | Awaitable[object]] | object,
+    tool_input: dict[str, JsonValue],
+) -> object | Awaitable[object]:
+    if not callable(action):
+        return action
+    signature = inspect.signature(action)
+    parameters = list(signature.parameters.values())
+    if not parameters:
+        no_arg_action = cast(Callable[[], object | Awaitable[object]], action)
+        return no_arg_action()
+    if _uses_tool_input_dict(parameters):
+        input_action = cast(
+            Callable[[dict[str, JsonValue]], object | Awaitable[object]],
+            action,
+        )
+        return input_action(tool_input)
+    kwargs = _bind_tool_action_kwargs(parameters=parameters, tool_input=tool_input)
+    named_action = cast(Callable[..., object | Awaitable[object]], action)
+    return named_action(**kwargs)
+
+
+def _capture_tool_input(
+    *,
+    raw_args: Mapping[str, object],
+    action: Callable[..., object | Awaitable[object]] | object,
+    exclude: tuple[str, ...],
+) -> dict[str, JsonValue]:
+    excluded = set(exclude)
+    parameter_names = _tool_input_parameter_names(action)
+    result: dict[str, JsonValue] = {}
+    for name, value in raw_args.items():
+        if name in excluded or name.startswith("_"):
+            continue
+        if parameter_names is not None and name not in parameter_names:
+            continue
+        result[name] = _normalize_json_value(value)
+    return result
+
+
+def _tool_input_parameter_names(
+    action: Callable[..., object | Awaitable[object]] | object,
+) -> set[str] | None:
+    if not callable(action):
+        return None
+    parameters = list(inspect.signature(action).parameters.values())
+    if not parameters or _uses_tool_input_dict(parameters):
+        return None
+    names: set[str] = set()
+    for parameter in parameters:
+        if parameter.kind in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }:
+            names.add(parameter.name)
+    return names
+
+
+def _uses_tool_input_dict(parameters: list[inspect.Parameter]) -> bool:
+    if len(parameters) != 1:
+        return False
+    parameter = parameters[0]
+    return parameter.kind in {
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    } and parameter.name in {"tool_input", "args", "tool_args"}
+
+
+def _bind_tool_action_kwargs(
+    *,
+    parameters: list[inspect.Parameter],
+    tool_input: dict[str, JsonValue],
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {}
+    for parameter in parameters:
+        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            kwargs.update(tool_input)
+            continue
+        if parameter.kind not in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }:
+            raise TypeError(
+                f"Unsupported tool action parameter kind: {parameter.kind.value}"
+            )
+        if parameter.name not in tool_input:
+            continue
+        kwargs[parameter.name] = _coerce_tool_argument_for_parameter(
+            value=tool_input[parameter.name],
+            parameter=parameter,
+        )
+    return kwargs
+
+
+def _coerce_tool_argument_for_parameter(
+    *,
+    value: JsonValue,
+    parameter: inspect.Parameter,
+) -> object:
+    if value is None:
+        return None
+    model_list_type = _resolve_pydantic_model_list_type(parameter)
+    if model_list_type is not None and isinstance(value, list):
+        return [model_list_type.model_validate(item) for item in value]
+    model_type = _resolve_pydantic_model_type(parameter)
+    if model_type is not None and isinstance(value, dict):
+        return model_type.model_validate(value)
+    enum_type = _resolve_enum_type(parameter)
+    if enum_type is not None and isinstance(value, str):
+        return enum_type(value)
+    if _parameter_accepts_type(parameter, bool):
+        return _coerce_bool(value)
+    if _parameter_accepts_type(parameter, int):
+        return _coerce_int(value)
+    if _parameter_accepts_type(parameter, float):
+        return _coerce_float(value)
+    if _parameter_accepts_type(parameter, str):
+        return str(value)
+    if _parameter_accepts_type(parameter, tuple) and isinstance(value, list):
+        return tuple(value)
+    if _parameter_accepts_type(parameter, list) and isinstance(value, tuple):
+        return list(value)
+    return value
+
+
+def _parameter_accepts_type(
+    parameter: inspect.Parameter,
+    expected_type: type[object],
+) -> bool:
+    annotation = parameter.annotation
+    if annotation is not inspect._empty and _annotation_contains_type(
+        annotation=annotation,
+        expected_type=expected_type,
+    ):
+        return True
+    default = parameter.default
+    if default is inspect._empty or default is None:
+        return False
+    return isinstance(default, expected_type)
+
+
+def _annotation_contains_type(
+    *,
+    annotation: object,
+    expected_type: type[object],
+) -> bool:
+    if annotation is expected_type:
+        return True
+    origin = get_origin(annotation)
+    if origin is None:
+        return False
+    return any(
+        item is expected_type for item in get_args(annotation) if item is not type(None)
+    )
+
+
+def _resolve_pydantic_model_list_type(
+    parameter: inspect.Parameter,
+) -> type[BaseModel] | None:
+    annotation = parameter.annotation
+    origin = get_origin(annotation)
+    if origin not in {list, tuple}:
+        return None
+    for item in get_args(annotation):
+        if inspect.isclass(item) and issubclass(item, BaseModel):
+            return cast(type[BaseModel], item)
+    return None
+
+
+def _resolve_pydantic_model_type(
+    parameter: inspect.Parameter,
+) -> type[BaseModel] | None:
+    annotation = parameter.annotation
+    if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
+        return cast(type[BaseModel], annotation)
+    origin = get_origin(annotation)
+    if origin is None:
+        return None
+    for item in get_args(annotation):
+        if item is type(None):
+            continue
+        if inspect.isclass(item) and issubclass(item, BaseModel):
+            return cast(type[BaseModel], item)
+    return None
+
+
+def _resolve_enum_type(
+    parameter: inspect.Parameter,
+) -> type[Enum] | None:
+    annotation = parameter.annotation
+    if annotation is not inspect._empty:
+        candidate = _enum_type_from_annotation(annotation)
+        if candidate is not None:
+            return candidate
+    default = parameter.default
+    if default is inspect._empty or not isinstance(default, Enum):
+        return None
+    return type(default)
+
+
+def _enum_type_from_annotation(annotation: object) -> type[Enum] | None:
+    if inspect.isclass(annotation) and issubclass(annotation, Enum):
+        return cast(type[Enum], annotation)
+    origin = get_origin(annotation)
+    if origin is None:
+        return None
+    for item in get_args(annotation):
+        if item is type(None):
+            continue
+        if inspect.isclass(item) and issubclass(item, Enum):
+            return cast(type[Enum], item)
+    return None
+
+
+def _coerce_bool(value: JsonValue) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def _coerce_int(value: JsonValue) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            return int(stripped)
+    raise ValueError(f"Cannot coerce tool argument to int: {value!r}")
+
+
+def _coerce_float(value: JsonValue) -> float:
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            return float(stripped)
+    raise ValueError(f"Cannot coerce tool argument to float: {value!r}")
+
+
 def _raise_if_stopped(ctx: ToolContext) -> None:
     ctx.deps.run_control_manager.raise_if_cancelled(
         run_id=ctx.deps.run_id,
         instance_id=ctx.deps.instance_id,
+    )
+
+
+async def _apply_pre_tool_hooks(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    tool_call_id: str,
+    tool_input: dict[str, JsonValue],
+) -> tuple[dict[str, JsonValue], ToolError | None, bool]:
+    hook_service = getattr(ctx.deps, "hook_service", None)
+    if hook_service is None:
+        return tool_input, None, False
+    bundle = await hook_service.execute(
+        event_input=PreToolUseInput(
+            event_name=HookEventName.PRE_TOOL_USE,
+            session_id=ctx.deps.session_id,
+            run_id=ctx.deps.run_id,
+            trace_id=ctx.deps.trace_id,
+            task_id=ctx.deps.task_id,
+            instance_id=ctx.deps.instance_id,
+            role_id=ctx.deps.role_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_input=tool_input,
+        ),
+        run_event_hub=ctx.deps.run_event_hub,
+    )
+    if bundle.decision == HookDecisionType.DENY:
+        return (
+            tool_input,
+            ToolError(
+                type="hook_denied",
+                message=bundle.reason or "Tool call denied by runtime hooks.",
+                retryable=False,
+            ),
+            False,
+        )
+    next_args = tool_input
+    if isinstance(bundle.updated_input, dict):
+        next_args = cast(dict[str, JsonValue], bundle.updated_input)
+    return next_args, None, bundle.decision == HookDecisionType.ASK
+
+
+async def _apply_permission_request_hooks(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    tool_call_id: str,
+    args_summary: dict[str, JsonValue],
+) -> tuple[bool, ToolError | None]:
+    hook_service = getattr(ctx.deps, "hook_service", None)
+    if hook_service is None:
+        return False, None
+    bundle = await hook_service.execute(
+        event_input=PermissionRequestInput(
+            event_name=HookEventName.PERMISSION_REQUEST,
+            session_id=ctx.deps.session_id,
+            run_id=ctx.deps.run_id,
+            trace_id=ctx.deps.trace_id,
+            task_id=ctx.deps.task_id,
+            instance_id=ctx.deps.instance_id,
+            role_id=ctx.deps.role_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_input=args_summary,
+            approval_required=True,
+        ),
+        run_event_hub=ctx.deps.run_event_hub,
+    )
+    if bundle.decision == HookDecisionType.DENY:
+        return (
+            False,
+            ToolError(
+                type="hook_denied",
+                message=bundle.reason or "Tool approval denied by runtime hooks.",
+                retryable=False,
+            ),
+        )
+    return bundle.decision == HookDecisionType.ALLOW, None
+
+
+async def _apply_post_tool_hooks(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    tool_call_id: str,
+    args_summary: dict[str, JsonValue],
+    envelope: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    hook_service = getattr(ctx.deps, "hook_service", None)
+    if hook_service is None:
+        return envelope
+    bundle = await hook_service.execute(
+        event_input=PostToolUseInput(
+            event_name=HookEventName.POST_TOOL_USE,
+            session_id=ctx.deps.session_id,
+            run_id=ctx.deps.run_id,
+            trace_id=ctx.deps.trace_id,
+            task_id=ctx.deps.task_id,
+            instance_id=ctx.deps.instance_id,
+            role_id=ctx.deps.role_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_input=args_summary,
+            tool_result=envelope,
+        ),
+        run_event_hub=ctx.deps.run_event_hub,
+    )
+    return _apply_post_hook_bundle_to_envelope(
+        ctx=ctx,
+        hook_event=HookEventName.POST_TOOL_USE,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        envelope=envelope,
+        bundle=bundle,
+    )
+
+
+async def _apply_post_tool_failure_hooks(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    tool_call_id: str,
+    args_summary: dict[str, JsonValue],
+    envelope: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    hook_service = getattr(ctx.deps, "hook_service", None)
+    if hook_service is None:
+        return envelope
+    error_payload = envelope.get("error")
+    tool_error = (
+        cast(dict[str, JsonValue], error_payload)
+        if isinstance(error_payload, dict)
+        else {}
+    )
+    bundle = await hook_service.execute(
+        event_input=PostToolUseFailureInput(
+            event_name=HookEventName.POST_TOOL_USE_FAILURE,
+            session_id=ctx.deps.session_id,
+            run_id=ctx.deps.run_id,
+            trace_id=ctx.deps.trace_id,
+            task_id=ctx.deps.task_id,
+            instance_id=ctx.deps.instance_id,
+            role_id=ctx.deps.role_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_input=args_summary,
+            tool_error=tool_error,
+        ),
+        run_event_hub=ctx.deps.run_event_hub,
+    )
+    return _apply_post_hook_bundle_to_envelope(
+        ctx=ctx,
+        hook_event=HookEventName.POST_TOOL_USE_FAILURE,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        envelope=envelope,
+        bundle=bundle,
+    )
+
+
+def _apply_post_hook_bundle_to_envelope(
+    *,
+    ctx: ToolContext,
+    hook_event: HookEventName,
+    tool_name: str,
+    tool_call_id: str,
+    envelope: dict[str, JsonValue],
+    bundle: HookDecisionBundle,
+) -> dict[str, JsonValue]:
+    meta = envelope.get("meta")
+    runtime_meta = cast(dict[str, JsonValue], meta) if isinstance(meta, dict) else {}
+    if bundle.additional_context:
+        runtime_meta["hook_additional_context"] = list(bundle.additional_context)
+        _enqueue_additional_context_followup(
+            ctx=ctx,
+            contexts=bundle.additional_context,
+        )
+    if bundle.deferred_action:
+        runtime_meta["hook_deferred_action"] = bundle.deferred_action
+        _enqueue_deferred_followup(
+            ctx=ctx,
+            hook_event=hook_event,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            deferred_action=bundle.deferred_action,
+        )
+    envelope["meta"] = runtime_meta
+    return envelope
+
+
+def _enqueue_additional_context_followup(
+    *,
+    ctx: ToolContext,
+    contexts: tuple[str, ...],
+) -> None:
+    injection_manager = getattr(ctx.deps, "injection_manager", None)
+    if injection_manager is None:
+        return
+    if not injection_manager.is_active(ctx.deps.run_id):
+        return
+    content = "\n\n".join(
+        str(context).strip() for context in contexts if str(context).strip()
+    )
+    if not content:
+        return
+    _ = injection_manager.enqueue(
+        ctx.deps.run_id,
+        ctx.deps.instance_id,
+        source=InjectionSource.SYSTEM,
+        content=content,
+    )
+
+
+def _enqueue_deferred_followup(
+    *,
+    ctx: ToolContext,
+    hook_event: HookEventName,
+    tool_name: str,
+    tool_call_id: str,
+    deferred_action: str,
+) -> None:
+    injection_manager = getattr(ctx.deps, "injection_manager", None)
+    if injection_manager is None:
+        return
+    if not injection_manager.is_active(ctx.deps.run_id):
+        return
+    record = injection_manager.enqueue(
+        ctx.deps.run_id,
+        ctx.deps.instance_id,
+        source=InjectionSource.SYSTEM,
+        content=deferred_action,
+    )
+    _ = record
+    ctx.deps.run_event_hub.publish(
+        RunEvent(
+            session_id=ctx.deps.session_id,
+            run_id=ctx.deps.run_id,
+            trace_id=ctx.deps.trace_id,
+            task_id=ctx.deps.task_id,
+            instance_id=ctx.deps.instance_id,
+            role_id=ctx.deps.role_id,
+            event_type=RunEventType.HOOK_DEFERRED,
+            payload_json=dumps(
+                {
+                    "hook_event": hook_event.value,
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "deferred_action": deferred_action,
+                },
+                ensure_ascii=False,
+            ),
+        )
     )
 
 
@@ -412,13 +1056,14 @@ async def _handle_tool_approval(
     meta: dict[str, JsonValue],
     tool_call_id: str,
     approval_request: ToolApprovalRequest | None = None,
+    force_approval: bool = False,
 ) -> tuple[str | None, ToolError | None]:
     decision = _evaluate_tool_approval_policy(
         policy=ctx.deps.tool_approval_policy,
         tool_name=tool_name,
         approval_request=approval_request,
     )
-    approval_required = decision.required
+    approval_required = force_approval or decision.required
     run_yolo = _policy_uses_yolo(ctx.deps.tool_approval_policy)
     args_preview = _safe_json(args_summary)
     approval_preview = _safe_json(
@@ -447,6 +1092,20 @@ async def _handle_tool_approval(
         meta["execution_surface"] = decision.execution_surface.value
     cache_key = approval_request.cache_key if approval_request is not None else ""
     if not approval_required:
+        meta["approval_status"] = "not_required"
+        return None, None
+
+    hook_allowed, hook_error = await _apply_permission_request_hooks(
+        ctx=ctx,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        args_summary=args_summary,
+    )
+    if hook_error is not None:
+        return None, hook_error
+    if hook_allowed:
+        meta["approval_required"] = False
+        meta["approval_mode"] = ToolApprovalMode.POLICY_EXEMPT.value
         meta["approval_status"] = "not_required"
         return None, None
 

@@ -23,7 +23,7 @@ from relay_teams.tools.runtime import (
     ToolContext,
     ToolDeps,
     ToolResultProjection,
-    execute_tool,
+    execute_tool_call,
 )
 
 
@@ -137,7 +137,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             content: Content to write.
         """
 
-        async def _action() -> ToolResultProjection:
+        async def _action(path: str, content: str) -> ToolResultProjection:
             file_path = ctx.deps.workspace.resolve_path(path, write=True)
 
             old_content = ""
@@ -164,7 +164,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 created=created,
             )
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="write",
             args_summary={
@@ -172,4 +172,5 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "content_len": len(content),
             },
             action=_action,
+            raw_args=locals(),
         )

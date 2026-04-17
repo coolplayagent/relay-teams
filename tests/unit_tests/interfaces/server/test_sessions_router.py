@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import pytest
+
 from relay_teams.interfaces.server.deps import get_session_service
 from relay_teams.interfaces.server.routers import sessions
 from relay_teams.providers import AgentTokenSummary, RunTokenUsage, SessionTokenUsage
@@ -272,6 +274,7 @@ def test_update_session_route_accepts_metadata_payload() -> None:
     ]
 
 
+@pytest.mark.timeout(5)
 def test_create_session_route_returns_created_session() -> None:
     fake_service = _FakeSessionService()
     client = _create_client(fake_service)

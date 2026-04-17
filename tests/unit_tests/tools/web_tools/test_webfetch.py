@@ -1,17 +1,36 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
-from typing import cast
+from types import SimpleNamespace
+from typing import Awaitable, Callable, cast
 
 import httpx
+from pydantic_ai import Agent
 import pytest
 
 from relay_teams.computer import ComputerActionRisk
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
-from relay_teams.tools.runtime import ToolApprovalPolicy, ToolExecutionError
+from relay_teams.tools.runtime import ToolApprovalPolicy, ToolDeps, ToolExecutionError
 from relay_teams.tools.web_tools import common, webfetch
 from relay_teams.tools.web_tools.preapproved import is_preapproved_webfetch_url
+
+
+class _FakeAgent:
+    def __init__(self) -> None:
+        self.tools: dict[str, Callable[..., object]] = {}
+
+    def tool(
+        self, *, description: str
+    ) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        del description
+
+        def decorator(func: Callable[..., object]) -> Callable[..., object]:
+            self.tools[func.__name__] = func
+            return func
+
+        return decorator
 
 
 def _dict_list(value: object) -> list[dict[str, object]]:
@@ -1766,3 +1785,76 @@ def test_build_webfetch_projection_uses_absolute_markdown_links(tmp_path: Path) 
     data = projection.visible_data
     assert isinstance(data, dict)
     assert data["output"] == "[Install](https://example.com/install)"
+
+
+@pytest.mark.asyncio
+async def test_register_webfetch_uses_default_proxy_env_when_hook_runtime_env_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    webfetch.register(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]], fake_agent.tools["webfetch"]
+    )
+
+    captured: dict[str, object] = {}
+
+    class _FakeAsyncClient:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            _ = (exc_type, exc, tb)
+            return False
+
+    def _fake_create_async_http_client(**kwargs: object) -> _FakeAsyncClient:
+        captured.update(kwargs)
+        return _FakeAsyncClient()
+
+    async def _fake_fetch_webfetch_projection(**kwargs: object) -> dict[str, object]:
+        _ = kwargs
+        return {"ok": True}
+
+    async def _fake_execute_tool(ctx, **kwargs: object) -> dict[str, object]:
+        _ = ctx
+        action = cast(
+            Callable[..., Awaitable[dict[str, object]]],
+            kwargs["action"],
+        )
+        raw_args = cast(dict[str, object], kwargs["raw_args"])
+        tool_args = {
+            name: raw_args[name]
+            for name in inspect.signature(action).parameters
+            if name in raw_args
+        }
+        return await action(**tool_args)
+
+    monkeypatch.setattr(
+        webfetch, "create_async_http_client", _fake_create_async_http_client
+    )
+    monkeypatch.setattr(
+        webfetch, "fetch_webfetch_projection", _fake_fetch_webfetch_projection
+    )
+    monkeypatch.setattr(webfetch, "execute_tool_call", _fake_execute_tool)
+
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            hook_runtime_env={},
+            workspace=SimpleNamespace(
+                locations=SimpleNamespace(workspace_dir=tmp_path),
+            ),
+            workspace_id="default",
+            shared_store=cast(object, None),
+            run_control_manager=SimpleNamespace(
+                raise_if_cancelled=lambda **kwargs: None,
+            ),
+            run_id="run-1",
+            instance_id="inst-1",
+        ),
+        tool_call_id="toolcall-1",
+    )
+
+    _ = await tool(ctx, url="https://example.com")
+
+    assert "merged_env" not in captured

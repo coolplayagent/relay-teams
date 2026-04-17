@@ -6,6 +6,8 @@ import json
 import sqlite3
 from typing import cast
 
+from relay_teams.sessions.runs.enums import InjectionSource
+
 import pytest
 
 from relay_teams.agents.orchestration.meta_agent import MetaAgent
@@ -34,6 +36,12 @@ from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.session_models import SessionRecord
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookService,
+)
 
 
 class _MetaAgent:
@@ -145,6 +153,7 @@ def _make_run_manager(
     control: RunControlManager,
     *,
     background_task_manager: object | None = None,
+    meta_agent: object | None = None,
 ) -> RunManager:
     hub = RunEventHub()
     injection = RunInjectionManager()
@@ -158,7 +167,7 @@ def _make_run_manager(
         run_runtime_repo=cast(RunRuntimeRepository, cast(object, _RunRuntimeRepo())),
     )
     return RunManager(
-        meta_agent=cast(MetaAgent, cast(object, _MetaAgent())),
+        meta_agent=cast(MetaAgent, cast(object, meta_agent or _MetaAgent())),
         injection_manager=injection,
         run_event_hub=hub,
         run_control_manager=control,
@@ -339,7 +348,7 @@ def test_completed_notification_uses_final_run_output() -> None:
             trace_id=run_id,
             root_task_id="task-1",
             status="completed",
-            output=content_parts_from_text("好"),
+            output=content_parts_from_text("done"),
         )
 
     asyncio.run(
@@ -358,7 +367,7 @@ def test_completed_notification_uses_final_run_output() -> None:
             break
 
     assert notification_payload is not None
-    assert notification_payload["body"] == "好"
+    assert notification_payload["body"] == "done"
 
 
 def test_assistant_error_notification_uses_failed_channel() -> None:
@@ -427,3 +436,223 @@ def test_assistant_error_notification_uses_failed_channel() -> None:
     )
     assert notification_payload["title"] == "Run Failed"
     assert notification_payload["body"] == "provider rejected request"
+
+
+class _FakeRunHookService:
+    def __init__(
+        self,
+        *,
+        stop_decision: HookDecisionType = HookDecisionType.ALLOW,
+        stop_bundles: tuple[HookDecisionBundle, ...] = (),
+    ) -> None:
+        self.stop_decision = stop_decision
+        self.stop_bundles = list(stop_bundles)
+        self.cleared_run_ids: list[str] = []
+        self.events: list[HookEventName] = []
+        self.snapshotted_run_ids: list[str] = []
+        self.stop_failure_payloads: list[tuple[str, str]] = []
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        event_name = cast(HookEventName, getattr(event_input, "event_name"))
+        self.events.append(event_name)
+        if event_name == HookEventName.STOP:
+            if self.stop_bundles:
+                return self.stop_bundles.pop(0)
+            return HookDecisionBundle(decision=self.stop_decision)
+        if event_name == HookEventName.STOP_FAILURE:
+            self.stop_failure_payloads.append(
+                (
+                    str(getattr(event_input, "error_code", "")),
+                    str(getattr(event_input, "error_message", "")),
+                )
+            )
+        return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+
+    def snapshot_run(self, run_id: str) -> None:
+        self.snapshotted_run_ids.append(run_id)
+
+    def clear_run(self, run_id: str) -> None:
+        self.cleared_run_ids.append(run_id)
+
+
+def test_stop_pending_run_does_not_invoke_completion_stop_hooks() -> None:
+    control = RunControlManager()
+    hook_service = _FakeRunHookService(stop_decision=HookDecisionType.RETRY)
+    manager = _make_run_manager(control)
+    manager._hook_service = cast(HookService, hook_service)
+
+    run_id, _ = manager.create_run(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("hello"),
+        )
+    )
+    manager.stop_run(run_id)
+
+    assert run_id not in manager._pending_runs
+    assert HookEventName.STOP not in hook_service.events
+
+
+def test_finalize_run_clears_hook_runtime_state() -> None:
+    control = RunControlManager()
+    hook_service = _FakeRunHookService()
+    manager = _make_run_manager(control)
+    manager._hook_service = cast(HookService, hook_service)
+    manager._running_run_ids.add("run-1")
+
+    manager._finalize_run(run_id="run-1", session_id="session-1")
+
+    assert hook_service.cleared_run_ids == ["run-1"]
+
+
+class _DirectRunMetaAgent:
+    async def handle_intent(self, intent, trace_id: str | None = None):
+        _ = intent
+        return RunResult(
+            trace_id=trace_id or "run-direct",
+            root_task_id="task-direct-1",
+            status="completed",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+            output=content_parts_from_text("done"),
+        )
+
+
+class _RetryingDirectRunMetaAgent:
+    def __init__(self) -> None:
+        self.resume_calls = 0
+
+    async def handle_intent(self, intent, trace_id: str | None = None):
+        _ = intent
+        return RunResult(
+            trace_id=trace_id or "run-direct",
+            root_task_id="task-direct-1",
+            status="completed",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+            output=content_parts_from_text("draft"),
+        )
+
+    async def resume_run(self, trace_id: str):
+        self.resume_calls += 1
+        return RunResult(
+            trace_id=trace_id,
+            root_task_id="task-direct-1",
+            status="completed",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+            output=content_parts_from_text("verified"),
+        )
+
+
+class _AssistantErrorMetaAgent:
+    async def handle_intent(self, intent, trace_id: str | None = None):
+        _ = intent
+        return RunResult(
+            trace_id=trace_id or "run-direct",
+            root_task_id="task-direct-1",
+            status="completed",
+            completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+            error_code="provider_error",
+            error_message="provider rejected request",
+            output=content_parts_from_text("provider rejected request"),
+        )
+
+
+def test_direct_run_executes_session_hooks_and_clears_runtime_state() -> None:
+    control = RunControlManager()
+    hook_service = _FakeRunHookService()
+    manager = _make_run_manager(control, meta_agent=_DirectRunMetaAgent())
+    manager._hook_service = cast(HookService, hook_service)
+
+    result = asyncio.run(
+        manager.run_intent(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("hello"),
+            )
+        )
+    )
+
+    assert result.status == "completed"
+    assert hook_service.events[:3] == [
+        HookEventName.SESSION_START,
+        HookEventName.STOP,
+        HookEventName.SESSION_END,
+    ]
+    assert hook_service.cleared_run_ids == [result.trace_id]
+    assert hook_service.snapshotted_run_ids == [result.trace_id]
+
+
+def test_direct_run_retries_completion_when_stop_hook_requests_retry() -> None:
+    control = RunControlManager()
+    meta_agent = _RetryingDirectRunMetaAgent()
+    hook_service = _FakeRunHookService(
+        stop_bundles=(
+            HookDecisionBundle(
+                decision=HookDecisionType.RETRY,
+                additional_context=("Need one more verification pass.",),
+            ),
+            HookDecisionBundle(decision=HookDecisionType.ALLOW),
+        )
+    )
+    manager = _make_run_manager(control, meta_agent=meta_agent)
+    manager._hook_service = cast(HookService, hook_service)
+    captured_followups: list[tuple[str, bool, InjectionSource]] = []
+    manager._append_followup_to_coordinator = (
+        lambda run_id, content, *, enqueue, source=InjectionSource.USER: (
+            captured_followups.append((content, enqueue, source)) or True
+        )
+    )
+    resume_calls: list[str] = []
+
+    async def _resume_existing_run(run_id: str) -> RunResult:
+        resume_calls.append(run_id)
+        return RunResult(
+            trace_id=run_id,
+            root_task_id="task-direct-1",
+            status="completed",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+            output=content_parts_from_text("verified"),
+        )
+
+    manager._resume_existing_run = _resume_existing_run
+
+    result = asyncio.run(
+        manager.run_intent(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("hello"),
+            )
+        )
+    )
+
+    assert result.output_text == "verified"
+    assert len(resume_calls) == 1
+    assert captured_followups == [
+        ("Need one more verification pass.", True, InjectionSource.SYSTEM)
+    ]
+    assert hook_service.events.count(HookEventName.STOP) == 2
+
+
+def test_direct_run_publishes_stop_failure_for_assistant_error() -> None:
+    control = RunControlManager()
+    hook_service = _FakeRunHookService()
+    manager = _make_run_manager(control, meta_agent=_AssistantErrorMetaAgent())
+    manager._hook_service = cast(HookService, hook_service)
+
+    result = asyncio.run(
+        manager.run_intent(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("hello"),
+            )
+        )
+    )
+
+    assert result.status == "failed"
+    assert HookEventName.STOP not in hook_service.events
+    assert HookEventName.STOP_FAILURE in hook_service.events
+    assert hook_service.stop_failure_payloads == [
+        ("provider_error", "provider rejected request")
+    ]

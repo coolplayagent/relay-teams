@@ -18,6 +18,7 @@ from relay_teams.external_agents.agent_cli import build_external_agents_app
 from relay_teams.gateway.gateway_cli import build_gateway_app
 from relay_teams.interfaces.cli.approvals_cli import build_approvals_app
 from relay_teams.interfaces.cli.metrics_cli import build_metrics_app
+from relay_teams.interfaces.cli.hooks_cli import build_hooks_app
 from relay_teams.interfaces.cli.run_prompt_cli import (
     execute_prompt as _execute_prompt_impl,
     root_command as _root_command_impl,
@@ -222,6 +223,11 @@ gateway_app = build_gateway_app(
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
 )
+hooks_app = build_hooks_app(
+    request_json=_module_request_json,
+    auto_start_if_needed=_module_auto_start,
+    default_base_url=DEFAULT_BASE_URL,
+)
 metrics_app = build_metrics_app(
     request_json=_module_request_json,
     auto_start_if_needed=_module_auto_start,
@@ -359,6 +365,7 @@ app.add_typer(mcp_app, name="mcp")
 app.add_typer(skills_app, name="skills")
 app.add_typer(clawhub_app, name="clawhub")
 app.add_typer(metrics_app, name="metrics")
+app.add_typer(hooks_app, name="hooks")
 app.add_typer(gateway_app, name="gateway")
 
 

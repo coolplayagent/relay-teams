@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 import json
 import re
+import sys
 import time
 
 from fastapi import FastAPI, Request
@@ -240,6 +241,12 @@ def plan_fake_response(payload: object) -> dict[str, object]:
         return _plan_rolling_summary_recall_response(messages)
     if _invalid_json_auto_recovery_mode(messages):
         return _plan_invalid_json_auto_recovery_response(payload, messages)
+    if _hook_read_rewrite_mode(messages):
+        return _plan_hook_read_rewrite_response(payload, messages)
+    if _hook_shell_env_mode(messages):
+        return _plan_hook_shell_env_response(payload, messages)
+    if _hook_deferred_followup_mode(messages):
+        return _plan_hook_deferred_followup_response(payload, messages)
     if _rate_limit_retry_mode(messages):
         return _plan_rate_limit_retry_response(messages)
     if _stream_drop_retry_mode(messages):
@@ -386,6 +393,103 @@ def _plan_invalid_json_auto_recovery_response(
 
 def _rate_limit_retry_mode(messages: list[object]) -> bool:
     return _messages_contain_user_text(messages, "[rate-limit-once]")
+
+
+def _hook_read_rewrite_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[hook-read-rewrite]")
+
+
+def _plan_hook_read_rewrite_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    available_tools = _extract_available_tools(payload)
+    if "read" not in available_tools:
+        return {
+            "kind": "text",
+            "content": "[fake-llm] read is not available for this role.",
+        }
+    last_tool_call_id = _extract_last_tool_call_id(messages)
+    if last_tool_call_id is None:
+        return {
+            "kind": "tool_call",
+            "tool_name": "read",
+            "tool_call_id": "call-hook-read-rewrite-1",
+            "arguments": {"path": "missing-from-hook.txt", "offset": 1, "limit": 20},
+        }
+    return {"kind": "text", "content": "[fake-llm] hook read rewrite completed"}
+
+
+def _hook_shell_env_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[hook-shell-env]")
+
+
+def _plan_hook_shell_env_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    available_tools = _extract_available_tools(payload)
+    if "shell" not in available_tools:
+        return {
+            "kind": "text",
+            "content": "[fake-llm] shell is not available for this role.",
+        }
+    last_tool_call_id = _extract_last_tool_call_id(messages)
+    if last_tool_call_id is None:
+        command = (
+            "Write-Output $env:RT_HOOK_TEST"
+            if sys.platform.startswith("win")
+            else f'"{sys.executable}" -c '
+            "'"
+            'import os; print(os.environ.get("RT_HOOK_TEST", "missing"))'
+            "'"
+            ""
+        )
+        return {
+            "kind": "tool_call",
+            "tool_name": "shell",
+            "tool_call_id": "call-hook-shell-env-1",
+            "arguments": {
+                "command": command,
+                "background": False,
+            },
+        }
+    return {"kind": "text", "content": "[fake-llm] hook shell env completed"}
+
+
+def _hook_deferred_followup_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[hook-deferred-followup]")
+
+
+def _plan_hook_deferred_followup_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    if _messages_contain_user_text(
+        messages, "Deferred follow-up instruction from hook"
+    ):
+        return {
+            "kind": "text",
+            "content": "[fake-llm] deferred follow-up acknowledged",
+        }
+    available_tools = _extract_available_tools(payload)
+    if "read" not in available_tools:
+        return {
+            "kind": "text",
+            "content": "[fake-llm] read is not available for this role.",
+        }
+    last_tool_call_id = _extract_last_tool_call_id(messages)
+    if last_tool_call_id is None:
+        return {
+            "kind": "tool_call",
+            "tool_name": "read",
+            "tool_call_id": "call-hook-deferred-followup-1",
+            "arguments": {"path": "README.md", "offset": 1, "limit": 20},
+        }
+    return {
+        "kind": "text",
+        "content": "[fake-llm] tool completed without deferred follow-up",
+    }
 
 
 def _plan_rate_limit_retry_response(messages: list[object]) -> dict[str, object]:

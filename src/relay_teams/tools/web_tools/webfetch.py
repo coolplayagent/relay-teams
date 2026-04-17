@@ -31,7 +31,7 @@ from relay_teams.tools.runtime import (
     ToolApprovalRequest,
     ToolExecutionError,
     ToolResultProjection,
-    execute_tool,
+    execute_tool_call,
 )
 from relay_teams.tools.web_tools.preapproved import is_preapproved_webfetch_url
 from relay_teams.tools.web_tools.common import (
@@ -256,13 +256,15 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Fetch web content and return text, a saved file path, or structured feed data."""
 
-        approval_request = build_webfetch_approval_request(url)
-        approval_args_summary = build_webfetch_approval_args_summary(url)
-
-        async def _action() -> ToolResultProjection:
+        async def _action(
+            url: str,
+            format: str = DEFAULT_FORMAT,
+            timeout: int | None = None,
+            extract: WebFetchExtractMode = WebFetchExtractMode.NONE,
+            item_limit: int = DEFAULT_ITEM_LIMIT,
+        ) -> ToolResultProjection:
             validate_web_url(url)
             resolved_timeout = normalize_timeout_seconds(timeout)
-            resolved_extract = normalize_extract_mode(extract)
             resolved_item_limit = normalize_item_limit(item_limit)
             async with create_async_http_client(
                 timeout_seconds=float(resolved_timeout),
@@ -272,7 +274,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     client=client,
                     requested_url=url,
                     response_format=format,
-                    extract=resolved_extract,
+                    extract=normalize_extract_mode(extract),
                     item_limit=resolved_item_limit,
                     workspace_dir=ctx.deps.workspace.locations.workspace_dir,
                     workspace_id=ctx.deps.workspace_id,
@@ -286,7 +288,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     ),
                 )
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="webfetch",
             args_summary={
@@ -297,8 +299,13 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "item_limit": item_limit,
             },
             action=_action,
-            approval_request=approval_request,
-            approval_args_summary=approval_args_summary,
+            raw_args=locals(),
+            approval_request_factory=lambda tool_input: build_webfetch_approval_request(
+                str(tool_input.get("url") or url)
+            ),
+            approval_args_summary_factory=lambda tool_input: (
+                build_webfetch_approval_args_summary(str(tool_input.get("url") or url))
+            ),
             keep_approval_ticket_reusable=True,
         )
 

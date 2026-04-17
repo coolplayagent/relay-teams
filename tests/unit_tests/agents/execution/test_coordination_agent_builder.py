@@ -116,10 +116,12 @@ def test_build_coordination_agent_passes_proxy_http_client(
         connect_timeout_seconds: float,
         cache_scope: str | None = None,
         ssl_verify: bool | None = None,
+        merged_env: object | None = None,
     ) -> object:
         captured["connect_timeout_seconds"] = connect_timeout_seconds
         captured["cache_scope"] = cache_scope
         captured["ssl_verify"] = ssl_verify
+        captured["merged_env"] = merged_env
         return sentinel_client
 
     def _fake_openai_provider(**kwargs: object) -> _FakeOpenAIProvider:

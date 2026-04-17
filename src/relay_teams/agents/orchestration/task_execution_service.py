@@ -286,6 +286,7 @@ class TaskExecutionService(BaseModel):
                 shared_state_snapshot=snapshot,
                 thinking=self._thinking_for_run(task.trace_id),
                 system_prompt_override=provider_system_prompt,
+                user_prompt=None,
             )
             self.task_repo.update_status(
                 task.task_id, TaskStatus.COMPLETED, result=result
@@ -850,7 +851,7 @@ class TaskExecutionService(BaseModel):
                 instance_id=instance_id,
                 task_id=task.task_id,
                 trace_id=task.trace_id,
-                content=prompt,
+                content=override_prompt,
             )
             return
 

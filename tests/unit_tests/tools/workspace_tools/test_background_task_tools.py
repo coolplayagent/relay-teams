@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +27,19 @@ from relay_teams.tools.workspace_tools import (
     register_wait_background_task,
 )
 from relay_teams.tools.workspace_tools import shell as shell_module
+
+
+async def _invoke_tool_action(
+    action: Callable[..., Awaitable[ToolResultProjection]],
+    raw_args: dict[str, object] | None,
+) -> ToolResultProjection:
+    resolved_raw_args = {} if raw_args is None else raw_args
+    tool_args = {
+        name: resolved_raw_args[name]
+        for name in inspect.signature(action).parameters
+        if name in resolved_raw_args
+    }
+    return await action(**tool_args)
 
 
 class _FakeAgent:
@@ -161,6 +175,7 @@ async def test_shell_passes_none_tool_call_id_without_validation_error(
             role_id="writer",
             shell_approval_repo=None,
             tool_approval_policy=SimpleNamespace(yolo=False),
+            hook_runtime_env={},
         ),
     )
 
@@ -169,13 +184,17 @@ async def test_shell_passes_none_tool_call_id_without_validation_error(
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
         approval_request=None,
+        approval_request_factory=None,
+        **_: object,
     ) -> dict[str, object]:
-        del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).visible_data)
+        del ctx, tool_name, approval_request, approval_request_factory
+        projected = await _invoke_tool_action(action, raw_args)
+        return cast(dict[str, object], projected.visible_data)
 
-    monkeypatch.setattr(shell_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(shell_module, "execute_tool_call", _fake_execute_tool)
 
     result = await tool(ctx, command="pwd")
 
@@ -216,17 +235,21 @@ async def test_spawn_subagent_runs_synchronously_by_default(
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
         approval_request=None,
+        approval_request_factory=None,
+        **_: object,
     ) -> dict[str, object]:
-        del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).visible_data)
+        del ctx, tool_name, approval_request, approval_request_factory
+        projected = await _invoke_tool_action(action, raw_args)
+        return cast(dict[str, object], projected.visible_data)
 
     from relay_teams.tools.workspace_tools import (
         spawn_subagent as spawn_subagent_module,
     )
 
-    monkeypatch.setattr(spawn_subagent_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(spawn_subagent_module, "execute_tool_call", _fake_execute_tool)
 
     result = await tool(
         ctx,
@@ -281,17 +304,21 @@ async def test_spawn_subagent_starts_background_subagent_task_when_requested(
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
         approval_request=None,
+        approval_request_factory=None,
+        **_: object,
     ) -> dict[str, object]:
-        del ctx, tool_name, args_summary, approval_request
-        return cast(dict[str, object], (await action()).visible_data)
+        del ctx, tool_name, approval_request, approval_request_factory
+        projected = await _invoke_tool_action(action, raw_args)
+        return cast(dict[str, object], projected.visible_data)
 
     from relay_teams.tools.workspace_tools import (
         spawn_subagent as spawn_subagent_module,
     )
 
-    monkeypatch.setattr(spawn_subagent_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(spawn_subagent_module, "execute_tool_call", _fake_execute_tool)
 
     result = await tool(
         ctx,
@@ -425,21 +452,27 @@ async def test_shell_builds_approval_request_after_resolving_workdir(
             role_id="writer",
             shell_approval_repo=None,
             tool_approval_policy=SimpleNamespace(yolo=False),
+            hook_runtime_env={},
         ),
     )
 
     async def _fake_execute_tool(_ctx: object, **kwargs: object) -> dict[str, object]:
         del _ctx
-        approval_request = cast(ToolApprovalRequest, kwargs["approval_request"])
+        approval_request_factory = kwargs.get("approval_request_factory")
+        assert callable(approval_request_factory)
+        tool_input = cast(dict[str, object], kwargs.get("raw_args") or {})
+        approval_request = cast(
+            ToolApprovalRequest, approval_request_factory(tool_input)
+        )
         assert approval_request.cache_key
         return {"delegated": True}
 
-    monkeypatch.setattr(shell_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(shell_module, "execute_tool_call", _fake_execute_tool)
 
     result = await tool(ctx, command="pwd", workdir="../outside")
 
     assert result == {"delegated": True}
-    assert workspace.calls == ["../outside"]
+    assert workspace.calls == ["../outside", "../outside"]
 
 
 def test_register_background_tasks_is_idempotent_per_agent(
@@ -567,25 +600,35 @@ async def test_shell_returns_blocked_tool_result_for_local_policy_command(
             role_id="writer",
             shell_approval_repo=None,
             tool_approval_policy=SimpleNamespace(yolo=True),
+            hook_runtime_env={},
         ),
     )
 
     async def _fake_execute_tool(
         _ctx: object,
         *,
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
         approval_request=None,
+        approval_request_factory=None,
         **_kwargs: object,
     ) -> dict[str, object]:
+        del approval_request
+        tool_input = cast(dict[str, object], raw_args or {})
+        assert callable(approval_request_factory)
+        approval_request = cast(
+            ToolApprovalRequest,
+            approval_request_factory(tool_input),
+        )
         assert approval_request is not None
         assert approval_request.source == "shell_local_policy"
         try:
-            await action()
+            await _invoke_tool_action(action, tool_input)
         except ToolExecutionError as exc:
             return {"ok": False, "error": {"type": exc.error_type, "message": str(exc)}}
         raise AssertionError("expected local shell policy to block action")
 
-    monkeypatch.setattr(shell_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(shell_module, "execute_tool_call", _fake_execute_tool)
 
     result = await tool(ctx, command="curl https://example.com")
 
@@ -623,25 +666,35 @@ async def test_shell_yolo_blocks_parent_directory_change_in_command(
             role_id="writer",
             shell_approval_repo=None,
             tool_approval_policy=SimpleNamespace(yolo=True),
+            hook_runtime_env={},
         ),
     )
 
     async def _fake_execute_tool(
         _ctx: object,
         *,
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
         approval_request=None,
+        approval_request_factory=None,
         **_kwargs: object,
     ) -> dict[str, object]:
+        del approval_request
+        tool_input = cast(dict[str, object], raw_args or {})
+        assert callable(approval_request_factory)
+        approval_request = cast(
+            ToolApprovalRequest,
+            approval_request_factory(tool_input),
+        )
         assert approval_request is not None
         assert approval_request.source == "shell_local_policy"
         try:
-            await action()
+            await _invoke_tool_action(action, tool_input)
         except ToolExecutionError as exc:
             return {"ok": False, "error": {"type": exc.error_type, "message": str(exc)}}
         raise AssertionError("expected yolo directory change to block action")
 
-    monkeypatch.setattr(shell_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(shell_module, "execute_tool_call", _fake_execute_tool)
 
     result = await tool(ctx, command="cd .. && pwd")
 
@@ -684,25 +737,35 @@ async def test_shell_returns_blocked_tool_result_for_workdir_escape(
             role_id="writer",
             shell_approval_repo=None,
             tool_approval_policy=SimpleNamespace(yolo=True),
+            hook_runtime_env={},
         ),
     )
 
     async def _fake_execute_tool(
         _ctx: object,
         *,
-        action: Callable[[], Awaitable[ToolResultProjection]],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
         approval_request=None,
+        approval_request_factory=None,
         **_kwargs: object,
     ) -> dict[str, object]:
+        del approval_request
+        tool_input = cast(dict[str, object], raw_args or {})
+        assert callable(approval_request_factory)
+        approval_request = cast(
+            ToolApprovalRequest,
+            approval_request_factory(tool_input),
+        )
         assert approval_request is not None
         assert approval_request.source == "shell_local_policy"
         try:
-            await action()
+            await _invoke_tool_action(action, tool_input)
         except ToolExecutionError as exc:
             return {"ok": False, "error": {"type": exc.error_type, "message": str(exc)}}
         raise AssertionError("expected workdir validation to block action")
 
-    monkeypatch.setattr(shell_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(shell_module, "execute_tool_call", _fake_execute_tool)
 
     result = await tool(ctx, command="pwd", workdir="../outside")
 

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
         ToolApprovalManager,
     )
     from relay_teams.tools.runtime.context import ToolContext, ToolDeps
-    from relay_teams.tools.runtime.execution import execute_tool
+    from relay_teams.tools.runtime.execution import execute_tool, execute_tool_call
     from relay_teams.tools.runtime.models import (
         ToolApprovalDecision,
         ToolApprovalRequest,
@@ -46,6 +46,7 @@ __all__ = [
     "ToolResultProjection",
     "approval_signature_key",
     "execute_tool",
+    "execute_tool_call",
 ]
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
@@ -105,6 +106,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "approval_signature_key",
     ),
     "execute_tool": ("relay_teams.tools.runtime.execution", "execute_tool"),
+    "execute_tool_call": ("relay_teams.tools.runtime.execution", "execute_tool_call"),
 }
 
 
