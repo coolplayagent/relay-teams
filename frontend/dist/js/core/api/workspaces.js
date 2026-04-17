@@ -67,6 +67,9 @@ export async function pickWorkspace(rootPath = null) {
     );
 }
 
+// Keep the legacy workspace picker name available for stale frontend imports.
+export const openWorkspace = pickWorkspace;
+
 export async function forkWorkspace(workspaceId, name) {
     return requestJson(
         `/api/workspaces/${encodeURIComponent(workspaceId)}:fork`,
