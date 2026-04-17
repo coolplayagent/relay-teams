@@ -816,11 +816,13 @@ class WindowsDesktopRuntime:
         if not command:
             return None
         if (
-            len(command) >= 5
+            len(command) >= 4
             and command[0].casefold() == "cmd"
             and command[1].casefold() == "/c"
             and command[2].casefold() == "start"
         ):
+            if len(command) == 4:
+                return command[3]
             return command[4]
         return command[0]
 

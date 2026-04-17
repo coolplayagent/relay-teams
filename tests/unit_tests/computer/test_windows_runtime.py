@@ -308,6 +308,24 @@ def test_windows_runtime_build_launch_window_queries_normalizes_path_command(
     )
 
 
+def test_windows_runtime_build_launch_window_queries_handles_cmd_start_without_title(
+    tmp_path: Path,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    queries = runtime._build_launch_window_queries(
+        app_name="cmd /c start notepad.exe",
+        command=["cmd", "/c", "start", "notepad.exe"],
+    )
+
+    assert queries == (
+        "cmd /c start notepad.exe",
+        "cmd",
+        "notepad.exe",
+        "notepad",
+    )
+
+
 def test_windows_runtime_build_list_windows_script_uses_hwnd_enumeration(
     tmp_path: Path,
 ) -> None:
