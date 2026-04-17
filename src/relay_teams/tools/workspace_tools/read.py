@@ -33,6 +33,7 @@ from relay_teams.tools.workspace_tools.read_support import (
     MAX_LINE_SUFFIX,
     _project_read_result,
     resolve_read_instruction_sections,
+    validate_pagination_args,
 )
 
 DESCRIPTION = load_tool_description(__file__)
@@ -118,6 +119,7 @@ async def read_file_content(
     max_bytes: int = MAX_BYTES,
 ) -> tuple[list[str], int, bool, bool]:
     """Read file content with line and byte limits."""
+    validate_pagination_args(offset=offset, limit=limit)
     lines: list[str] = []
     total_lines = 0
     bytes_count = 0
@@ -156,6 +158,7 @@ def read_directory(
     limit: int = DEFAULT_READ_LIMIT,
 ) -> tuple[list[str], int, bool]:
     """Read directory entries with offset and limit pagination."""
+    validate_pagination_args(offset=offset, limit=limit)
     entries = []
 
     for entry in iter_dir_paths(dir_path):

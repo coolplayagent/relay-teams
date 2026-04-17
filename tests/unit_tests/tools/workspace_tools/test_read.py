@@ -139,6 +139,16 @@ class TestReadFileContent:
         assert lines == []
         assert total == 0
 
+    @pytest.mark.asyncio
+    async def test_read_file_rejects_non_positive_limit(self, tmp_path):
+        from relay_teams.tools.workspace_tools.read import read_file_content
+
+        test_file = tmp_path / "test.py"
+        test_file.write_text("line1\nline2\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="limit must be greater than 0"):
+            await read_file_content(test_file, limit=0)
+
 
 class TestReadDirectory:
     def test_read_directory(self, tmp_path):
@@ -182,6 +192,14 @@ class TestReadDirectory:
         assert entries[0] == "a.txt"
         assert entries[1] == "m.txt"
         assert entries[2] == "z.txt"
+
+    def test_read_directory_rejects_non_positive_offset(self, tmp_path):
+        from relay_teams.tools.workspace_tools.read import read_directory
+
+        (tmp_path / "a.txt").touch()
+
+        with pytest.raises(ValueError, match="offset must be greater than 0"):
+            read_directory(tmp_path, offset=0, limit=1)
 
 
 def test_project_read_result_keeps_output_first_shape() -> None:

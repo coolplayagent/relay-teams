@@ -19,6 +19,13 @@ MAX_BYTES = 50 * 1024
 MAX_BYTES_LABEL = "50 KB"
 
 
+def validate_pagination_args(*, offset: int, limit: int) -> None:
+    if offset <= 0:
+        raise ValueError("offset must be greater than 0")
+    if limit <= 0:
+        raise ValueError("limit must be greater than 0")
+
+
 def paginate_text_content(
     content: str,
     offset: int = 1,
@@ -26,6 +33,7 @@ def paginate_text_content(
     max_bytes: int = MAX_BYTES,
 ) -> tuple[list[str], int, bool, bool]:
     """Paginate in-memory text using the same limits as file reads."""
+    validate_pagination_args(offset=offset, limit=limit)
     lines: list[str] = []
     total_lines = 0
     bytes_count = 0

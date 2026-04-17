@@ -22,6 +22,7 @@ from relay_teams.tools.workspace_tools.read_support import (
     _project_read_result,
     paginate_text_content,
     resolve_read_instruction_sections,
+    validate_pagination_args,
 )
 
 DESCRIPTION = load_tool_description(__file__)
@@ -94,6 +95,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         """Convert an Office document or PDF to Markdown and page the result."""
 
         async def _action():
+            validate_pagination_args(offset=offset, limit=limit)
             file_path = ctx.deps.workspace.resolve_read_path(path)
 
             if not path_exists(file_path):

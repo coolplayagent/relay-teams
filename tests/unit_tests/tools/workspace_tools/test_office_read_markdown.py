@@ -91,6 +91,18 @@ class TestPaginateTextContent:
         assert truncated_lines is False
         assert truncated_bytes is True
 
+    def test_paginate_text_content_rejects_non_positive_limit(self) -> None:
+        from relay_teams.tools.workspace_tools.read_support import paginate_text_content
+
+        with pytest.raises(ValueError, match="limit must be greater than 0"):
+            paginate_text_content("line1\nline2", limit=0)
+
+    def test_paginate_text_content_rejects_non_positive_offset(self) -> None:
+        from relay_teams.tools.workspace_tools.read_support import paginate_text_content
+
+        with pytest.raises(ValueError, match="offset must be greater than 0"):
+            paginate_text_content("line1\nline2", offset=0)
+
 
 @pytest.mark.asyncio
 async def test_office_read_markdown_tool_converts_supported_pdf(
@@ -457,3 +469,59 @@ async def test_office_read_markdown_rejects_non_office_files(
         match="office_read_markdown only supports Office documents and PDFs",
     ):
         await tool(ctx, path="src/notes.txt")
+
+
+@pytest.mark.asyncio
+async def test_office_read_markdown_rejects_non_positive_limit_before_conversion(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import (
+        office_read_markdown as office_read_markdown_module,
+    )
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    file_path = source_dir / "report.pdf"
+    file_path.write_bytes(b"%PDF-1.7")
+    fake_agent = _FakeAgent()
+    register_office_read_markdown(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["office_read_markdown"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=SharedStateRepository(tmp_path / "state.db"),
+            task_id="task-1",
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    def _unexpected_convert(file_path: Path) -> object:
+        raise AssertionError(f"unexpected conversion for {file_path}")
+
+    monkeypatch.setattr(
+        office_read_markdown_module,
+        "execute_tool",
+        _fake_execute_tool,
+    )
+    monkeypatch.setattr(
+        office_read_markdown_module,
+        "convert_office_document",
+        _unexpected_convert,
+    )
+
+    with pytest.raises(ValueError, match="limit must be greater than 0"):
+        await tool(ctx, path="src/report.pdf", limit=0)
