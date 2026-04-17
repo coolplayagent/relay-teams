@@ -33,9 +33,10 @@ _PROXY_CACHE_KEYS = (
 )
 _LLM_HTTP_CLIENT_CACHE_MAXSIZE = 32
 type _LlmHttpClientCacheKey = tuple[frozenset[tuple[str, str]], bool, float, str | None]
-_LLM_HTTP_CLIENT_CACHE: OrderedDict[_LlmHttpClientCacheKey, httpx.AsyncClient] = (
-    OrderedDict()
-)
+_SHARED_LLM_HTTP_CLIENT_CACHE: OrderedDict[
+    _LlmHttpClientCacheKey, httpx.AsyncClient
+] = OrderedDict()
+_SCOPED_LLM_HTTP_CLIENT_CACHE: dict[_LlmHttpClientCacheKey, httpx.AsyncClient] = {}
 
 
 def build_llm_http_client(
@@ -55,9 +56,10 @@ def build_llm_http_client(
         connect_timeout_seconds=connect_timeout_seconds,
         cache_scope=cache_scope,
     )
-    client = _LLM_HTTP_CLIENT_CACHE.get(cache_key)
+    cache = _select_llm_http_client_cache(cache_scope=cache_scope)
+    client = cache.get(cache_key)
     if client is not None and client.is_closed:
-        _LLM_HTTP_CLIENT_CACHE.pop(cache_key, None)
+        cache.pop(cache_key, None)
         client = None
     if client is None:
         client = create_async_http_client(
@@ -65,17 +67,22 @@ def build_llm_http_client(
             connect_timeout_seconds=connect_timeout_seconds,
             ssl_verify=effective_ssl_verify,
         )
-        _LLM_HTTP_CLIENT_CACHE[cache_key] = client
-        _LLM_HTTP_CLIENT_CACHE.move_to_end(cache_key)
-        _evict_stale_llm_http_clients()
+        cache[cache_key] = client
+        if cache_scope is None:
+            _SHARED_LLM_HTTP_CLIENT_CACHE.move_to_end(cache_key)
+            _evict_stale_llm_http_clients()
         return client
-    _LLM_HTTP_CLIENT_CACHE.move_to_end(cache_key)
+    if cache_scope is None:
+        _SHARED_LLM_HTTP_CLIENT_CACHE.move_to_end(cache_key)
     return client
 
 
 def clear_llm_http_client_cache() -> None:
-    clients = tuple(_LLM_HTTP_CLIENT_CACHE.values())
-    _LLM_HTTP_CLIENT_CACHE.clear()
+    clients = tuple(_SHARED_LLM_HTTP_CLIENT_CACHE.values()) + tuple(
+        _SCOPED_LLM_HTTP_CLIENT_CACHE.values()
+    )
+    _SHARED_LLM_HTTP_CLIENT_CACHE.clear()
+    _SCOPED_LLM_HTTP_CLIENT_CACHE.clear()
     _close_llm_http_clients(clients)
 
 
@@ -96,7 +103,8 @@ async def reset_llm_http_client_cache_entry(
         connect_timeout_seconds=connect_timeout_seconds,
         cache_scope=cache_scope,
     )
-    client = _LLM_HTTP_CLIENT_CACHE.pop(cache_key, None)
+    cache = _select_llm_http_client_cache(cache_scope=cache_scope)
+    client = cache.pop(cache_key, None)
     if client is None or client.is_closed:
         return
     await client.aclose()
@@ -145,10 +153,22 @@ def _resolve_client_config(
 
 def _evict_stale_llm_http_clients() -> None:
     stale_clients: list[httpx.AsyncClient] = []
-    while len(_LLM_HTTP_CLIENT_CACHE) > _LLM_HTTP_CLIENT_CACHE_MAXSIZE:
-        _, stale_client = _LLM_HTTP_CLIENT_CACHE.popitem(last=False)
+    while len(_SHARED_LLM_HTTP_CLIENT_CACHE) > _LLM_HTTP_CLIENT_CACHE_MAXSIZE:
+        _, stale_client = _SHARED_LLM_HTTP_CLIENT_CACHE.popitem(last=False)
         stale_clients.append(stale_client)
     _close_llm_http_clients(stale_clients)
+
+
+def _select_llm_http_client_cache(
+    *,
+    cache_scope: str | None,
+) -> (
+    OrderedDict[_LlmHttpClientCacheKey, httpx.AsyncClient]
+    | dict[_LlmHttpClientCacheKey, httpx.AsyncClient]
+):
+    if cache_scope is None:
+        return _SHARED_LLM_HTTP_CLIENT_CACHE
+    return _SCOPED_LLM_HTTP_CLIENT_CACHE
 
 
 def _close_llm_http_clients(clients: Sequence[httpx.AsyncClient]) -> None:

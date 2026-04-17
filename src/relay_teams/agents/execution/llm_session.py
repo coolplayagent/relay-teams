@@ -1068,7 +1068,9 @@ class AgentLlmSession:
                 skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
             )
             if recovery_outcome.response is not None:
+                await self._close_run_scoped_llm_http_client(request=request)
                 return recovery_outcome.response
+            await self._close_run_scoped_llm_http_client(request=request)
             self._raise_terminal_model_api_failure(
                 request=request,
                 error=exc,
@@ -1106,7 +1108,9 @@ class AgentLlmSession:
                 skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
             )
             if recovery_outcome.response is not None:
+                await self._close_run_scoped_llm_http_client(request=request)
                 return recovery_outcome.response
+            await self._close_run_scoped_llm_http_client(request=request)
             self._raise_terminal_generic_failure(
                 request=request,
                 error=exc,
@@ -1176,6 +1180,7 @@ class AgentLlmSession:
                 "chars": len(text),
             },
         )
+        await self._close_run_scoped_llm_http_client(request=request)
         return text
 
     def _publish_model_step_started_event(self, *, request: LLMRequest) -> None:
@@ -1444,6 +1449,17 @@ class AgentLlmSession:
     ) -> None:
         if retry_error is None or not retry_error.transport_error:
             return
+        await reset_llm_http_client_cache_entry(
+            ssl_verify=self._config.ssl_verify,
+            connect_timeout_seconds=self._config.connect_timeout_seconds,
+            cache_scope=request.run_id,
+        )
+
+    async def _close_run_scoped_llm_http_client(
+        self,
+        *,
+        request: LLMRequest,
+    ) -> None:
         await reset_llm_http_client_cache_entry(
             ssl_verify=self._config.ssl_verify,
             connect_timeout_seconds=self._config.connect_timeout_seconds,

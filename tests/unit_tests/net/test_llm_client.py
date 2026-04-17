@@ -301,3 +301,40 @@ async def test_reset_llm_http_client_cache_entry_isolated_by_cache_scope(
 
     assert run_a_client.close_calls == 1
     assert run_b_client.close_calls == 0
+
+
+def test_build_llm_http_client_does_not_evict_scoped_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeAsyncClient:
+        def __init__(self) -> None:
+            self.is_closed = False
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            self.is_closed = True
+
+    created_clients: list[_FakeAsyncClient] = []
+
+    def _create_async_http_client(**_: object) -> _FakeAsyncClient:
+        client = _FakeAsyncClient()
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        llm_client,
+        "create_async_http_client",
+        _create_async_http_client,
+    )
+
+    for index in range(40):
+        _ = llm_client.build_llm_http_client(
+            merged_env={"HTTPS_PROXY": "http://proxy.internal:8443"},
+            connect_timeout_seconds=42.5,
+            cache_scope=f"run-{index}",
+            ssl_verify=False,
+        )
+
+    assert len(created_clients) == 40
+    assert all(client.close_calls == 0 for client in created_clients)
