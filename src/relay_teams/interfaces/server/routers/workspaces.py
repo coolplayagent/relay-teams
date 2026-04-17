@@ -107,6 +107,22 @@ def get_workspace(
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
 
 
+@router.post("/{workspace_id}:open-root")
+def open_workspace_root(
+    workspace_id: RequiredIdentifierStr,
+    service: WorkspaceService = Depends(get_workspace_service),
+) -> dict[str, str]:
+    try:
+        _ = service.open_workspace_root(workspace_id)
+        return {"status": "ok"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workspace not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/{workspace_id}/snapshot", response_model=WorkspaceSnapshot)
 def get_workspace_snapshot(
     workspace_id: RequiredIdentifierStr,

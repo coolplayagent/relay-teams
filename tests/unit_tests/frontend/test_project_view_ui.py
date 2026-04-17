@@ -104,6 +104,40 @@ console.log(JSON.stringify({
     assert payload["treeRequests"] == ["src"]
 
 
+def test_project_view_opens_workspace_root_from_header(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openWorkspaceProjectView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openWorkspaceProjectView({ workspace_id: "alpha-project" });
+await flushTasks();
+await flushTasks();
+
+const openRootButton = els.projectViewContent.querySelector("[data-open-workspace-root]");
+openRootButton?.onclick?.();
+
+console.log(JSON.stringify({
+    contentHtml: els.projectViewContent.innerHTML,
+    openWorkspaceRootCalls: globalThis.__openWorkspaceRootCalls,
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+    )
+
+    assert "data-open-workspace-root" in str(payload["contentHtml"])
+    assert "/work/alpha-project" in str(payload["contentHtml"])
+    assert payload["openWorkspaceRootCalls"] == ["alpha-project"]
+    assert payload["toastCalls"] == []
+
+
 def test_project_view_updates_automation_project_with_feishu_binding(
     tmp_path: Path,
 ) -> None:
@@ -2855,6 +2889,11 @@ export async function fetchWorkspaceSnapshot(workspaceId) {
     };
 }
 
+export async function openWorkspaceRoot(workspaceId) {
+    globalThis.__openWorkspaceRootCalls.push(workspaceId);
+    return { status: "ok" };
+}
+
 export async function fetchWorkspaceTree(workspaceId, path) {
     globalThis.__treeRequests.push(path);
     return {
@@ -3052,7 +3091,14 @@ export async function disableGitHubTriggerRule(triggerRuleId) {
 }
 """.strip()
     resolved_mock_api_source = mock_api_source or default_mock_api_source
-    github_api_fallbacks = {
+    required_api_fallbacks = {
+        "openWorkspaceRoot": """
+export async function openWorkspaceRoot(workspaceId) {
+    globalThis.__openWorkspaceRootCalls = globalThis.__openWorkspaceRootCalls || [];
+    globalThis.__openWorkspaceRootCalls.push(workspaceId);
+    return { status: "ok" };
+}
+""".strip(),
         "fetchGitHubTriggerAccounts": """
 export async function fetchGitHubTriggerAccounts() {
     return globalThis.__mockGitHubAccounts || [];
@@ -3164,7 +3210,7 @@ export async function disableGitHubTriggerRule(triggerRuleId) {
 }
 """.strip(),
     }
-    for export_name, export_source in github_api_fallbacks.items():
+    for export_name, export_source in required_api_fallbacks.items():
         if f"export async function {export_name}" not in resolved_mock_api_source:
             resolved_mock_api_source = f"{resolved_mock_api_source}\n\n{export_source}"
     mock_api_path.write_text(
@@ -3190,6 +3236,8 @@ export const state = {
         "workspace_view.title": "{workspace} Project",
         "workspace_view.bindings": "Bindings",
         "workspace_view.tree": "Files",
+        "workspace_view.open_root": "Open project folder",
+        "workspace_view.open_root_failed": "Failed to open project folder",
         "workspace_view.diffs": "Changes",
         "workspace_view.reload": "Reload",
         "workspace_view.back": "Back",
@@ -3502,6 +3550,7 @@ globalThis.__snapshotRequests = [];
 globalThis.__diffRequests = [];
 globalThis.__diffFileRequests = [];
 globalThis.__treeRequests = [];
+globalThis.__openWorkspaceRootCalls = [];
 globalThis.__showFormDialogResult = null;
 globalThis.__showFormDialogCalls = [];
 globalThis.__dispatchedEvents = [];

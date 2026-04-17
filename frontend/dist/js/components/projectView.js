@@ -44,6 +44,7 @@ import {
     fetchWorkspaceDiffs,
     fetchWorkspaceSnapshot,
     fetchWorkspaceTree,
+    openWorkspaceRoot,
     reloadSkillsConfig,
     runAutomationProject,
     startWeChatGatewayLogin,
@@ -5080,7 +5081,7 @@ function renderWorkspaceSnapshot(workspace, snapshot) {
             <section class="workspace-view-panel">
                 <div class="workspace-view-panel-header">
                     <h3>${escapeHtml(t('workspace_view.tree'))}</h3>
-                    <span class="workspace-view-panel-meta">${escapeHtml(snapshot?.root_path || '')}</span>
+                    <span class="workspace-view-panel-meta">${renderWorkspaceRootMeta(snapshot)}</span>
                 </div>
                 <div class="workspace-tree-shell">
                     ${renderTree(snapshot?.tree)}
@@ -5096,8 +5097,28 @@ function renderWorkspaceSnapshot(workspace, snapshot) {
         </div>
     `;
 
+    bindWorkspaceHeaderInteractions();
     bindTreeInteractions();
     bindDiffInteractions();
+}
+
+function renderWorkspaceRootMeta(snapshot) {
+    const rootPath = String(snapshot?.root_path || '').trim();
+    if (!rootPath) {
+        return '';
+    }
+    const openLabel = t('workspace_view.open_root');
+    return `
+        <button
+            type="button"
+            class="workspace-view-path-button"
+            data-open-workspace-root
+            title="${escapeHtml(openLabel)}"
+            aria-label="${escapeHtml(`${openLabel}: ${rootPath}`)}"
+        >
+            <span class="workspace-view-path-text">${escapeHtml(rootPath)}</span>
+        </button>
+    `;
 }
 
 function renderToolbar(projectOrWorkspace, { title = '', summary = '', mode = 'workspace', actions = '' } = {}) {
@@ -5491,6 +5512,16 @@ function renderInlineState(message, extraClass = '') {
     `;
 }
 
+function bindWorkspaceHeaderInteractions() {
+    const openRootButton = els.projectViewContent?.querySelector('[data-open-workspace-root]');
+    if (!openRootButton) {
+        return;
+    }
+    openRootButton.onclick = () => {
+        void handleOpenWorkspaceRoot();
+    };
+}
+
 function bindTreeInteractions() {
     if (!els.projectViewContent || typeof els.projectViewContent.querySelectorAll !== 'function') {
         return;
@@ -5533,6 +5564,22 @@ function bindDiffInteractions() {
         diffCard.onclick = () => {
             void selectTreePath(diffPath);
         };
+    }
+}
+
+async function handleOpenWorkspaceRoot() {
+    const workspaceId = String(currentWorkspace?.workspace_id || '').trim();
+    if (!workspaceId) {
+        return;
+    }
+    try {
+        await openWorkspaceRoot(workspaceId);
+    } catch (error) {
+        showToast({
+            title: t('workspace_view.open_root_failed'),
+            message: String(error?.message || error || ''),
+            tone: 'danger',
+        });
     }
 }
 
