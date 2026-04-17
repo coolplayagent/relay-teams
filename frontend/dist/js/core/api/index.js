@@ -56,6 +56,7 @@ export {
     fetchEnvironmentVariables,
     fetchMcpServerTools,
     fetchModelConfig,
+    fetchModelFallbackConfig,
     fetchModelProfiles,
     fetchNotificationConfig,
     fetchOrchestrationConfig,
@@ -149,6 +150,8 @@ export {
     fetchWorkspaceTree,
     fetchWorkspaces,
     forkWorkspace,
+    openWorkspace,
+    openWorkspaceRoot,
     pickWorkspace,
 } from './workspaces.js';
 

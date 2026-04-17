@@ -1,13 +1,45 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from pydantic_ai import Agent
 
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.tools.runtime import ToolResultProjection
 from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.workspace_tools import register_read
+from relay_teams.tools.workspace_tools.edit_state import load_file_read_state
+
+
+class _FakeAgent:
+    def __init__(self) -> None:
+        self.tools: dict[str, Callable[..., object]] = {}
+
+    def tool(
+        self,
+        *,
+        description: str,
+    ) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        del description
+
+        def decorator(func: Callable[..., object]) -> Callable[..., object]:
+            self.tools[func.__name__] = func
+            return func
+
+        return decorator
+
+
+class _FakeWorkspace:
+    def __init__(self, root: Path) -> None:
+        self.scope_root = root
+
+    def resolve_read_path(self, relative_path: str) -> Path:
+        return (self.scope_root / relative_path).resolve()
 
 
 class TestIsBinaryFile:
@@ -171,6 +203,109 @@ def test_project_read_result_keeps_output_first_shape() -> None:
         "truncated": True,
         "next_offset": 2,
     }
+
+
+@pytest.mark.asyncio
+async def test_read_tool_reads_notebook_cell_without_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    notebook = {
+        "cells": [
+            {
+                "cell_type": "markdown",
+                "id": "intro",
+                "metadata": {},
+                "source": "# Title\n",
+            },
+            {
+                "cell_type": "code",
+                "id": "calc",
+                "metadata": {},
+                "source": "print(1)\n",
+                "execution_count": 1,
+                "outputs": [
+                    {
+                        "output_type": "stream",
+                        "name": "stdout",
+                        "text": "1\n",
+                    }
+                ],
+            },
+        ],
+        "metadata": {"language_info": {"name": "python"}},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    instruction_path = source_dir / "AGENTS.md"
+    instruction_path.write_text("Notebook instructions.", encoding="utf-8")
+    file_path = source_dir / "demo.ipynb"
+    file_path.write_text(json.dumps(notebook, indent=1), encoding="utf-8")
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    fake_agent = _FakeAgent()
+    register_read(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["read"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=shared_store,
+            task_id="task-1",
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[[], Awaitable[ToolResultProjection]],
+        approval_request=None,
+    ) -> dict[str, object]:
+        del ctx, tool_name, args_summary, approval_request
+        return cast(dict[str, object], (await action()).internal_data)
+
+    monkeypatch.setattr(read_module, "execute_tool", _fake_execute_tool)
+
+    result = await tool(
+        ctx,
+        path="src/demo.ipynb",
+        cell_id="cell-1",
+        include_outputs=False,
+    )
+
+    output = cast(str, result["output"])
+    assert result["truncated"] is False
+    assert result["next_offset"] is None
+    assert "<type>notebook</type>" in output
+    assert "<instructions>" in output
+    assert "Notebook instructions." in output
+    assert '"cell_id": "calc"' in output
+    assert '"source": "print(1)\\n"' in output
+    assert '"outputs"' not in output
+    from relay_teams.agents.execution.prompt_instruction_state import (
+        is_prompt_instruction_loaded,
+    )
+
+    assert is_prompt_instruction_loaded(
+        shared_store=shared_store,
+        task_id="task-1",
+        path=instruction_path,
+    )
+    assert (
+        load_file_read_state(
+            shared_store=shared_store,
+            task_id="task-1",
+            path=file_path,
+        )
+        is not None
+    )
 
 
 @pytest.mark.asyncio

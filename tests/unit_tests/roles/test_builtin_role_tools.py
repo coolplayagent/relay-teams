@@ -27,6 +27,9 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
 
     assert "write" in crafter.tools
     assert "edit" in crafter.tools
+    assert "read" in crafter.tools
+    assert "notebook_edit" in crafter.tools
+    assert "notebook_edit" in main_agent.tools
     assert "webfetch" in crafter.tools
     assert "websearch" in crafter.tools
     assert background_task_tools.issubset(set(crafter.tools))

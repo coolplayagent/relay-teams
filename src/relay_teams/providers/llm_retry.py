@@ -36,6 +36,7 @@ class LlmRetryErrorInfo(BaseModel):
     error_type: str | None = None
     retry_after_ms: int | None = Field(default=None, ge=0)
     retryable: bool = False
+    rate_limited: bool = False
     transport_error: bool = False
     timeout_error: bool = False
 
@@ -156,6 +157,12 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
             status_code=exc.status_code,
             error_code=_status_code_error_code(exc.status_code),
             retryable=retryable,
+            rate_limited=_is_rate_limited_error(
+                status_code=exc.status_code,
+                error_code=_status_code_error_code(exc.status_code),
+                error_type=None,
+                message=str(exc),
+            ),
         )
     if isinstance(exc, ModelAPIError):
         parsed = _parse_message_metadata(str(exc))
@@ -166,12 +173,19 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
             status_code=parsed.status_code,
             error_code=parsed.error_code,
             retryable=_is_retryable_status_code(parsed.status_code),
+            rate_limited=_is_rate_limited_error(
+                status_code=parsed.status_code,
+                error_code=parsed.error_code,
+                error_type=None,
+                message=str(exc),
+            ),
         )
     if isinstance(exc, httpx.TimeoutException):
         return LlmRetryErrorInfo(
             message=str(exc) or "Connection timed out.",
             error_code="network_timeout",
             retryable=True,
+            rate_limited=False,
             transport_error=True,
             timeout_error=True,
         )
@@ -180,6 +194,7 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
             message=str(exc) or "Stream transport was interrupted.",
             error_code="network_stream_interrupted",
             retryable=True,
+            rate_limited=False,
             transport_error=True,
         )
     if isinstance(exc, httpx.RequestError):
@@ -187,6 +202,7 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
             message=str(exc) or "Network request failed.",
             error_code="network_error",
             retryable=True,
+            rate_limited=False,
             transport_error=True,
         )
 
@@ -195,6 +211,7 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
             message=str(exc) or "Connection timed out.",
             error_code="network_timeout",
             retryable=True,
+            rate_limited=False,
             transport_error=True,
             timeout_error=True,
         )
@@ -203,6 +220,7 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
             message=str(exc) or "Network request failed.",
             error_code="network_error",
             retryable=True,
+            rate_limited=False,
             transport_error=True,
         )
     if APIStatusError is not None and isinstance(exc, APIStatusError):
@@ -225,24 +243,47 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
                 if retry_override is not None
                 else _is_retryable_status_code(status_code)
             ),
+            rate_limited=_is_rate_limited_error(
+                status_code=status_code,
+                error_code=error_payload.error_code
+                or _status_code_error_code(status_code),
+                error_type=error_payload.error_type,
+                message=error_payload.message or str(exc),
+            ),
         )
     if APIError is not None and isinstance(exc, APIError):
         body = getattr(exc, "body", None)
         error_payload = _extract_error_payload(body)
         fallback = _parse_message_metadata(str(exc))
+        resolved_error_code = (
+            error_payload.error_code
+            or _optional_str(getattr(exc, "code", None))
+            or (fallback.error_code if fallback is not None else None)
+        )
         status_code = fallback.status_code if fallback is not None else None
+        if status_code is None:
+            status_code = _status_code_from_error_code(resolved_error_code)
         retry_override = _explicit_retry_override(getattr(exc, "headers", None))
         return LlmRetryErrorInfo(
             message=error_payload.message or str(exc),
             status_code=status_code,
-            error_code=error_payload.error_code
-            or _optional_str(getattr(exc, "code", None))
-            or (fallback.error_code if fallback is not None else None),
+            error_code=resolved_error_code,
             error_type=error_payload.error_type,
             retryable=(
                 retry_override
                 if retry_override is not None
-                else _is_retryable_status_code(status_code)
+                else (
+                    _is_retryable_status_code(status_code)
+                    or _is_retryable_error_code(resolved_error_code)
+                )
+            ),
+            rate_limited=_is_rate_limited_error(
+                status_code=status_code,
+                error_code=error_payload.error_code
+                or _optional_str(getattr(exc, "code", None))
+                or (fallback.error_code if fallback is not None else None),
+                error_type=error_payload.error_type,
+                message=error_payload.message or str(exc),
             ),
         )
 
@@ -258,6 +299,7 @@ def _extract_invalid_json_error_info(
         message=str(exc),
         error_code="model_tool_args_invalid_json",
         retryable=False,
+        rate_limited=False,
         transport_error=False,
         timeout_error=False,
     )
@@ -284,15 +326,44 @@ def _extract_error_payload(body: object) -> _ParsedErrorPayload:
     error_payload = body.get("error")
     if isinstance(error_payload, dict):
         return _ParsedErrorPayload(
-            message=_optional_str(error_payload.get("message")),
-            error_code=_optional_str(error_payload.get("code")),
+            message=_optional_str(error_payload.get("message"))
+            or _optional_str(error_payload.get("error_msg")),
+            error_code=_optional_str(error_payload.get("code"))
+            or _optional_str(error_payload.get("error_code")),
             error_type=_optional_str(error_payload.get("type")),
         )
     return _ParsedErrorPayload(
-        message=_optional_str(body.get("message")) or _optional_str(body.get("detail")),
-        error_code=_optional_str(body.get("code")),
+        message=_optional_str(body.get("message"))
+        or _optional_str(body.get("detail"))
+        or _optional_str(body.get("error_msg")),
+        error_code=_optional_str(body.get("code"))
+        or _optional_str(body.get("error_code")),
         error_type=_optional_str(body.get("type")),
     )
+
+
+def _status_code_from_error_code(error_code: str | None) -> int | None:
+    normalized = _optional_str(error_code)
+    if normalized is None:
+        return None
+    matched = re.search(r"(?<!\d)(\d{3})(?!\d)$", normalized)
+    if matched is None:
+        return None
+    status_code = int(matched.group(1))
+    if 400 <= status_code <= 599:
+        return status_code
+    return None
+
+
+def _is_retryable_error_code(error_code: str | None) -> bool:
+    normalized = _optional_str(error_code)
+    if normalized is None:
+        return False
+    lowered = normalized.lower()
+    if lowered in {"rate_limited", "rate_limit_exceeded"}:
+        return True
+    derived_status_code = _status_code_from_error_code(normalized)
+    return _is_retryable_status_code(derived_status_code)
 
 
 def _parse_message_metadata(message: str) -> _ParsedMessageMetadata | None:
@@ -365,6 +436,43 @@ def _explicit_retry_override(headers: object) -> bool | None:
     if lowered == "false":
         return False
     return None
+
+
+def _is_rate_limited_error(
+    *,
+    status_code: int | None,
+    error_code: str | None,
+    error_type: str | None,
+    message: str,
+) -> bool:
+    if status_code == 429:
+        return True
+    normalized_code = (error_code or "").strip().casefold()
+    normalized_type = (error_type or "").strip().casefold()
+    normalized_message = message.strip().casefold()
+    if normalized_code in {
+        "rate_limited",
+        "rate_limit_exceeded",
+        "insufficient_quota",
+        "quota_exceeded",
+    }:
+        return True
+    if normalized_type in {
+        "rate_limit_error",
+        "insufficient_quota",
+        "quota_exceeded",
+    }:
+        return True
+    return any(
+        hint in normalized_message
+        for hint in (
+            "rate limit",
+            "rate-limit",
+            "too many requests",
+            "insufficient quota",
+            "quota exceeded",
+        )
+    )
 
 
 def _parse_retry_after_ms(raw_value: str | None) -> int | None:

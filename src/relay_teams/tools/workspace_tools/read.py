@@ -28,6 +28,9 @@ from relay_teams.tools.runtime import (
     execute_tool_call,
 )
 from relay_teams.tools.workspace_tools.edit_state import record_file_read
+from relay_teams.tools.workspace_tools.notebook import (
+    read_notebook_for_tool,
+)
 
 DEFAULT_READ_LIMIT = 2000
 MAX_LINE_LENGTH = 2000
@@ -172,6 +175,23 @@ def read_directory(
     return sliced, len(entries), truncated
 
 
+def _inject_instruction_sections(
+    output: str,
+    instruction_sections: tuple[str, ...],
+) -> str:
+    if not instruction_sections:
+        return output
+    lines = output.splitlines()
+    instructions = [
+        "<instructions>",
+        "\n\n".join(instruction_sections),
+        "</instructions>",
+    ]
+    if len(lines) >= 2 and lines[1] == "<type>notebook</type>":
+        return "\n".join([*lines[:2], *instructions, *lines[2:]])
+    return "\n".join([*instructions, output])
+
+
 def _project_read_result(
     *,
     output: str,
@@ -222,6 +242,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         path: str,
         offset: int = 1,
         limit: int = DEFAULT_READ_LIMIT,
+        cell_id: str | None = None,
+        include_outputs: bool = True,
     ) -> dict[str, JsonValue]:
         """Read a file or directory content.
 
@@ -230,6 +252,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             path: Path to the file or directory, relative to the workspace root.
             offset: Line offset for files, or entry offset for directories (1-based).
             limit: Maximum number of lines or entries to return.
+            cell_id: Notebook cell id or cell-N fallback index for .ipynb files.
+            include_outputs: Whether notebook code cell outputs are included.
         """
 
         async def _action(
@@ -269,6 +293,35 @@ def register(agent: Agent[ToolDeps, str]) -> None:
 
             if not path_is_file(file_path):
                 raise ValueError(f"Not a file: {path}")
+
+            if file_path.suffix.lower() == ".ipynb":
+                instruction_sections = await resolve_read_instruction_sections(
+                    deps=ctx.deps,
+                    file_path=file_path,
+                )
+                output, _cells, truncated, _parsed = read_notebook_for_tool(
+                    file_path=file_path,
+                    cell_id=cell_id,
+                    include_outputs=include_outputs,
+                )
+                output = _inject_instruction_sections(output, instruction_sections)
+                record_file_read(
+                    shared_store=ctx.deps.shared_store,
+                    task_id=ctx.deps.task_id,
+                    path=file_path,
+                )
+                return _project_read_result(
+                    output=output,
+                    truncated=truncated,
+                    next_offset=None,
+                )
+
+            if cell_id is not None:
+                raise ValueError("cell_id only applies to Jupyter notebooks (.ipynb).")
+            if not include_outputs:
+                raise ValueError(
+                    "include_outputs only applies to Jupyter notebooks (.ipynb)."
+                )
 
             if is_binary_file(file_path, path_stat(file_path).st_size):
                 raise ValueError(f"Cannot read binary file: {path}")
@@ -334,7 +387,13 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         return await execute_tool_call(
             ctx,
             tool_name="read",
-            args_summary={"path": path, "offset": offset, "limit": limit},
+            args_summary={
+                "path": path,
+                "offset": offset,
+                "limit": limit,
+                "cell_id": cell_id,
+                "include_outputs": include_outputs,
+            },
             action=_action,
             raw_args=locals(),
         )

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from json import loads
+import logging
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -12,6 +13,7 @@ from relay_teams.agents.execution.prompt_instructions import (
     load_prompt_instructions_config,
 )
 from relay_teams.env import load_merged_env_vars
+from relay_teams.logger import get_logger, log_event
 from relay_teams.paths import (
     format_app_config_file_reference,
     get_app_config_dir,
@@ -23,9 +25,14 @@ from relay_teams.providers.model_config import (
     LlmRetryConfig,
     MaaSAuthConfig,
     ModelEndpointConfig,
+    ModelFallbackConfig,
     ModelRequestHeader,
     ProviderType,
     SamplingConfig,
+    default_model_fallback_config,
+)
+from relay_teams.providers.model_fallback_config_manager import (
+    ModelFallbackConfigManager,
 )
 from relay_teams.providers.model_header_utils import (
     model_header_secret_field_name,
@@ -39,6 +46,7 @@ from relay_teams.secrets import get_secret_store
 _MODEL_PROFILE_SECRET_NAMESPACE = "model_profile"
 _MODEL_PROFILE_SECRET_FIELD = "api_key"
 _MODEL_PROFILE_MAAS_PASSWORD_FIELD = maas_password_secret_field_name()
+LOGGER = get_logger(__name__)
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
@@ -74,6 +82,9 @@ class RuntimeConfig(BaseModel):
     paths: RuntimePaths
     llm_profiles: dict[str, ModelEndpointConfig]
     llm_retry: LlmRetryConfig = Field(default_factory=LlmRetryConfig)
+    model_fallback: ModelFallbackConfig = Field(
+        default_factory=default_model_fallback_config
+    )
     default_model_profile: str | None = None
     model_status: ModelConfigStatus = ModelConfigStatus(loaded=True)
     prompt_instructions: PromptInstructionsConfig = Field(
@@ -114,8 +125,15 @@ def load_runtime_config(
         if db_path is not None
         else resolved_config_dir / "relay_teams.db"
     )
+    model_fallback = ModelFallbackConfigManager(
+        config_dir=resolved_config_dir
+    ).get_model_fallback_config()
     try:
-        loaded_profiles = load_llm_profile_state(resolved_config_dir, merged_env)
+        loaded_profiles = load_llm_profile_state(
+            resolved_config_dir,
+            merged_env,
+            model_fallback=model_fallback,
+        )
         llm_profiles = loaded_profiles.profiles
         model_status = ModelConfigStatus(
             loaded=True,
@@ -142,6 +160,7 @@ def load_runtime_config(
         ),
         llm_profiles=llm_profiles,
         llm_retry=LlmRetryConfig(),
+        model_fallback=model_fallback,
         default_model_profile=default_model_profile,
         model_status=model_status,
         prompt_instructions=prompt_instructions,
@@ -152,12 +171,21 @@ def load_llm_configs(
     config_dir: Path,
     env_values: Mapping[str, str],
 ) -> dict[str, ModelEndpointConfig]:
-    return load_llm_profile_state(config_dir, env_values).profiles
+    fallback_config = ModelFallbackConfigManager(
+        config_dir=config_dir
+    ).get_model_fallback_config()
+    return load_llm_profile_state(
+        config_dir,
+        env_values,
+        model_fallback=fallback_config,
+    ).profiles
 
 
 def load_llm_profile_state(
     config_dir: Path,
     env_values: Mapping[str, str],
+    *,
+    model_fallback: ModelFallbackConfig | None = None,
 ) -> LoadedLlmProfiles:
     model_file = config_dir / "model.json"
     if not model_file.exists():
@@ -168,6 +196,7 @@ def load_llm_profile_state(
         )
 
     data = _load_model_payload(model_file)
+    fallback_config = model_fallback or default_model_fallback_config()
     default_profile_name = _resolve_default_profile_name(data)
 
     profiles: dict[str, ModelEndpointConfig] = {}
@@ -227,6 +256,14 @@ def load_llm_profile_state(
             "connect_timeout_seconds",
             DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
         )
+        fallback_policy_id = _resolve_profile_fallback_policy_id(
+            raw_value=cfg.get("fallback_policy_id"),
+            fallback_config=fallback_config,
+            profile_name=name,
+        )
+        fallback_priority = _resolve_profile_fallback_priority(
+            cfg.get("fallback_priority")
+        )
 
         profiles[name] = ModelEndpointConfig(
             provider=provider,
@@ -244,6 +281,8 @@ def load_llm_profile_state(
                     model=model,
                 )
             ),
+            fallback_policy_id=fallback_policy_id,
+            fallback_priority=fallback_priority,
             connect_timeout_seconds=connect_timeout_seconds,
             sampling=SamplingConfig(
                 temperature=temperature,
@@ -257,6 +296,40 @@ def load_llm_profile_state(
         profiles=profiles,
         default_profile_name=default_profile_name,
     )
+
+
+def _resolve_profile_fallback_policy_id(
+    *,
+    raw_value: object,
+    fallback_config: ModelFallbackConfig,
+    profile_name: str,
+) -> str | None:
+    if not isinstance(raw_value, str):
+        return None
+    normalized_value = raw_value.strip()
+    if not normalized_value:
+        return None
+    if fallback_config.get_policy(normalized_value) is None:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="runtime_config.model_fallback_policy_missing",
+            message="Ignoring unknown fallback policy reference in model profile.",
+            payload={
+                "profile_name": profile_name,
+                "fallback_policy_id": normalized_value,
+            },
+        )
+        return None
+    return normalized_value
+
+
+def _resolve_profile_fallback_priority(raw_value: object) -> int:
+    if isinstance(raw_value, bool):
+        return 0
+    if isinstance(raw_value, int):
+        return max(0, raw_value)
+    return 0
 
 
 def _load_model_payload(model_file: Path) -> dict[str, object]:

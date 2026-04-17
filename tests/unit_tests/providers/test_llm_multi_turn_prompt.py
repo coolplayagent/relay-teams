@@ -729,6 +729,7 @@ def _build_provider(
     session_history_marker_repo = SessionHistoryMarkerRepository(db_path)
     provider = OpenAICompatibleProvider(
         config,
+        profile_name=None,
         task_repo=TaskRepository(db_path),
         shared_store=shared_store,
         event_bus=EventLog(db_path),
@@ -1029,7 +1030,7 @@ async def test_generate_recomputes_budget_after_injection_restart(
         ]
     )
 
-    monkeypatch.setattr(llm_module, "ModelRequestNode", _FakeModelRequestNode)
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _StreamingTextNode)
     monkeypatch.setattr(
         llm_module,
         "build_coordination_agent",
@@ -2638,6 +2639,215 @@ async def test_generate_retries_retryable_status_error_before_side_effects(
 
 
 @pytest.mark.asyncio
+async def test_generate_retries_retryable_api_error_after_live_tool_call_event(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "retry_live_tool_call_event.db", fake_hub
+    )
+    provider._session._retry_config.jitter = False
+    provider._session._retry_config.initial_delay_ms = 1
+
+    async def _fast_sleep(delay: float) -> None:
+        _ = delay
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(llm_retry_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(llm_module, "compute_retry_delay_ms", lambda **_: 0)
+    request_error = APIError(
+        "An error occurred during streaming",
+        request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        body={
+            "error_msg": "Too many requests, the rate limit is 8000000 tokens per minute.",
+            "error_code": "InferHub.ModelArts.81101.429",
+        },
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[object()],
+                messages_by_step=[
+                    [
+                        ModelResponse(
+                            parts=[
+                                ToolCallPart(
+                                    tool_name="write",
+                                    args={"path": "notes.txt", "content": "hello"},
+                                    tool_call_id="call-live-retry",
+                                )
+                            ]
+                        )
+                    ]
+                ],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="after retry")]),
+                    messages=[ModelResponse(parts=[TextPart(content="after retry")])],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-live-tool-retry",
+        trace_id="run-live-tool-retry",
+        task_id="task-live-tool-retry",
+        session_id="session-live-tool-retry",
+        workspace_id="default",
+        instance_id="inst-live-tool-retry",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "after retry"
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.TOOL_CALL in event_types
+    assert RunEventType.TOOL_RESULT in event_types
+    assert RunEventType.LLM_RETRY_SCHEDULED in event_types
+    tool_result_event = next(
+        event
+        for event in fake_hub.events
+        if event.event_type == RunEventType.TOOL_RESULT
+    )
+    tool_result_payload = json.loads(tool_result_event.payload_json)
+    assert tool_result_payload["tool_call_id"] == "call-live-retry"
+    assert tool_result_payload["error"] is True
+    assert (
+        tool_result_payload["result"]["error"]["code"]
+        == "tool_call_superseded_by_retry"
+    )
+    history = message_repo.get_history("inst-live-tool-retry")
+    assert len(history) == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_resets_retry_budget_after_successful_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "retry_budget_reset.db", fake_hub
+    )
+    provider._session._retry_config.jitter = False
+    provider._session._retry_config.initial_delay_ms = 1
+    provider._session._retry_config.max_retries = 1
+
+    async def _fast_sleep(delay: float) -> None:
+        _ = delay
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(llm_retry_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(llm_module, "compute_retry_delay_ms", lambda **_: 0)
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _FakeModelRequestNode)
+    request_error = APIError(
+        "An error occurred during streaming",
+        request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        body={
+            "error_msg": "Too many requests, the rate limit is 8000000 tokens per minute.",
+            "error_code": "InferHub.ModelArts.81101.429",
+        },
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[_StreamingTextNode([""])],
+                messages_by_step=[
+                    [
+                        ModelResponse(
+                            parts=[
+                                ToolCallPart(
+                                    tool_name="write",
+                                    args={"path": "notes.txt", "content": "hello"},
+                                    tool_call_id="call-reset-budget",
+                                )
+                            ]
+                        )
+                    ]
+                ],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(
+                        parts=[TextPart(content="after second retry")]
+                    ),
+                    messages=[
+                        ModelResponse(parts=[TextPart(content="after second retry")])
+                    ],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-retry-budget-reset",
+        trace_id="run-retry-budget-reset",
+        task_id="task-retry-budget-reset",
+        session_id="session-retry-budget-reset",
+        workspace_id="default",
+        instance_id="inst-retry-budget-reset",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "after second retry"
+    retry_events = [
+        event
+        for event in fake_hub.events
+        if event.event_type == RunEventType.LLM_RETRY_SCHEDULED
+    ]
+    assert len(retry_events) == 2
+    first_payload = json.loads(retry_events[0].payload_json)
+    second_payload = json.loads(retry_events[1].payload_json)
+    assert first_payload["attempt_number"] == 2
+    assert second_payload["attempt_number"] == 2
+    tool_result_event = next(
+        event
+        for event in fake_hub.events
+        if event.event_type == RunEventType.TOOL_RESULT
+    )
+    tool_result_payload = json.loads(tool_result_event.payload_json)
+    assert tool_result_payload["tool_call_id"] == "call-reset-budget"
+    assert (
+        tool_result_payload["result"]["error"]["code"]
+        == "tool_call_superseded_by_retry"
+    )
+    history = message_repo.get_history("inst-retry-budget-reset")
+    assert len(history) == 2
+
+
+@pytest.mark.asyncio
 async def test_generate_rebuilds_prompt_context_after_tool_validation_restart(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -2958,6 +3168,334 @@ async def test_generate_retries_midstream_provider_500_after_streamed_text(
     assert RunEventType.LLM_RETRY_SCHEDULED in event_types
     history = message_repo.get_history("inst-midstream-500")
     assert len(history) == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_retries_midstream_provider_429_after_streamed_text(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "retry_midstream_429.db", fake_hub
+    )
+    provider._session._retry_config.jitter = False
+    provider._session._retry_config.initial_delay_ms = 1
+
+    async def _fast_sleep(delay: float) -> None:
+        _ = delay
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(llm_retry_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(llm_module, "compute_retry_delay_ms", lambda **_: 0)
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[_StreamingTextNode(["partial "])],
+                messages_by_step=[[]],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=APIStatusError(
+                    "rate limited",
+                    response=httpx.Response(
+                        429,
+                        request=httpx.Request(
+                            "POST",
+                            "https://example.test/v1/chat/completions",
+                        ),
+                    ),
+                    body={"error": {"code": "rate_limited", "message": "retry me"}},
+                ),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="after retry")]),
+                    messages=[ModelResponse(parts=[TextPart(content="after retry")])],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _StreamingTextNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-midstream-429",
+        trace_id="run-midstream-429",
+        task_id="task-midstream-429",
+        session_id="session-midstream-429",
+        workspace_id="default",
+        instance_id="inst-midstream-429",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "after retry"
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.LLM_RETRY_SCHEDULED in event_types
+    history = message_repo.get_history("inst-midstream-429")
+    assert len(history) == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_resumes_after_committed_tool_result_for_retryable_api_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "resume_after_tool_result.db", fake_hub
+    )
+    provider._session._retry_config.jitter = False
+    request_error = APIError(
+        "An error occurred during streaming",
+        request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        body={
+            "error_msg": "Too many requests, the rate limit is 8000000 tokens per minute.",
+            "error_code": "InferHub.ModelArts.81101.429",
+        },
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[object()],
+                messages_by_step=[
+                    [
+                        ModelResponse(
+                            parts=[
+                                ToolCallPart(
+                                    tool_name="write",
+                                    args={"path": "notes.txt", "content": "hello"},
+                                    tool_call_id="call-real-result",
+                                )
+                            ]
+                        ),
+                        ModelRequest(
+                            parts=[
+                                ToolReturnPart(
+                                    tool_name="write",
+                                    tool_call_id="call-real-result",
+                                    content={"ok": True, "data": {"saved": True}},
+                                )
+                            ]
+                        ),
+                    ]
+                ],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(
+                        parts=[TextPart(content="continued after tool result")]
+                    ),
+                    messages=[
+                        ModelResponse(
+                            parts=[TextPart(content="continued after tool result")]
+                        )
+                    ],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-tool-result-resume",
+        trace_id="run-tool-result-resume",
+        task_id="task-tool-result-resume",
+        session_id="session-tool-result-resume",
+        workspace_id="default",
+        instance_id="inst-tool-result-resume",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "continued after tool result"
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
+    assert event_types.count(RunEventType.TOOL_RESULT) == 1
+    assert len(scripted_agent.histories) == 2
+    resumed_history = scripted_agent.histories[1]
+    assert isinstance(resumed_history[-1], ModelRequest)
+    resumed_result_message = resumed_history[-1]
+    assert isinstance(resumed_result_message.parts[0], ToolReturnPart)
+    assert resumed_result_message.parts[0].tool_call_id == "call-real-result"
+    history = message_repo.get_history("inst-tool-result-resume")
+    assert len(history) == 4
+
+
+@pytest.mark.asyncio
+async def test_generate_resumes_after_failed_tool_result_for_retryable_api_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "resume_after_failed_tool_result.db", fake_hub
+    )
+    provider._session._retry_config.jitter = False
+    request_error = APIError(
+        "An error occurred during streaming",
+        request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        body={
+            "error_msg": "Too many requests, the rate limit is 8000000 tokens per minute.",
+            "error_code": "InferHub.ModelArts.81101.429",
+        },
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[object()],
+                messages_by_step=[
+                    [
+                        ModelResponse(
+                            parts=[
+                                ToolCallPart(
+                                    tool_name="write",
+                                    args={"path": "notes.txt", "content": "hello"},
+                                    tool_call_id="call-failed-result",
+                                )
+                            ]
+                        ),
+                        ModelRequest(
+                            parts=[
+                                ToolReturnPart(
+                                    tool_name="write",
+                                    tool_call_id="call-failed-result",
+                                    content={
+                                        "ok": False,
+                                        "error": {
+                                            "code": "write_failed",
+                                            "message": "disk full",
+                                        },
+                                    },
+                                )
+                            ]
+                        ),
+                    ]
+                ],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(
+                        parts=[TextPart(content="continued after tool failure")]
+                    ),
+                    messages=[
+                        ModelResponse(
+                            parts=[TextPart(content="continued after tool failure")]
+                        )
+                    ],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-failed-tool-result-resume",
+        trace_id="run-failed-tool-result-resume",
+        task_id="task-failed-tool-result-resume",
+        session_id="session-failed-tool-result-resume",
+        workspace_id="default",
+        instance_id="inst-failed-tool-result-resume",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "continued after tool failure"
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
+    assert event_types.count(RunEventType.TOOL_RESULT) == 1
+    assert len(scripted_agent.histories) == 2
+    resumed_history = scripted_agent.histories[1]
+    assert isinstance(resumed_history[-1], ModelRequest)
+    resumed_result_message = resumed_history[-1]
+    assert isinstance(resumed_result_message.parts[0], ToolReturnPart)
+    assert resumed_result_message.parts[0].tool_call_id == "call-failed-result"
+    history = message_repo.get_history("inst-failed-tool-result-resume")
+    assert len(history) == 4
+
+
+@pytest.mark.asyncio
+async def test_generate_does_not_retry_after_committed_messages_for_retryable_api_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "retry_blocked_committed_message.db", fake_hub
+    )
+    provider._session._retry_config.jitter = False
+    request_error = APIError(
+        "An error occurred during streaming",
+        request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        body={
+            "error_msg": "Too many requests, the rate limit is 8000000 tokens per minute.",
+            "error_code": "InferHub.ModelArts.81101.429",
+        },
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[object()],
+                messages_by_step=[
+                    [ModelResponse(parts=[TextPart(content="committed before error")])]
+                ],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-committed-message-blocked",
+        trace_id="run-committed-message-blocked",
+        task_id="task-committed-message-blocked",
+        session_id="session-committed-message-blocked",
+        workspace_id="default",
+        instance_id="inst-committed-message-blocked",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    with pytest.raises(AssistantRunError):
+        await provider.generate(request)
+
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.LLM_RETRY_SCHEDULED not in event_types
+    assert len(scripted_agent.histories) == 1
+    history = message_repo.get_history("inst-committed-message-blocked")
+    assert len(history) == 3
 
 
 @pytest.mark.asyncio

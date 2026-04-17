@@ -24,6 +24,10 @@ from relay_teams.metrics import MetricRecorder
 from relay_teams.monitors import MonitorService
 from relay_teams.net.llm_client import build_llm_http_client
 from relay_teams.providers.model_config import LlmRetryConfig, ProviderType
+from relay_teams.providers.model_fallback import (
+    DisabledLlmFallbackMiddleware,
+    LlmFallbackMiddleware,
+)
 from relay_teams.providers.openai_support import build_model_request_headers
 from relay_teams.providers.provider_contracts import (
     LLMProvider,
@@ -87,6 +91,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self,
         config: ModelEndpointConfig,
         *,
+        profile_name: str | None,
         task_repo: TaskRepository,
         shared_store: SharedStateRepository,
         event_bus: EventLog,
@@ -121,6 +126,9 @@ class OpenAICompatibleProvider(LLMProvider):
         token_usage_repo: TokenUsageRepository | None = None,
         metric_recorder: MetricRecorder | None = None,
         retry_config: LlmRetryConfig | None = None,
+        fallback_middleware: LlmFallbackMiddleware
+        | DisabledLlmFallbackMiddleware
+        | None = None,
         im_tool_service: ImToolService | None = None,
         computer_runtime: ComputerRuntime | None = None,
         hook_service: HookService | None = None,
@@ -130,6 +138,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._hook_service = hook_service
         self._session = AgentLlmSession(
             config=config,
+            profile_name=profile_name,
             task_repo=task_repo,
             shared_store=shared_store,
             event_bus=event_bus,
@@ -147,9 +156,11 @@ class OpenAICompatibleProvider(LLMProvider):
             subagent_reflection_service=subagent_reflection_service,
             conversation_compaction_service=ConversationCompactionService(
                 config=config,
+                profile_name=profile_name,
                 retry_config=retry_config or LlmRetryConfig(),
                 message_repo=message_repo,
                 session_history_marker_repo=session_history_marker_repo,
+                fallback_middleware=fallback_middleware,
             ),
             conversation_microcompact_service=ConversationMicrocompactService(),
             tool_registry=tool_registry,
@@ -170,6 +181,7 @@ class OpenAICompatibleProvider(LLMProvider):
             token_usage_repo=token_usage_repo,
             metric_recorder=metric_recorder,
             retry_config=retry_config,
+            fallback_middleware=fallback_middleware,
             im_tool_service=im_tool_service,
             computer_runtime=computer_runtime,
             hook_service=hook_service,

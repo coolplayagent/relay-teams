@@ -65,6 +65,25 @@ export function handleRunStarted(eventMeta) {
     state.activeAgentInstanceId = null;
 }
 
+export function handleLlmFallbackActivated(payload) {
+    const fromProfile = escapeLogLabel(payload?.from_profile_id);
+    const toProfile = escapeLogLabel(payload?.to_profile_id);
+    if (fromProfile && toProfile) {
+        sysLog(`Fallback activated: ${fromProfile} -> ${toProfile}`, 'log-info');
+        return;
+    }
+    sysLog('Fallback activated.', 'log-info');
+}
+
+export function handleLlmFallbackExhausted(payload) {
+    const fromProfile = escapeLogLabel(payload?.from_profile_id);
+    if (fromProfile) {
+        sysLog(`Fallback exhausted for ${fromProfile}.`, 'log-error');
+        return;
+    }
+    sysLog('Fallback exhausted.', 'log-error');
+}
+
 export function handleModelStepStarted(eventMeta, instanceId, roleId) {
     beginLlmRetryAttempt();
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
@@ -537,4 +556,14 @@ function isNormalModeSubagentRun(runId, roleId) {
         && safeRoleId
         && !isRunPrimaryRoleId(safeRoleId, safeRunId)
     );
+}
+
+function escapeLogLabel(value) {
+    return String(value || '')
+        .trim()
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
 }

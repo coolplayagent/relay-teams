@@ -139,6 +139,58 @@ console.log(JSON.stringify({
     ]
 
 
+def test_route_event_routes_fallback_events(tmp_path: Path) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+
+routeEvent('llm_fallback_activated', { from_profile_id: 'default', to_profile_id: 'secondary' }, { run_id: 'run-1', trace_id: 'run-1' });
+routeEvent('llm_fallback_exhausted', { from_profile_id: 'default' }, { run_id: 'run-1', trace_id: 'run-1' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    recoveryCalls: globalThis.__scheduleRecoveryContinuityRefreshCalls,
+    runEventCalls: globalThis.__runEventCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["recoveryCalls"] == [
+        {
+            "sessionId": "session-1",
+            "delayMs": 0,
+            "includeRounds": False,
+            "quiet": True,
+            "reason": "llm_fallback_activated",
+        },
+        {
+            "sessionId": "session-1",
+            "delayMs": 0,
+            "includeRounds": False,
+            "quiet": True,
+            "reason": "llm_fallback_exhausted",
+        },
+    ]
+    assert payload["runEventCalls"] == [
+        {
+            "name": "handleLlmFallbackActivated",
+            "args": [
+                {"from_profile_id": "default", "to_profile_id": "secondary"},
+                {"run_id": "run-1", "trace_id": "run-1"},
+            ],
+        },
+        {
+            "name": "handleLlmFallbackExhausted",
+            "args": [
+                {"from_profile_id": "default"},
+                {"run_id": "run-1", "trace_id": "run-1"},
+            ],
+        },
+    ]
+
+
 def test_handle_subagent_run_terminal_finalizes_with_run_id(
     tmp_path: Path,
 ) -> None:
@@ -221,6 +273,38 @@ console.log(JSON.stringify({
         }
     ]
     assert payload["settleCalls"] == ["writer-1"]
+
+
+def test_handle_fallback_logs_escape_profile_labels(tmp_path: Path) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleLlmFallbackActivated, handleLlmFallbackExhausted } = await import('./runEvents.mjs');
+
+handleLlmFallbackActivated({
+    from_profile_id: '<img src=x onerror=1>',
+    to_profile_id: '<svg onload=1>',
+});
+handleLlmFallbackExhausted({
+    from_profile_id: '<script>alert(1)</script>',
+});
+
+console.log(JSON.stringify({
+    sysLogCalls: globalThis.__sysLogCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["sysLogCalls"] == [
+        [
+            "Fallback activated: &lt;img src=x onerror=1&gt; -> &lt;svg onload=1&gt;",
+            "log-info",
+        ],
+        [
+            "Fallback exhausted for &lt;script&gt;alert(1)&lt;/script&gt;.",
+            "log-error",
+        ],
+    ]
 
 
 def test_handle_model_step_finished_passes_run_id_for_normal_mode_subagent(
@@ -439,8 +523,8 @@ export const els = {
     )
     (tmp_path / "mockLogger.mjs").write_text(
         """
-export function sysLog() {
-    return undefined;
+export function sysLog(...args) {
+    globalThis.__sysLogCalls.push(args);
 }
 """.strip(),
         encoding="utf-8",
@@ -516,6 +600,7 @@ globalThis.__renderActiveSubagentSessionCalls = [];
 globalThis.__updateNormalModeSubagentSessionStatusCalls = [];
 globalThis.__finalizeStreamCalls = [];
 globalThis.__settleActiveSubagentSessionAfterTerminalCalls = [];
+globalThis.__sysLogCalls = [];
 globalThis.__activeSubagentSession = null;
 globalThis.__activeSubagentSessionStreamContainer = null;
 
@@ -611,6 +696,8 @@ function pushCall(name, args) {
 
 export function handleLlmRetryExhausted(...args) { pushCall('handleLlmRetryExhausted', args); }
 export function handleLlmRetryScheduled(...args) { pushCall('handleLlmRetryScheduled', args); }
+export function handleLlmFallbackActivated(...args) { pushCall('handleLlmFallbackActivated', args); }
+export function handleLlmFallbackExhausted(...args) { pushCall('handleLlmFallbackExhausted', args); }
 export function handleModelStepFinished(...args) { pushCall('handleModelStepFinished', args); }
 export function handleModelStepStarted(...args) { pushCall('handleModelStepStarted', args); }
 export function handleOutputDelta(...args) { pushCall('handleOutputDelta', args); }

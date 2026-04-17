@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
+import relay_teams.workspace.workspace_service as workspace_service_module
 
 from relay_teams.interfaces.server.deps import get_workspace_service
 from relay_teams.interfaces.server.routers import workspaces
@@ -176,6 +177,63 @@ def test_create_workspace_rejects_missing_root(tmp_path: Path) -> None:
 
     assert response.status_code == 400
     assert "does not exist" in response.json()["detail"]
+
+
+def test_open_workspace_root_uses_native_directory_opener(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, service = _create_test_client(tmp_path)
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+    captured: dict[str, Path] = {}
+
+    def fake_open_workspace_directory(path: Path) -> None:
+        captured["path"] = path
+
+    monkeypatch.setattr(
+        workspace_service_module,
+        "open_workspace_directory",
+        fake_open_workspace_directory,
+    )
+
+    response = client.post("/api/workspaces/project-alpha:open-root")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert captured["path"] == root_path.resolve()
+
+
+def test_open_workspace_root_returns_service_unavailable_when_opener_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, service = _create_test_client(tmp_path)
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    def fail_open_workspace_directory(path: Path) -> None:
+        _ = path
+        raise RuntimeError("Native file manager is unavailable")
+
+    monkeypatch.setattr(
+        workspace_service_module,
+        "open_workspace_directory",
+        fail_open_workspace_directory,
+    )
+
+    response = client.post("/api/workspaces/project-alpha:open-root")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Native file manager is unavailable"}
 
 
 def test_get_workspace_snapshot_tree_and_diffs(tmp_path: Path) -> None:

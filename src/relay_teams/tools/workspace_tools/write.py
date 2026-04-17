@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import difflib
+import json
 import tempfile
 from pathlib import Path
 
@@ -89,6 +90,17 @@ def atomic_write(
         raise
 
 
+def _is_notebook_editable_json(content: str) -> bool:
+    try:
+        notebook = json.loads(content.removeprefix("\ufeff"))
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(notebook, dict):
+        return False
+    cells = notebook.get("cells")
+    return isinstance(cells, list) and all(isinstance(cell, dict) for cell in cells)
+
+
 DESCRIPTION = load_tool_description(__file__)
 
 
@@ -134,6 +146,13 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 if path_is_dir(file_path):
                     raise ValueError(f"Path is a directory: {path}")
                 old_content = read_text_file(file_path)
+                if file_path.suffix.lower() == ".ipynb" and _is_notebook_editable_json(
+                    old_content
+                ):
+                    raise ValueError(
+                        "File is a Jupyter notebook. "
+                        "Use notebook_edit to modify notebook cells."
+                    )
 
             diff_summary = format_diff_summary(old_content, content)
             atomic_write(file_path, content, encoding="utf-8")

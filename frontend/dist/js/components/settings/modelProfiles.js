@@ -5,6 +5,7 @@
 import {
     deleteModelProfile,
     discoverModelCatalog,
+    fetchModelFallbackConfig,
     fetchModelProfiles,
     probeModelConnection,
     reloadModelConfig,
@@ -15,6 +16,7 @@ import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 let profiles = {};
+let fallbackConfig = { policies: [] };
 let editingProfile = null;
 let profileProbeStates = {};
 let draftProbeState = null;
@@ -135,7 +137,13 @@ export function bindModelProfileHandlers() {
 
 export async function loadModelProfilesPanel() {
     try {
-        profiles = await fetchModelProfiles();
+        const [loadedProfiles, loadedFallbackConfig] = await Promise.all([
+            fetchModelProfiles(),
+            fetchModelFallbackConfig(),
+        ]);
+        profiles = loadedProfiles;
+        fallbackConfig = loadedFallbackConfig || { policies: [] };
+        renderFallbackPolicyOptions();
         renderProfiles();
         renderDraftProbeState();
     } catch (e) {
@@ -190,6 +198,7 @@ function handleAddProfile() {
     editingProfile = null;
     resetDraftEditorState();
     renderProfileEditorTitle();
+    renderFallbackPolicyOptions();
     document.getElementById('profile-name').value = '';
     document.getElementById('profile-provider').value = 'openai_compatible';
     setDraftModelValue('');
@@ -209,6 +218,8 @@ function handleAddProfile() {
     delete document.getElementById('profile-context-window').dataset.autofilledModel;
     document.getElementById('profile-connect-timeout').value = '15';
     document.getElementById('profile-ssl-verify').value = '';
+    document.getElementById('profile-fallback-policy').value = '';
+    document.getElementById('profile-fallback-priority').value = '0';
 
     showProfileEditor();
     renderDraftApiKeyField();
@@ -227,6 +238,7 @@ function handleEditProfile(name) {
     editingProfile = name;
     resetDraftEditorState();
     renderProfileEditorTitle();
+    renderFallbackPolicyOptions();
     document.getElementById('profile-name').value = name;
     document.getElementById('profile-provider').value = profile.provider || 'openai_compatible';
     setDraftModelValue(profile.model || '');
@@ -260,6 +272,8 @@ function handleEditProfile(name) {
     delete document.getElementById('profile-context-window').dataset.autofilledModel;
     document.getElementById('profile-connect-timeout').value = profile.connect_timeout_seconds || 15;
     document.getElementById('profile-ssl-verify').value = serializeTriStateValue(profile.ssl_verify);
+    document.getElementById('profile-fallback-policy').value = profile.fallback_policy_id || '';
+    document.getElementById('profile-fallback-priority').value = String(profile.fallback_priority || 0);
 
     showProfileEditor();
     renderDraftApiKeyField();
@@ -298,6 +312,13 @@ async function handleSaveProfile() {
     const contextWindow = contextWindowValue ? parseInt(contextWindowValue) || null : null;
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
+    const fallbackPolicyId = String(
+        document.getElementById('profile-fallback-policy').value || '',
+    ).trim();
+    const fallbackPriority = Math.max(
+        0,
+        parseInt(document.getElementById('profile-fallback-priority').value || '0', 10) || 0,
+    );
 
     if (!name) {
         showToast({ title: t('settings.model.profile_required_title'), message: t('settings.model.profile_required_message'), tone: 'warning' });
@@ -336,6 +357,8 @@ async function handleSaveProfile() {
         temperature: temperature,
         top_p: topP,
         context_window: contextWindow,
+        fallback_policy_id: fallbackPolicyId || null,
+        fallback_priority: fallbackPriority,
         connect_timeout_seconds: connectTimeoutSeconds,
     };
     if (maxTokens !== null) {
@@ -1370,6 +1393,10 @@ function renderProfileCard(name, profile, index) {
         : '';
     const modelLabel = profile.model || t('settings.model.no_model');
     const baseUrlLabel = profile.base_url || t('settings.model.no_endpoint');
+    const fallbackLabel = profile.fallback_policy_id
+        ? formatFallbackPolicyLabel(profile.fallback_policy_id)
+        : 'Fallback disabled';
+    const fallbackPriority = Number(profile.fallback_priority || 0);
 
     return `
         <div class="profile-record profile-card" data-profile-name="${escapeHtml(name)}" style="--profile-index:${index};">
@@ -1387,6 +1414,11 @@ function renderProfileCard(name, profile, index) {
                             <span class="profile-record-summary-primary">${escapeHtml(modelLabel)}</span>
                             <span class="profile-record-summary-separator">/</span>
                             <span class="profile-record-summary-secondary">${escapeHtml(baseUrlLabel)}</span>
+                        </div>
+                        <div class="profile-record-summary" title="${escapeHtml(fallbackLabel)}">
+                            <span class="profile-record-summary-primary">${escapeHtml(fallbackLabel)}</span>
+                            <span class="profile-record-summary-separator">/</span>
+                            <span class="profile-record-summary-secondary">Priority ${escapeHtml(String(fallbackPriority))}</span>
                         </div>
                     </div>
                 </div>
@@ -1439,6 +1471,30 @@ function formatProviderLabel(provider) {
         return 'Echo';
     }
     return provider || t('settings.model.unknown');
+}
+
+function renderFallbackPolicyOptions() {
+    const select = document.getElementById('profile-fallback-policy');
+    if (!select) {
+        return;
+    }
+    const policies = Array.isArray(fallbackConfig?.policies) ? fallbackConfig.policies : [];
+    const options = [
+        '<option value="">Disabled</option>',
+        ...policies.map(policy => (
+            `<option value="${escapeHtml(policy.policy_id)}">${escapeHtml(policy.name || policy.policy_id)}</option>`
+        )),
+    ];
+    select.innerHTML = options.join('');
+}
+
+function formatFallbackPolicyLabel(policyId) {
+    const policies = Array.isArray(fallbackConfig?.policies) ? fallbackConfig.policies : [];
+    const matched = policies.find(policy => policy?.policy_id === policyId);
+    if (matched?.name) {
+        return matched.name;
+    }
+    return policyId;
 }
 
 function escapeHtml(value) {

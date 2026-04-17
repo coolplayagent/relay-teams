@@ -26,6 +26,16 @@ export async function fetchWorkspaceSnapshot(workspaceId) {
     );
 }
 
+export async function openWorkspaceRoot(workspaceId) {
+    return requestJson(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}:open-root`,
+        {
+            method: 'POST',
+        },
+        'Failed to open project folder',
+    );
+}
+
 export async function fetchWorkspaceTree(workspaceId, path = '.') {
     const query = new URLSearchParams({ path: String(path || '.').trim() || '.' });
     return requestJson(
@@ -66,6 +76,9 @@ export async function pickWorkspace(rootPath = null) {
         'Failed to choose project directory',
     );
 }
+
+// Keep the legacy workspace picker name available for stale frontend imports.
+export const openWorkspace = pickWorkspace;
 
 export async function forkWorkspace(workspaceId, name) {
     return requestJson(
