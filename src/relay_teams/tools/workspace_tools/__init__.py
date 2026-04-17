@@ -27,6 +27,10 @@ def register_read(agent: Agent[ToolDeps, str]) -> None:
     _register_workspace_tools(agent, ("read",))
 
 
+def register_office_read_markdown(agent: Agent[ToolDeps, str]) -> None:
+    _register_workspace_tools(agent, ("office_read_markdown",))
+
+
 def register_notebook_edit(agent: Agent[ToolDeps, str]) -> None:
     _register_workspace_tools(agent, ("notebook_edit",))
 
@@ -113,6 +117,10 @@ def _register_single_tool(agent: Agent[ToolDeps, str], tool_name: str) -> None:
         from relay_teams.tools.workspace_tools.grep import register as register_impl
     elif tool_name == "read":
         from relay_teams.tools.workspace_tools.read import register as register_impl
+    elif tool_name == "office_read_markdown":
+        from relay_teams.tools.workspace_tools.office_read_markdown import (
+            register as register_impl,
+        )
     elif tool_name == "notebook_edit":
         from relay_teams.tools.workspace_tools.notebook_edit import (
             register as register_impl,
@@ -163,6 +171,7 @@ TOOLS = {
     "glob": register_glob,
     "grep": register_grep,
     "read": register_read,
+    "office_read_markdown": register_office_read_markdown,
     "notebook_edit": register_notebook_edit,
     "write": register_write,
     "write_tmp": register_write_tmp,
@@ -187,6 +196,7 @@ __all__ = [
     "register_list_monitors",
     "register_monitors",
     "register_notebook_edit",
+    "register_office_read_markdown",
     "register_read",
     "register_shell",
     "register_spawn_subagent",

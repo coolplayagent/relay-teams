@@ -1,17 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from pydantic import JsonValue
 from pydantic_ai import Agent
 
-from relay_teams.agents.execution.prompt_instruction_state import (
-    filter_unloaded_prompt_instruction_paths,
-    record_prompt_instruction_paths_loaded,
-)
-from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from relay_teams.paths import (
     iter_dir_paths,
     open_binary_file,
@@ -22,27 +16,25 @@ from relay_teams.paths import (
     path_stat,
 )
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.office_tools import (
-    OfficeConversionResult,
-    SUPPORTED_OFFICE_EXTENSIONS,
-    convert_office_document,
-)
 from relay_teams.tools.runtime import (
     ToolContext,
     ToolDeps,
-    ToolResultProjection,
     execute_tool,
 )
 from relay_teams.tools.workspace_tools.edit_state import record_file_read
 from relay_teams.tools.workspace_tools.notebook import (
     read_notebook_for_tool,
 )
+from relay_teams.tools.workspace_tools.read_support import (
+    DEFAULT_READ_LIMIT,
+    MAX_BYTES,
+    MAX_BYTES_LABEL,
+    MAX_LINE_LENGTH,
+    MAX_LINE_SUFFIX,
+    _project_read_result,
+    resolve_read_instruction_sections,
+)
 
-DEFAULT_READ_LIMIT = 2000
-MAX_LINE_LENGTH = 2000
-MAX_LINE_SUFFIX = "... (line truncated)"
-MAX_BYTES = 50 * 1024
-MAX_BYTES_LABEL = "50 KB"
 DESCRIPTION = load_tool_description(__file__)
 
 BINARY_EXTENSIONS = {
@@ -158,45 +150,6 @@ async def read_file_content(
     return lines, total_lines, truncated_by_lines, truncated_by_bytes
 
 
-def paginate_text_content(
-    content: str,
-    offset: int = 1,
-    limit: int = DEFAULT_READ_LIMIT,
-    max_bytes: int = MAX_BYTES,
-) -> tuple[list[str], int, bool, bool]:
-    """Paginate in-memory text using the same limits as file reads."""
-    lines: list[str] = []
-    total_lines = 0
-    bytes_count = 0
-    truncated_by_lines = False
-    truncated_by_bytes = False
-    start_offset = offset - 1
-
-    for raw_line in content.splitlines():
-        total_lines += 1
-
-        if total_lines <= start_offset:
-            continue
-
-        if len(lines) >= limit:
-            truncated_by_lines = True
-            continue
-
-        line = raw_line
-        if len(line) > MAX_LINE_LENGTH:
-            line = line[:MAX_LINE_LENGTH] + MAX_LINE_SUFFIX
-
-        line_size = len(line.encode("utf-8"))
-        if bytes_count + line_size > max_bytes:
-            truncated_by_bytes = True
-            break
-
-        lines.append(line)
-        bytes_count += line_size
-
-    return lines, total_lines, truncated_by_lines, truncated_by_bytes
-
-
 def read_directory(
     dir_path: Path,
     offset: int = 1,
@@ -237,114 +190,6 @@ def _inject_instruction_sections(
     return "\n".join([*instructions, output])
 
 
-def _project_read_result(
-    *,
-    output: str,
-    truncated: bool,
-    next_offset: int | None,
-    metadata: dict[str, JsonValue] | None = None,
-) -> ToolResultProjection:
-    visible_data: dict[str, JsonValue] = {
-        "output": output,
-        "truncated": truncated,
-        "next_offset": next_offset,
-    }
-    if metadata:
-        visible_data.update(metadata)
-    return ToolResultProjection(
-        visible_data=visible_data,
-        internal_data=dict(visible_data),
-    )
-
-
-def _should_include_line_numbers(
-    *,
-    source_extension: str,
-    line_numbers: bool | None,
-) -> bool:
-    if line_numbers is not None:
-        return line_numbers
-    return source_extension not in SUPPORTED_OFFICE_EXTENSIONS
-
-
-def _render_content_lines(
-    *,
-    lines: list[str],
-    offset: int,
-    include_line_numbers: bool,
-) -> str:
-    if include_line_numbers:
-        return "\n".join(f"{offset + i}: {line}" for i, line in enumerate(lines))
-    return "\n".join(lines)
-
-
-def _append_office_content_metadata(
-    *,
-    output: list[str],
-    converted: OfficeConversionResult,
-    include_line_numbers: bool,
-) -> None:
-    output.append("<content_format>markdown</content_format>")
-    output.append(f"<line_numbers>{str(include_line_numbers).lower()}</line_numbers>")
-    output.append(f"<conversion_quality>{converted.quality.level}</conversion_quality>")
-    output.append(
-        f"<preserves_tables>{str(converted.quality.preserves_tables).lower()}</preserves_tables>"
-    )
-    if converted.warnings:
-        output.append("<warnings>")
-        output.append("\n".join(converted.warnings))
-        output.append("</warnings>")
-
-
-def _build_file_metadata(
-    *,
-    include_line_numbers: bool,
-    converted: OfficeConversionResult | None,
-) -> dict[str, JsonValue]:
-    metadata: dict[str, JsonValue] = {
-        "line_numbers": include_line_numbers,
-    }
-    if converted is None:
-        return metadata
-
-    metadata.update(
-        {
-            "content_format": "markdown",
-            "converter_name": converted.converter_name,
-            "conversion_quality": converted.quality.level,
-            "preserves_tables": converted.quality.preserves_tables,
-            "warnings": list(converted.warnings),
-        }
-    )
-    return metadata
-
-
-async def resolve_read_instruction_sections(
-    *,
-    deps: ToolDeps,
-    file_path: Path,
-) -> tuple[str, ...]:
-    resolver = PromptInstructionResolver()
-    candidate_paths = resolver.resolve_dynamic_paths(
-        file_path=file_path,
-        workspace_root=deps.workspace.scope_root,
-    )
-    unresolved_paths = filter_unloaded_prompt_instruction_paths(
-        shared_store=deps.shared_store,
-        task_id=deps.task_id,
-        paths=candidate_paths,
-    )
-    if not unresolved_paths:
-        return ()
-    loaded = await resolver.load_paths(unresolved_paths)
-    record_prompt_instruction_paths_loaded(
-        shared_store=deps.shared_store,
-        task_id=deps.task_id,
-        paths=loaded.local_paths,
-    )
-    return loaded.sections
-
-
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
     async def read(
@@ -352,7 +197,6 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         path: str,
         offset: int = 1,
         limit: int = DEFAULT_READ_LIMIT,
-        line_numbers: bool | None = None,
         cell_id: str | None = None,
         include_outputs: bool = True,
     ) -> dict[str, JsonValue]:
@@ -363,12 +207,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             path: Path to the file or directory, relative to the workspace root.
             offset: Line offset for files, or entry offset for directories (1-based).
             limit: Maximum number of lines or entries to return.
-            line_numbers: Whether content lines are prefixed with line numbers.
             cell_id: Notebook cell id or cell-N fallback index for .ipynb files.
             include_outputs: Whether notebook code cell outputs are included.
         """
 
-        async def _action() -> ToolResultProjection:
+        async def _action():
             file_path = ctx.deps.workspace.resolve_read_path(path)
 
             if not path_exists(file_path):
@@ -431,26 +274,15 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     "include_outputs only applies to Jupyter notebooks (.ipynb)."
                 )
 
-            source_extension = file_path.suffix.lower()
-            converted: OfficeConversionResult | None = None
-            if source_extension in SUPPORTED_OFFICE_EXTENSIONS:
-                converted = await asyncio.to_thread(convert_office_document, file_path)
-                (
-                    lines,
-                    total_lines,
-                    truncated_by_lines,
-                    truncated_by_bytes,
-                ) = paginate_text_content(converted.markdown, offset, limit)
-            else:
-                if is_binary_file(file_path, path_stat(file_path).st_size):
-                    raise ValueError(f"Cannot read binary file: {path}")
+            if is_binary_file(file_path, path_stat(file_path).st_size):
+                raise ValueError(f"Cannot read binary file: {path}")
 
-                (
-                    lines,
-                    total_lines,
-                    truncated_by_lines,
-                    truncated_by_bytes,
-                ) = await read_file_content(file_path, offset, limit)
+            (
+                lines,
+                total_lines,
+                truncated_by_lines,
+                truncated_by_bytes,
+            ) = await read_file_content(file_path, offset, limit)
 
             if offset > total_lines and not (offset == 1 and total_lines == 0):
                 raise ValueError(
@@ -467,25 +299,10 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 output.append("<instructions>")
                 output.append("\n\n".join(instruction_sections))
                 output.append("</instructions>")
-            include_line_numbers = _should_include_line_numbers(
-                source_extension=source_extension,
-                line_numbers=line_numbers,
-            )
-            if converted is not None:
-                _append_office_content_metadata(
-                    output=output,
-                    converted=converted,
-                    include_line_numbers=include_line_numbers,
-                )
             output.append("<content>")
 
-            output.append(
-                _render_content_lines(
-                    lines=lines,
-                    offset=offset,
-                    include_line_numbers=include_line_numbers,
-                )
-            )
+            numbered_lines = [f"{offset + i}: {line}" for i, line in enumerate(lines)]
+            output.append("\n".join(numbered_lines))
 
             last_read_line = offset + len(lines) - 1
             continuation_offset: int | None = last_read_line + 1
@@ -516,10 +333,6 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 output="\n".join(output),
                 truncated=truncated_by_lines or truncated_by_bytes,
                 next_offset=continuation_offset,
-                metadata=_build_file_metadata(
-                    include_line_numbers=include_line_numbers,
-                    converted=converted,
-                ),
             )
 
         return await execute_tool(
@@ -529,7 +342,6 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "path": path,
                 "offset": offset,
                 "limit": limit,
-                "line_numbers": line_numbers,
                 "cell_id": cell_id,
                 "include_outputs": include_outputs,
             },
