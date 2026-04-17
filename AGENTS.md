@@ -9,8 +9,9 @@
     - `agents/tasks/`: task models, ids, events, repository, and status helpers
   - `builtin/`: built-in roles, default config, logging config, and bundled skills/resources
   - `env/`: runtime env loading, proxy support, web connectivity, and env CLI
+  - `hooks/`: runtime hook models, loader, matcher, service, executors, state, and event integration
   - `interfaces/`: external interfaces
-    - `interfaces/cli/`: Typer commands for server, prompts, approvals, triggers, reflection, and skills
+    - `interfaces/cli/`: Typer commands for server, prompts, approvals, triggers, reflection, hooks, and skills
     - `interfaces/server/`: FastAPI app, DI container, config services, and `/api/*` routers
     - `interfaces/sdk/`: HTTP client SDK
   - `logger/`: runtime logging
@@ -31,6 +32,7 @@
 - Frontend assets: `frontend/dist/`
 - Tests:
   - `tests/unit_tests/`: mirrors `src/relay_teams/` by module
+  - `tests/unit_tests/hooks/`: hook loader, executors, and runtime behavior
   - `tests/integration_tests/api/`: HTTP/SSE integration flows
   - `tests/integration_tests/browser/`: browser scenarios
   - `tests/integration_tests/cli/`: CLI integration coverage
@@ -47,13 +49,14 @@
 - Use the project logger in production paths; do not use `print()`.
 - Do not use emoji in code, comments, docs, or commit messages.
 - For packaged resource files such as tool description `.txt` files, avoid hand-maintained subpackage `package-data` whitelists; use parent-package globs and add a source-tree coverage test to catch drift.
-- Keep transport semantics consistent for the same provider/model path. If the primary execution flow uses streaming, auxiliary LLM flows such as reflection, compaction, or memory rewrite must also use streaming APIs against that endpoint rather than mixing in non-streaming shortcuts.
+- Keep transport semantics consistent for the same provider/model path. If the primary execution flow uses streaming, auxiliary LLM flows such as reflection, compaction, memory rewrite, or hooks must also use streaming APIs against that endpoint rather than mixing in non-streaming shortcuts.
 - For outbound network changes, evaluate proxy requirements first and reuse the existing proxy module when needed.
 - CLI modules should provide their own subcommands. List/query output must support default table output and `--format json`.
 - Database schema and API changes do not need backward compatibility, but matching `docs/` updates must be included in the same task.
 - Persisted capability references may contain dirty data. Runtime paths that consume existing role state from the database or already-saved config must tolerate missing `tools`, `mcp_servers`, and `skills` by filtering unknown entries and logging a warning with enough context to diagnose the source.
 - Keep strict validation for explicit user mutations and validation endpoints. Creating or editing a role should still reject unknown `tools`, `mcp_servers`, and `skills` instead of silently accepting them.
 - Do not let startup, config reload, prompt building, provider construction, or task execution fail only because persisted capability references point at missing registry entries.
+- Apply the same validation split to hooks and similar runtime config: explicit user mutations must fail on unknown or invalid references, but persisted drift at runtime should degrade safely with warnings instead of crashing startup or execution.
 
 ## Development
 - Initial setup:
@@ -68,6 +71,8 @@
 - Changed behavior must come with tests.
 - `tests/unit_tests/` should mirror `src/relay_teams/`. Add matching `__init__.py` files for new test directories.
 - Prefer focused unit tests first. Add integration coverage when run/SSE/interface flows change.
+- New tools should follow the shared runtime middleware path via `execute_tool_call(..., raw_args=locals())`; do not reimplement hook-aware input parsing or approval plumbing inside each tool.
+- Hook-driven tool input rewrites and hook-provided runtime environment must be handled in the shared tool runtime plus shared HTTP and command execution layers, not with per-tool special cases.
 - For built-in PPT skills, when a user reports遮挡、重叠、溢出等版式问题, fix the artifact, upstream the reusable rule into the built-in ppt skill docs/tests, and verify end-to-end conversion before opening a PR.
 
 ## Interface Boundaries
