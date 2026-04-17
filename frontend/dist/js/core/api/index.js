@@ -150,6 +150,7 @@ export {
     fetchWorkspaceTree,
     fetchWorkspaces,
     forkWorkspace,
+    openWorkspace,
     openWorkspaceRoot,
     pickWorkspace,
 } from './workspaces.js';

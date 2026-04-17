@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         ScriptedComputerRuntime,
         build_default_computer_runtime,
     )
+    from relay_teams.computer.windows_runtime import WindowsDesktopRuntime
 
 __all__ = [
     "BUILTIN_COMPUTER_TOOL_NAMES",
@@ -48,6 +49,7 @@ __all__ = [
     "ExecutionSurface",
     "LinuxDesktopRuntime",
     "ScriptedComputerRuntime",
+    "WindowsDesktopRuntime",
     "build_computer_tool_payload",
     "build_default_computer_runtime",
     "describe_builtin_tool",
@@ -88,6 +90,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ScriptedComputerRuntime": (
         "relay_teams.computer.runtime",
         "ScriptedComputerRuntime",
+    ),
+    "WindowsDesktopRuntime": (
+        "relay_teams.computer.windows_runtime",
+        "WindowsDesktopRuntime",
     ),
     "build_computer_tool_payload": (
         "relay_teams.computer.mapping",

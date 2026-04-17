@@ -1,8 +1,16 @@
 # Computer Use Real Smoke
 
-This feature already has CI coverage through the scripted desktop runtime. Use this runbook when you need to verify that the built-in computer tools are operating a real Linux desktop session.
+This feature already has CI coverage through the scripted desktop runtime. Use this runbook when you need to verify that the built-in computer tools are operating a real desktop session on Linux or Windows.
 
 ## Prerequisites
+
+### Windows
+
+- Windows desktop session with an interactive user session
+- PowerShell available on `PATH`
+- Calculator available through `calc.exe`
+
+### Linux
 
 - Linux desktop session with `DISPLAY` or `WAYLAND_DISPLAY` available
 - Window discovery/activation:
@@ -15,7 +23,7 @@ This feature already has CI coverage through the scripted desktop runtime. Use t
   - `grim`, or
   - `scrot`, or
   - ImageMagick `import`, or
-  - `flameshot`
+- `flameshot`
 - A calculator app available through one of these launch paths:
   - `gtk-launch org.gnome.Calculator`
   - `gnome-calculator`
@@ -23,6 +31,8 @@ This feature already has CI coverage through the scripted desktop runtime. Use t
   - `mate-calc`
   - `galculator`
   - `xcalc`
+
+The Windows backend uses PowerShell for screenshot and window discovery, plus Win32 input injection for mouse and keyboard control. It expects a normal interactive desktop session.
 
 The Linux backend is intended for X11 or XWayland-style desktop control. Scripted CI validation remains the default because many headless or pure Wayland environments do not expose window/input automation consistently.
 
@@ -32,7 +42,7 @@ When Agent Teams launches apps through the Linux backend, it now prefers X11-com
 
 ## Start The Backend
 
-Agent Teams now auto-detects the host OS backend. On Linux, the real desktop runtime is selected automatically unless you explicitly force scripted validation.
+Agent Teams now auto-detects the host OS backend. On Linux and Windows, the real desktop runtime is selected automatically unless you explicitly force scripted validation.
 
 ```bash
 uv run --extra dev python -m uvicorn relay_teams.interfaces.server.app:app --host 127.0.0.1 --port 8000
@@ -69,4 +79,5 @@ Keep the existing fake model server setup if you want a deterministic tool seque
 
 - The OS really launches Calculator instead of only appending a fake window entry.
 - The run timeline contains a real screenshot from the desktop session.
-- The `launch_app` tool result includes `data.launched_command`, which shows the resolved executable used by the Linux backend.
+- Windows screenshot observations include the virtual-screen origin so multi-monitor coordinate picks stay aligned with pointer actions.
+- The `launch_app` tool result includes `data.launched_command`, which shows the resolved executable used by the OS backend, such as `calc.exe` on Windows or `gnome-calculator` on Linux.

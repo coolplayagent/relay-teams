@@ -126,6 +126,7 @@ export {
     fetchWorkspaceTree,
     fetchWorkspaces,
     forkWorkspace,
+    openWorkspace,
     openWorkspaceRoot,
     pickWorkspace,
     deleteExternalAgent,
