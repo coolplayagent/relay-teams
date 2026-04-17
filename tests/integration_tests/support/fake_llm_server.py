@@ -635,6 +635,10 @@ def build_fake_response_text(payload: object) -> str:
 
 def _computer_validation_mode(messages: list[object]) -> str | None:
     last_user_text = _extract_last_user_text(messages)
+    if "[computer-input-validation]" in last_user_text:
+        return "input"
+    if "[computer-mouse-validation]" in last_user_text:
+        return "mouse"
     if "[computer-real-validation]" in last_user_text:
         return "real"
     if "[computer-validation]" in last_user_text:
@@ -650,6 +654,18 @@ def _plan_computer_validation_response(
 ) -> dict[str, object] | None:
     available_tools = _extract_available_tools(payload)
     last_tool_call_id = _extract_last_tool_call_id(messages)
+
+    if mode == "input":
+        return _plan_input_computer_validation_response(
+            available_tools=available_tools,
+            last_tool_call_id=last_tool_call_id,
+        )
+
+    if mode == "mouse":
+        return _plan_mouse_computer_validation_response(
+            available_tools=available_tools,
+            last_tool_call_id=last_tool_call_id,
+        )
 
     if mode == "real":
         return _plan_real_computer_validation_response(
@@ -680,7 +696,7 @@ def _plan_computer_validation_response(
             "kind": "tool_call",
             "tool_name": "launch_app",
             "tool_call_id": "call-launch-app-1",
-            "arguments": {"app_name": "Calculator"},
+            "arguments": {"app_name": "Notepad"},
         }
 
     if last_tool_call_id == "call-launch-app-1":
@@ -692,6 +708,155 @@ def _plan_computer_validation_response(
     return {
         "kind": "text",
         "content": "[fake-llm] Computer validation reached an unknown step.",
+    }
+
+
+def _plan_input_computer_validation_response(
+    *,
+    available_tools: set[str],
+    last_tool_call_id: str | None,
+) -> dict[str, object]:
+    if last_tool_call_id is None:
+        if "focus_window" not in available_tools:
+            return {
+                "kind": "text",
+                "content": "[fake-llm] focus_window is not available for this role.",
+            }
+        return {
+            "kind": "tool_call",
+            "tool_name": "focus_window",
+            "tool_call_id": "call-input-focus-window-1",
+            "arguments": {"window_title": "Agent Teams"},
+        }
+
+    if last_tool_call_id == "call-input-focus-window-1":
+        if "list_windows" not in available_tools:
+            return {
+                "kind": "text",
+                "content": "[fake-llm] list_windows is not available for this role.",
+            }
+        return {
+            "kind": "tool_call",
+            "tool_name": "list_windows",
+            "tool_call_id": "call-input-list-windows-1",
+            "arguments": {},
+        }
+
+    if last_tool_call_id == "call-input-list-windows-1":
+        if "type_text" not in available_tools:
+            return {
+                "kind": "text",
+                "content": "[fake-llm] type_text is not available for this role.",
+            }
+        return {
+            "kind": "tool_call",
+            "tool_name": "type_text",
+            "tool_call_id": "call-input-type-text-1",
+            "arguments": {"text": "hello from fake llm"},
+        }
+
+    if last_tool_call_id == "call-input-type-text-1":
+        if "hotkey" not in available_tools:
+            return {
+                "kind": "text",
+                "content": "[fake-llm] hotkey is not available for this role.",
+            }
+        return {
+            "kind": "tool_call",
+            "tool_name": "hotkey",
+            "tool_call_id": "call-input-hotkey-1",
+            "arguments": {"shortcut": "Ctrl+A"},
+        }
+
+    if last_tool_call_id == "call-input-hotkey-1":
+        return {
+            "kind": "text",
+            "content": (
+                "[fake-llm] Input computer validation finished after focus_window, "
+                "list_windows, type_text, and hotkey."
+            ),
+        }
+
+    return {
+        "kind": "text",
+        "content": "[fake-llm] Input computer validation reached an unknown step.",
+    }
+
+
+def _plan_mouse_computer_validation_response(
+    *,
+    available_tools: set[str],
+    last_tool_call_id: str | None,
+) -> dict[str, object]:
+    if last_tool_call_id is None:
+        if "click_at" not in available_tools:
+            return {
+                "kind": "text",
+                "content": "[fake-llm] click_at is not available for this role.",
+            }
+        return {
+            "kind": "tool_call",
+            "tool_name": "click_at",
+            "tool_call_id": "call-mouse-click-1",
+            "arguments": {"x": 120, "y": 240},
+        }
+
+    if last_tool_call_id == "call-mouse-click-1":
+        if "double_click_at" not in available_tools:
+            return {
+                "kind": "text",
+                "content": "[fake-llm] double_click_at is not available for this role.",
+            }
+        return {
+            "kind": "tool_call",
+            "tool_name": "double_click_at",
+            "tool_call_id": "call-mouse-double-click-1",
+            "arguments": {"x": 120, "y": 240},
+        }
+
+    if last_tool_call_id == "call-mouse-double-click-1":
+        if "drag_between" not in available_tools:
+            return {
+                "kind": "text",
+                "content": "[fake-llm] drag_between is not available for this role.",
+            }
+        return {
+            "kind": "tool_call",
+            "tool_name": "drag_between",
+            "tool_call_id": "call-mouse-drag-1",
+            "arguments": {
+                "start_x": 120,
+                "start_y": 240,
+                "end_x": 360,
+                "end_y": 420,
+            },
+        }
+
+    if last_tool_call_id == "call-mouse-drag-1":
+        if "scroll_view" not in available_tools:
+            return {
+                "kind": "text",
+                "content": "[fake-llm] scroll_view is not available for this role.",
+            }
+        return {
+            "kind": "tool_call",
+            "tool_name": "scroll_view",
+            "tool_call_id": "call-mouse-scroll-1",
+            "arguments": {"amount": -3},
+        }
+
+    if last_tool_call_id == "call-mouse-scroll-1":
+        return {
+            "kind": "text",
+            "content": (
+                "[fake-llm] Mouse computer validation finished after click_at, "
+                "double_click_at, drag_between, and scroll_view."
+            ),
+        }
+
+    return {
+        "kind": "text",
+        "content": "[fake-llm] Mouse computer validation reached an unknown step.",
     }
 
 
@@ -710,7 +875,7 @@ def _plan_real_computer_validation_response(
             "kind": "tool_call",
             "tool_name": "launch_app",
             "tool_call_id": "call-real-launch-app-1",
-            "arguments": {"app_name": "Calculator"},
+            "arguments": {"app_name": "Notepad"},
         }
 
     if last_tool_call_id == "call-real-launch-app-1":
@@ -723,7 +888,7 @@ def _plan_real_computer_validation_response(
             "kind": "tool_call",
             "tool_name": "wait_for_window",
             "tool_call_id": "call-real-wait-window-1",
-            "arguments": {"window_title": "Calculator"},
+            "arguments": {"window_title": "Notepad"},
         }
 
     if last_tool_call_id == "call-real-wait-window-1":

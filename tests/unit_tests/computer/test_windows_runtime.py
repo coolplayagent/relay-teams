@@ -138,6 +138,46 @@ def test_windows_runtime_list_windows_marks_active_window(
     ]
 
 
+def test_windows_runtime_focus_window_activates_matched_window(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    matched_window = ComputerWindow(
+        window_id="0x20",
+        app_name="notepad",
+        title="Untitled - Notepad",
+        focused=True,
+    )
+    activated_window_ids: list[str] = []
+    observation = ComputerObservation(
+        text="Windows desktop runtime snapshot.",
+        windows=(matched_window,),
+        focused_window="Untitled - Notepad",
+    )
+
+    monkeypatch.setattr(runtime, "_find_window", lambda query: matched_window)
+    monkeypatch.setattr(
+        runtime,
+        "_activate_window",
+        lambda window_id: activated_window_ids.append(window_id),
+    )
+    monkeypatch.setattr(runtime, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        runtime,
+        "_build_observation",
+        lambda **kwargs: observation,
+    )
+
+    result = asyncio.run(runtime.focus_window(window_title="Notepad"))
+
+    assert activated_window_ids == ["0x20"]
+    assert result.observation is not None
+    assert result.observation.focused_window == "Untitled - Notepad"
+    assert result.action.target.window_title == "Untitled - Notepad"
+    assert result.data["runtime_mode"] == "windows"
+
+
 def test_windows_runtime_launch_app_records_real_command(
     tmp_path: Path,
     monkeypatch,
@@ -165,9 +205,22 @@ def test_windows_runtime_launch_app_records_real_command(
         _ = (require_windows, require_input)
         return ()
 
-    def fake_resolve_launch_command(app_name: str) -> list[str]:
+    def fake_resolve_launch_candidates(
+        app_name: str,
+    ) -> tuple[windows_runtime_module._LaunchCandidate, ...]:
         assert app_name == "Calculator"
-        return ["calc.exe"]
+        return (
+            windows_runtime_module._LaunchCandidate(
+                command=("calc.exe",),
+                match_queries=(
+                    "Calculator",
+                    "calc",
+                    "calc.exe",
+                    "Microsoft.WindowsCalculator",
+                    "计算器",
+                ),
+            ),
+        )
 
     def fake_spawn_process(command: list[str]) -> None:
         spawned_commands.append(command)
@@ -178,7 +231,13 @@ def test_windows_runtime_launch_app_records_real_command(
         before_windows: tuple[ComputerWindow, ...] = (),
         allow_existing_matches: bool = True,
     ) -> ComputerWindow:
-        assert queries == ("Calculator", "calc.exe", "calc")
+        assert queries == (
+            "Calculator",
+            "calc",
+            "calc.exe",
+            "Microsoft.WindowsCalculator",
+            "计算器",
+        )
         assert before_windows == ()
         assert allow_existing_matches is False
         return matched_window
@@ -196,7 +255,11 @@ def test_windows_runtime_launch_app_records_real_command(
         return observation
 
     monkeypatch.setattr(runtime, "_list_windows_snapshot", fake_list_windows_snapshot)
-    monkeypatch.setattr(runtime, "_resolve_launch_command", fake_resolve_launch_command)
+    monkeypatch.setattr(
+        runtime,
+        "_resolve_launch_candidates",
+        fake_resolve_launch_candidates,
+    )
     monkeypatch.setattr(runtime, "_spawn_process", fake_spawn_process)
     monkeypatch.setattr(runtime, "_wait_for_window_match", fake_wait_for_window_match)
     monkeypatch.setattr(runtime, "_activate_window", fake_activate_window)
@@ -214,12 +277,164 @@ def test_windows_runtime_launch_app_records_real_command(
     assert result.data["launched_command"] == "calc.exe"
 
 
+def test_windows_runtime_launch_app_tries_next_candidate_after_spawn_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    spawned_commands: list[list[str]] = []
+    waited_queries: list[tuple[str, ...]] = []
+    activated_window_ids: list[str] = []
+    matched_window = ComputerWindow(
+        window_id="0x20",
+        app_name="Calculator",
+        title="Calculator",
+        focused=True,
+    )
+    observation = ComputerObservation(
+        text="Windows desktop runtime snapshot.",
+        windows=(matched_window,),
+        focused_window="Calculator",
+    )
+
+    def fake_resolve_launch_candidates(
+        app_name: str,
+    ) -> tuple[windows_runtime_module._LaunchCandidate, ...]:
+        assert app_name == "Calculator"
+        return (
+            windows_runtime_module._LaunchCandidate(
+                command=("calc.exe",),
+                match_queries=("Calculator",),
+            ),
+            windows_runtime_module._LaunchCandidate(
+                command=(
+                    "explorer.exe",
+                    r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+                ),
+                match_queries=("Calculator", "Microsoft.WindowsCalculator"),
+            ),
+        )
+
+    def fake_spawn_process(command: list[str]) -> None:
+        spawned_commands.append(command)
+        if command == ["calc.exe"]:
+            raise FileNotFoundError("calc.exe")
+
+    def fake_wait_for_window_match(
+        *,
+        queries: tuple[str, ...],
+        before_windows: tuple[ComputerWindow, ...] = (),
+        allow_existing_matches: bool = True,
+    ) -> ComputerWindow:
+        assert before_windows == ()
+        assert allow_existing_matches is False
+        waited_queries.append(queries)
+        return matched_window
+
+    monkeypatch.setattr(runtime, "_list_windows_snapshot", lambda **kwargs: ())
+    monkeypatch.setattr(
+        runtime,
+        "_resolve_launch_candidates",
+        fake_resolve_launch_candidates,
+    )
+    monkeypatch.setattr(runtime, "_spawn_process", fake_spawn_process)
+    monkeypatch.setattr(runtime, "_wait_for_window_match", fake_wait_for_window_match)
+    monkeypatch.setattr(
+        runtime,
+        "_activate_window",
+        lambda window_id: activated_window_ids.append(window_id),
+    )
+    monkeypatch.setattr(runtime, "_build_observation", lambda **kwargs: observation)
+    monkeypatch.setattr(runtime, "_sleep", lambda seconds: None)
+
+    result = asyncio.run(runtime.launch_app(app_name="Calculator"))
+
+    assert spawned_commands == [
+        ["calc.exe"],
+        [
+            "explorer.exe",
+            r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+        ],
+    ]
+    assert waited_queries == [("Calculator", "Microsoft.WindowsCalculator")]
+    assert activated_window_ids == ["0x20"]
+    assert result.data["launched_command"] == (
+        "explorer.exe "
+        r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"
+    )
+
+
 def test_windows_runtime_resolves_calculator_candidates(tmp_path: Path) -> None:
     runtime = WindowsDesktopRuntime(project_root=tmp_path)
 
     command = runtime._resolve_launch_command("Calculator")
 
     assert command == ["calc.exe"]
+
+
+def test_windows_runtime_resolves_localized_notepad_command(tmp_path: Path) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    command = runtime._resolve_launch_command("记事本")
+
+    assert command == ["notepad.exe"]
+
+
+def test_windows_runtime_resolve_launch_candidates_adds_calculator_shell_fallback(
+    tmp_path: Path,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    candidates = runtime._resolve_launch_candidates("Calculator")
+
+    assert candidates[0].command == ("calc.exe",)
+    assert candidates[0].match_queries == (
+        "Calculator",
+        "calc",
+        "calc.exe",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+    )
+    assert candidates[1].command == (
+        "explorer.exe",
+        r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+    )
+
+
+def test_windows_runtime_expand_match_queries_adds_localized_aliases(
+    tmp_path: Path,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    queries = runtime._expand_match_queries("Calculator", "Notepad")
+
+    assert queries == (
+        "Calculator",
+        "calc",
+        "calc.exe",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+        "Notepad",
+        "notepad.exe",
+        "记事本",
+    )
+
+
+def test_windows_runtime_expand_window_title_queries_avoids_calc_shorthand(
+    tmp_path: Path,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    queries = runtime._expand_window_title_queries("Calculator", "notepad.exe")
+
+    assert queries == (
+        "Calculator",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+        "notepad.exe",
+        "Notepad",
+        "记事本",
+    )
 
 
 def test_windows_runtime_click_translates_virtual_screen_origin(
@@ -247,6 +462,77 @@ def test_windows_runtime_click_translates_virtual_screen_origin(
     result = asyncio.run(runtime.click_at(x=125, y=250))
 
     assert cursor_positions == [(-1795, 210)]
+    assert result.action.target.x == 125
+    assert result.action.target.y == 250
+
+
+def test_windows_runtime_type_text_sends_unicode_input(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    typed_texts: list[str] = []
+    observation = ComputerObservation(text="Windows desktop runtime snapshot.")
+
+    monkeypatch.setattr(
+        runtime,
+        "_send_unicode_text",
+        lambda text: typed_texts.append(text),
+    )
+    monkeypatch.setattr(runtime, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        runtime,
+        "_build_observation",
+        lambda **kwargs: observation,
+    )
+
+    result = asyncio.run(runtime.type_text(text="hello from windows"))
+
+    assert typed_texts == ["hello from windows"]
+    assert result.action.target.text == "hello from windows"
+    assert result.data["runtime_mode"] == "windows"
+
+
+def test_windows_runtime_type_text_requires_non_blank_text(
+    tmp_path: Path,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    with pytest.raises(ValueError, match="text is required"):
+        asyncio.run(runtime.type_text(text="   "))
+
+
+def test_windows_runtime_double_click_translates_virtual_screen_origin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    cursor_positions: list[tuple[int, int]] = []
+    click_repeats: list[int] = []
+    observation = ComputerObservation(text="Windows desktop runtime snapshot.")
+
+    monkeypatch.setattr(runtime, "_get_virtual_screen_origin", lambda: (-100, 50))
+    monkeypatch.setattr(
+        runtime,
+        "_set_cursor_position",
+        lambda x, y: cursor_positions.append((x, y)),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_mouse_click",
+        lambda *, repeat: click_repeats.append(repeat),
+    )
+    monkeypatch.setattr(runtime, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        runtime,
+        "_build_observation",
+        lambda **kwargs: observation,
+    )
+
+    result = asyncio.run(runtime.double_click_at(x=125, y=250))
+
+    assert cursor_positions == [(25, 300)]
+    assert click_repeats == [2]
     assert result.action.target.x == 125
     assert result.action.target.y == 250
 
@@ -288,6 +574,77 @@ def test_windows_runtime_drag_translates_virtual_screen_origin(
     assert result.action.target.y == 20
     assert result.action.target.end_x == 400
     assert result.action.target.end_y == 500
+
+
+def test_windows_runtime_scroll_view_uses_signed_wheel_delta(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    mouse_events: list[tuple[int, int]] = []
+    observation = ComputerObservation(text="Windows desktop runtime snapshot.")
+
+    monkeypatch.setattr(
+        runtime,
+        "_send_mouse_event",
+        lambda flags, *, data=0: mouse_events.append((flags, data)),
+    )
+    monkeypatch.setattr(runtime, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        runtime,
+        "_build_observation",
+        lambda **kwargs: observation,
+    )
+
+    result = asyncio.run(runtime.scroll_view(amount=-3))
+
+    assert mouse_events == [(0x0800, -360)]
+    assert result.action.target.amount == -3
+
+
+def test_windows_runtime_hotkey_sends_normalized_shortcut(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    sent_shortcuts: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
+    observation = ComputerObservation(text="Windows desktop runtime snapshot.")
+
+    monkeypatch.setattr(
+        runtime,
+        "_send_hotkey_inputs",
+        lambda modifiers, normal: sent_shortcuts.append((modifiers, normal)),
+    )
+    monkeypatch.setattr(runtime, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        runtime,
+        "_build_observation",
+        lambda **kwargs: observation,
+    )
+
+    result = asyncio.run(runtime.hotkey(shortcut="Ctrl+A"))
+
+    assert sent_shortcuts == [((0x11,), (0x41,))]
+    assert result.action.target.shortcut == "Ctrl+A"
+    assert result.data["runtime_mode"] == "windows"
+
+
+def test_windows_runtime_hotkey_requires_non_blank_shortcut(
+    tmp_path: Path,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    with pytest.raises(ValueError, match="shortcut is required"):
+        asyncio.run(runtime.hotkey(shortcut="   "))
+
+
+def test_windows_runtime_scroll_view_requires_non_zero_amount(
+    tmp_path: Path,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    with pytest.raises(ValueError, match="amount must not be zero"):
+        asyncio.run(runtime.scroll_view(amount=0))
 
 
 def test_windows_runtime_build_launch_window_queries_normalizes_path_command(
@@ -337,6 +694,121 @@ def test_windows_runtime_build_list_windows_script_uses_hwnd_enumeration(
     assert "GetWindowThreadProcessId" in script
     assert "GetWindowTextLength" in script
     assert "MainWindowHandle" not in script
+
+
+def test_windows_runtime_activate_window_tolerates_focus_stealing_guard(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    class _FakeCallable:
+        def __init__(self, result: object) -> None:
+            self._result = result
+            self.calls: list[tuple[object, ...]] = []
+
+        def __call__(self, *args: object) -> object:
+            self.calls.append(args)
+            return self._result
+
+    class _FakeUser32:
+        def __init__(self) -> None:
+            self.IsWindow = _FakeCallable(True)
+            self.GetForegroundWindow = _FakeCallable(0)
+            self.ShowWindow = _FakeCallable(True)
+            self.SetForegroundWindow = _FakeCallable(False)
+            self.BringWindowToTop = _FakeCallable(False)
+
+    fake_user32 = _FakeUser32()
+    monkeypatch.setattr(runtime, "_load_user32", lambda: fake_user32)
+
+    runtime._activate_window("0x20")
+
+    assert len(fake_user32.IsWindow.calls) == 1
+    assert len(fake_user32.ShowWindow.calls) == 1
+    assert len(fake_user32.SetForegroundWindow.calls) == 1
+    assert len(fake_user32.BringWindowToTop.calls) == 1
+
+
+def test_windows_runtime_wait_for_window_returns_observation_for_match(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    matched_window = ComputerWindow(
+        window_id="0x20",
+        app_name="notepad",
+        title="Untitled - Notepad",
+        focused=True,
+    )
+    observation = ComputerObservation(
+        text="Windows desktop runtime snapshot.",
+        windows=(matched_window,),
+        focused_window="Untitled - Notepad",
+    )
+    waited_queries: list[tuple[str, ...]] = []
+
+    def fake_wait_for_window_match(
+        *,
+        queries: tuple[str, ...] = (),
+        before_windows: tuple[ComputerWindow, ...] = (),
+        allow_existing_matches: bool = True,
+    ) -> ComputerWindow:
+        _ = before_windows
+        assert allow_existing_matches is True
+        waited_queries.append(queries)
+        return matched_window
+
+    monkeypatch.setattr(
+        runtime,
+        "_wait_for_window_match",
+        fake_wait_for_window_match,
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_build_observation",
+        lambda **kwargs: observation,
+    )
+
+    result = asyncio.run(runtime.wait_for_window(window_title="Notepad"))
+
+    assert result.observation is not None
+    assert result.observation.focused_window == "Untitled - Notepad"
+    assert result.action.target.window_title == "Untitled - Notepad"
+    assert result.data["runtime_mode"] == "windows"
+    assert waited_queries == [("Notepad", "记事本")]
+
+
+def test_windows_runtime_find_window_avoids_calc_alias_false_positive(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    windows = (
+        ComputerWindow(
+            window_id="0x10",
+            app_name="spreadsheet",
+            title="Calculation Draft",
+            focused=False,
+        ),
+        ComputerWindow(
+            window_id="0x20",
+            app_name="ApplicationFrameHost",
+            title="计算器",
+            focused=True,
+        ),
+    )
+
+    monkeypatch.setattr(
+        runtime,
+        "_list_windows_snapshot",
+        lambda **kwargs: windows,
+    )
+
+    matched_window = runtime._find_window("Calculator")
+
+    assert matched_window.window_id == "0x20"
+    assert matched_window.title == "计算器"
 
 
 def test_windows_runtime_wait_for_window_match_ignores_existing_launch_match(
