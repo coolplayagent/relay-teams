@@ -6,7 +6,7 @@ import re
 import time
 from collections.abc import Sequence
 from urllib.parse import urlencode, urlparse
-from typing import Literal
+from typing import Final, Literal, TypeAlias
 
 import httpx
 from pydantic import (
@@ -40,6 +40,7 @@ from relay_teams.tools.web_tools.common import load_runtime_web_config
 EXA_BASE_URL = "https://mcp.exa.ai"
 EXA_PATH = "/mcp"
 EXA_TOOL_NAME = "web_search_advanced_exa"
+EXA_CODE_CONTEXT_TOOL_NAME = "get_code_context_exa"
 SEARXNG_SEARCH_PATH = "/search"
 SEARXNG_SEARCH_TOOL_NAME = "search"
 SEARXNG_PUBLIC_INSTANCES_URL = "https://searx.space/data/instances.json"
@@ -52,10 +53,24 @@ DEFAULT_TIMEOUT_SECONDS = 25.0
 DEFAULT_TEXT_MAX_CHARACTERS = 300
 DEFAULT_HIGHLIGHTS_PER_URL = 3
 DEFAULT_HIGHLIGHT_SENTENCES = 2
+DEFAULT_CODE_TOKENS_NUM = 5000
+MIN_CODE_TOKENS_NUM = 1000
+MAX_CODE_TOKENS_NUM = 50000
+SEARCH_MODE_AUTO: Final = "auto"
+SEARCH_MODE_WEB: Final = "web"
+SEARCH_MODE_CODE: Final = "code"
+EMPTY_CODE_CONTEXT_MESSAGE = (
+    "No code snippets or documentation found. Please try a different query, "
+    "be more specific about the library or programming concept, or check the "
+    "spelling of framework names."
+)
 DESCRIPTION = load_tool_description(__file__)
 
 _SEARXNG_INSTANCE_CACHE: SearxngInstanceCache | None = None
 _SEARXNG_INSTANCE_COOLDOWNS: dict[str, float] = {}
+
+WebSearchRequestMode: TypeAlias = Literal["auto", "web", "code"]
+WebSearchResolvedMode: TypeAlias = Literal["web", "code"]
 
 
 class WebSearchRequest(BaseModel):
@@ -65,6 +80,12 @@ class WebSearchRequest(BaseModel):
     num_results: int = Field(default=DEFAULT_NUM_RESULTS, ge=1)
     allowed_domains: tuple[str, ...] | None = None
     blocked_domains: tuple[str, ...] | None = None
+    search_mode: WebSearchRequestMode = SEARCH_MODE_AUTO
+    tokens_num: int = Field(
+        default=DEFAULT_CODE_TOKENS_NUM,
+        ge=MIN_CODE_TOKENS_NUM,
+        le=MAX_CODE_TOKENS_NUM,
+    )
 
     @field_validator("query")
     @classmethod
@@ -107,6 +128,10 @@ class WebSearchRequest(BaseModel):
             raise ValueError(
                 "Cannot specify both allowed_domains and blocked_domains in the same request"
             )
+        if self.search_mode == SEARCH_MODE_CODE and (
+            self.allowed_domains is not None or self.blocked_domains is not None
+        ):
+            raise ValueError("Domain filters are not supported for code context search")
         return self
 
 
@@ -127,7 +152,14 @@ class WebSearchResponse(BaseModel):
 
     query: str = Field(min_length=1)
     provider: WebProvider
+    search_mode: WebSearchResolvedMode = SEARCH_MODE_WEB
     hits: tuple[WebSearchHit, ...] = ()
+    context: str | None = None
+    tokens_num: int | None = Field(
+        default=None,
+        ge=MIN_CODE_TOKENS_NUM,
+        le=MAX_CODE_TOKENS_NUM,
+    )
     duration_ms: int = Field(ge=0)
 
 
@@ -137,7 +169,14 @@ class SearchExecutionResult(BaseModel):
     provider: WebProvider
     endpoint_host: str
     upstream_tool: str
+    search_mode: WebSearchResolvedMode = SEARCH_MODE_WEB
     hits: tuple[WebSearchHit, ...] = ()
+    context: str | None = None
+    tokens_num: int | None = Field(
+        default=None,
+        ge=MIN_CODE_TOKENS_NUM,
+        le=MAX_CODE_TOKENS_NUM,
+    )
     upstream_search_time: float | None = None
     internal_data: dict[str, JsonValue] = Field(default_factory=dict)
 
@@ -155,6 +194,13 @@ class ExaSearchArguments(BaseModel):
     highlightsNumSentences: int = DEFAULT_HIGHLIGHT_SENTENCES
     highlightsPerUrl: int = DEFAULT_HIGHLIGHTS_PER_URL
     highlightsQuery: str
+
+
+class ExaCodeContextArguments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    tokensNum: int
 
 
 class ExaSearchRequest(BaseModel):
@@ -296,8 +342,10 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         num_results: int | None = None,
         allowed_domains: list[str] | None = None,
         blocked_domains: list[str] | None = None,
+        search_mode: WebSearchRequestMode | None = None,
+        tokens_num: int | None = None,
     ) -> dict[str, JsonValue]:
-        """Search the web and return structured search hits."""
+        """Search the web and return structured search hits, or retrieve code-oriented context."""
 
         async def _action(
             query: str,
@@ -309,13 +357,21 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             started = time.perf_counter()
             request = WebSearchRequest(
                 query=query,
-                num_results=num_results or DEFAULT_NUM_RESULTS,
+                num_results=num_results
+                if num_results is not None
+                else DEFAULT_NUM_RESULTS,
                 allowed_domains=(
                     tuple(allowed_domains) if allowed_domains is not None else None
                 ),
                 blocked_domains=(
                     tuple(blocked_domains) if blocked_domains is not None else None
                 ),
+                search_mode=search_mode
+                if search_mode is not None
+                else SEARCH_MODE_AUTO,
+                tokens_num=tokens_num
+                if tokens_num is not None
+                else DEFAULT_CODE_TOKENS_NUM,
             )
             async with create_async_http_client(
                 timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
@@ -342,6 +398,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "num_results": num_results,
                 "allowed_domains": _normalize_domain_summary(allowed_domains),
                 "blocked_domains": _normalize_domain_summary(blocked_domains),
+                "search_mode": search_mode,
+                "tokens_num": tokens_num,
             },
             action=_action,
             raw_args=locals(),
@@ -354,6 +412,14 @@ async def execute_search(
     config: WebConfig,
     request: WebSearchRequest,
 ) -> SearchExecutionResult:
+    resolved_mode = resolve_search_mode(request)
+    if resolved_mode == SEARCH_MODE_CODE:
+        return await execute_code_context_search(
+            client=client,
+            config=config,
+            request=request,
+        )
+
     try:
         return await execute_provider_search(
             client=client,
@@ -387,6 +453,51 @@ async def execute_search(
         )
 
 
+def resolve_search_mode(request: WebSearchRequest) -> WebSearchResolvedMode:
+    if request.search_mode == SEARCH_MODE_CODE:
+        return SEARCH_MODE_CODE
+    return SEARCH_MODE_WEB
+
+
+async def execute_code_context_search(
+    *,
+    client: httpx.AsyncClient,
+    config: WebConfig,
+    request: WebSearchRequest,
+) -> SearchExecutionResult:
+    if config.provider != WebProvider.EXA:
+        raise ToolExecutionError(
+            error_type="unsupported_provider",
+            message="Code context search requires the Exa web provider",
+            retryable=False,
+            details={
+                "provider": config.provider.value,
+                "search_mode": SEARCH_MODE_CODE,
+            },
+        )
+
+    prepared_request = build_provider_code_context_request(
+        config=config,
+        request=request,
+    )
+    response_text = await fetch_exa_search_response(
+        client=client,
+        endpoint=prepared_request.endpoint,
+        payload=prepared_request.payload,
+    )
+    context = extract_code_context_response(response_text)
+    if not context:
+        context = EMPTY_CODE_CONTEXT_MESSAGE
+    return SearchExecutionResult(
+        provider=prepared_request.provider,
+        endpoint_host=prepared_request.endpoint_host,
+        upstream_tool=prepared_request.upstream_tool,
+        search_mode=SEARCH_MODE_CODE,
+        context=context,
+        tokens_num=request.tokens_num,
+    )
+
+
 def should_fallback_from_exa(
     *,
     config: WebConfig,
@@ -401,7 +512,7 @@ def should_fallback_from_exa(
 
 def is_exa_fallback_error(primary_error: ToolExecutionError) -> bool:
     status_code = primary_error.details.get("status_code")
-    if primary_error.error_type == "rate_limited":
+    if primary_error.error_type in {"network_error", "network_timeout", "rate_limited"}:
         return True
     if status_code == 402:
         return True
@@ -883,6 +994,29 @@ def build_provider_search_request(
     raise ValueError(f"Unsupported web provider: {config.provider.value}")
 
 
+def build_provider_code_context_request(
+    *,
+    config: WebConfig,
+    request: WebSearchRequest,
+) -> PreparedSearchRequest:
+    if config.provider == WebProvider.EXA:
+        endpoint = build_exa_search_url(
+            api_key=config.get_api_key_for_provider(WebProvider.EXA),
+            enabled_tools=(EXA_CODE_CONTEXT_TOOL_NAME,),
+        )
+        return PreparedSearchRequest(
+            provider=config.provider,
+            endpoint=endpoint,
+            endpoint_host=httpx.URL(endpoint).host or "",
+            payload=build_exa_code_context_request(
+                query=request.query,
+                tokens_num=request.tokens_num,
+            ),
+            upstream_tool=EXA_CODE_CONTEXT_TOOL_NAME,
+        )
+    raise ValueError(f"Unsupported web provider: {config.provider.value}")
+
+
 def build_search_result_projection(
     *,
     query: str,
@@ -892,7 +1026,10 @@ def build_search_result_projection(
     response = WebSearchResponse(
         query=query,
         provider=result.provider,
+        search_mode=result.search_mode,
         hits=result.hits,
+        context=result.context,
+        tokens_num=result.tokens_num,
         duration_ms=duration_ms,
     )
     internal_data: dict[str, JsonValue] = {
@@ -902,8 +1039,13 @@ def build_search_result_projection(
     if result.upstream_search_time is not None:
         internal_data["upstream_search_time"] = result.upstream_search_time
     internal_data.update(result.internal_data)
+    visible_data = response.model_dump(mode="json")
+    if result.context is None:
+        visible_data.pop("context", None)
+    if result.tokens_num is None:
+        visible_data.pop("tokens_num", None)
     return ToolResultProjection(
-        visible_data=response.model_dump(mode="json"),
+        visible_data=visible_data,
         internal_data=internal_data,
     )
 
@@ -927,6 +1069,24 @@ def build_exa_search_request(
         params={
             "name": EXA_TOOL_NAME,
             "arguments": arguments.model_dump(mode="json", exclude_none=True),
+        }
+    )
+    return request.model_dump(mode="json")
+
+
+def build_exa_code_context_request(
+    *,
+    query: str,
+    tokens_num: int,
+) -> dict[str, JsonValue]:
+    arguments = ExaCodeContextArguments(
+        query=query,
+        tokensNum=tokens_num,
+    )
+    request = ExaSearchRequest(
+        params={
+            "name": EXA_CODE_CONTEXT_TOOL_NAME,
+            "arguments": arguments.model_dump(mode="json"),
         }
     )
     return request.model_dump(mode="json")
@@ -1018,25 +1178,29 @@ def _search_status_error_type(status_code: int) -> str:
 
 
 def _parse_exa_rpc_error_response(response_text: str) -> ToolExecutionError | None:
-    try:
-        payload = ExaRpcResponsePayload.model_validate_json(response_text)
-    except Exception:
-        return None
-    if payload.error is None:
-        return None
-    message = _normalize_optional_text(payload.error.message) or "Exa web search failed"
-    error_type = (
-        "rate_limited" if _contains_exa_quota_hint(message) else "upstream_error"
-    )
-    return ToolExecutionError(
-        error_type=error_type,
-        message=f"Exa web search returned JSON-RPC error: {message}",
-        retryable=error_type == "rate_limited",
-        details={
-            "provider": WebProvider.EXA.value,
-            "rpc_error_code": payload.error.code,
-        },
-    )
+    for payload in _iter_exa_response_payloads(response_text):
+        try:
+            rpc_payload = ExaRpcResponsePayload.model_validate(payload)
+        except Exception:
+            continue
+        if rpc_payload.error is None:
+            continue
+        message = _normalize_optional_text(rpc_payload.error.message) or (
+            "Exa web search failed"
+        )
+        error_type = (
+            "rate_limited" if _contains_exa_quota_hint(message) else "upstream_error"
+        )
+        return ToolExecutionError(
+            error_type=error_type,
+            message=f"Exa web search returned JSON-RPC error: {message}",
+            retryable=error_type == "rate_limited",
+            details={
+                "provider": WebProvider.EXA.value,
+                "rpc_error_code": rpc_payload.error.code,
+            },
+        )
+    return None
 
 
 def _search_status_error_message(
@@ -1049,6 +1213,45 @@ def _search_status_error_message(
     if detail:
         return f"{base}: {detail}"
     return base
+
+
+def extract_code_context_response(response_text: str) -> str:
+    contexts: list[str] = []
+    for payload in _iter_exa_response_payloads(response_text):
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            continue
+        content = result.get("content")
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            normalized = _normalize_optional_text(item.get("text"))
+            if normalized is not None:
+                contexts.append(normalized)
+    return "\n\n".join(contexts).strip()
+
+
+def _iter_exa_response_payloads(response_text: str) -> tuple[dict[str, JsonValue], ...]:
+    payloads: list[dict[str, JsonValue]] = []
+    for raw_line in response_text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload_text = line[5:].strip()
+        if not payload_text:
+            continue
+        try:
+            payloads.append(_parse_search_event(payload_text))
+        except Exception:
+            continue
+    if payloads:
+        return tuple(payloads)
+    try:
+        return (_parse_search_event(response_text),)
+    except Exception:
+        return ()
 
 
 def extract_search_response(response_text: str) -> ExtractedSearchResponse:
