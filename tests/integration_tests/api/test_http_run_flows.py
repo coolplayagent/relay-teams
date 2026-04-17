@@ -4,7 +4,6 @@ import json
 import time
 
 import httpx
-import pytest
 
 from integration_tests.support.environment import IntegrationEnvironment
 from integration_tests.support.api_helpers import (
@@ -349,11 +348,227 @@ def test_ai_run_executes_builtin_computer_tools_with_fake_runtime(
     assert launch_result["ok"] is True
     assert launch_result["data"]["computer"]["source"] == "tool"
     assert launch_result["data"]["computer"]["risk_level"] == "destructive"
-    assert launch_result["data"]["observation"]["focused_window"] == "Calculator Window"
+    assert launch_result["data"]["observation"]["focused_window"] == "Notepad Window"
 
 
-@pytest.mark.skip(reason="Flaky on CI - LLM tool call generation is non-deterministic")
-def test_ai_run_executes_real_computer_smoke_sequence_with_fake_runtime(
+def test_ai_run_executes_builtin_mouse_computer_tools_with_fake_runtime(
+    api_client: httpx.Client,
+) -> None:
+    original_response = api_client.get("/api/roles/configs/MainAgent")
+    original_response.raise_for_status()
+    original_record = original_response.json()
+    assert isinstance(original_record, dict)
+
+    updated_record = dict(original_record)
+    updated_tools = {
+        str(tool)
+        for tool in updated_record.get("tools", [])
+        if isinstance(tool, str) and tool
+    }
+    updated_tools.update({"click_at", "double_click_at", "drag_between", "scroll_view"})
+    updated_record["tools"] = sorted(updated_tools)
+    updated_record["execution_surface"] = "desktop"
+
+    save_response = api_client.put(
+        "/api/roles/configs/MainAgent",
+        json=_role_draft_payload(updated_record),
+    )
+    save_response.raise_for_status()
+    _wait_for_role_tools(
+        api_client,
+        "MainAgent",
+        {"click_at", "double_click_at", "drag_between", "scroll_view"},
+    )
+
+    try:
+        session_id = create_session(
+            api_client,
+            session_id=new_session_id("session-computer-mouse"),
+        )
+        run_id = create_run(
+            api_client,
+            session_id=session_id,
+            intent="[computer-mouse-validation] 通过内建鼠标工具完成一次验证。",
+            execution_mode="ai",
+            yolo=True,
+        )
+        _ = stream_run_until_terminal(api_client, run_id=run_id)
+    finally:
+        restore_response = api_client.put(
+            "/api/roles/configs/MainAgent",
+            json=_role_draft_payload(original_record),
+        )
+        restore_response.raise_for_status()
+
+    events = _session_run_events(
+        api_client,
+        session_id=session_id,
+        run_id=run_id,
+    )
+    tool_calls = [
+        json.loads(str(event["payload_json"]))
+        for event in events
+        if str(event.get("event_type") or "") == "tool_call"
+    ]
+    tool_results = [
+        json.loads(str(event["payload_json"]))
+        for event in events
+        if str(event.get("event_type") or "") == "tool_result"
+    ]
+
+    assert [payload["tool_name"] for payload in tool_calls] == [
+        "click_at",
+        "double_click_at",
+        "drag_between",
+        "scroll_view",
+    ]
+    assert [payload["tool_name"] for payload in tool_results] == [
+        "click_at",
+        "double_click_at",
+        "drag_between",
+        "scroll_view",
+    ]
+
+    click_result = tool_results[0]["result"]
+    assert click_result["ok"] is True
+    assert click_result["data"]["computer"]["action"] == "click"
+    assert click_result["data"]["computer"]["risk_level"] == "guarded"
+    assert click_result["data"]["computer"]["target"]["x"] == 120
+    assert click_result["data"]["computer"]["target"]["y"] == 240
+
+    double_click_result = tool_results[1]["result"]
+    assert double_click_result["ok"] is True
+    assert double_click_result["data"]["computer"]["action"] == "double_click"
+    assert double_click_result["data"]["computer"]["target"]["x"] == 120
+    assert double_click_result["data"]["computer"]["target"]["y"] == 240
+
+    drag_result = tool_results[2]["result"]
+    assert drag_result["ok"] is True
+    assert drag_result["data"]["computer"]["action"] == "drag"
+    assert drag_result["data"]["computer"]["risk_level"] == "destructive"
+    assert drag_result["data"]["computer"]["target"]["x"] == 120
+    assert drag_result["data"]["computer"]["target"]["y"] == 240
+    assert drag_result["data"]["computer"]["target"]["end_x"] == 360
+    assert drag_result["data"]["computer"]["target"]["end_y"] == 420
+
+    scroll_result = tool_results[3]["result"]
+    assert scroll_result["ok"] is True
+    assert scroll_result["data"]["computer"]["action"] == "scroll"
+    assert scroll_result["data"]["computer"]["risk_level"] == "guarded"
+    assert scroll_result["data"]["computer"]["target"]["amount"] == -3
+
+
+def test_ai_run_executes_builtin_input_computer_tools_with_fake_runtime(
+    api_client: httpx.Client,
+) -> None:
+    original_response = api_client.get("/api/roles/configs/MainAgent")
+    original_response.raise_for_status()
+    original_record = original_response.json()
+    assert isinstance(original_record, dict)
+
+    updated_record = dict(original_record)
+    updated_tools = {
+        str(tool)
+        for tool in updated_record.get("tools", [])
+        if isinstance(tool, str) and tool
+    }
+    updated_tools.update({"list_windows", "focus_window", "type_text", "hotkey"})
+    updated_record["tools"] = sorted(updated_tools)
+    updated_record["execution_surface"] = "desktop"
+
+    save_response = api_client.put(
+        "/api/roles/configs/MainAgent",
+        json=_role_draft_payload(updated_record),
+    )
+    save_response.raise_for_status()
+    _wait_for_role_tools(
+        api_client,
+        "MainAgent",
+        {"list_windows", "focus_window", "type_text", "hotkey"},
+    )
+
+    try:
+        session_id = create_session(
+            api_client,
+            session_id=new_session_id("session-computer-input"),
+        )
+        run_id = create_run(
+            api_client,
+            session_id=session_id,
+            intent="[computer-input-validation] 通过内建窗口和输入工具完成一次验证。",
+            execution_mode="ai",
+            yolo=True,
+        )
+        _ = stream_run_until_terminal(api_client, run_id=run_id)
+    finally:
+        restore_response = api_client.put(
+            "/api/roles/configs/MainAgent",
+            json=_role_draft_payload(original_record),
+        )
+        restore_response.raise_for_status()
+
+    events = _session_run_events(
+        api_client,
+        session_id=session_id,
+        run_id=run_id,
+    )
+    tool_calls = [
+        json.loads(str(event["payload_json"]))
+        for event in events
+        if str(event.get("event_type") or "") == "tool_call"
+    ]
+    tool_results = [
+        json.loads(str(event["payload_json"]))
+        for event in events
+        if str(event.get("event_type") or "") == "tool_result"
+    ]
+
+    assert [payload["tool_name"] for payload in tool_calls] == [
+        "focus_window",
+        "list_windows",
+        "type_text",
+        "hotkey",
+    ]
+    assert [payload["tool_name"] for payload in tool_results] == [
+        "focus_window",
+        "list_windows",
+        "type_text",
+        "hotkey",
+    ]
+
+    focus_result = tool_results[0]["result"]
+    assert focus_result["ok"] is True
+    assert focus_result["data"]["computer"]["action"] == "focus_window"
+    assert focus_result["data"]["computer"]["risk_level"] == "guarded"
+    assert (
+        focus_result["data"]["computer"]["target"]["window_title"] == "Agent Teams Demo"
+    )
+    assert focus_result["data"]["observation"]["focused_window"] == "Agent Teams Demo"
+
+    list_result = tool_results[1]["result"]
+    assert list_result["ok"] is True
+    assert list_result["data"]["computer"]["action"] == "list_windows"
+    assert list_result["data"]["computer"]["risk_level"] == "safe"
+    assert list_result["data"]["observation"]["focused_window"] == "Agent Teams Demo"
+    window_titles = [
+        window["title"] for window in list_result["data"]["observation"]["windows"]
+    ]
+    assert "Agent Teams Demo" in window_titles
+
+    type_result = tool_results[2]["result"]
+    assert type_result["ok"] is True
+    assert type_result["data"]["computer"]["action"] == "type_text"
+    assert type_result["data"]["computer"]["risk_level"] == "guarded"
+    assert type_result["data"]["computer"]["target"]["text"] == "hello from fake llm"
+
+    hotkey_result = tool_results[3]["result"]
+    assert hotkey_result["ok"] is True
+    assert hotkey_result["data"]["computer"]["action"] == "hotkey"
+    assert hotkey_result["data"]["computer"]["risk_level"] == "guarded"
+    assert hotkey_result["data"]["computer"]["target"]["shortcut"] == "Ctrl+A"
+
+
+def test_ai_run_executes_builtin_wait_for_window_computer_tools_with_fake_runtime(
     api_client: httpx.Client,
 ) -> None:
     original_response = api_client.get("/api/roles/configs/MainAgent")
@@ -390,7 +605,7 @@ def test_ai_run_executes_real_computer_smoke_sequence_with_fake_runtime(
         run_id = create_run(
             api_client,
             session_id=session_id,
-            intent="[computer-real-validation] 打开计算器，等待窗口出现，然后截图确认。",
+            intent="[computer-real-validation] 打开记事本，等待窗口出现，然后截图确认。",
             execution_mode="ai",
             yolo=True,
         )
@@ -437,7 +652,7 @@ def test_ai_run_executes_real_computer_smoke_sequence_with_fake_runtime(
     wait_result = tool_results[1]["result"]
     assert wait_result["ok"] is True
     assert wait_result["data"]["computer"]["action"] == "wait_for_window"
-    assert wait_result["data"]["observation"]["focused_window"] == "Calculator Window"
+    assert wait_result["data"]["observation"]["focused_window"] == "Notepad Window"
 
     capture_result = tool_results[2]["result"]
     assert capture_result["ok"] is True

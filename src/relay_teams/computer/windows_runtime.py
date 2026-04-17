@@ -11,6 +11,7 @@ import tempfile
 import time
 from ctypes import wintypes
 from pathlib import Path, PureWindowsPath
+from typing import NamedTuple
 
 from relay_teams.computer.models import (
     ComputerActionDescriptor,
@@ -116,7 +117,83 @@ _NAMED_VKEYS: dict[str, int] = {
     "up": _VK_UP,
 }
 
+_WINDOWS_APP_QUERY_ALIASES: dict[str, tuple[str, ...]] = {
+    "calc": (
+        "Calculator",
+        "calc",
+        "calc.exe",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+    ),
+    "calc.exe": (
+        "Calculator",
+        "calc",
+        "calc.exe",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+    ),
+    "calculator": (
+        "Calculator",
+        "calc",
+        "calc.exe",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+    ),
+    "microsoft.windowscalculator": (
+        "Calculator",
+        "calc",
+        "calc.exe",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+    ),
+    "notepad": (
+        "Notepad",
+        "notepad",
+        "notepad.exe",
+        "记事本",
+    ),
+    "notepad.exe": (
+        "Notepad",
+        "notepad",
+        "notepad.exe",
+        "记事本",
+    ),
+    "记事本": (
+        "Notepad",
+        "notepad",
+        "notepad.exe",
+        "记事本",
+    ),
+    "计算器": (
+        "Calculator",
+        "calc",
+        "calc.exe",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+    ),
+}
+
+_WINDOWS_KNOWN_LAUNCH_COMMANDS: dict[str, tuple[str, ...]] = {
+    "calc": ("calc.exe",),
+    "calc.exe": ("calc.exe",),
+    "calculator": ("calc.exe",),
+    "notepad": ("notepad.exe",),
+    "notepad.exe": ("notepad.exe",),
+    "记事本": ("notepad.exe",),
+    "计算器": ("calc.exe",),
+}
+
+_WINDOWS_CALCULATOR_SHELL_COMMAND = (
+    "explorer.exe",
+    r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+)
+
 _ULONG_PTR = ctypes.c_size_t
+
+
+class _LaunchCandidate(NamedTuple):
+    command: tuple[str, ...]
+    match_queries: tuple[str, ...]
 
 
 class _MouseInput(ctypes.Structure):
@@ -390,19 +467,28 @@ class WindowsDesktopRuntime:
             require_windows=False,
             require_input=False,
         )
-        command = self._resolve_launch_command(app_name)
-        self._spawn_process(command)
-        window_queries = self._build_launch_window_queries(
-            app_name=app_name,
-            command=command,
-        )
-        matched_window = self._wait_for_window_match(
-            queries=window_queries,
-            before_windows=before_windows,
-            allow_existing_matches=False,
-        )
+        launched_command: tuple[str, ...] | None = None
+        matched_window: ComputerWindow | None = None
+        attempted_commands: list[str] = []
+        for candidate in self._resolve_launch_candidates(app_name):
+            command = list(candidate.command)
+            attempted_commands.append(" ".join(command))
+            self._spawn_process(command)
+            matched_window = self._wait_for_window_match(
+                queries=candidate.match_queries,
+                before_windows=before_windows,
+                allow_existing_matches=False,
+            )
+            if matched_window is not None:
+                launched_command = candidate.command
+                break
         if matched_window is None:
-            raise RuntimeError(f"App window did not appear within timeout: {app_name}")
+            raise RuntimeError(
+                self._launch_failure_message(
+                    app_name=app_name,
+                    attempted_commands=attempted_commands,
+                )
+            )
         self._activate_window(matched_window.window_id)
         self._sleep(_WINDOW_ACTIVATE_DELAY_SECONDS)
         observation = self._build_observation(
@@ -425,7 +511,7 @@ class WindowsDesktopRuntime:
             data={
                 "window_count": len(observation.windows),
                 "runtime_mode": "windows",
-                "launched_command": " ".join(command),
+                "launched_command": " ".join(launched_command or ()),
             },
         )
 
@@ -748,9 +834,10 @@ class WindowsDesktopRuntime:
         normalized = query.strip()
         if not normalized:
             raise ValueError("window_title is required")
+        match_queries = self._expand_match_queries(normalized)
         windows = self._list_windows_snapshot(require_windows=True, require_input=False)
         for window in windows:
-            if self._window_matches(window, normalized):
+            if self._window_matches_any(window, match_queries):
                 return window
         raise RuntimeError(f"Window not found: {query}")
 
@@ -761,7 +848,7 @@ class WindowsDesktopRuntime:
         before_windows: tuple[ComputerWindow, ...] = (),
         allow_existing_matches: bool = True,
     ) -> ComputerWindow | None:
-        normalized_queries = self._normalize_match_queries(*queries)
+        normalized_queries = self._expand_match_queries(*queries)
         before_ids = {window.window_id for window in before_windows}
         deadline = self._time_monotonic() + _WAIT_TIMEOUT_SECONDS
         while self._time_monotonic() < deadline:
@@ -840,6 +927,15 @@ class WindowsDesktopRuntime:
             seen_queries.add(dedupe_key)
         return tuple(normalized_queries)
 
+    def _expand_match_queries(self, *queries: str) -> tuple[str, ...]:
+        expanded_queries: list[str] = []
+        for query in self._normalize_match_queries(*queries):
+            expanded_queries.append(query)
+            expanded_queries.extend(
+                _WINDOWS_APP_QUERY_ALIASES.get(query.casefold(), ())
+            )
+        return self._normalize_match_queries(*expanded_queries)
+
     def _window_matches_any(
         self,
         window: ComputerWindow,
@@ -859,15 +955,32 @@ class WindowsDesktopRuntime:
         user32 = self._load_user32()
         user32.IsWindow.argtypes = (wintypes.HWND,)
         user32.IsWindow.restype = wintypes.BOOL
+        user32.GetForegroundWindow.argtypes = ()
+        user32.GetForegroundWindow.restype = wintypes.HWND
         user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
         user32.ShowWindow.restype = wintypes.BOOL
         user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
         user32.SetForegroundWindow.restype = wintypes.BOOL
+        user32.BringWindowToTop.argtypes = (wintypes.HWND,)
+        user32.BringWindowToTop.restype = wintypes.BOOL
         if not user32.IsWindow(handle):
             raise RuntimeError(f"Window not found: {window_id}")
+        if self._handle_value(user32.GetForegroundWindow()) == self._handle_value(
+            handle
+        ):
+            return
         user32.ShowWindow(handle, _SW_RESTORE)
-        if not user32.SetForegroundWindow(handle):
-            raise RuntimeError(f"Windows desktop activation failed: {window_id}")
+        if user32.SetForegroundWindow(handle):
+            return
+        user32.BringWindowToTop(handle)
+        if self._handle_value(user32.GetForegroundWindow()) == self._handle_value(
+            handle
+        ):
+            return
+        LOGGER.warning(
+            "Windows desktop activation could not be confirmed.",
+            extra={"window_id": window_id},
+        )
 
     def _parse_window_id(self, window_id: str) -> wintypes.HWND:
         normalized = window_id.strip()
@@ -879,14 +992,21 @@ class WindowsDesktopRuntime:
             raise ValueError(f"Unsupported window_id: {window_id}") from exc
         return wintypes.HWND(handle_value)
 
+    def _handle_value(self, handle: wintypes.HWND | int | None) -> int:
+        raw_value = getattr(handle, "value", handle)
+        if raw_value is None:
+            return 0
+        return int(raw_value)
+
     def _resolve_launch_command(self, app_name: str) -> list[str]:
         normalized = app_name.strip()
         if not normalized:
             raise ValueError("app_name is required")
 
         lowered = normalized.casefold()
-        if lowered in {"calc", "calculator"}:
-            return ["calc.exe"]
+        known_command = _WINDOWS_KNOWN_LAUNCH_COMMANDS.get(lowered)
+        if known_command is not None:
+            return list(known_command)
 
         parsed_command = shlex.split(normalized, posix=False)
         if parsed_command:
@@ -898,6 +1018,67 @@ class WindowsDesktopRuntime:
             return [normalized]
 
         return ["cmd", "/c", "start", "", normalized]
+
+    def _resolve_launch_candidates(self, app_name: str) -> tuple[_LaunchCandidate, ...]:
+        command = tuple(self._resolve_launch_command(app_name))
+        match_queries = self._expand_match_queries(
+            *self._build_launch_window_queries(
+                app_name=app_name,
+                command=list(command),
+            )
+        )
+        candidates: list[_LaunchCandidate] = [
+            _LaunchCandidate(
+                command=command,
+                match_queries=match_queries,
+            )
+        ]
+        if (
+            app_name.strip().casefold()
+            in {
+                "calc",
+                "calc.exe",
+                "calculator",
+                "microsoft.windowscalculator",
+                "计算器",
+            }
+            and command != _WINDOWS_CALCULATOR_SHELL_COMMAND
+        ):
+            candidates.append(
+                _LaunchCandidate(
+                    command=_WINDOWS_CALCULATOR_SHELL_COMMAND,
+                    match_queries=self._expand_match_queries(
+                        *match_queries,
+                        "Microsoft.WindowsCalculator",
+                    ),
+                )
+            )
+        return tuple(candidates)
+
+    def _launch_failure_message(
+        self,
+        *,
+        app_name: str,
+        attempted_commands: list[str],
+    ) -> str:
+        details = [f"App window did not appear within timeout: {app_name}."]
+        if attempted_commands:
+            details.append("Attempted commands: " + ", ".join(attempted_commands) + ".")
+        visible_titles = self._visible_window_titles()
+        if visible_titles:
+            details.append("Visible windows: " + visible_titles + ".")
+        return " ".join(details)
+
+    def _visible_window_titles(self) -> str:
+        try:
+            windows = self._list_windows_snapshot(
+                require_windows=False,
+                require_input=False,
+            )
+        except RuntimeError:
+            return ""
+        titles = [window.title for window in windows[:5] if window.title]
+        return "; ".join(titles)
 
     def _spawn_process(self, command: list[str]) -> None:
         LOGGER.info("Launching Windows desktop app", extra={"command": command})
