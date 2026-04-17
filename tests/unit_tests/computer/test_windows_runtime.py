@@ -420,6 +420,23 @@ def test_windows_runtime_expand_match_queries_adds_localized_aliases(
     )
 
 
+def test_windows_runtime_expand_window_title_queries_avoids_calc_shorthand(
+    tmp_path: Path,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+
+    queries = runtime._expand_window_title_queries("Calculator", "notepad.exe")
+
+    assert queries == (
+        "Calculator",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+        "notepad.exe",
+        "Notepad",
+        "记事本",
+    )
+
+
 def test_windows_runtime_click_translates_virtual_screen_origin(
     tmp_path: Path,
     monkeypatch,
@@ -729,11 +746,23 @@ def test_windows_runtime_wait_for_window_returns_observation_for_match(
         windows=(matched_window,),
         focused_window="Untitled - Notepad",
     )
+    waited_queries: list[tuple[str, ...]] = []
+
+    def fake_wait_for_window_match(
+        *,
+        queries: tuple[str, ...] = (),
+        before_windows: tuple[ComputerWindow, ...] = (),
+        allow_existing_matches: bool = True,
+    ) -> ComputerWindow:
+        _ = before_windows
+        assert allow_existing_matches is True
+        waited_queries.append(queries)
+        return matched_window
 
     monkeypatch.setattr(
         runtime,
         "_wait_for_window_match",
-        lambda **kwargs: matched_window,
+        fake_wait_for_window_match,
     )
     monkeypatch.setattr(
         runtime,
@@ -747,6 +776,39 @@ def test_windows_runtime_wait_for_window_returns_observation_for_match(
     assert result.observation.focused_window == "Untitled - Notepad"
     assert result.action.target.window_title == "Untitled - Notepad"
     assert result.data["runtime_mode"] == "windows"
+    assert waited_queries == [("Notepad", "记事本")]
+
+
+def test_windows_runtime_find_window_avoids_calc_alias_false_positive(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    windows = (
+        ComputerWindow(
+            window_id="0x10",
+            app_name="spreadsheet",
+            title="Calculation Draft",
+            focused=False,
+        ),
+        ComputerWindow(
+            window_id="0x20",
+            app_name="ApplicationFrameHost",
+            title="计算器",
+            focused=True,
+        ),
+    )
+
+    monkeypatch.setattr(
+        runtime,
+        "_list_windows_snapshot",
+        lambda **kwargs: windows,
+    )
+
+    matched_window = runtime._find_window("Calculator")
+
+    assert matched_window.window_id == "0x20"
+    assert matched_window.title == "计算器"
 
 
 def test_windows_runtime_wait_for_window_match_ignores_existing_launch_match(

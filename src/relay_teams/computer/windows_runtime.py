@@ -173,6 +173,46 @@ _WINDOWS_APP_QUERY_ALIASES: dict[str, tuple[str, ...]] = {
     ),
 }
 
+_WINDOWS_WINDOW_TITLE_QUERY_ALIASES: dict[str, tuple[str, ...]] = {
+    "calc": (
+        "Calculator",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+    ),
+    "calc.exe": (
+        "Calculator",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+    ),
+    "calculator": (
+        "Calculator",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+    ),
+    "microsoft.windowscalculator": (
+        "Calculator",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+    ),
+    "notepad": (
+        "Notepad",
+        "记事本",
+    ),
+    "notepad.exe": (
+        "Notepad",
+        "记事本",
+    ),
+    "记事本": (
+        "Notepad",
+        "记事本",
+    ),
+    "计算器": (
+        "Calculator",
+        "Microsoft.WindowsCalculator",
+        "计算器",
+    ),
+}
+
 _WINDOWS_KNOWN_LAUNCH_COMMANDS: dict[str, tuple[str, ...]] = {
     "calc": ("calc.exe",),
     "calc.exe": ("calc.exe",),
@@ -534,7 +574,9 @@ class WindowsDesktopRuntime:
         normalized_title = window_title.strip()
         if not normalized_title:
             raise ValueError("window_title is required")
-        matched_window = self._wait_for_window_match(queries=(normalized_title,))
+        matched_window = self._wait_for_window_match(
+            queries=self._expand_window_title_queries(normalized_title)
+        )
         if matched_window is None:
             raise RuntimeError(f"Window not found within timeout: {window_title}")
         observation = self._build_observation(
@@ -849,7 +891,7 @@ class WindowsDesktopRuntime:
         normalized = query.strip()
         if not normalized:
             raise ValueError("window_title is required")
-        match_queries = self._expand_match_queries(normalized)
+        match_queries = self._expand_window_title_queries(normalized)
         windows = self._list_windows_snapshot(require_windows=True, require_input=False)
         for window in windows:
             if self._window_matches_any(window, match_queries):
@@ -863,7 +905,7 @@ class WindowsDesktopRuntime:
         before_windows: tuple[ComputerWindow, ...] = (),
         allow_existing_matches: bool = True,
     ) -> ComputerWindow | None:
-        normalized_queries = self._expand_match_queries(*queries)
+        normalized_queries = self._normalize_match_queries(*queries)
         before_ids = {window.window_id for window in before_windows}
         deadline = self._time_monotonic() + _WAIT_TIMEOUT_SECONDS
         while self._time_monotonic() < deadline:
@@ -948,6 +990,15 @@ class WindowsDesktopRuntime:
             expanded_queries.append(query)
             expanded_queries.extend(
                 _WINDOWS_APP_QUERY_ALIASES.get(query.casefold(), ())
+            )
+        return self._normalize_match_queries(*expanded_queries)
+
+    def _expand_window_title_queries(self, *queries: str) -> tuple[str, ...]:
+        expanded_queries: list[str] = []
+        for query in self._normalize_match_queries(*queries):
+            expanded_queries.append(query)
+            expanded_queries.extend(
+                _WINDOWS_WINDOW_TITLE_QUERY_ALIASES.get(query.casefold(), ())
             )
         return self._normalize_match_queries(*expanded_queries)
 
