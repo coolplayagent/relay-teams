@@ -100,6 +100,8 @@ class ComputerObservation(BaseModel):
     screenshot_bytes: bytes | None = None
     screenshot_mime_type: str | None = None
     screenshot_name: str = ""
+    screenshot_origin_x: int | None = None
+    screenshot_origin_y: int | None = None
     screenshot_width: int | None = Field(default=None, ge=0)
     screenshot_height: int | None = Field(default=None, ge=0)
 
