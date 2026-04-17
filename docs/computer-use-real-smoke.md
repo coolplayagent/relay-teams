@@ -8,7 +8,7 @@ This feature already has CI coverage through the scripted desktop runtime. Use t
 
 - Windows desktop session with an interactive user session
 - PowerShell available on `PATH`
-- Calculator available through `calc.exe`
+- Notepad available through `notepad.exe`
 
 ### Linux
 
@@ -33,6 +33,8 @@ This feature already has CI coverage through the scripted desktop runtime. Use t
   - `xcalc`
 
 The Windows backend uses PowerShell for screenshot and window discovery, plus Win32 input injection for mouse and keyboard control. It expects a normal interactive desktop session.
+
+Windows launch resolution now includes built-in aliases for common apps such as `Notepad` / `记事本` and `Calculator` / `计算器`. Use Notepad for smoke validation because it is consistently present on Windows desktop and server images, while Calculator can still depend on AppX availability.
 
 The Linux backend is intended for X11 or XWayland-style desktop control. Scripted CI validation remains the default because many headless or pure Wayland environments do not expose window/input automation consistently.
 
@@ -65,19 +67,19 @@ Keep the existing fake model server setup if you want a deterministic tool seque
 5. Start a run with a prompt such as:
 
 ```text
-[computer-real-validation] 打开计算器，等待窗口出现，然后截图确认。
+[computer-real-validation] 打开记事本，等待窗口出现，然后截图确认。
 ```
 
 6. Approve the `launch_app` action when the approval card appears.
-7. Confirm that a real calculator window appears on the desktop.
+7. Confirm that a real Notepad window appears on the desktop.
 8. Confirm that the completed run includes:
    - a successful `launch_app`
    - a successful `wait_for_window`
-   - a screenshot showing the calculator window
+   - a screenshot showing the Notepad window
 
 ## Expected Result
 
-- The OS really launches Calculator instead of only appending a fake window entry.
+- The OS really launches Notepad instead of only appending a fake window entry.
 - The run timeline contains a real screenshot from the desktop session.
 - Windows screenshot observations include the virtual-screen origin so multi-monitor coordinate picks stay aligned with pointer actions.
-- The `launch_app` tool result includes `data.launched_command`, which shows the resolved executable used by the OS backend, such as `calc.exe` on Windows or `gnome-calculator` on Linux.
+- The `launch_app` tool result includes `data.launched_command`, which shows the resolved executable used by the OS backend, such as `notepad.exe` or `calc.exe` on Windows, or `gnome-calculator` on Linux.
