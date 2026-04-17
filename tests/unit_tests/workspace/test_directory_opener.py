@@ -98,6 +98,59 @@ def test_open_workspace_directory_uses_explorer_on_windows(
     }
 
 
+def test_open_workspace_directory_tolerates_explorer_exiting_immediately_on_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_path = tmp_path / "workspace-root"
+    target_path.mkdir()
+
+    def fake_popen(command: list[str], **kwargs: object) -> object:
+        _ = (command, kwargs)
+        return _FakeProcess(returncode=1)
+
+    monkeypatch.setattr(directory_opener.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        directory_opener.shutil,
+        "which",
+        lambda name: "C:/Windows/explorer.exe" if name == "explorer" else None,
+    )
+    monkeypatch.setattr(directory_opener.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        directory_opener.subprocess,
+        "STARTUPINFO",
+        lambda: types.SimpleNamespace(dwFlags=0, wShowWindow=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        directory_opener.subprocess,
+        "STARTF_USESHOWWINDOW",
+        1,
+        raising=False,
+    )
+    monkeypatch.setattr(directory_opener.subprocess, "SW_HIDE", 0, raising=False)
+    monkeypatch.setattr(
+        directory_opener.subprocess,
+        "CREATE_NEW_PROCESS_GROUP",
+        2,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        directory_opener.subprocess,
+        "DETACHED_PROCESS",
+        4,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        directory_opener.subprocess,
+        "CREATE_NO_WINDOW",
+        8,
+        raising=False,
+    )
+
+    directory_opener.open_workspace_directory(target_path)
+
+
 def test_open_workspace_directory_falls_back_to_gio_on_linux(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

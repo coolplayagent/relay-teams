@@ -93,7 +93,7 @@ def _start_detached_process(command: list[str], *, platform_name: str) -> None:
                 | int(getattr(subprocess, "DETACHED_PROCESS", 0))
                 | int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
             )
-            process = subprocess.Popen(
+            _ = subprocess.Popen(
                 command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -101,7 +101,8 @@ def _start_detached_process(command: list[str], *, platform_name: str) -> None:
                 creationflags=creationflags,
                 startupinfo=startupinfo,
             )
-            _ensure_process_started(process)
+            # Explorer can hand the directory off to the shell and exit immediately
+            # with a non-zero code even when the folder opens successfully.
             return
 
         process = subprocess.Popen(
