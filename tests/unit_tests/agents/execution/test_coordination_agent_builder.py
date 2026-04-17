@@ -114,9 +114,11 @@ def test_build_coordination_agent_passes_proxy_http_client(
     def _fake_build_llm_http_client(
         *,
         connect_timeout_seconds: float,
+        cache_scope: str | None = None,
         ssl_verify: bool | None = None,
     ) -> object:
         captured["connect_timeout_seconds"] = connect_timeout_seconds
+        captured["cache_scope"] = cache_scope
         captured["ssl_verify"] = ssl_verify
         return sentinel_client
 
@@ -178,6 +180,7 @@ def test_build_coordination_agent_passes_proxy_http_client(
     assert provider.kwargs["headers"] == ()
     assert provider.kwargs["http_client"] is sentinel_client
     assert captured["connect_timeout_seconds"] == 22.0
+    assert captured["cache_scope"] is None
     assert captured["ssl_verify"] is None
     assert fake_tool_registry.required == ("dispatch_task",)
     assert fake_tool_registry.calls == [

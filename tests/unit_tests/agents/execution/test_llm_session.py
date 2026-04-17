@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -10,6 +11,7 @@ from typing import cast
 import pytest
 from openai import APIStatusError
 
+import relay_teams.agents.execution.llm_session as llm_module
 from relay_teams.agents.execution.llm_session import (
     AgentLlmSession,
     _FallbackAttemptState,
@@ -726,6 +728,404 @@ async def test_generate_async_passes_retry_after_to_retry_schedule() -> None:
     assert len(captured_schedules) == 1
     schedule = captured_schedules[0]
     assert schedule.delay_ms == 7000
+
+
+@pytest.mark.asyncio
+async def test_execute_attempt_recovery_clears_cached_transport_before_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_retry_config"] = LlmRetryConfig(
+        jitter=False,
+        max_retries=1,
+        initial_delay_ms=1,
+    )
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="glm-5",
+        base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        api_key="test-key",
+        connect_timeout_seconds=15.0,
+    )
+
+    cleared: list[str] = []
+
+    async def _reset_llm_http_client_cache_entry(**kwargs: object) -> None:
+        assert kwargs["cache_scope"] == "run-1"
+        cleared.append("cleared")
+
+    monkeypatch.setattr(
+        llm_module,
+        "reset_llm_http_client_cache_entry",
+        _reset_llm_http_client_cache_entry,
+    )
+    monkeypatch.setattr(llm_module, "compute_retry_delay_ms", lambda **_: 0)
+
+    async def _fast_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fast_sleep)
+
+    scheduled: list[LlmRetrySchedule] = []
+
+    async def _capture_retry_scheduled(**kwargs: object) -> None:
+        scheduled.append(cast(LlmRetrySchedule, kwargs["schedule"]))
+
+    session.__dict__["_handle_retry_scheduled"] = _capture_retry_scheduled
+
+    async def _generate_async(
+        request: LLMRequest,
+        **kwargs: object,
+    ) -> str:
+        _ = (request, kwargs)
+        assert cleared == ["cleared"]
+        return "after retry"
+
+    session.__dict__["_generate_async"] = _generate_async
+
+    result = await AgentLlmSession._execute_attempt_recovery(
+        session,
+        request=_build_request(),
+        retry_error=LlmRetryErrorInfo(
+            message="TLS handshake failed",
+            error_code="network_error",
+            retryable=True,
+            transport_error=True,
+        ),
+        retry_number=0,
+        total_attempts=2,
+        history=[],
+        pending_messages=[],
+        should_retry=True,
+        should_resume_after_tool_outcomes=False,
+        attempt_text_emitted=False,
+        attempt_tool_call_event_emitted=False,
+        attempt_tool_outcome_event_emitted=False,
+        attempt_messages_committed=False,
+        fallback_state=_FallbackAttemptState.initial("default"),
+        skip_initial_user_prompt_persist=False,
+    )
+
+    assert result.response == "after retry"
+    assert scheduled[0].delay_ms == 0
+    assert cleared == ["cleared"]
+
+
+@pytest.mark.asyncio
+async def test_execute_attempt_recovery_keeps_cached_transport_for_non_transport_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_retry_config"] = LlmRetryConfig(
+        jitter=False,
+        max_retries=1,
+        initial_delay_ms=1,
+    )
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="glm-5",
+        base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        api_key="test-key",
+        connect_timeout_seconds=15.0,
+    )
+
+    cleared: list[str] = []
+
+    async def _reset_llm_http_client_cache_entry(**kwargs: object) -> None:
+        assert kwargs["cache_scope"] == "run-1"
+        cleared.append("cleared")
+
+    monkeypatch.setattr(
+        llm_module,
+        "reset_llm_http_client_cache_entry",
+        _reset_llm_http_client_cache_entry,
+    )
+    monkeypatch.setattr(llm_module, "compute_retry_delay_ms", lambda **_: 0)
+
+    async def _fast_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fast_sleep)
+
+    async def _ignore_retry_schedule(**kwargs: object) -> None:
+        _ = kwargs
+        return None
+
+    session.__dict__["_handle_retry_scheduled"] = _ignore_retry_schedule
+
+    async def _generate_async(
+        request: LLMRequest,
+        **kwargs: object,
+    ) -> str:
+        _ = (request, kwargs)
+        assert cleared == []
+        return "after retry"
+
+    session.__dict__["_generate_async"] = _generate_async
+
+    result = await AgentLlmSession._execute_attempt_recovery(
+        session,
+        request=_build_request(),
+        retry_error=LlmRetryErrorInfo(
+            message="slow down",
+            status_code=429,
+            error_code="rate_limited",
+            retryable=True,
+            rate_limited=True,
+            transport_error=False,
+        ),
+        retry_number=0,
+        total_attempts=2,
+        history=[],
+        pending_messages=[],
+        should_retry=True,
+        should_resume_after_tool_outcomes=False,
+        attempt_text_emitted=False,
+        attempt_tool_call_event_emitted=False,
+        attempt_tool_outcome_event_emitted=False,
+        attempt_messages_committed=False,
+        fallback_state=_FallbackAttemptState.initial("default"),
+        skip_initial_user_prompt_persist=False,
+    )
+
+    assert result.response == "after retry"
+    assert cleared == []
+
+
+@pytest.mark.asyncio
+async def test_execute_attempt_recovery_clears_cached_transport_before_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_retry_config"] = LlmRetryConfig(max_retries=1)
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="glm-5",
+        base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        api_key="test-key",
+        connect_timeout_seconds=15.0,
+    )
+
+    cleared: list[str] = []
+
+    async def _reset_llm_http_client_cache_entry(**kwargs: object) -> None:
+        assert kwargs["cache_scope"] == "run-1"
+        cleared.append("cleared")
+
+    monkeypatch.setattr(
+        llm_module,
+        "reset_llm_http_client_cache_entry",
+        _reset_llm_http_client_cache_entry,
+    )
+
+    async def _resume_after_tool_outcomes(**kwargs: object) -> str:
+        _ = kwargs
+        assert cleared == ["cleared"]
+        return "resumed"
+
+    session.__dict__["_resume_after_tool_outcomes"] = _resume_after_tool_outcomes
+
+    result = await AgentLlmSession._execute_attempt_recovery(
+        session,
+        request=_build_request(),
+        retry_error=LlmRetryErrorInfo(
+            message="TLS handshake failed",
+            error_code="network_error",
+            retryable=True,
+            transport_error=True,
+        ),
+        retry_number=0,
+        total_attempts=2,
+        history=[],
+        pending_messages=[],
+        should_retry=False,
+        should_resume_after_tool_outcomes=True,
+        attempt_text_emitted=False,
+        attempt_tool_call_event_emitted=False,
+        attempt_tool_outcome_event_emitted=False,
+        attempt_messages_committed=False,
+        fallback_state=_FallbackAttemptState.initial("default"),
+        skip_initial_user_prompt_persist=False,
+    )
+
+    assert result.response == "resumed"
+    assert cleared == ["cleared"]
+
+
+@pytest.mark.asyncio
+async def test_generate_async_closes_scoped_transport_cache_on_cancellation() -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="glm-5",
+        base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        api_key="test-key",
+        connect_timeout_seconds=15.0,
+    )
+    session.__dict__["_retry_config"] = LlmRetryConfig(max_retries=0)
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_allowed_tools"] = ()
+    session.__dict__["_allowed_mcp_servers"] = ()
+    session.__dict__["_allowed_skills"] = ()
+    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_shared_store"] = cast(object, None)
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_message_repo"] = cast(
+        MessageRepository, _FakeMessageRepo(history=[])
+    )
+    session.__dict__["_approval_ticket_repo"] = cast(object, None)
+    session.__dict__["_run_runtime_repo"] = cast(object, None)
+    session.__dict__["_injection_manager"] = type(
+        "_InjectionManager",
+        (),
+        {"drain_at_boundary": lambda self, run_id, instance_id: []},
+    )()
+    session.__dict__["_run_event_hub"] = type(
+        "_RunEventHub", (), {"publish": lambda self, event: None}
+    )()
+    session.__dict__["_agent_repo"] = cast(object, None)
+    session.__dict__["_workspace_manager"] = type(
+        "_WorkspaceManager",
+        (),
+        {"resolve": lambda self, **kwargs: cast(object, None)},
+    )()
+    session.__dict__["_role_memory_service"] = None
+    session.__dict__["_media_asset_service"] = None
+    session.__dict__["_computer_runtime"] = None
+    session.__dict__["_background_task_service"] = None
+    session.__dict__["_monitor_service"] = None
+    session.__dict__["_metric_recorder"] = None
+    session.__dict__["_token_usage_repo"] = None
+    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_mcp_registry"] = McpRegistry()
+    session.__dict__["_task_service"] = cast(object, None)
+    session.__dict__["_task_execution_service"] = cast(object, object())
+    session.__dict__["_tool_approval_manager"] = cast(object, None)
+    session.__dict__["_shell_approval_repo"] = None
+    session.__dict__["_notification_service"] = None
+    session.__dict__["_im_tool_service"] = None
+    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
+        object, None
+    )
+    session.__dict__["_persist_user_prompt_if_needed"] = lambda **kwargs: kwargs[
+        "history"
+    ]
+
+    class _CancelledControlContext:
+        def raise_if_cancelled(self) -> None:
+            raise asyncio.CancelledError()
+
+    session.__dict__["_run_control_manager"] = type(
+        "_RunControlManager",
+        (),
+        {
+            "context": lambda self, run_id, instance_id: _CancelledControlContext(),
+        },
+    )()
+
+    class _UnusedAgent:
+        def iter(self, *_args: object, **_kwargs: object) -> object:
+            raise AssertionError("cancelled runs should not start agent iteration")
+
+    async def _build_agent_iteration_context(
+        **kwargs: object,
+    ) -> tuple[str, list[object], str, object]:
+        _ = kwargs
+        return "", [], "System prompt", _UnusedAgent()
+
+    session.__dict__["_build_agent_iteration_context"] = _build_agent_iteration_context
+
+    closed_run_ids: list[str] = []
+
+    async def _close_run_scoped_llm_http_client(*, request: LLMRequest) -> None:
+        closed_run_ids.append(request.run_id)
+
+    session.__dict__["_close_run_scoped_llm_http_client"] = (
+        _close_run_scoped_llm_http_client
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await AgentLlmSession._generate_async(
+            session,
+            _build_request(),
+        )
+
+    assert closed_run_ids == ["run-1"]
+
+
+@pytest.mark.asyncio
+async def test_generate_async_closes_scoped_transport_cache_on_setup_failure() -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="glm-5",
+        base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        api_key="test-key",
+        connect_timeout_seconds=15.0,
+    )
+    session.__dict__["_retry_config"] = LlmRetryConfig(max_retries=0)
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_allowed_tools"] = ()
+    session.__dict__["_allowed_mcp_servers"] = ()
+    session.__dict__["_allowed_skills"] = ()
+    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_shared_store"] = cast(object, None)
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_message_repo"] = cast(
+        MessageRepository, _FakeMessageRepo(history=[])
+    )
+    session.__dict__["_approval_ticket_repo"] = cast(object, None)
+    session.__dict__["_run_runtime_repo"] = cast(object, None)
+    session.__dict__["_injection_manager"] = type(
+        "_InjectionManager",
+        (),
+        {"drain_at_boundary": lambda self, run_id, instance_id: []},
+    )()
+    session.__dict__["_run_event_hub"] = type(
+        "_RunEventHub", (), {"publish": lambda self, event: None}
+    )()
+    session.__dict__["_agent_repo"] = cast(object, None)
+    session.__dict__["_workspace_manager"] = type(
+        "_WorkspaceManager",
+        (),
+        {"resolve": lambda self, **kwargs: cast(object, None)},
+    )()
+    session.__dict__["_role_memory_service"] = None
+    session.__dict__["_media_asset_service"] = None
+    session.__dict__["_computer_runtime"] = None
+    session.__dict__["_background_task_service"] = None
+    session.__dict__["_monitor_service"] = None
+    session.__dict__["_metric_recorder"] = None
+    session.__dict__["_token_usage_repo"] = None
+    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_mcp_registry"] = McpRegistry()
+    session.__dict__["_task_service"] = cast(object, None)
+    session.__dict__["_task_execution_service"] = cast(object, object())
+    session.__dict__["_tool_approval_manager"] = cast(object, None)
+    session.__dict__["_shell_approval_repo"] = None
+    session.__dict__["_notification_service"] = None
+    session.__dict__["_im_tool_service"] = None
+    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
+        object, None
+    )
+
+    async def _build_agent_iteration_context(**kwargs: object) -> object:
+        _ = kwargs
+        raise RuntimeError("setup failed after creating scoped client")
+
+    session.__dict__["_build_agent_iteration_context"] = _build_agent_iteration_context
+
+    closed_run_ids: list[str] = []
+
+    async def _close_run_scoped_llm_http_client(*, request: LLMRequest) -> None:
+        closed_run_ids.append(request.run_id)
+
+    session.__dict__["_close_run_scoped_llm_http_client"] = (
+        _close_run_scoped_llm_http_client
+    )
+
+    with pytest.raises(RuntimeError, match="setup failed"):
+        await AgentLlmSession._generate_async(
+            session,
+            _build_request(),
+        )
+
+    assert closed_run_ids == ["run-1"]
 
 
 @pytest.mark.asyncio
