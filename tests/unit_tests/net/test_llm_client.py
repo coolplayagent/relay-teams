@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import cast
 
 import httpx
 import pytest
@@ -53,6 +54,9 @@ def test_build_llm_http_client_loads_saved_proxy_settings_when_env_not_provided(
     class _FakeAsyncClient:
         def __init__(self) -> None:
             self.is_closed = False
+
+        async def aclose(self) -> None:
+            self.is_closed = True
 
     captured_kwargs: dict[str, object] = {}
 
@@ -175,3 +179,69 @@ def test_build_llm_http_client_enables_ssl_verification_when_configured() -> Non
 
     assert client is not None
     assert _transport_verify_mode(direct_transport) == _SSL_VERIFY_REQUIRED
+
+
+@pytest.mark.asyncio
+async def test_reset_llm_http_client_cache_entry_closes_targeted_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeAsyncClient:
+        def __init__(self) -> None:
+            self.is_closed = False
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            self.is_closed = True
+
+    created_clients: list[_FakeAsyncClient] = []
+
+    def _create_async_http_client(**_: object) -> _FakeAsyncClient:
+        client = _FakeAsyncClient()
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        llm_client,
+        "create_async_http_client",
+        _create_async_http_client,
+    )
+
+    first_client = cast(
+        _FakeAsyncClient,
+        llm_client.build_llm_http_client(
+            merged_env={"HTTPS_PROXY": "http://proxy.internal:8443"},
+            connect_timeout_seconds=42.5,
+            ssl_verify=False,
+        ),
+    )
+    second_client = cast(
+        _FakeAsyncClient,
+        llm_client.build_llm_http_client(
+            merged_env={"HTTPS_PROXY": "http://proxy.internal:9443"},
+            connect_timeout_seconds=42.5,
+            ssl_verify=False,
+        ),
+    )
+
+    await llm_client.reset_llm_http_client_cache_entry(
+        merged_env={"HTTPS_PROXY": "http://proxy.internal:8443"},
+        connect_timeout_seconds=42.5,
+        ssl_verify=False,
+    )
+
+    assert first_client.close_calls == 1
+    assert first_client.is_closed is True
+    assert second_client.close_calls == 0
+
+    rebuilt_client = cast(
+        _FakeAsyncClient,
+        llm_client.build_llm_http_client(
+            merged_env={"HTTPS_PROXY": "http://proxy.internal:8443"},
+            connect_timeout_seconds=42.5,
+            ssl_verify=False,
+        ),
+    )
+
+    assert rebuilt_client is not first_client
+    assert len(created_clients) == 3

@@ -49,7 +49,7 @@ from relay_teams.providers.model_fallback import (
     LlmFallbackDecision,
     LlmFallbackMiddleware,
 )
-from relay_teams.net.llm_client import clear_llm_http_client_cache
+from relay_teams.net.llm_client import reset_llm_http_client_cache_entry
 from relay_teams.providers.openai_model_profiles import (
     resolve_openai_chat_model_profile,
 )
@@ -1368,7 +1368,7 @@ class AgentLlmSession:
         skip_initial_user_prompt_persist: bool,
     ) -> _AttemptRecoveryOutcome:
         if should_retry:
-            self._reset_cached_transport_for_retry(retry_error=retry_error)
+            await self._reset_cached_transport_for_retry(retry_error=retry_error)
             resolved_retry_error = retry_error
             assert resolved_retry_error is not None
             next_retry_number = retry_number + 1
@@ -1397,7 +1397,7 @@ class AgentLlmSession:
                 )
             )
         if should_resume_after_tool_outcomes:
-            self._reset_cached_transport_for_retry(retry_error=retry_error)
+            await self._reset_cached_transport_for_retry(retry_error=retry_error)
             return _AttemptRecoveryOutcome.recovered(
                 await self._resume_after_tool_outcomes(
                     request=request,
@@ -1430,14 +1430,17 @@ class AgentLlmSession:
                 return _AttemptRecoveryOutcome.fallback_exhausted()
         return _AttemptRecoveryOutcome.no_recovery()
 
-    def _reset_cached_transport_for_retry(
+    async def _reset_cached_transport_for_retry(
         self,
         *,
         retry_error: LlmRetryErrorInfo | None,
     ) -> None:
         if retry_error is None or not retry_error.transport_error:
             return
-        clear_llm_http_client_cache()
+        await reset_llm_http_client_cache_entry(
+            ssl_verify=self._config.ssl_verify,
+            connect_timeout_seconds=self._config.connect_timeout_seconds,
+        )
 
     def _log_generate_failure_diagnostics(
         self,

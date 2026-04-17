@@ -739,12 +739,23 @@ async def test_execute_attempt_recovery_clears_cached_transport_before_retry(
         max_retries=1,
         initial_delay_ms=1,
     )
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="glm-5",
+        base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        api_key="test-key",
+        connect_timeout_seconds=15.0,
+    )
 
     cleared: list[str] = []
+
+    async def _reset_llm_http_client_cache_entry(**kwargs: object) -> None:
+        _ = kwargs
+        cleared.append("cleared")
+
     monkeypatch.setattr(
         llm_module,
-        "clear_llm_http_client_cache",
-        lambda: cleared.append("cleared"),
+        "reset_llm_http_client_cache_entry",
+        _reset_llm_http_client_cache_entry,
     )
     monkeypatch.setattr(llm_module, "compute_retry_delay_ms", lambda **_: 0)
 
@@ -808,12 +819,23 @@ async def test_execute_attempt_recovery_keeps_cached_transport_for_non_transport
         max_retries=1,
         initial_delay_ms=1,
     )
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="glm-5",
+        base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        api_key="test-key",
+        connect_timeout_seconds=15.0,
+    )
 
     cleared: list[str] = []
+
+    async def _reset_llm_http_client_cache_entry(**kwargs: object) -> None:
+        _ = kwargs
+        cleared.append("cleared")
+
     monkeypatch.setattr(
         llm_module,
-        "clear_llm_http_client_cache",
-        lambda: cleared.append("cleared"),
+        "reset_llm_http_client_cache_entry",
+        _reset_llm_http_client_cache_entry,
     )
     monkeypatch.setattr(llm_module, "compute_retry_delay_ms", lambda **_: 0)
 
@@ -873,12 +895,23 @@ async def test_execute_attempt_recovery_clears_cached_transport_before_resume(
 ) -> None:
     session = object.__new__(AgentLlmSession)
     session.__dict__["_retry_config"] = LlmRetryConfig(max_retries=1)
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="glm-5",
+        base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        api_key="test-key",
+        connect_timeout_seconds=15.0,
+    )
 
     cleared: list[str] = []
+
+    async def _reset_llm_http_client_cache_entry(**kwargs: object) -> None:
+        _ = kwargs
+        cleared.append("cleared")
+
     monkeypatch.setattr(
         llm_module,
-        "clear_llm_http_client_cache",
-        lambda: cleared.append("cleared"),
+        "reset_llm_http_client_cache_entry",
+        _reset_llm_http_client_cache_entry,
     )
 
     async def _resume_after_tool_outcomes(**kwargs: object) -> str:
