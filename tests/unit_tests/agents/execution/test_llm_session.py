@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -946,6 +947,106 @@ async def test_execute_attempt_recovery_clears_cached_transport_before_resume(
 
     assert result.response == "resumed"
     assert cleared == ["cleared"]
+
+
+@pytest.mark.asyncio
+async def test_generate_async_closes_scoped_transport_cache_on_cancellation() -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="glm-5",
+        base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        api_key="test-key",
+        connect_timeout_seconds=15.0,
+    )
+    session.__dict__["_retry_config"] = LlmRetryConfig(max_retries=0)
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_allowed_tools"] = ()
+    session.__dict__["_allowed_mcp_servers"] = ()
+    session.__dict__["_allowed_skills"] = ()
+    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_shared_store"] = cast(object, None)
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_message_repo"] = cast(
+        MessageRepository, _FakeMessageRepo(history=[])
+    )
+    session.__dict__["_approval_ticket_repo"] = cast(object, None)
+    session.__dict__["_run_runtime_repo"] = cast(object, None)
+    session.__dict__["_injection_manager"] = type(
+        "_InjectionManager",
+        (),
+        {"drain_at_boundary": lambda self, run_id, instance_id: []},
+    )()
+    session.__dict__["_run_event_hub"] = type(
+        "_RunEventHub", (), {"publish": lambda self, event: None}
+    )()
+    session.__dict__["_agent_repo"] = cast(object, None)
+    session.__dict__["_workspace_manager"] = type(
+        "_WorkspaceManager",
+        (),
+        {"resolve": lambda self, **kwargs: cast(object, None)},
+    )()
+    session.__dict__["_role_memory_service"] = None
+    session.__dict__["_media_asset_service"] = None
+    session.__dict__["_computer_runtime"] = None
+    session.__dict__["_background_task_service"] = None
+    session.__dict__["_monitor_service"] = None
+    session.__dict__["_metric_recorder"] = None
+    session.__dict__["_token_usage_repo"] = None
+    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_mcp_registry"] = McpRegistry()
+    session.__dict__["_task_service"] = cast(object, None)
+    session.__dict__["_task_execution_service"] = cast(object, object())
+    session.__dict__["_tool_approval_manager"] = cast(object, None)
+    session.__dict__["_shell_approval_repo"] = None
+    session.__dict__["_notification_service"] = None
+    session.__dict__["_im_tool_service"] = None
+    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
+        object, None
+    )
+    session.__dict__["_persist_user_prompt_if_needed"] = lambda **kwargs: kwargs[
+        "history"
+    ]
+
+    class _CancelledControlContext:
+        def raise_if_cancelled(self) -> None:
+            raise asyncio.CancelledError()
+
+    session.__dict__["_run_control_manager"] = type(
+        "_RunControlManager",
+        (),
+        {
+            "context": lambda self, run_id, instance_id: _CancelledControlContext(),
+        },
+    )()
+
+    class _UnusedAgent:
+        def iter(self, *_args: object, **_kwargs: object) -> object:
+            raise AssertionError("cancelled runs should not start agent iteration")
+
+    async def _build_agent_iteration_context(
+        **kwargs: object,
+    ) -> tuple[str, list[object], str, object]:
+        _ = kwargs
+        return "", [], "System prompt", _UnusedAgent()
+
+    session.__dict__["_build_agent_iteration_context"] = _build_agent_iteration_context
+
+    closed_run_ids: list[str] = []
+
+    async def _close_run_scoped_llm_http_client(*, request: LLMRequest) -> None:
+        closed_run_ids.append(request.run_id)
+
+    session.__dict__["_close_run_scoped_llm_http_client"] = (
+        _close_run_scoped_llm_http_client
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await AgentLlmSession._generate_async(
+            session,
+            _build_request(),
+        )
+
+    assert closed_run_ids == ["run-1"]
 
 
 @pytest.mark.asyncio

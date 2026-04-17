@@ -698,153 +698,214 @@ class AgentLlmSession:
         latest_streamed_text = ""
 
         try:
-            while True:
-                control_ctx.raise_if_cancelled()
-                restarted = False
-                async with agent.iter(
-                    None,
-                    deps=deps,
-                    message_history=history,
-                    usage_limits=UsageLimits(request_limit=LLM_REQUEST_LIMIT),
-                ) as agent_run:
-                    async for node in agent_run:
-                        control_ctx.raise_if_cancelled()
-                        if isinstance(node, ModelRequestNode):
-                            streamable_node = cast(_StreamableModelRequestNode, node)
-                            streamed_tool_calls = {}
-                            streamed_text_start = len(emitted_text_chunks)
-                            usage_before = deepcopy(agent_run.usage())
-                            # Stream text chunks from this model response in real-time
-                            async with streamable_node.stream(agent_run.ctx) as stream:
-                                stream_iter = getattr(stream, "__aiter__", None)
-                                if callable(stream_iter):
-                                    text_lengths: dict[int, int] = {}
-                                    thinking_lengths: dict[int, int] = {}
-                                    started_thinking_parts: set[int] = set()
-                                    async for stream_event in stream:
-                                        control_ctx.raise_if_cancelled()
-                                        text_emitted = self._handle_model_stream_event(
-                                            request=request,
-                                            stream_event=stream_event,
-                                            emitted_text_chunks=emitted_text_chunks,
-                                            text_lengths=text_lengths,
-                                            thinking_lengths=thinking_lengths,
-                                            started_thinking_parts=started_thinking_parts,
-                                            streamed_tool_calls=streamed_tool_calls,
-                                        )
-                                        if text_emitted:
-                                            printed_any = True
-                                            attempt_text_emitted = True
-                                            if active_retry_number > 0:
-                                                active_retry_number = 0
-                                else:
-                                    async for text_delta in stream.stream_text(
-                                        delta=True
-                                    ):
-                                        control_ctx.raise_if_cancelled()
-                                        if text_delta:
-                                            log_model_stream_chunk(
-                                                request.role_id, text_delta
-                                            )
-                                            printed_any = True
-                                            attempt_text_emitted = True
-                                            if active_retry_number > 0:
-                                                active_retry_number = 0
-                                            emitted_text_chunks.append(text_delta)
-                                            self._publish_text_delta_event(
+            try:
+                while True:
+                    control_ctx.raise_if_cancelled()
+                    restarted = False
+                    async with agent.iter(
+                        None,
+                        deps=deps,
+                        message_history=history,
+                        usage_limits=UsageLimits(request_limit=LLM_REQUEST_LIMIT),
+                    ) as agent_run:
+                        async for node in agent_run:
+                            control_ctx.raise_if_cancelled()
+                            if isinstance(node, ModelRequestNode):
+                                streamable_node = cast(
+                                    _StreamableModelRequestNode, node
+                                )
+                                streamed_tool_calls = {}
+                                streamed_text_start = len(emitted_text_chunks)
+                                usage_before = deepcopy(agent_run.usage())
+                                # Stream text chunks from this model response in real-time
+                                async with streamable_node.stream(
+                                    agent_run.ctx
+                                ) as stream:
+                                    stream_iter = getattr(stream, "__aiter__", None)
+                                    if callable(stream_iter):
+                                        text_lengths: dict[int, int] = {}
+                                        thinking_lengths: dict[int, int] = {}
+                                        started_thinking_parts: set[int] = set()
+                                        async for stream_event in stream:
+                                            control_ctx.raise_if_cancelled()
+                                            text_emitted = self._handle_model_stream_event(
                                                 request=request,
-                                                text=text_delta,
+                                                stream_event=stream_event,
+                                                emitted_text_chunks=emitted_text_chunks,
+                                                text_lengths=text_lengths,
+                                                thinking_lengths=thinking_lengths,
+                                                started_thinking_parts=started_thinking_parts,
+                                                streamed_tool_calls=streamed_tool_calls,
                                             )
-                            usage_after = stream.usage()
-                            request_level_input_tokens += self._usage_delta_int(
-                                after=usage_after,
-                                before=usage_before,
-                                field_name="input_tokens",
-                            )
-                            request_level_cached_input_tokens += self._usage_delta_int(
-                                after=usage_after,
-                                before=usage_before,
-                                field_name="cache_read_tokens",
-                            )
-                            request_level_output_tokens += self._usage_delta_int(
-                                after=usage_after,
-                                before=usage_before,
-                                field_name="output_tokens",
-                            )
-                            request_level_reasoning_output_tokens += (
-                                self._usage_detail_delta_int(
+                                            if text_emitted:
+                                                printed_any = True
+                                                attempt_text_emitted = True
+                                                if active_retry_number > 0:
+                                                    active_retry_number = 0
+                                    else:
+                                        async for text_delta in stream.stream_text(
+                                            delta=True
+                                        ):
+                                            control_ctx.raise_if_cancelled()
+                                            if text_delta:
+                                                log_model_stream_chunk(
+                                                    request.role_id, text_delta
+                                                )
+                                                printed_any = True
+                                                attempt_text_emitted = True
+                                                if active_retry_number > 0:
+                                                    active_retry_number = 0
+                                                emitted_text_chunks.append(text_delta)
+                                                self._publish_text_delta_event(
+                                                    request=request,
+                                                    text=text_delta,
+                                                )
+                                usage_after = stream.usage()
+                                request_level_input_tokens += self._usage_delta_int(
                                     after=usage_after,
                                     before=usage_before,
-                                    detail_name="reasoning_tokens",
+                                    field_name="input_tokens",
                                 )
-                            )
-                            request_level_requests += self._usage_delta_int(
-                                after=usage_after,
-                                before=usage_before,
-                                field_name="requests",
-                            )
-                            saw_request_level_usage = True
-                            streamed_node_text = "".join(
-                                emitted_text_chunks[streamed_text_start:]
-                            )
-                            latest_streamed_text = streamed_node_text
-                        else:
-                            streamed_node_text = ""
+                                request_level_cached_input_tokens += (
+                                    self._usage_delta_int(
+                                        after=usage_after,
+                                        before=usage_before,
+                                        field_name="cache_read_tokens",
+                                    )
+                                )
+                                request_level_output_tokens += self._usage_delta_int(
+                                    after=usage_after,
+                                    before=usage_before,
+                                    field_name="output_tokens",
+                                )
+                                request_level_reasoning_output_tokens += (
+                                    self._usage_detail_delta_int(
+                                        after=usage_after,
+                                        before=usage_before,
+                                        detail_name="reasoning_tokens",
+                                    )
+                                )
+                                request_level_requests += self._usage_delta_int(
+                                    after=usage_after,
+                                    before=usage_before,
+                                    field_name="requests",
+                                )
+                                saw_request_level_usage = True
+                                streamed_node_text = "".join(
+                                    emitted_text_chunks[streamed_text_start:]
+                                )
+                                latest_streamed_text = streamed_node_text
+                            else:
+                                streamed_node_text = ""
 
-                        # After each node (ModelRequestNode or others like CallToolsNode),
-                        # scan for new messages to emit tool call/result events
-                        all_new = agent_run.new_messages()
-                        new_batch = list(all_new)[seen_count:]
-                        new_to_process = self._drop_duplicate_leading_request(
-                            history=history,
-                            new_messages=new_batch,
-                        )
-                        new_to_process = self._apply_streamed_text_fallback(
-                            new_to_process,
-                            streamed_text=streamed_node_text,
-                        )
-                        if new_to_process:
-                            if active_retry_number > 0:
-                                active_retry_number = 0
-                            tool_call_events_emitted = (
-                                self._publish_tool_call_events_from_messages(
-                                    request=request,
-                                    messages=new_to_process,
-                                    published_tool_call_ids=published_tool_call_ids,
-                                )
-                            )
-                            if tool_call_events_emitted:
-                                attempt_tool_call_event_emitted = True
-                            self._normalize_tool_call_args_for_replay(new_to_process)
-                            buffered_messages.extend(new_to_process)
-                            previous_history_size = len(history)
-                            (
-                                history,
-                                buffered_messages,
-                                committed_tool_events_published,
-                                committed_tool_validation_failures,
-                            ) = self._commit_ready_messages(
-                                request=request,
+                            # After each node (ModelRequestNode or others like CallToolsNode),
+                            # scan for new messages to emit tool call/result events
+                            all_new = agent_run.new_messages()
+                            new_batch = list(all_new)[seen_count:]
+                            new_to_process = self._drop_duplicate_leading_request(
                                 history=history,
-                                pending_messages=buffered_messages,
+                                new_messages=new_batch,
                             )
-                            if committed_tool_events_published:
-                                attempt_tool_outcome_event_emitted = True
-                            if len(history) > previous_history_size:
-                                attempt_messages_committed = True
-                            if committed_tool_validation_failures:
-                                log_event(
-                                    LOGGER,
-                                    logging.INFO,
-                                    event="llm.tool_input_validation.continue_after_failure",
-                                    message=(
-                                        "Restarting agent iteration after tool input validation failure"
-                                    ),
-                                    payload={
-                                        "role_id": request.role_id,
-                                        "instance_id": request.instance_id,
-                                    },
+                            new_to_process = self._apply_streamed_text_fallback(
+                                new_to_process,
+                                streamed_text=streamed_node_text,
+                            )
+                            if new_to_process:
+                                if active_retry_number > 0:
+                                    active_retry_number = 0
+                                tool_call_events_emitted = (
+                                    self._publish_tool_call_events_from_messages(
+                                        request=request,
+                                        messages=new_to_process,
+                                        published_tool_call_ids=published_tool_call_ids,
+                                    )
                                 )
+                                if tool_call_events_emitted:
+                                    attempt_tool_call_event_emitted = True
+                                self._normalize_tool_call_args_for_replay(
+                                    new_to_process
+                                )
+                                buffered_messages.extend(new_to_process)
+                                previous_history_size = len(history)
+                                (
+                                    history,
+                                    buffered_messages,
+                                    committed_tool_events_published,
+                                    committed_tool_validation_failures,
+                                ) = self._commit_ready_messages(
+                                    request=request,
+                                    history=history,
+                                    pending_messages=buffered_messages,
+                                )
+                                if committed_tool_events_published:
+                                    attempt_tool_outcome_event_emitted = True
+                                if len(history) > previous_history_size:
+                                    attempt_messages_committed = True
+                                if committed_tool_validation_failures:
+                                    log_event(
+                                        LOGGER,
+                                        logging.INFO,
+                                        event="llm.tool_input_validation.continue_after_failure",
+                                        message=(
+                                            "Restarting agent iteration after tool input validation failure"
+                                        ),
+                                        payload={
+                                            "role_id": request.role_id,
+                                            "instance_id": request.instance_id,
+                                        },
+                                    )
+                                    (
+                                        prepared_prompt,
+                                        history,
+                                        agent_system_prompt,
+                                        agent,
+                                    ) = await self._build_agent_iteration_context(
+                                        request=request,
+                                        conversation_id=resolved_conversation_id,
+                                        system_prompt=request.system_prompt,
+                                        reserve_user_prompt_tokens=False,
+                                        allowed_tools=allowed_tools,
+                                        allowed_mcp_servers=self._allowed_mcp_servers,
+                                        allowed_skills=self._allowed_skills,
+                                    )
+                                    seen_count = 0
+                                    buffered_messages = []
+                                    restarted = True
+                                    break
+                            seen_count += len(new_batch)
+
+                            # Only restart for injections at a safe persistence boundary.
+                            if self._has_pending_tool_calls(buffered_messages):
+                                continue
+                            injections = self._injection_manager.drain_at_boundary(
+                                request.run_id, request.instance_id
+                            )
+                            if injections:
+                                for msg in injections:
+                                    self._run_event_hub.publish(
+                                        RunEvent(
+                                            session_id=request.session_id,
+                                            run_id=request.run_id,
+                                            trace_id=request.trace_id,
+                                            task_id=request.task_id,
+                                            instance_id=request.instance_id,
+                                            role_id=request.role_id,
+                                            event_type=RunEventType.INJECTION_APPLIED,
+                                            payload_json=msg.model_dump_json(),
+                                        )
+                                    )
+                                    self._message_repo.append_user_prompt_if_missing(
+                                        session_id=request.session_id,
+                                        workspace_id=resolved_workspace_id,
+                                        conversation_id=resolved_conversation_id,
+                                        agent_role_id=request.role_id,
+                                        instance_id=request.instance_id,
+                                        task_id=request.task_id,
+                                        trace_id=request.trace_id,
+                                        content=msg.content,
+                                    )
+                                attempt_messages_committed = True
+                                # Restart iter() with injected messages appended to committed history
                                 (
                                     prepared_prompt,
                                     history,
@@ -862,273 +923,245 @@ class AgentLlmSession:
                                 seen_count = 0
                                 buffered_messages = []
                                 restarted = True
-                                break
-                        seen_count += len(new_batch)
+                                break  # break inner for-loop, restart while
 
-                        # Only restart for injections at a safe persistence boundary.
-                        if self._has_pending_tool_calls(buffered_messages):
-                            continue
-                        injections = self._injection_manager.drain_at_boundary(
-                            request.run_id, request.instance_id
+                    if not restarted:
+                        # Normal completion
+                        maybe_result = agent_run.result
+                        if maybe_result is None:
+                            raise RuntimeError(
+                                "Model run finished without a result object"
+                            )
+                        result = maybe_result
+                        # Flush any remaining messages (e.g. final tool results)
+                        all_new = maybe_result.new_messages()
+                        to_save = self._drop_duplicate_leading_request(
+                            history=history,
+                            new_messages=list(all_new)[seen_count:],
                         )
-                        if injections:
-                            for msg in injections:
-                                self._run_event_hub.publish(
-                                    RunEvent(
-                                        session_id=request.session_id,
-                                        run_id=request.run_id,
-                                        trace_id=request.trace_id,
-                                        task_id=request.task_id,
-                                        instance_id=request.instance_id,
-                                        role_id=request.role_id,
-                                        event_type=RunEventType.INJECTION_APPLIED,
-                                        payload_json=msg.model_dump_json(),
-                                    )
+                        to_save = self._apply_streamed_text_fallback(
+                            to_save,
+                            streamed_text=latest_streamed_text,
+                        )
+                        if to_save:
+                            tool_call_events_emitted = (
+                                self._publish_tool_call_events_from_messages(
+                                    request=request,
+                                    messages=to_save,
+                                    published_tool_call_ids=published_tool_call_ids,
                                 )
-                                self._message_repo.append_user_prompt_if_missing(
-                                    session_id=request.session_id,
-                                    workspace_id=resolved_workspace_id,
-                                    conversation_id=resolved_conversation_id,
-                                    agent_role_id=request.role_id,
-                                    instance_id=request.instance_id,
-                                    task_id=request.task_id,
-                                    trace_id=request.trace_id,
-                                    content=msg.content,
-                                )
+                            )
+                            if tool_call_events_emitted:
+                                attempt_tool_call_event_emitted = True
+                            self._normalize_tool_call_args_for_replay(to_save)
+                            buffered_messages.extend(to_save)
+                        previous_history_size = len(history)
+                        (
+                            history,
+                            buffered_messages,
+                            committed_tool_events_published,
+                            _committed_tool_validation_failures,
+                        ) = self._commit_all_safe_messages(
+                            request=request,
+                            history=history,
+                            pending_messages=buffered_messages,
+                        )
+                        if committed_tool_events_published:
+                            attempt_tool_outcome_event_emitted = True
+                        if len(history) > previous_history_size:
                             attempt_messages_committed = True
-                            # Restart iter() with injected messages appended to committed history
-                            (
-                                prepared_prompt,
-                                history,
-                                agent_system_prompt,
-                                agent,
-                            ) = await self._build_agent_iteration_context(
-                                request=request,
-                                conversation_id=resolved_conversation_id,
-                                system_prompt=request.system_prompt,
-                                reserve_user_prompt_tokens=False,
-                                allowed_tools=allowed_tools,
-                                allowed_mcp_servers=self._allowed_mcp_servers,
-                                allowed_skills=self._allowed_skills,
+                        # Record and publish token usage
+                        usage = maybe_result.usage()
+                        input_tokens = request_level_input_tokens
+                        cached_input_tokens = request_level_cached_input_tokens
+                        output_tokens = request_level_output_tokens
+                        reasoning_output_tokens = request_level_reasoning_output_tokens
+                        requests = request_level_requests
+                        if not saw_request_level_usage:
+                            input_tokens = self._usage_field_int(usage, "input_tokens")
+                            cached_input_tokens = self._usage_field_int(
+                                usage, "cache_read_tokens"
                             )
-                            seen_count = 0
-                            buffered_messages = []
-                            restarted = True
-                            break  # break inner for-loop, restart while
-
-                if not restarted:
-                    # Normal completion
-                    maybe_result = agent_run.result
-                    if maybe_result is None:
-                        raise RuntimeError("Model run finished without a result object")
-                    result = maybe_result
-                    # Flush any remaining messages (e.g. final tool results)
-                    all_new = maybe_result.new_messages()
-                    to_save = self._drop_duplicate_leading_request(
-                        history=history,
-                        new_messages=list(all_new)[seen_count:],
-                    )
-                    to_save = self._apply_streamed_text_fallback(
-                        to_save,
-                        streamed_text=latest_streamed_text,
-                    )
-                    if to_save:
-                        tool_call_events_emitted = (
-                            self._publish_tool_call_events_from_messages(
-                                request=request,
-                                messages=to_save,
-                                published_tool_call_ids=published_tool_call_ids,
+                            output_tokens = self._usage_field_int(
+                                usage, "output_tokens"
+                            )
+                            reasoning_output_tokens = self._usage_detail_int(
+                                usage, "reasoning_tokens"
+                            )
+                            requests = self._usage_field_int(usage, "requests")
+                        tool_calls = self._usage_field_int(usage, "tool_calls")
+                        if self._token_usage_repo is not None:
+                            self._token_usage_repo.record(
+                                session_id=request.session_id,
+                                run_id=request.run_id,
+                                instance_id=request.instance_id,
+                                role_id=request.role_id,
+                                input_tokens=input_tokens,
+                                cached_input_tokens=cached_input_tokens,
+                                output_tokens=output_tokens,
+                                reasoning_output_tokens=reasoning_output_tokens,
+                                requests=requests,
+                                tool_calls=tool_calls,
+                            )
+                        self._run_event_hub.publish(
+                            RunEvent(
+                                session_id=request.session_id,
+                                run_id=request.run_id,
+                                trace_id=request.trace_id,
+                                task_id=request.task_id,
+                                instance_id=request.instance_id,
+                                role_id=request.role_id,
+                                event_type=RunEventType.TOKEN_USAGE,
+                                payload_json=dumps(
+                                    {
+                                        "input_tokens": input_tokens,
+                                        "cached_input_tokens": cached_input_tokens,
+                                        "output_tokens": output_tokens,
+                                        "reasoning_output_tokens": reasoning_output_tokens,
+                                        "total_tokens": input_tokens + output_tokens,
+                                        "requests": requests,
+                                        "tool_calls": tool_calls,
+                                        "role_id": request.role_id,
+                                        "instance_id": request.instance_id,
+                                    }
+                                ),
                             )
                         )
-                        if tool_call_events_emitted:
-                            attempt_tool_call_event_emitted = True
-                        self._normalize_tool_call_args_for_replay(to_save)
-                        buffered_messages.extend(to_save)
-                    previous_history_size = len(history)
-                    (
-                        history,
-                        buffered_messages,
-                        committed_tool_events_published,
-                        _committed_tool_validation_failures,
-                    ) = self._commit_all_safe_messages(
-                        request=request,
-                        history=history,
-                        pending_messages=buffered_messages,
-                    )
-                    if committed_tool_events_published:
-                        attempt_tool_outcome_event_emitted = True
-                    if len(history) > previous_history_size:
-                        attempt_messages_committed = True
-                    # Record and publish token usage
-                    usage = maybe_result.usage()
-                    input_tokens = request_level_input_tokens
-                    cached_input_tokens = request_level_cached_input_tokens
-                    output_tokens = request_level_output_tokens
-                    reasoning_output_tokens = request_level_reasoning_output_tokens
-                    requests = request_level_requests
-                    if not saw_request_level_usage:
-                        input_tokens = self._usage_field_int(usage, "input_tokens")
-                        cached_input_tokens = self._usage_field_int(
-                            usage, "cache_read_tokens"
+                        if self._metric_recorder is not None:
+                            record_token_usage(
+                                self._metric_recorder,
+                                workspace_id=resolved_workspace_id,
+                                session_id=request.session_id,
+                                run_id=request.run_id,
+                                instance_id=request.instance_id,
+                                role_id=request.role_id,
+                                input_tokens=input_tokens,
+                                cached_input_tokens=cached_input_tokens,
+                                output_tokens=output_tokens,
+                            )
+                        log_event(
+                            LOGGER,
+                            logging.INFO,
+                            event="llm.token_usage.recorded",
+                            message="LLM token usage recorded",
+                            payload={
+                                "input_tokens": input_tokens,
+                                "cached_input_tokens": cached_input_tokens,
+                                "output_tokens": output_tokens,
+                                "reasoning_output_tokens": reasoning_output_tokens,
+                                "requests": requests,
+                                "tool_calls": tool_calls,
+                                "role_id": request.role_id,
+                                "instance_id": request.instance_id,
+                            },
                         )
-                        output_tokens = self._usage_field_int(usage, "output_tokens")
-                        reasoning_output_tokens = self._usage_detail_int(
-                            usage, "reasoning_tokens"
-                        )
-                        requests = self._usage_field_int(usage, "requests")
-                    tool_calls = self._usage_field_int(usage, "tool_calls")
-                    if self._token_usage_repo is not None:
-                        self._token_usage_repo.record(
-                            session_id=request.session_id,
-                            run_id=request.run_id,
-                            instance_id=request.instance_id,
-                            role_id=request.role_id,
-                            input_tokens=input_tokens,
-                            cached_input_tokens=cached_input_tokens,
-                            output_tokens=output_tokens,
-                            reasoning_output_tokens=reasoning_output_tokens,
-                            requests=requests,
-                            tool_calls=tool_calls,
-                        )
-                    self._run_event_hub.publish(
-                        RunEvent(
-                            session_id=request.session_id,
-                            run_id=request.run_id,
-                            trace_id=request.trace_id,
-                            task_id=request.task_id,
-                            instance_id=request.instance_id,
-                            role_id=request.role_id,
-                            event_type=RunEventType.TOKEN_USAGE,
-                            payload_json=dumps(
-                                {
-                                    "input_tokens": input_tokens,
-                                    "cached_input_tokens": cached_input_tokens,
-                                    "output_tokens": output_tokens,
-                                    "reasoning_output_tokens": reasoning_output_tokens,
-                                    "total_tokens": input_tokens + output_tokens,
-                                    "requests": requests,
-                                    "tool_calls": tool_calls,
-                                    "role_id": request.role_id,
-                                    "instance_id": request.instance_id,
-                                }
-                            ),
-                        )
-                    )
-                    if self._metric_recorder is not None:
-                        record_token_usage(
-                            self._metric_recorder,
-                            workspace_id=resolved_workspace_id,
-                            session_id=request.session_id,
-                            run_id=request.run_id,
-                            instance_id=request.instance_id,
-                            role_id=request.role_id,
-                            input_tokens=input_tokens,
-                            cached_input_tokens=cached_input_tokens,
-                            output_tokens=output_tokens,
-                        )
-                    log_event(
-                        LOGGER,
-                        logging.INFO,
-                        event="llm.token_usage.recorded",
-                        message="LLM token usage recorded",
-                        payload={
-                            "input_tokens": input_tokens,
-                            "cached_input_tokens": cached_input_tokens,
-                            "output_tokens": output_tokens,
-                            "reasoning_output_tokens": reasoning_output_tokens,
-                            "requests": requests,
-                            "tool_calls": tool_calls,
-                            "role_id": request.role_id,
-                            "instance_id": request.instance_id,
-                        },
-                    )
-                    break  # done
-        except ModelAPIError as exc:
-            self._log_provider_request_failed(request=request, error=exc)
-            retry_error = extract_retry_error_info(exc)
-            error_message = self._build_model_api_error_message(exc)
-            recovery_outcome = await self._handle_generate_attempt_failure(
-                request=request,
-                error=exc,
-                retry_error=retry_error,
-                error_message=error_message,
-                diagnostics_kind="model_api_error",
-                retry_number=active_retry_number,
-                total_attempts=total_attempts,
-                history=history,
-                pending_messages=buffered_messages,
-                emitted_text_chunks=emitted_text_chunks,
-                published_tool_call_ids=published_tool_call_ids,
-                streamed_tool_calls=streamed_tool_calls,
-                attempt_text_emitted=attempt_text_emitted or printed_any,
-                attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
-                attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
-                attempt_messages_committed=attempt_messages_committed,
-                fallback_state=resolved_fallback_state,
-                skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
-            )
-            if recovery_outcome.response is not None:
-                await self._close_run_scoped_llm_http_client(request=request)
-                return recovery_outcome.response
-            await self._close_run_scoped_llm_http_client(request=request)
-            self._raise_terminal_model_api_failure(
-                request=request,
-                error=exc,
-                retry_error=retry_error,
-                retry_number=active_retry_number,
-                total_attempts=total_attempts,
-                error_message=error_message,
-                fallback_status=recovery_outcome.fallback_status,
-            )
-        except Exception as exc:
-            retry_error = extract_retry_error_info(exc)
-            error_message = (
-                retry_error.message
-                if retry_error is not None
-                else (str(exc) or exc.__class__.__name__)
-            )
-            recovery_outcome = await self._handle_generate_attempt_failure(
-                request=request,
-                error=exc,
-                retry_error=retry_error,
-                error_message=error_message,
-                diagnostics_kind="generic_exception",
-                retry_number=active_retry_number,
-                total_attempts=total_attempts,
-                history=history,
-                pending_messages=buffered_messages,
-                emitted_text_chunks=emitted_text_chunks,
-                published_tool_call_ids=published_tool_call_ids,
-                streamed_tool_calls=streamed_tool_calls,
-                attempt_text_emitted=attempt_text_emitted or printed_any,
-                attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
-                attempt_tool_outcome_event_emitted=(attempt_tool_outcome_event_emitted),
-                attempt_messages_committed=attempt_messages_committed,
-                fallback_state=resolved_fallback_state,
-                skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
-            )
-            if recovery_outcome.response is not None:
-                await self._close_run_scoped_llm_http_client(request=request)
-                return recovery_outcome.response
-            await self._close_run_scoped_llm_http_client(request=request)
-            self._raise_terminal_generic_failure(
-                request=request,
-                error=exc,
-                retry_error=retry_error,
-                retry_number=active_retry_number,
-                total_attempts=total_attempts,
-                fallback_status=recovery_outcome.fallback_status,
-            )
+                        break  # done
+            except ModelAPIError as exc:
+                self._log_provider_request_failed(request=request, error=exc)
+                retry_error = extract_retry_error_info(exc)
+                error_message = self._build_model_api_error_message(exc)
+                recovery_outcome = await self._handle_generate_attempt_failure(
+                    request=request,
+                    error=exc,
+                    retry_error=retry_error,
+                    error_message=error_message,
+                    diagnostics_kind="model_api_error",
+                    retry_number=active_retry_number,
+                    total_attempts=total_attempts,
+                    history=history,
+                    pending_messages=buffered_messages,
+                    emitted_text_chunks=emitted_text_chunks,
+                    published_tool_call_ids=published_tool_call_ids,
+                    streamed_tool_calls=streamed_tool_calls,
+                    attempt_text_emitted=attempt_text_emitted or printed_any,
+                    attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
+                    attempt_tool_outcome_event_emitted=(
+                        attempt_tool_outcome_event_emitted
+                    ),
+                    attempt_messages_committed=attempt_messages_committed,
+                    fallback_state=resolved_fallback_state,
+                    skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
+                )
+                if recovery_outcome.response is not None:
+                    return recovery_outcome.response
+                self._raise_terminal_model_api_failure(
+                    request=request,
+                    error=exc,
+                    retry_error=retry_error,
+                    retry_number=active_retry_number,
+                    total_attempts=total_attempts,
+                    error_message=error_message,
+                    fallback_status=recovery_outcome.fallback_status,
+                )
+            except Exception as exc:
+                retry_error = extract_retry_error_info(exc)
+                error_message = (
+                    retry_error.message
+                    if retry_error is not None
+                    else (str(exc) or exc.__class__.__name__)
+                )
+                recovery_outcome = await self._handle_generate_attempt_failure(
+                    request=request,
+                    error=exc,
+                    retry_error=retry_error,
+                    error_message=error_message,
+                    diagnostics_kind="generic_exception",
+                    retry_number=active_retry_number,
+                    total_attempts=total_attempts,
+                    history=history,
+                    pending_messages=buffered_messages,
+                    emitted_text_chunks=emitted_text_chunks,
+                    published_tool_call_ids=published_tool_call_ids,
+                    streamed_tool_calls=streamed_tool_calls,
+                    attempt_text_emitted=attempt_text_emitted or printed_any,
+                    attempt_tool_call_event_emitted=attempt_tool_call_event_emitted,
+                    attempt_tool_outcome_event_emitted=(
+                        attempt_tool_outcome_event_emitted
+                    ),
+                    attempt_messages_committed=attempt_messages_committed,
+                    fallback_state=resolved_fallback_state,
+                    skip_initial_user_prompt_persist=skip_initial_user_prompt_persist,
+                )
+                if recovery_outcome.response is not None:
+                    return recovery_outcome.response
+                self._raise_terminal_generic_failure(
+                    request=request,
+                    error=exc,
+                    retry_error=retry_error,
+                    retry_number=active_retry_number,
+                    total_attempts=total_attempts,
+                    fallback_status=recovery_outcome.fallback_status,
+                )
 
-        assert result is not None
+            assert result is not None
 
-        if printed_any:
-            close_model_stream()
+            if printed_any:
+                close_model_stream()
 
-        text = self._extract_text(result.response)
-        if not text and emitted_text_chunks:
-            text = "".join(emitted_text_chunks)
-        elif text and not emitted_text_chunks:
+            text = self._extract_text(result.response)
+            if not text and emitted_text_chunks:
+                text = "".join(emitted_text_chunks)
+            elif text and not emitted_text_chunks:
+                self._run_event_hub.publish(
+                    RunEvent(
+                        session_id=request.session_id,
+                        run_id=request.run_id,
+                        trace_id=request.trace_id,
+                        task_id=request.task_id,
+                        instance_id=request.instance_id,
+                        role_id=request.role_id,
+                        event_type=RunEventType.TEXT_DELTA,
+                        payload_json=dumps(
+                            {
+                                "text": text,
+                                "role_id": request.role_id,
+                                "instance_id": request.instance_id,
+                            }
+                        ),
+                    )
+                )
+            if text and not printed_any:
+                log_model_output(request.role_id, text)
             self._run_event_hub.publish(
                 RunEvent(
                     session_id=request.session_id,
@@ -1137,51 +1170,32 @@ class AgentLlmSession:
                     task_id=request.task_id,
                     instance_id=request.instance_id,
                     role_id=request.role_id,
-                    event_type=RunEventType.TEXT_DELTA,
+                    event_type=RunEventType.MODEL_STEP_FINISHED,
                     payload_json=dumps(
-                        {
-                            "text": text,
-                            "role_id": request.role_id,
-                            "instance_id": request.instance_id,
-                        }
+                        _model_step_payload(
+                            role_id=request.role_id,
+                            instance_id=request.instance_id,
+                            prepared_prompt=prepared_prompt,
+                        )
                     ),
                 )
             )
-        if text and not printed_any:
-            log_model_output(request.role_id, text)
-        self._run_event_hub.publish(
-            RunEvent(
-                session_id=request.session_id,
-                run_id=request.run_id,
-                trace_id=request.trace_id,
-                task_id=request.task_id,
-                instance_id=request.instance_id,
-                role_id=request.role_id,
-                event_type=RunEventType.MODEL_STEP_FINISHED,
-                payload_json=dumps(
-                    _model_step_payload(
-                        role_id=request.role_id,
-                        instance_id=request.instance_id,
-                        prepared_prompt=prepared_prompt,
-                    )
-                ),
+            log_event(
+                LOGGER,
+                logging.INFO,
+                event="llm.request.completed",
+                message="LLM request completed",
+                payload={
+                    "model": self._config.model,
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                    "task_id": request.task_id,
+                    "chars": len(text),
+                },
             )
-        )
-        log_event(
-            LOGGER,
-            logging.INFO,
-            event="llm.request.completed",
-            message="LLM request completed",
-            payload={
-                "model": self._config.model,
-                "role_id": request.role_id,
-                "instance_id": request.instance_id,
-                "task_id": request.task_id,
-                "chars": len(text),
-            },
-        )
-        await self._close_run_scoped_llm_http_client(request=request)
-        return text
+            return text
+        finally:
+            await self._close_run_scoped_llm_http_client(request=request)
 
     def _publish_model_step_started_event(self, *, request: LLMRequest) -> None:
         self._publish_model_step_started_event(request=request)
