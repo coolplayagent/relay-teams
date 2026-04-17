@@ -127,12 +127,20 @@ def test_web_search_request_rejects_invalid_code_context_options() -> None:
 async def test_registered_websearch_preserves_explicit_invalid_search_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def _execute_tool(_ctx: object, **kwargs: object) -> dict[str, JsonValue]:
-        action = cast(Callable[[], Awaitable[object]], kwargs["action"])
-        await action()
+    async def _execute_tool_call(
+        _ctx: object, **kwargs: object
+    ) -> dict[str, JsonValue]:
+        action = cast(Callable[..., Awaitable[object]], kwargs["action"])
+        raw_args = cast(dict[str, object], kwargs["raw_args"])
+        tool_args = {
+            name: raw_args[name]
+            for name in inspect.signature(action).parameters
+            if name in raw_args
+        }
+        await action(**tool_args)
         raise AssertionError("expected invalid search_mode to fail validation")
 
-    monkeypatch.setattr(websearch, "execute_tool", _execute_tool)
+    monkeypatch.setattr(websearch, "execute_tool_call", _execute_tool_call)
     monkeypatch.setattr(
         websearch,
         "load_runtime_web_config",
