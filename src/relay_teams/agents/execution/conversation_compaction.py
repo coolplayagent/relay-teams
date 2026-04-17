@@ -28,8 +28,15 @@ from pydantic_ai.profiles.openai import OpenAIModelProfile
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.logger import get_logger, log_event
 from relay_teams.net.llm_client import build_llm_http_client
-from relay_teams.providers.llm_retry import run_with_llm_retry
+from relay_teams.providers.llm_retry import (
+    extract_retry_error_info,
+    run_with_llm_retry,
+)
 from relay_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
+from relay_teams.providers.model_fallback import (
+    DisabledLlmFallbackMiddleware,
+    LlmFallbackMiddleware,
+)
 from relay_teams.providers.openai_model_profiles import (
     resolve_openai_chat_model_profile,
 )
@@ -280,13 +287,43 @@ class ConversationCompactionService:
         retry_config: LlmRetryConfig,
         message_repo: MessageRepository,
         session_history_marker_repo: SessionHistoryMarkerRepository,
+        fallback_middleware: LlmFallbackMiddleware
+        | DisabledLlmFallbackMiddleware
+        | None = None,
         strategy: ConversationCompactionStrategy | None = None,
+        profile_name: str | None = None,
     ) -> None:
         self._config = config
+        self._profile_name = (
+            profile_name.strip()
+            if profile_name is not None and profile_name.strip()
+            else None
+        )
         self._retry_config = retry_config
         self._message_repo = message_repo
         self._session_history_marker_repo = session_history_marker_repo
+        self._fallback_middleware = (
+            fallback_middleware
+            if fallback_middleware is not None
+            else DisabledLlmFallbackMiddleware()
+        )
         self._strategy = strategy or DefaultConversationCompactionStrategy()
+
+    def with_config(
+        self,
+        config: ModelEndpointConfig,
+        *,
+        profile_name: str | None = None,
+    ) -> "ConversationCompactionService":
+        return ConversationCompactionService(
+            config=config,
+            profile_name=self._profile_name if profile_name is None else profile_name,
+            retry_config=self._retry_config,
+            message_repo=self._message_repo,
+            session_history_marker_repo=self._session_history_marker_repo,
+            fallback_middleware=self._fallback_middleware,
+            strategy=self._strategy,
+        )
 
     async def maybe_compact(
         self,
@@ -452,6 +489,8 @@ class ConversationCompactionService:
         existing_summary: str,
         source_history: Sequence[ModelRequest | ModelResponse],
         source_char_budget: int,
+        fallback_hop: int = 0,
+        visited_profiles: tuple[str, ...] | None = None,
     ) -> str:
         transcript = _render_transcript(source_history, max_chars=source_char_budget)
         if not transcript.strip():
@@ -475,13 +514,50 @@ class ConversationCompactionService:
             f"Existing compacted summary:\n{existing_summary or '(empty)'}\n\n"
             f"Transcript to absorb:\n{transcript}"
         )
-        result = await run_with_llm_retry(
-            operation=lambda: self._run_streaming_summary(agent=agent, prompt=prompt),
-            config=self._retry_config,
-            is_retry_allowed=lambda: True,
-            on_retry_scheduled=lambda _schedule: None,
-        )
-        return result.strip()
+        try:
+            result = await run_with_llm_retry(
+                operation=lambda: self._run_streaming_summary(
+                    agent=agent, prompt=prompt
+                ),
+                config=self._retry_config,
+                is_retry_allowed=lambda: True,
+                on_retry_scheduled=lambda _schedule: None,
+            )
+            return result.strip()
+        except Exception as exc:
+            retry_error = extract_retry_error_info(exc)
+            if (
+                retry_error is None
+                or not retry_error.rate_limited
+                or self._profile_name is None
+                or not self._fallback_middleware.has_enabled_policy(self._config)
+            ):
+                raise
+            resolved_visited_profiles = visited_profiles or (
+                (self._profile_name,) if self._profile_name is not None else ()
+            )
+            decision = self._fallback_middleware.select_fallback(
+                current_profile_name=self._profile_name,
+                current_config=self._config,
+                error=retry_error,
+                visited_profiles=resolved_visited_profiles,
+                hop=fallback_hop,
+            )
+            if decision is None:
+                raise
+            next_service = self.with_config(
+                decision.target_config,
+                profile_name=decision.to_profile_name,
+            )
+            return await next_service._rewrite_summary(
+                role_id=role_id,
+                existing_summary=existing_summary,
+                source_history=source_history,
+                source_char_budget=source_char_budget,
+                fallback_hop=decision.hop,
+                visited_profiles=resolved_visited_profiles
+                + (decision.to_profile_name,),
+            )
 
     async def _run_streaming_summary(
         self,

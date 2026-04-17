@@ -29,6 +29,15 @@ class ProviderType(StrEnum):
     ECHO = "echo"
 
 
+class ModelFallbackTrigger(StrEnum):
+    RATE_LIMIT_AFTER_RETRIES = "rate_limit_after_retries"
+
+
+class ModelFallbackStrategy(StrEnum):
+    SAME_PROVIDER_THEN_OTHER_PROVIDER = "same_provider_then_other_provider"
+    OTHER_PROVIDER_ONLY = "other_provider_only"
+
+
 DEFAULT_MAAS_LOGIN_URL = (
     "http://rnd-idea-api.huawei.com/ideaclientservice/login/v4/secureLogin"
 )
@@ -112,6 +121,8 @@ class ModelEndpointConfig(BaseModel):
     maas_auth: MaaSAuthConfig | None = None
     ssl_verify: bool | None = None
     context_window: int | None = Field(default=None, ge=1)
+    fallback_policy_id: str | None = Field(default=None, min_length=1)
+    fallback_priority: int = Field(default=0, ge=0, le=1_000_000)
     connect_timeout_seconds: float = Field(
         default=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
         gt=0.0,
@@ -180,6 +191,8 @@ class ModelProfileConfigPayload(BaseModel):
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     max_tokens: int | None = Field(default=None, ge=1)
     context_window: int | None = Field(default=None, ge=1)
+    fallback_policy_id: str | None = Field(default=None, min_length=1)
+    fallback_priority: int = Field(default=0, ge=0, le=1_000_000)
     connect_timeout_seconds: float = Field(
         default=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
         gt=0.0,
@@ -226,3 +239,74 @@ class LlmRetryConfig(BaseModel):
         le=10.0,
     )
     jitter: bool = False
+
+
+class ModelFallbackPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy_id: RequiredIdentifierStr
+    name: str = Field(min_length=1)
+    description: str = ""
+    enabled: bool = True
+    trigger: ModelFallbackTrigger = ModelFallbackTrigger.RATE_LIMIT_AFTER_RETRIES
+    strategy: ModelFallbackStrategy
+    max_hops: int = Field(default=3, ge=1, le=10)
+    cooldown_seconds: int = Field(default=60, ge=0, le=3600)
+
+
+class ModelFallbackConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policies: tuple[ModelFallbackPolicy, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_unique_policy_ids(self) -> "ModelFallbackConfig":
+        seen_ids: set[str] = set()
+        for policy in self.policies:
+            normalized_id = policy.policy_id.casefold()
+            if normalized_id in seen_ids:
+                raise ValueError(
+                    f"Duplicate model fallback policy id: {policy.policy_id}"
+                )
+            seen_ids.add(normalized_id)
+        return self
+
+    def get_policy(self, policy_id: str | None) -> ModelFallbackPolicy | None:
+        if policy_id is None:
+            return None
+        normalized_id = policy_id.strip().casefold()
+        if not normalized_id:
+            return None
+        for policy in self.policies:
+            if policy.policy_id.casefold() == normalized_id:
+                return policy
+        return None
+
+
+def default_model_fallback_config() -> ModelFallbackConfig:
+    return ModelFallbackConfig(
+        policies=(
+            ModelFallbackPolicy(
+                policy_id="same_provider_then_other_provider",
+                name="Same Provider Then Other Provider",
+                description=(
+                    "Retry the same provider with higher-priority fallback profiles "
+                    "before switching to other providers."
+                ),
+                strategy=(ModelFallbackStrategy.SAME_PROVIDER_THEN_OTHER_PROVIDER),
+                max_hops=3,
+                cooldown_seconds=60,
+            ),
+            ModelFallbackPolicy(
+                policy_id="other_provider_only",
+                name="Other Provider Only",
+                description=(
+                    "Skip same-provider alternatives and fail over directly to "
+                    "profiles from other providers."
+                ),
+                strategy=ModelFallbackStrategy.OTHER_PROVIDER_ONLY,
+                max_hops=3,
+                cooldown_seconds=60,
+            ),
+        )
+    )

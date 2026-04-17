@@ -729,6 +729,7 @@ def _build_provider(
     session_history_marker_repo = SessionHistoryMarkerRepository(db_path)
     provider = OpenAICompatibleProvider(
         config,
+        profile_name=None,
         task_repo=TaskRepository(db_path),
         shared_store=shared_store,
         event_bus=EventLog(db_path),

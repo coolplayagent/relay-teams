@@ -319,6 +319,19 @@ function createModal() {
                                                 </div>
                                             </div>
                                         </div>
+                                        <div class="profile-editor-subsection">
+                                            <h5>Fallback</h5>
+                                            <div class="form-row">
+                                                <div class="form-group">
+                                                    <label for="profile-fallback-policy">Fallback Strategy</label>
+                                                    <select id="profile-fallback-policy"></select>
+                                                </div>
+                                                <div class="form-group">
+                                                    <label for="profile-fallback-priority">Fallback Priority</label>
+                                                    <input type="number" id="profile-fallback-priority" value="0" min="0" max="1000000" autocomplete="off">
+                                                </div>
+                                            </div>
+                                        </div>
                                         <div class="profile-default-row">
                                             <input type="checkbox" id="profile-is-default">
                                             <label for="profile-is-default" data-i18n="settings.model.set_default">Set as default profile</label>

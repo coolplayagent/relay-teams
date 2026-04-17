@@ -11,11 +11,16 @@ if TYPE_CHECKING:
         MaaSAuthConfig,
         ModelConfigPayload,
         ModelEndpointConfig,
+        ModelFallbackConfig,
+        ModelFallbackPolicy,
+        ModelFallbackStrategy,
+        ModelFallbackTrigger,
         ModelProfileConfigPayload,
         ModelRequestHeader,
         ProviderModelInfo,
         ProviderType,
         SamplingConfig,
+        default_model_fallback_config,
     )
     from relay_teams.providers.llm_retry import (
         LlmRetryErrorInfo,
@@ -27,6 +32,16 @@ if TYPE_CHECKING:
     from relay_teams.providers.openai_compatible import OpenAICompatibleProvider
     from relay_teams.providers.model_config_manager import ModelConfigManager
     from relay_teams.providers.model_config_service import ModelConfigService
+    from relay_teams.providers.model_fallback import (
+        DisabledLlmFallbackMiddleware,
+        LlmFallbackDecision,
+        LlmFallbackMiddleware,
+        ProfileCooldownRecord,
+        ProfileCooldownRegistry,
+    )
+    from relay_teams.providers.model_fallback_config_manager import (
+        ModelFallbackConfigManager,
+    )
     from relay_teams.providers.model_connectivity import (
         ModelDiscoveryEntry,
         ModelConnectivityDiagnostics,
@@ -60,8 +75,15 @@ __all__ = [
     "LlmRetryConfig",
     "MaaSAuthConfig",
     "ModelConfigPayload",
+    "ModelFallbackConfig",
+    "ModelFallbackConfigManager",
+    "ModelFallbackPolicy",
+    "ModelFallbackStrategy",
+    "ModelFallbackTrigger",
     "LlmRetryErrorInfo",
     "LlmRetrySchedule",
+    "LlmFallbackDecision",
+    "LlmFallbackMiddleware",
     "ModelEndpointConfig",
     "ModelProfileConfigPayload",
     "ModelRequestHeader",
@@ -77,6 +99,8 @@ __all__ = [
     "ModelConnectivityTokenUsage",
     "OpenAICompatibleProvider",
     "ProviderModelInfo",
+    "ProfileCooldownRecord",
+    "ProfileCooldownRegistry",
     "ProviderRegistry",
     "ProviderType",
     "RunTokenUsage",
@@ -86,6 +110,8 @@ __all__ = [
     "TokenUsageRepository",
     "compute_retry_delay_ms",
     "create_default_provider_registry",
+    "default_model_fallback_config",
+    "DisabledLlmFallbackMiddleware",
     "extract_retry_error_info",
     "infer_known_context_window",
     "list_provider_models",
@@ -102,11 +128,35 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "LlmRetryConfig": ("relay_teams.providers.model_config", "LlmRetryConfig"),
     "MaaSAuthConfig": ("relay_teams.providers.model_config", "MaaSAuthConfig"),
     "ModelConfigPayload": ("relay_teams.providers.model_config", "ModelConfigPayload"),
+    "ModelFallbackConfig": (
+        "relay_teams.providers.model_config",
+        "ModelFallbackConfig",
+    ),
+    "ModelFallbackPolicy": (
+        "relay_teams.providers.model_config",
+        "ModelFallbackPolicy",
+    ),
+    "ModelFallbackStrategy": (
+        "relay_teams.providers.model_config",
+        "ModelFallbackStrategy",
+    ),
+    "ModelFallbackTrigger": (
+        "relay_teams.providers.model_config",
+        "ModelFallbackTrigger",
+    ),
     "LlmRetryErrorInfo": (
         "relay_teams.providers.llm_retry",
         "LlmRetryErrorInfo",
     ),
     "LlmRetrySchedule": ("relay_teams.providers.llm_retry", "LlmRetrySchedule"),
+    "LlmFallbackDecision": (
+        "relay_teams.providers.model_fallback",
+        "LlmFallbackDecision",
+    ),
+    "LlmFallbackMiddleware": (
+        "relay_teams.providers.model_fallback",
+        "LlmFallbackMiddleware",
+    ),
     "ModelEndpointConfig": (
         "relay_teams.providers.model_config",
         "ModelEndpointConfig",
@@ -122,6 +172,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ModelConfigManager": (
         "relay_teams.providers.model_config_manager",
         "ModelConfigManager",
+    ),
+    "ModelFallbackConfigManager": (
+        "relay_teams.providers.model_fallback_config_manager",
+        "ModelFallbackConfigManager",
     ),
     "ModelConfigService": (
         "relay_teams.providers.model_config_service",
@@ -167,6 +221,14 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "relay_teams.providers.model_config",
         "ProviderModelInfo",
     ),
+    "ProfileCooldownRecord": (
+        "relay_teams.providers.model_fallback",
+        "ProfileCooldownRecord",
+    ),
+    "ProfileCooldownRegistry": (
+        "relay_teams.providers.model_fallback",
+        "ProfileCooldownRegistry",
+    ),
     "ProviderRegistry": ("relay_teams.providers.provider_registry", "ProviderRegistry"),
     "ProviderType": ("relay_teams.providers.model_config", "ProviderType"),
     "RunTokenUsage": (
@@ -193,6 +255,14 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "create_default_provider_registry": (
         "relay_teams.providers.provider_registry",
         "create_default_provider_registry",
+    ),
+    "default_model_fallback_config": (
+        "relay_teams.providers.model_config",
+        "default_model_fallback_config",
+    ),
+    "DisabledLlmFallbackMiddleware": (
+        "relay_teams.providers.model_fallback",
+        "DisabledLlmFallbackMiddleware",
     ),
     "extract_retry_error_info": (
         "relay_teams.providers.llm_retry",

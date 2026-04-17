@@ -103,7 +103,7 @@ The response body is a root object whose keys are profile ids and whose values u
 ### `GET /system/configs/model/profiles`
 
 Returns normalized model profiles.
-Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `headers[]` for additional request headers, `is_default` to mark the runtime fallback profile, and optional `context_window` for next-send context preview UI.
+Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `headers[]` for additional request headers, `is_default` to mark the runtime default profile, optional `context_window` for next-send context preview UI, optional `fallback_policy_id` to bind that profile to a fallback policy, and `fallback_priority` to rank it as a fallback candidate.
 `provider` currently supports `openai_compatible`, `bigmodel`, `minimax`, `maas`, and the internal/testing-only `echo`. MAAS profiles also return `maas_auth` with `username` and `has_password` so the web UI can preserve the stored password without echoing it back. The MAAS login endpoint and `app-id` are fixed by the backend.
 When no profile is explicitly marked default, the backend resolves the default in this order: a profile named `default`, the only configured profile, then the first profile by name.
 
@@ -116,9 +116,29 @@ If `source_name` does not exist, the backend returns `404`. Profile-level semant
 Profiles may also include optional `ssl_verify` to override the global outbound TLS verification default for that model only.
 Profiles may include `is_default` to promote that profile to the runtime default; saving one default clears the flag from all others.
 Profiles may include optional `context_window` to declare the total model context limit separately from `max_tokens`, which remains the output-token cap when explicitly set. If `max_tokens` is omitted, the backend preserves that unset state and lets the provider decide the default output cap for primary LLM requests.
+Profiles may include optional `fallback_policy_id` to enable quota/rate-limit fallback for that profile. The referenced policy id must exist in `model-fallback.json`. Profiles may also include `fallback_priority`; higher values are preferred when the profile is selected as a fallback candidate.
 Profiles may include `headers[]`, where each item has `name`, optional `value`, optional `secret`, and optional `configured`.
 Profiles must provide at least one auth source: `api_key`, one configured header, or `maas_auth` for `provider = "maas"`.
 When `provider = "maas"`, `maas_auth` must include `username`; `password` is accepted on write but persisted only in the unified secret store. The backend always authenticates against `http://rnd-idea-api.huawei.com/ideaclientservice/login/v4/secureLogin`, always sends `app-id: RelayTeams`, and always uses `http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/` as the MAAS inference base URL. When `context_window` is omitted and the backend recognizes the provider/model pair, it may auto-fill a known context limit during save and runtime load.
+
+### `GET /system/configs/model-fallback`
+
+Returns the model fallback policy config used after a profile exhausts its normal LLM retry budget because of a rate-limit or quota-style error.
+The response body contains `policies[]`. Each policy includes:
+- `policy_id`
+- `name`
+- `description`
+- `enabled`
+- `trigger`
+- `strategy`
+- `max_hops`
+- `cooldown_seconds`
+
+### `PUT /system/configs/model-fallback`
+
+Replaces the full model fallback policy config.
+The request body must match the same schema returned by `GET /system/configs/model-fallback`.
+Profile writes still validate `fallback_policy_id` strictly, but runtime loading tolerates stale saved references by ignoring the missing policy and logging a warning instead of failing startup.
 
 ### `DELETE /system/configs/model/profiles/{name}`
 

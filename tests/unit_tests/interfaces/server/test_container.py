@@ -12,6 +12,7 @@ from relay_teams.env.environment_variable_models import (
     EnvironmentVariableScope,
 )
 from relay_teams.interfaces.server.container import ServerContainer
+from relay_teams.providers.model_fallback import LlmFallbackMiddleware
 from relay_teams.roles import RoleLoader
 from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
@@ -86,6 +87,21 @@ def test_runtime_reload_updates_run_manager_provider_factory(
 
     assert container.run_service._provider_factory is container._provider_factory
     assert container.run_service._provider_factory is not previous_provider_factory
+
+
+def test_container_injects_fallback_middleware_into_reflection_service(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    container = ServerContainer(config_dir=config_dir)
+
+    reflection_service = container._build_subagent_reflection_service()
+
+    assert reflection_service is not None
+    assert isinstance(reflection_service._fallback_middleware, LlmFallbackMiddleware)
 
 
 def test_roles_reload_updates_long_lived_role_registry_references(

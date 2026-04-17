@@ -56,6 +56,7 @@ export {
     fetchEnvironmentVariables,
     fetchMcpServerTools,
     fetchModelConfig,
+    fetchModelFallbackConfig,
     fetchModelProfiles,
     fetchNotificationConfig,
     fetchOrchestrationConfig,

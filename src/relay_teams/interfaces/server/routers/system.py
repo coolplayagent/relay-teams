@@ -89,6 +89,7 @@ from relay_teams.notifications.notification_settings_service import (
 from relay_teams.providers.model_config import (
     DEFAULT_MAAS_BASE_URL,
     ModelConfigPayload,
+    ModelFallbackConfig,
     ModelProfileConfigPayload,
     ProviderType,
 )
@@ -122,6 +123,12 @@ class ModelConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     config: ModelConfigPayload
+
+
+class ModelFallbackConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    config: ModelFallbackConfig
 
 
 class OrchestrationConfigRequest(BaseModel):
@@ -209,6 +216,13 @@ def get_model_profiles(
     return service.get_model_profiles()
 
 
+@router.get("/configs/model-fallback")
+def get_model_fallback_config(
+    service: ModelConfigService = Depends(get_model_config_service),
+) -> ModelFallbackConfig:
+    return service.get_model_fallback_config()
+
+
 class ModelProfileRequest(ModelProfileConfigPayload):
     model_config = ConfigDict(extra="forbid")
 
@@ -235,6 +249,10 @@ def save_model_profile(
             "context_window": req.context_window,
             "connect_timeout_seconds": req.connect_timeout_seconds,
         }
+        if "fallback_policy_id" in req.model_fields_set:
+            profile["fallback_policy_id"] = req.fallback_policy_id
+        if "fallback_priority" in req.model_fields_set:
+            profile["fallback_priority"] = req.fallback_priority
         if "max_tokens" in req.model_fields_set:
             profile["max_tokens"] = req.max_tokens
         if req.is_default is not None:
@@ -294,6 +312,19 @@ def save_model_config(
     try:
         config = req.config if isinstance(req, ModelConfigRequest) else req
         service.save_model_config(config)
+        return {"status": "ok"}
+    except Exception as exc:
+        _raise_system_http_error(exc, value_error_status=400)
+
+
+@router.put("/configs/model-fallback")
+def save_model_fallback_config(
+    req: ModelFallbackConfig | ModelFallbackConfigRequest,
+    service: ModelConfigService = Depends(get_model_config_service),
+) -> dict[str, str]:
+    try:
+        config = req.config if isinstance(req, ModelFallbackConfigRequest) else req
+        service.save_model_fallback_config(config)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(exc, value_error_status=400)
