@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 from relay_teams.computer.linux_runtime import LinuxDesktopRuntime
+from relay_teams.computer.windows_runtime import WindowsDesktopRuntime
 from relay_teams.computer.models import (
     ComputerActionDescriptor,
     ComputerActionResult,
@@ -370,6 +371,8 @@ def build_default_computer_runtime(*, project_root: Path) -> ComputerRuntime:
     system_name = _platform_system()
     if system_name == "linux":
         return LinuxDesktopRuntime(project_root=project_root)
+    if system_name == "windows":
+        return WindowsDesktopRuntime(project_root=project_root)
     if system_name == "darwin":
         return DisabledComputerRuntime(
             reason="macOS desktop control has not been implemented yet."
