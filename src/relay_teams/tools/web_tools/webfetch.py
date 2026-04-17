@@ -1353,11 +1353,14 @@ async def download_binary_response(
                     size_bytes=manifest.total_size
                     or Path(manifest.saved_path).stat().st_size,
                     final_url=manifest.final_url,
-                    download_mode=BinaryDownloadMode.STREAMING_RANGES,
-                    range_supported=True,
-                    resume_supported=binary_download_resume_supported(
-                        probe=active_probe
+                    download_mode=(
+                        BinaryDownloadMode.STREAMING_RANGES
+                        if manifest.range_supported
+                        else BinaryDownloadMode.STREAMING
                     ),
+                    range_supported=manifest.range_supported,
+                    resume_supported=manifest.range_supported
+                    and binary_download_resume_supported(probe=active_probe),
                 )
             except ToolExecutionError as exc:
                 last_error = exc

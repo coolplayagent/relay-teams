@@ -1605,6 +1605,10 @@ async def test_download_binary_response_falls_back_when_full_range_request_retur
     data = cast(dict[str, object], projection.visible_data)
     saved_path = Path(str(data["saved_path"]))
     assert saved_path.read_bytes() == payload
+    assert data["download_mode"] == "streaming"
+    assert data["streamed_to_disk"] is True
+    assert data["range_supported"] is False
+    assert data["resume_supported"] is False
     assert request_log == [
         webfetch.RANGE_PROBE_HEADER_VALUE,
         f"bytes=0-{len(payload) - 1}",
