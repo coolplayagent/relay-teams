@@ -37,7 +37,11 @@ def _open_directory_windows(target_path: Path) -> None:
     if explorer is None:
         explorer = shutil.which("explorer.exe")
     if explorer is not None:
-        _start_detached_process([explorer, str(target_path)], platform_name="Windows")
+        _start_detached_process(
+            [explorer, str(target_path)],
+            platform_name="Windows",
+            skip_startup_check=True,
+        )
         return
 
     shell = shutil.which("powershell")
@@ -82,7 +86,12 @@ def _build_linux_open_command(target_path: Path) -> list[str]:
     raise RuntimeError(_OPEN_DIRECTORY_ERROR_MESSAGE)
 
 
-def _start_detached_process(command: list[str], *, platform_name: str) -> None:
+def _start_detached_process(
+    command: list[str],
+    *,
+    platform_name: str,
+    skip_startup_check: bool = False,
+) -> None:
     try:
         if platform_name == "Windows":
             startupinfo = subprocess.STARTUPINFO()
@@ -101,7 +110,8 @@ def _start_detached_process(command: list[str], *, platform_name: str) -> None:
                 creationflags=creationflags,
                 startupinfo=startupinfo,
             )
-            _ensure_process_started(process)
+            if not skip_startup_check:
+                _ensure_process_started(process)
             return
 
         process = subprocess.Popen(
