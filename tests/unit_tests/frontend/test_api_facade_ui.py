@@ -245,6 +245,108 @@ def test_core_api_facade_exports_wechat_gateway_helpers() -> None:
     )
 
 
+def test_core_api_facade_exports_open_workspace_root() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    api_module_path = repo_root / "frontend" / "dist" / "js" / "core" / "api.js"
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.document = {"
+                "querySelector() { return null; },"
+                "querySelectorAll() { return []; },"
+                "getElementById() { return null; },"
+                "body: null"
+                "}; "
+                f"const mod = await import({api_module_path.as_uri()!r}); "
+                "console.log(typeof mod.openWorkspaceRoot);"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    assert completed.stdout.strip() == "function"
+
+
+def test_open_workspace_root_posts_expected_endpoint(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "workspaces.js"
+    )
+    module_under_test_path = tmp_path / "workspaces.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJson(url, options, errorMessage) {
+    globalThis.__capturedRequest = {
+        url,
+        options,
+        errorMessage,
+    };
+    return globalThis.__capturedRequest;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "import { requestJson } from './request.js';",
+        "import { requestJson } from './mockRequest.mjs';",
+    )
+    assert module_text != source_text
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "await mod.openWorkspaceRoot('project-alpha'); "
+                "console.log(JSON.stringify(globalThis.__capturedRequest));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload == {
+        "url": "/api/workspaces/project-alpha:open-root",
+        "options": {"method": "POST"},
+        "errorMessage": "Failed to open project folder",
+    }
+
+
 def test_request_json_disables_browser_cache_for_get_requests(
     tmp_path: Path,
 ) -> None:

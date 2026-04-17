@@ -18,6 +18,7 @@ from relay_teams.paths import (
     read_bytes_file,
     unlink_path,
 )
+from relay_teams.workspace.directory_opener import open_workspace_directory
 from relay_teams.workspace.git_worktree import GitWorktreeClient
 from relay_teams.workspace.workspace_models import (
     BranchBinding,
@@ -114,6 +115,36 @@ class WorkspaceService:
 
     def get_workspace(self, workspace_id: str) -> WorkspaceRecord:
         return self._repository.get(workspace_id)
+
+    def open_workspace_root(self, workspace_id: str) -> Path:
+        record = self._repository.get(workspace_id)
+        root_path = self._validate_root(record.root_path)
+        try:
+            open_workspace_directory(root_path)
+        except RuntimeError:
+            log_event(
+                _logger,
+                30,
+                event="workspace.open_root.failed",
+                message="Failed to open workspace root in native file manager",
+                payload={
+                    "workspace_id": record.workspace_id,
+                    "root_path": str(root_path),
+                },
+            )
+            raise
+
+        log_event(
+            _logger,
+            20,
+            event="workspace.open_root.started",
+            message="Opened workspace root in native file manager",
+            payload={
+                "workspace_id": record.workspace_id,
+                "root_path": str(root_path),
+            },
+        )
+        return root_path
 
     def get_workspace_snapshot(self, workspace_id: str) -> WorkspaceSnapshot:
         record = self._repository.get(workspace_id)
