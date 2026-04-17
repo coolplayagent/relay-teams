@@ -1,6 +1,8 @@
-Search the web with the configured provider and return structured search hits for the query.
+Search the web and return structured search hits with the configured provider, or retrieve code-oriented context for the query.
 
-Use this when you need fresh external information that is not available in the workspace.
+Use this when you need fresh external information that is not available in the workspace, including SDK, API, library, framework, documentation, usage pattern, or code example context.
 Keep arguments minimal: provide the query and optionally the number of results.
-You may also pass `allowed_domains` or `blocked_domains` to constrain sources, but never both in the same call.
+For programming questions about SDK/API/library/framework usage, configuration, documentation, or code examples, explicitly pass `search_mode="code"` to retrieve concentrated Exa code context; optionally pass `tokens_num` from 1000 to 50000 to control context size.
+Use `search_mode="web"`, or leave `search_mode` unset, for normal web search such as release notes, news, changelogs, pricing, status pages, current events, and source-constrained searches.
+You may also pass `allowed_domains` or `blocked_domains` to constrain normal web search sources, but never both in the same call; domain filters are not supported with `search_mode="code"`.
 Provider-specific search knobs are handled internally.
