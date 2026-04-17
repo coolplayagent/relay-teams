@@ -314,6 +314,12 @@ def test_preapproved_webfetch_url_honors_path_boundaries() -> None:
     )
 
 
+def test_webfetch_description_mentions_binary_download_support() -> None:
+    assert "Downloading network files such as PDFs" in webfetch.DESCRIPTION
+    assert "can resume on later `webfetch` calls" in webfetch.DESCRIPTION
+    assert "shared `net` HTTP client" in webfetch.DESCRIPTION
+
+
 def test_build_webfetch_approval_request_marks_preapproved_hosts_safe() -> None:
     request = webfetch.build_webfetch_approval_request("https://docs.python.org/3/")
     decision = ToolApprovalPolicy().evaluate("webfetch", request)
@@ -1105,6 +1111,10 @@ async def test_download_binary_response_streams_parallel_ranges_to_file(
     saved_path = Path(str(data["saved_path"]))
     assert saved_path.exists()
     assert saved_path.read_bytes() == payload
+    assert data["download_mode"] == "streaming_ranges"
+    assert data["streamed_to_disk"] is True
+    assert data["range_supported"] is True
+    assert data["resume_supported"] is True
     assert request_log.count(webfetch.RANGE_PROBE_HEADER_VALUE) == 1
     assert (
         len(
@@ -1186,6 +1196,10 @@ async def test_fetch_webfetch_projection_falls_back_when_probe_is_rejected(
     data = cast(dict[str, object], projection.visible_data)
     saved_path = Path(str(data["saved_path"]))
     assert saved_path.read_bytes() == payload
+    assert data["download_mode"] == "streaming"
+    assert data["streamed_to_disk"] is True
+    assert data["range_supported"] is False
+    assert data["resume_supported"] is False
     assert request_log == [webfetch.RANGE_PROBE_HEADER_VALUE, ""]
 
 
@@ -1229,6 +1243,10 @@ async def test_download_binary_response_resumes_across_calls(tmp_path: Path) -> 
     data = cast(dict[str, object], projection.visible_data)
     saved_path = Path(str(data["saved_path"]))
     assert saved_path.read_bytes() == payload
+    assert data["download_mode"] == "streaming_ranges"
+    assert data["streamed_to_disk"] is True
+    assert data["range_supported"] is True
+    assert data["resume_supported"] is True
     assert webfetch.RANGE_PROBE_HEADER_VALUE in request_log
     assert f"bytes=786432-{len(payload) - 1}" in request_log
 
@@ -1489,7 +1507,72 @@ async def test_download_binary_response_falls_back_when_range_probe_is_ignored(
     data = cast(dict[str, object], projection.visible_data)
     saved_path = Path(str(data["saved_path"]))
     assert saved_path.read_bytes() == payload
+    assert data["download_mode"] == "streaming"
+    assert data["streamed_to_disk"] is True
+    assert data["range_supported"] is False
+    assert data["resume_supported"] is False
     assert request_log == [webfetch.RANGE_PROBE_HEADER_VALUE]
+
+
+@pytest.mark.asyncio
+async def test_download_binary_response_reuses_completed_non_range_file_metadata(
+    tmp_path: Path,
+) -> None:
+    payload = _make_binary_bytes(1024 * 1024)
+    request_log: list[str] = []
+    shared_store = _build_shared_store(tmp_path)
+
+    first_client = httpx.AsyncClient(
+        transport=_build_binary_transport(
+            data=payload,
+            ignore_range_probe=True,
+            request_log=request_log,
+        )
+    )
+    try:
+        first = await webfetch.download_binary_response(
+            client=first_client,
+            requested_url="https://example.com/reuse-no-range.pdf",
+            response_format="markdown",
+            workspace_dir=tmp_path,
+            workspace_id="workspace-1",
+            shared_store=shared_store,
+            cancel_check=lambda: None,
+        )
+    finally:
+        await first_client.aclose()
+
+    second_client = httpx.AsyncClient(
+        transport=_build_binary_transport(
+            data=payload,
+            ignore_range_probe=True,
+            request_log=request_log,
+        )
+    )
+    try:
+        second = await webfetch.download_binary_response(
+            client=second_client,
+            requested_url="https://example.com/reuse-no-range.pdf",
+            response_format="markdown",
+            workspace_dir=tmp_path,
+            workspace_id="workspace-1",
+            shared_store=shared_store,
+            cancel_check=lambda: None,
+        )
+    finally:
+        await second_client.aclose()
+
+    first_data = cast(dict[str, object], first.visible_data)
+    second_data = cast(dict[str, object], second.visible_data)
+    assert first_data["saved_path"] == second_data["saved_path"]
+    assert second_data["download_mode"] == "streaming"
+    assert second_data["streamed_to_disk"] is True
+    assert second_data["range_supported"] is False
+    assert second_data["resume_supported"] is False
+    assert request_log == [
+        webfetch.RANGE_PROBE_HEADER_VALUE,
+        webfetch.RANGE_PROBE_HEADER_VALUE,
+    ]
 
 
 @pytest.mark.asyncio
@@ -1624,6 +1707,10 @@ def test_build_webfetch_projection_saves_binary_file(tmp_path: Path) -> None:
     saved_path = Path(str(data["saved_path"]))
     assert saved_path.exists()
     assert saved_path.parent == tmp_path / "tmp" / "webfetch"
+    assert data["download_mode"] == "buffered"
+    assert data["streamed_to_disk"] is False
+    assert data["range_supported"] is False
+    assert data["resume_supported"] is False
 
 
 def test_build_webfetch_projection_truncates_large_text_output(tmp_path: Path) -> None:
