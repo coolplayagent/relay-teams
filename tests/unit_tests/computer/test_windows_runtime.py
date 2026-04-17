@@ -277,6 +277,93 @@ def test_windows_runtime_launch_app_records_real_command(
     assert result.data["launched_command"] == "calc.exe"
 
 
+def test_windows_runtime_launch_app_tries_next_candidate_after_spawn_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = WindowsDesktopRuntime(project_root=tmp_path)
+    spawned_commands: list[list[str]] = []
+    waited_queries: list[tuple[str, ...]] = []
+    activated_window_ids: list[str] = []
+    matched_window = ComputerWindow(
+        window_id="0x20",
+        app_name="Calculator",
+        title="Calculator",
+        focused=True,
+    )
+    observation = ComputerObservation(
+        text="Windows desktop runtime snapshot.",
+        windows=(matched_window,),
+        focused_window="Calculator",
+    )
+
+    def fake_resolve_launch_candidates(
+        app_name: str,
+    ) -> tuple[windows_runtime_module._LaunchCandidate, ...]:
+        assert app_name == "Calculator"
+        return (
+            windows_runtime_module._LaunchCandidate(
+                command=("calc.exe",),
+                match_queries=("Calculator",),
+            ),
+            windows_runtime_module._LaunchCandidate(
+                command=(
+                    "explorer.exe",
+                    r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+                ),
+                match_queries=("Calculator", "Microsoft.WindowsCalculator"),
+            ),
+        )
+
+    def fake_spawn_process(command: list[str]) -> None:
+        spawned_commands.append(command)
+        if command == ["calc.exe"]:
+            raise FileNotFoundError("calc.exe")
+
+    def fake_wait_for_window_match(
+        *,
+        queries: tuple[str, ...],
+        before_windows: tuple[ComputerWindow, ...] = (),
+        allow_existing_matches: bool = True,
+    ) -> ComputerWindow:
+        assert before_windows == ()
+        assert allow_existing_matches is False
+        waited_queries.append(queries)
+        return matched_window
+
+    monkeypatch.setattr(runtime, "_list_windows_snapshot", lambda **kwargs: ())
+    monkeypatch.setattr(
+        runtime,
+        "_resolve_launch_candidates",
+        fake_resolve_launch_candidates,
+    )
+    monkeypatch.setattr(runtime, "_spawn_process", fake_spawn_process)
+    monkeypatch.setattr(runtime, "_wait_for_window_match", fake_wait_for_window_match)
+    monkeypatch.setattr(
+        runtime,
+        "_activate_window",
+        lambda window_id: activated_window_ids.append(window_id),
+    )
+    monkeypatch.setattr(runtime, "_build_observation", lambda **kwargs: observation)
+    monkeypatch.setattr(runtime, "_sleep", lambda seconds: None)
+
+    result = asyncio.run(runtime.launch_app(app_name="Calculator"))
+
+    assert spawned_commands == [
+        ["calc.exe"],
+        [
+            "explorer.exe",
+            r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+        ],
+    ]
+    assert waited_queries == [("Calculator", "Microsoft.WindowsCalculator")]
+    assert activated_window_ids == ["0x20"]
+    assert result.data["launched_command"] == (
+        "explorer.exe "
+        r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"
+    )
+
+
 def test_windows_runtime_resolves_calculator_candidates(tmp_path: Path) -> None:
     runtime = WindowsDesktopRuntime(project_root=tmp_path)
 

@@ -470,10 +470,24 @@ class WindowsDesktopRuntime:
         launched_command: tuple[str, ...] | None = None
         matched_window: ComputerWindow | None = None
         attempted_commands: list[str] = []
+        failed_commands: list[str] = []
         for candidate in self._resolve_launch_candidates(app_name):
             command = list(candidate.command)
-            attempted_commands.append(" ".join(command))
-            self._spawn_process(command)
+            command_text = " ".join(command)
+            attempted_commands.append(command_text)
+            try:
+                self._spawn_process(command)
+            except OSError as exc:
+                failed_commands.append(f"{command_text} ({exc})")
+                LOGGER.warning(
+                    "Windows desktop launch candidate failed before window wait.",
+                    extra={
+                        "app_name": app_name,
+                        "command": command,
+                        "error": str(exc),
+                    },
+                )
+                continue
             matched_window = self._wait_for_window_match(
                 queries=candidate.match_queries,
                 before_windows=before_windows,
@@ -487,6 +501,7 @@ class WindowsDesktopRuntime:
                 self._launch_failure_message(
                     app_name=app_name,
                     attempted_commands=attempted_commands,
+                    failed_commands=failed_commands,
                 )
             )
         self._activate_window(matched_window.window_id)
@@ -1060,10 +1075,13 @@ class WindowsDesktopRuntime:
         *,
         app_name: str,
         attempted_commands: list[str],
+        failed_commands: list[str],
     ) -> str:
         details = [f"App window did not appear within timeout: {app_name}."]
         if attempted_commands:
             details.append("Attempted commands: " + ", ".join(attempted_commands) + ".")
+        if failed_commands:
+            details.append("Spawn failures: " + ", ".join(failed_commands) + ".")
         visible_titles = self._visible_window_titles()
         if visible_titles:
             details.append("Visible windows: " + visible_titles + ".")
