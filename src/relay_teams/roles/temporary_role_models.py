@@ -42,6 +42,7 @@ class TemporaryRoleSpec(BaseModel):
             version=self.version,
             tools=apply_default_role_tools(
                 role_id=self.role_id,
+                role_name=self.name,
                 tools=self.tools,
             ),
             mcp_servers=self.mcp_servers,

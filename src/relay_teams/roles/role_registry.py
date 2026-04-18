@@ -6,19 +6,15 @@ from pathlib import Path
 import yaml
 
 from relay_teams.computer import ExecutionSurface
-from relay_teams.roles.default_role_tools import apply_default_role_tools
+from relay_teams.roles.default_role_tools import (
+    COORDINATOR_IDENTIFIERS,
+    COORDINATOR_REQUIRED_TOOLS,
+    apply_default_role_tools,
+)
 from relay_teams.roles.memory_models import MemoryProfile, default_memory_profile
 from relay_teams.roles.role_models import RoleConfigSource, RoleDefinition, RoleMode
 
-COORDINATOR_REQUIRED_TOOLS = frozenset(
-    (
-        "create_tasks",
-        "update_task",
-        "dispatch_task",
-    )
-)
 MAIN_AGENT_ROLE_ID = "MainAgent"
-COORDINATOR_IDENTIFIERS = frozenset(("coordinator",))
 MAIN_AGENT_IDENTIFIERS = frozenset(("mainagent", "main agent", "main_agent"))
 
 
@@ -288,6 +284,7 @@ class RoleLoader:
             version=str(parsed["version"]),
             tools=apply_default_role_tools(
                 role_id=str(parsed["role_id"]),
+                role_name=str(parsed["name"]),
                 tools=tuple(str(item) for item in parsed["tools"]),
             ),
             mcp_servers=tuple(str(item) for item in mcp_servers),

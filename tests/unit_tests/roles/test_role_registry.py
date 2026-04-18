@@ -62,8 +62,8 @@ def test_role_loader_keeps_coordinator_tools_unchanged(tmp_path: Path) -> None:
     role_file = tmp_path / "coordinator.md"
     role_file.write_text(
         "---\n"
-        "role_id: Coordinator\n"
-        "name: Coordinator\n"
+        "role_id: dispatch_lead\n"
+        "name: Dispatch Lead\n"
         "description: Coordinates delegated work\n"
         "version: 1.0.0\n"
         "tools:\n"

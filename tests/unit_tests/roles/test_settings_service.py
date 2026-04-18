@@ -786,6 +786,49 @@ def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:
     assert captured_registry[-1].get("new_role").name == "New Role"
 
 
+def test_save_role_document_strips_office_tool_from_coordinator_like_role(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    saved = service.save_role_document(
+        "dispatch_lead",
+        draft=RoleDocumentDraft(
+            role_id="dispatch_lead",
+            name="Dispatch Lead",
+            description="Coordinates delegated work.",
+            version="1.0.0",
+            tools=(
+                "create_tasks",
+                "update_task",
+                "dispatch_task",
+                "office_read_markdown",
+            ),
+            mcp_servers=(),
+            skills=(),
+            model_profile="default",
+            memory_profile=default_memory_profile(),
+            system_prompt="Coordinate delegated work.",
+        ),
+    )
+
+    assert saved.tools == ("create_tasks", "update_task", "dispatch_task")
+
+
 def test_save_role_document_allows_reserved_role_prompt_updates(tmp_path: Path) -> None:
     roles_dir = tmp_path / "roles"
     roles_dir.mkdir()

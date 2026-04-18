@@ -108,3 +108,27 @@ def test_runtime_role_resolver_applies_template_defaults(tmp_path: Path) -> None
     role = resolver.get_effective_role(run_id="run-1", role_id="tmp_researcher")
     assert role.tools == ("read", "office_read_markdown")
     assert role.model_profile == "default"
+
+
+def test_runtime_role_resolver_does_not_add_office_tool_to_coordinator_like_role(
+    tmp_path: Path,
+) -> None:
+    resolver = RuntimeRoleResolver(
+        role_registry=_base_registry(),
+        temporary_role_repository=TemporaryRoleRepository(tmp_path / "roles.db"),
+    )
+
+    resolver.create_temporary_role(
+        run_id="run-1",
+        session_id="session-1",
+        role=TemporaryRoleSpec(
+            role_id="dispatch_lead",
+            name="Dispatch Lead",
+            description="temporary coordinator",
+            system_prompt="coordinate",
+            tools=("create_tasks", "update_task", "dispatch_task"),
+        ),
+    )
+
+    role = resolver.get_effective_role(run_id="run-1", role_id="dispatch_lead")
+    assert role.tools == ("create_tasks", "update_task", "dispatch_task")
