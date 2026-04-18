@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import importlib
 import importlib.util
 import os
@@ -31,14 +32,7 @@ class _MarkItDownConverter(Protocol):
 
 
 def convert_with_markitdown(file_path: Path) -> OfficeConversionResult:
-    converter = _load_markitdown_converter()
-    try:
-        result = converter.convert(file_path)
-    except Exception as exc:  # pragma: no cover - external library behavior
-        raise OfficeConversionError(
-            f"Failed to convert document to markdown: {file_path.name}"
-        ) from exc
-    markdown = _extract_markdown(result)
+    markdown = _convert_markitdown_to_text(file_path)
     return OfficeConversionResult(
         markdown=markdown,
         converter_name=MARKITDOWN_CONVERTER_NAME,
@@ -77,6 +71,7 @@ def stream_markdown_with_markitdown(
         )
 
     stderr_chunks: list[str] = []
+    emitted_any_line = False
     stderr_reader = threading.Thread(
         target=_read_stderr_stream,
         args=(process.stderr, stderr_chunks),
@@ -86,6 +81,7 @@ def stream_markdown_with_markitdown(
 
     try:
         for line in _iter_normalized_markdown_lines(process.stdout):
+            emitted_any_line = True
             on_line(line)
     finally:
         process.stdout.close()
@@ -103,6 +99,15 @@ def stream_markdown_with_markitdown(
         raise OfficeConversionError(
             f"Failed to convert document to markdown: {file_path.name}"
         )
+
+    if emitted_any_line:
+        return
+
+    fallback_markdown = _convert_markitdown_to_text(file_path)
+    if not fallback_markdown:
+        return
+    for line in _iter_normalized_markdown_lines(io.StringIO(fallback_markdown)):
+        on_line(line)
 
 
 def _load_markitdown_converter() -> _MarkItDownConverter:
@@ -178,3 +183,14 @@ def _extract_markdown(result: _MarkItDownResult) -> str:
     if markdown:
         return markdown
     return str(result.text_content or "").strip()
+
+
+def _convert_markitdown_to_text(file_path: Path) -> str:
+    converter = _load_markitdown_converter()
+    try:
+        result = converter.convert(file_path)
+    except Exception as exc:  # pragma: no cover - external library behavior
+        raise OfficeConversionError(
+            f"Failed to convert document to markdown: {file_path.name}"
+        ) from exc
+    return _extract_markdown(result)

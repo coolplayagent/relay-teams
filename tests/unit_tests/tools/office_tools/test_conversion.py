@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -76,6 +77,60 @@ def test_convert_with_markitdown_reports_missing_dependency(
 
     with pytest.raises(OfficeConversionError, match="dependencies are unavailable"):
         convert_with_markitdown(tmp_path / "report.pdf")
+
+
+def test_stream_markdown_with_markitdown_uses_text_content_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.office_tools.markitdown_backend import (
+        stream_markdown_with_markitdown,
+    )
+
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = io.StringIO("")
+            self.stderr = io.StringIO("")
+
+        def wait(self) -> int:
+            return 0
+
+        def kill(self) -> None:
+            return None
+
+    fake_module = SimpleNamespace(
+        MarkItDown=lambda: _FakeMarkItDown(
+            _FakeMarkItDownResult(
+                markdown="",
+                text_content="fallback text\nsecond line",
+            )
+        )
+    )
+
+    def _import_module(name: str) -> object:
+        del name
+        return fake_module
+
+    monkeypatch.setattr(
+        "relay_teams.tools.office_tools.markitdown_backend.importlib.util.find_spec",
+        lambda name: object(),
+    )
+    monkeypatch.setattr(
+        "relay_teams.tools.office_tools.markitdown_backend.subprocess.Popen",
+        lambda *args, **kwargs: _FakeProcess(),
+    )
+    monkeypatch.setattr(
+        "relay_teams.tools.office_tools.markitdown_backend.importlib.import_module",
+        _import_module,
+    )
+
+    lines: list[str] = []
+    stream_markdown_with_markitdown(
+        tmp_path / "report.docx",
+        on_line=lines.append,
+    )
+
+    assert lines == ["fallback text", "second line"]
 
 
 def test_convert_office_document_rejects_unsupported_extension(tmp_path: Path) -> None:
