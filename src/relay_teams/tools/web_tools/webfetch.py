@@ -115,6 +115,12 @@ class WebFetchExtractMode(StrEnum):
     OPML = "opml"
 
 
+class BinaryDownloadMode(StrEnum):
+    BUFFERED = "buffered"
+    STREAMING = "streaming"
+    STREAMING_RANGES = "streaming_ranges"
+
+
 class ParsedDocumentKind(StrEnum):
     FEED = "feed"
     OPML = "opml"
@@ -1167,16 +1173,14 @@ def save_binary_result(
     suffix = sanitize_file_extension(final_url, content_type)
     output_path = output_dir / f"{tool_call_id}{suffix}"
     output_path.write_bytes(body)
-    visible_data: dict[str, JsonValue] = {
-        "output": "Binary content saved to file",
-        "saved_path": str(output_path),
-        "mime_type": content_type,
-        "size_bytes": len(body),
-        "final_url": final_url,
-    }
-    return ToolResultProjection(
-        visible_data=visible_data,
-        internal_data=visible_data,
+    return build_binary_download_projection(
+        saved_path=output_path,
+        content_type=content_type,
+        size_bytes=len(body),
+        final_url=final_url,
+        download_mode=BinaryDownloadMode.BUFFERED,
+        range_supported=False,
+        resume_supported=False,
     )
 
 
@@ -1245,6 +1249,14 @@ async def download_binary_response(
                 size_bytes=manifest.total_size
                 or Path(manifest.saved_path).stat().st_size,
                 final_url=manifest.final_url,
+                download_mode=(
+                    BinaryDownloadMode.STREAMING_RANGES
+                    if manifest.range_supported
+                    else BinaryDownloadMode.STREAMING
+                ),
+                range_supported=manifest.range_supported,
+                resume_supported=manifest.range_supported
+                and binary_download_resume_supported(probe=active_probe),
             )
 
         if manifest is None:
@@ -1299,6 +1311,9 @@ async def download_binary_response(
                 size_bytes=manifest.total_size
                 or Path(manifest.saved_path).stat().st_size,
                 final_url=manifest.final_url,
+                download_mode=BinaryDownloadMode.STREAMING,
+                range_supported=False,
+                resume_supported=False,
             )
 
         last_error: ToolExecutionError | None = None
@@ -1338,6 +1353,14 @@ async def download_binary_response(
                     size_bytes=manifest.total_size
                     or Path(manifest.saved_path).stat().st_size,
                     final_url=manifest.final_url,
+                    download_mode=(
+                        BinaryDownloadMode.STREAMING_RANGES
+                        if manifest.range_supported
+                        else BinaryDownloadMode.STREAMING
+                    ),
+                    range_supported=manifest.range_supported,
+                    resume_supported=manifest.range_supported
+                    and binary_download_resume_supported(probe=active_probe),
                 )
             except ToolExecutionError as exc:
                 last_error = exc
@@ -1488,6 +1511,9 @@ async def download_binary_response_from_response(
         content_type=manifest.mime_type,
         size_bytes=manifest.total_size or Path(manifest.saved_path).stat().st_size,
         final_url=manifest.final_url,
+        download_mode=BinaryDownloadMode.STREAMING,
+        range_supported=False,
+        resume_supported=False,
     )
 
 
@@ -2037,6 +2063,9 @@ def build_binary_download_projection(
     content_type: str,
     size_bytes: int,
     final_url: str,
+    download_mode: BinaryDownloadMode,
+    range_supported: bool,
+    resume_supported: bool,
 ) -> ToolResultProjection:
     visible_data: dict[str, JsonValue] = {
         "output": "Binary content saved to file",
@@ -2044,6 +2073,10 @@ def build_binary_download_projection(
         "mime_type": content_type,
         "size_bytes": size_bytes,
         "final_url": final_url,
+        "download_mode": download_mode.value,
+        "streamed_to_disk": download_mode is not BinaryDownloadMode.BUFFERED,
+        "range_supported": range_supported,
+        "resume_supported": resume_supported,
     }
     return ToolResultProjection(
         visible_data=visible_data,
@@ -2156,6 +2189,14 @@ def build_if_range_header(probe: BinaryDownloadProbe) -> str | None:
     if probe.last_modified:
         return probe.last_modified
     return None
+
+
+def binary_download_resume_supported(*, probe: BinaryDownloadProbe) -> bool:
+    return (
+        probe.range_supported
+        and probe.total_size is not None
+        and build_if_range_header(probe) is not None
+    )
 
 
 def binary_download_has_strong_validator(

@@ -1,7 +1,16 @@
 Fetch content from an http or https URL.
 
-Use this for reading current web pages, downloading files that need to be inspected,
-or explicitly extracting structured data from RSS/Atom feeds and OPML subscription lists.
+Use this for:
+- Reading current web pages as markdown, plain text, or raw HTML.
+- Downloading network files such as PDFs, images, archives, and other binary payloads.
+- Extracting structured data from RSS/Atom feeds and OPML subscription lists.
+
+Binary download behavior:
+- Binary responses are streamed to the workspace temp directory and returned as `saved_path`; they are not inlined into the conversation.
+- Large binary downloads are supported up to 512 MiB.
+- When the origin supports `Range` and returns a strong validator such as `ETag` or `Last-Modified`, downloads use segmented fetching and can resume on later `webfetch` calls for the same URL.
+- Prefer `webfetch` over `shell` plus `curl`, `wget`, or `python urllib` for normal unauthenticated HTTP(S) downloads.
+- Requests go through the shared `net` HTTP client, so proxy and SSL settings stay aligned with the rest of the runtime.
 
 Notes:
 - Authenticated or private URLs often fail in this tool. Prefer specialized MCP or authenticated tools for GitHub, Confluence, Jira, Google Docs, and similar services.
