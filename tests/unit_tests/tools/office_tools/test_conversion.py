@@ -273,6 +273,42 @@ def test_paginate_office_document_markdown_streams_without_full_markdown_copy(
     assert result.warnings == ()
 
 
+def test_paginate_office_document_markdown_stops_at_first_byte_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.office_tools import paginate_office_document_markdown
+
+    consumed: list[str] = []
+
+    def _fake_stream(file_path: Path, *, on_line) -> None:
+        assert file_path == tmp_path / "report.docx"
+        for line in ("alpha", "0123456789", "b"):
+            consumed.append(line)
+            on_line(line)
+
+    monkeypatch.setattr(
+        "relay_teams.tools.office_tools.conversion.stream_markdown_with_markitdown",
+        _fake_stream,
+    )
+
+    result = paginate_office_document_markdown(
+        tmp_path / "report.docx",
+        offset=1,
+        limit=10,
+        max_bytes=8,
+        max_line_length=2000,
+        max_line_suffix="... (line truncated)",
+    )
+
+    assert consumed == ["alpha", "0123456789", "b"]
+    assert result.lines == ("alpha",)
+    assert result.total_lines == 3
+    assert result.truncated_by_lines is False
+    assert result.truncated_by_bytes is True
+    assert result.converter_name == "markitdown"
+
+
 def test_paginate_office_document_markdown_raises_ocr_for_empty_pdf(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

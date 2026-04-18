@@ -103,11 +103,13 @@ def _paginate_streamed_markdown(
     bytes_count = 0
     truncated_by_lines = False
     truncated_by_bytes = False
+    byte_cap_reached = False
     contains_markdown_table = False
     previous_nonempty_line: str | None = None
 
     def _consume_line(raw_line: str) -> None:
         nonlocal bytes_count
+        nonlocal byte_cap_reached
         nonlocal contains_markdown_table
         nonlocal previous_nonempty_line
         nonlocal total_lines
@@ -125,6 +127,8 @@ def _paginate_streamed_markdown(
         if stripped_line:
             previous_nonempty_line = stripped_line
 
+        if byte_cap_reached:
+            return
         if total_lines <= start_offset:
             return
         if len(lines) >= limit:
@@ -138,6 +142,7 @@ def _paginate_streamed_markdown(
         line_size = len(line.encode("utf-8"))
         if bytes_count + line_size > max_bytes:
             truncated_by_bytes = True
+            byte_cap_reached = True
             return
 
         lines.append(line)
