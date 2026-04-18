@@ -220,3 +220,82 @@ def test_convert_office_document_raises_error_for_blank_docx(
 
     with pytest.raises(OfficeConversionError, match="produced no readable markdown"):
         convert_office_document(tmp_path / "empty.docx")
+
+
+def test_paginate_office_document_markdown_streams_without_full_markdown_copy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.office_tools import paginate_office_document_markdown
+
+    consumed: list[str] = []
+
+    def _fake_stream(file_path: Path, *, on_line) -> None:
+        assert file_path == tmp_path / "report.xlsx"
+        for line in (
+            "## Sheet1",
+            "| Name | Score |",
+            "| --- | --- |",
+            "| Alice | 95 |",
+            "| Bob | 88 |",
+        ):
+            consumed.append(line)
+            on_line(line)
+
+    monkeypatch.setattr(
+        "relay_teams.tools.office_tools.conversion.stream_markdown_with_markitdown",
+        _fake_stream,
+    )
+
+    result = paginate_office_document_markdown(
+        tmp_path / "report.xlsx",
+        offset=2,
+        limit=2,
+        max_bytes=50 * 1024,
+        max_line_length=2000,
+        max_line_suffix="... (line truncated)",
+    )
+
+    assert consumed == [
+        "## Sheet1",
+        "| Name | Score |",
+        "| --- | --- |",
+        "| Alice | 95 |",
+        "| Bob | 88 |",
+    ]
+    assert result.lines == ("| Name | Score |", "| --- | --- |")
+    assert result.total_lines == 5
+    assert result.truncated_by_lines is True
+    assert result.truncated_by_bytes is False
+    assert result.converter_name == "markitdown"
+    assert result.quality.level == "high"
+    assert result.quality.preserves_tables is True
+    assert result.warnings == ()
+
+
+def test_paginate_office_document_markdown_raises_ocr_for_empty_pdf(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.office_tools import (
+        OfficeConversionRequiresOcrError,
+        paginate_office_document_markdown,
+    )
+
+    def _fake_stream(file_path: Path, *, on_line) -> None:
+        del file_path, on_line
+
+    monkeypatch.setattr(
+        "relay_teams.tools.office_tools.conversion.stream_markdown_with_markitdown",
+        _fake_stream,
+    )
+
+    with pytest.raises(OfficeConversionRequiresOcrError, match="requires OCR"):
+        paginate_office_document_markdown(
+            tmp_path / "scanned.pdf",
+            offset=1,
+            limit=10,
+            max_bytes=50 * 1024,
+            max_line_length=2000,
+            max_line_suffix="... (line truncated)",
+        )

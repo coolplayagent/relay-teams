@@ -124,8 +124,8 @@ async def test_office_read_markdown_tool_converts_supported_pdf(
     tmp_path: Path,
 ) -> None:
     from relay_teams.tools.office_tools import (
+        OfficeConversionPage,
         OfficeConversionQuality,
-        OfficeConversionResult,
     )
     from relay_teams.tools.workspace_tools import (
         office_read_markdown as office_read_markdown_module,
@@ -167,11 +167,11 @@ async def test_office_read_markdown_tool_converts_supported_pdf(
             (await _invoke_tool_action(action, raw_args)).internal_data,
         )
 
-    def _fake_convert(file_path: Path) -> OfficeConversionResult:
-        return OfficeConversionResult(
-            markdown="# Report\nConverted PDF body",
+    def _fake_convert(file_path: Path, **_: object) -> OfficeConversionPage:
+        return OfficeConversionPage(
+            lines=("# Report", "Converted PDF body"),
+            total_lines=2,
             converter_name="markitdown",
-            source_extension=file_path.suffix.lower(),
             quality=OfficeConversionQuality(level="medium", preserves_tables=False),
             warnings=("PDF layout reconstruction may be approximate.",),
         )
@@ -183,7 +183,7 @@ async def test_office_read_markdown_tool_converts_supported_pdf(
     )
     monkeypatch.setattr(
         office_read_markdown_module,
-        "convert_office_document",
+        "paginate_office_document_markdown",
         _fake_convert,
     )
 
@@ -236,8 +236,8 @@ async def test_office_read_markdown_preserves_markdown_tables(
     tmp_path: Path,
 ) -> None:
     from relay_teams.tools.office_tools import (
+        OfficeConversionPage,
         OfficeConversionQuality,
-        OfficeConversionResult,
     )
     from relay_teams.tools.workspace_tools import (
         office_read_markdown as office_read_markdown_module,
@@ -276,17 +276,17 @@ async def test_office_read_markdown_preserves_markdown_tables(
             (await _invoke_tool_action(action, raw_args)).internal_data,
         )
 
-    def _fake_convert(file_path: Path) -> OfficeConversionResult:
-        return OfficeConversionResult(
-            markdown=(
-                "## Sheet1\n"
-                "| Name | Score |\n"
-                "| --- | --- |\n"
-                "| Alice | 95 |\n"
-                "| Bob | 88 |"
+    def _fake_convert(file_path: Path, **_: object) -> OfficeConversionPage:
+        return OfficeConversionPage(
+            lines=(
+                "## Sheet1",
+                "| Name | Score |",
+                "| --- | --- |",
+                "| Alice | 95 |",
+                "| Bob | 88 |",
             ),
+            total_lines=5,
             converter_name="markitdown",
-            source_extension=file_path.suffix.lower(),
             quality=OfficeConversionQuality(level="high", preserves_tables=True),
         )
 
@@ -297,7 +297,7 @@ async def test_office_read_markdown_preserves_markdown_tables(
     )
     monkeypatch.setattr(
         office_read_markdown_module,
-        "convert_office_document",
+        "paginate_office_document_markdown",
         _fake_convert,
     )
 
@@ -320,8 +320,8 @@ async def test_office_read_markdown_allows_explicit_line_numbers(
     tmp_path: Path,
 ) -> None:
     from relay_teams.tools.office_tools import (
+        OfficeConversionPage,
         OfficeConversionQuality,
-        OfficeConversionResult,
     )
     from relay_teams.tools.workspace_tools import (
         office_read_markdown as office_read_markdown_module,
@@ -360,11 +360,11 @@ async def test_office_read_markdown_allows_explicit_line_numbers(
             (await _invoke_tool_action(action, raw_args)).internal_data,
         )
 
-    def _fake_convert(file_path: Path) -> OfficeConversionResult:
-        return OfficeConversionResult(
-            markdown=("## Sheet1\n| Name | Score |\n| --- | --- |\n| Alice | 95 |"),
+    def _fake_convert(file_path: Path, **_: object) -> OfficeConversionPage:
+        return OfficeConversionPage(
+            lines=("## Sheet1", "| Name | Score |", "| --- | --- |", "| Alice | 95 |"),
+            total_lines=4,
             converter_name="markitdown",
-            source_extension=file_path.suffix.lower(),
             quality=OfficeConversionQuality(level="high", preserves_tables=True),
         )
 
@@ -375,7 +375,7 @@ async def test_office_read_markdown_allows_explicit_line_numbers(
     )
     monkeypatch.setattr(
         office_read_markdown_module,
-        "convert_office_document",
+        "paginate_office_document_markdown",
         _fake_convert,
     )
 
@@ -430,7 +430,7 @@ async def test_office_read_markdown_surfaces_office_ocr_error(
             (await _invoke_tool_action(action, raw_args)).internal_data,
         )
 
-    def _raise_ocr_error(file_path: Path) -> object:
+    def _raise_ocr_error(file_path: Path, **_: object) -> object:
         raise OfficeConversionRequiresOcrError(
             f"PDF requires OCR before it can be read as markdown: {file_path.name}"
         )
@@ -442,7 +442,7 @@ async def test_office_read_markdown_surfaces_office_ocr_error(
     )
     monkeypatch.setattr(
         office_read_markdown_module,
-        "convert_office_document",
+        "paginate_office_document_markdown",
         _raise_ocr_error,
     )
 
@@ -557,7 +557,7 @@ async def test_office_read_markdown_rejects_non_positive_limit_before_conversion
     )
     monkeypatch.setattr(
         office_read_markdown_module,
-        "convert_office_document",
+        "paginate_office_document_markdown",
         _unexpected_convert,
     )
 
