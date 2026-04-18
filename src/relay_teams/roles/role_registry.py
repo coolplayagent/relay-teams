@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from relay_teams.computer import ExecutionSurface
+from relay_teams.roles.default_role_tools import apply_default_role_tools
 from relay_teams.roles.memory_models import MemoryProfile, default_memory_profile
 from relay_teams.roles.role_models import RoleConfigSource, RoleDefinition, RoleMode
 
@@ -285,7 +286,10 @@ class RoleLoader:
             name=str(parsed["name"]),
             description=str(parsed["description"]),
             version=str(parsed["version"]),
-            tools=tuple(str(item) for item in parsed["tools"]),
+            tools=apply_default_role_tools(
+                role_id=str(parsed["role_id"]),
+                tools=tuple(str(item) for item in parsed["tools"]),
+            ),
             mcp_servers=tuple(str(item) for item in mcp_servers),
             skills=tuple(str(item) for item in skills),
             model_profile=str(parsed.get("model_profile", "default")),

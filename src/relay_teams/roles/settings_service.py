@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.roles.default_role_tools import apply_default_role_tools
 from relay_teams.roles.role_models import (
     RoleConfigSource,
     RoleDefinition,
@@ -244,16 +245,20 @@ class RoleSettingsService:
         )
 
     def _normalize_draft(self, draft: RoleDocumentDraft) -> RoleDocumentDraft:
+        normalized_role_id = draft.role_id.strip()
         return draft.model_copy(
             update={
-                "role_id": draft.role_id.strip(),
+                "role_id": normalized_role_id,
                 "name": draft.name.strip(),
                 "description": draft.description.strip(),
                 "version": draft.version.strip(),
                 "model_profile": draft.model_profile.strip(),
                 "bound_agent_id": _normalize_optional_text(draft.bound_agent_id),
                 "system_prompt": draft.system_prompt.strip(),
-                "tools": tuple(item.strip() for item in draft.tools if item.strip()),
+                "tools": apply_default_role_tools(
+                    role_id=normalized_role_id,
+                    tools=tuple(item.strip() for item in draft.tools if item.strip()),
+                ),
                 "mcp_servers": tuple(
                     item.strip() for item in draft.mcp_servers if item.strip()
                 ),

@@ -9,6 +9,7 @@ from relay_teams.roles.role_registry import RoleLoader
 def test_builtin_roles_mount_expected_write_tools() -> None:
     registry = RoleLoader().load_all(get_builtin_roles_dir())
 
+    coordinator = registry.get("Coordinator")
     crafter = registry.get("Crafter")
     daily_ai_report = registry.get("daily-ai-report")
     designer = registry.get("Designer")
@@ -28,6 +29,7 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert "write" in crafter.tools
     assert "edit" in crafter.tools
     assert "read" in crafter.tools
+    assert "office_read_markdown" not in coordinator.tools
     assert "office_read_markdown" in crafter.tools
     assert "notebook_edit" in crafter.tools
     assert "notebook_edit" in main_agent.tools

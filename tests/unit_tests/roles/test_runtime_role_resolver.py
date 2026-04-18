@@ -65,7 +65,7 @@ def test_runtime_role_resolver_prefers_run_temporary_roles(tmp_path: Path) -> No
 
     role = resolver.get_effective_role(run_id="run-1", role_id="tmp_writer")
     assert role.role_id == "tmp_writer"
-    assert role.tools == ("write",)
+    assert role.tools == ("write", "office_read_markdown")
 
 
 def test_runtime_role_resolver_rejects_reserved_ids(tmp_path: Path) -> None:
@@ -106,5 +106,5 @@ def test_runtime_role_resolver_applies_template_defaults(tmp_path: Path) -> None
     )
 
     role = resolver.get_effective_role(run_id="run-1", role_id="tmp_researcher")
-    assert role.tools == ("read",)
+    assert role.tools == ("read", "office_read_markdown")
     assert role.model_profile == "default"

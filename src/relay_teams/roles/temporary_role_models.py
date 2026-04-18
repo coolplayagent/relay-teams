@@ -7,6 +7,7 @@ from enum import Enum
 from relay_teams.computer import ExecutionSurface
 from pydantic import BaseModel, ConfigDict, Field
 
+from relay_teams.roles.default_role_tools import apply_default_role_tools
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.memory_models import MemoryProfile, default_memory_profile
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
@@ -39,7 +40,10 @@ class TemporaryRoleSpec(BaseModel):
             name=self.name,
             description=self.description,
             version=self.version,
-            tools=self.tools,
+            tools=apply_default_role_tools(
+                role_id=self.role_id,
+                tools=self.tools,
+            ),
             mcp_servers=self.mcp_servers,
             skills=self.skills,
             model_profile=self.model_profile,

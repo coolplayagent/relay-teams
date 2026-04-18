@@ -254,7 +254,12 @@ def test_get_role_document_preserves_unknown_tool_names_without_aliases(
 
     record = service.get_role_document("legacy")
 
-    assert record.tools == ("deprecated_writer", "shell", "missing_tool")
+    assert record.tools == (
+        "deprecated_writer",
+        "shell",
+        "missing_tool",
+        "office_read_markdown",
+    )
 
 
 def test_list_role_documents_tolerates_unknown_capabilities_in_persisted_roles(
@@ -446,7 +451,7 @@ def test_save_role_document_filters_unknown_capabilities_from_other_roles(
 
     assert saved.role_id == "writer"
     reloaded_dirty_role = captured_registry[-1].get("dirty")
-    assert reloaded_dirty_role.tools == ()
+    assert reloaded_dirty_role.tools == ("office_read_markdown",)
     assert reloaded_dirty_role.mcp_servers == ()
     assert reloaded_dirty_role.skills == ()
 
@@ -891,7 +896,7 @@ def test_delete_role_document_removes_dirty_app_role_and_reloads_registry(
     with pytest.raises(KeyError):
         captured_registry[-1].get("writer")
     reloaded_dirty_role = captured_registry[-1].get("dirty")
-    assert reloaded_dirty_role.tools == ()
+    assert reloaded_dirty_role.tools == ("office_read_markdown",)
     assert reloaded_dirty_role.mcp_servers == ()
     assert reloaded_dirty_role.skills == ()
 
