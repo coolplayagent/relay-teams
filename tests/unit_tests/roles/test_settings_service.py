@@ -254,7 +254,12 @@ def test_get_role_document_preserves_unknown_tool_names_without_aliases(
 
     record = service.get_role_document("legacy")
 
-    assert record.tools == ("deprecated_writer", "shell", "missing_tool")
+    assert record.tools == (
+        "deprecated_writer",
+        "shell",
+        "missing_tool",
+        "office_read_markdown",
+    )
 
 
 def test_list_role_documents_tolerates_unknown_capabilities_in_persisted_roles(
@@ -446,7 +451,7 @@ def test_save_role_document_filters_unknown_capabilities_from_other_roles(
 
     assert saved.role_id == "writer"
     reloaded_dirty_role = captured_registry[-1].get("dirty")
-    assert reloaded_dirty_role.tools == ()
+    assert reloaded_dirty_role.tools == ("office_read_markdown",)
     assert reloaded_dirty_role.mcp_servers == ()
     assert reloaded_dirty_role.skills == ()
 
@@ -781,6 +786,49 @@ def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:
     assert captured_registry[-1].get("new_role").name == "New Role"
 
 
+def test_save_role_document_strips_office_tool_from_coordinator_like_role(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    saved = service.save_role_document(
+        "dispatch_lead",
+        draft=RoleDocumentDraft(
+            role_id="dispatch_lead",
+            name="Dispatch Lead",
+            description="Coordinates delegated work.",
+            version="1.0.0",
+            tools=(
+                "create_tasks",
+                "update_task",
+                "dispatch_task",
+                "office_read_markdown",
+            ),
+            mcp_servers=(),
+            skills=(),
+            model_profile="default",
+            memory_profile=default_memory_profile(),
+            system_prompt="Coordinate delegated work.",
+        ),
+    )
+
+    assert saved.tools == ("create_tasks", "update_task", "dispatch_task")
+
+
 def test_save_role_document_allows_reserved_role_prompt_updates(tmp_path: Path) -> None:
     roles_dir = tmp_path / "roles"
     roles_dir.mkdir()
@@ -891,7 +939,7 @@ def test_delete_role_document_removes_dirty_app_role_and_reloads_registry(
     with pytest.raises(KeyError):
         captured_registry[-1].get("writer")
     reloaded_dirty_role = captured_registry[-1].get("dirty")
-    assert reloaded_dirty_role.tools == ()
+    assert reloaded_dirty_role.tools == ("office_read_markdown",)
     assert reloaded_dirty_role.mcp_servers == ()
     assert reloaded_dirty_role.skills == ()
 

@@ -43,6 +43,7 @@ let currentExecutionSurface = 'api';
 let languageBound = false;
 let roleActionPromise = null;
 let roleActionRequestId = 0;
+const DEFAULT_ROLE_TOOL = 'office_read_markdown';
 
 export function bindRoleSettingsHandlers() {
     bindActionButton('add-role-btn', handleAddRole);
@@ -710,7 +711,7 @@ function handleAddRole() {
         name: '',
         description: '',
         version: '1.0.0',
-        tools: [],
+        tools: getDefaultToolsForNewRole(),
         mcp_servers: [],
         skills: [],
         model_profile: 'default',
@@ -725,6 +726,13 @@ function handleAddRole() {
     if (roleIdInput?.focus) {
         roleIdInput.focus();
     }
+}
+
+function getDefaultToolsForNewRole() {
+    if (!Array.isArray(roleConfigOptions.tools)) {
+        return [];
+    }
+    return roleConfigOptions.tools.includes(DEFAULT_ROLE_TOOL) ? [DEFAULT_ROLE_TOOL] : [];
 }
 
 async function handleValidateRole() {

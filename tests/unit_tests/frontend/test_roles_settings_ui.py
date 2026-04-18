@@ -159,7 +159,10 @@ console.log(JSON.stringify({
     assert second_saved_payload["description"] == "Starts from a blank role."
     assert second_saved_payload["bound_agent_id"] is None
     assert second_saved_payload["execution_surface"] == "hybrid"
-    assert second_saved_payload["tools"] == ["read_file"]
+    assert second_saved_payload["tools"] == [
+        "read_file",
+        "office_read_markdown",
+    ]
     assert second_saved_payload["memory_profile"] == {
         "enabled": True,
     }
@@ -1446,7 +1449,7 @@ export async function fetchRoleConfigOptions() {
     const defaults = {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
-        tools: ["read_file", "write_file", "shell"],
+        tools: ["read_file", "write_file", "shell", "office_read_markdown"],
         mcp_servers: ["docs"],
         skills: [
             { ref: "builtin:diff", name: "diff", description: "Inspect file changes before replying.", scope: "builtin" },

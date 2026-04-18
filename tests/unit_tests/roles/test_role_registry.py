@@ -36,6 +36,50 @@ def test_role_loader_rejects_depends_on_in_role_front_matter(tmp_path: Path) -> 
         RoleLoader().load_one(role_file)
 
 
+def test_role_loader_adds_office_markdown_tool_to_non_coordinator_roles(
+    tmp_path: Path,
+) -> None:
+    role_file = tmp_path / "writer.md"
+    role_file.write_text(
+        "---\n"
+        "role_id: writer\n"
+        "name: Writer\n"
+        "description: Drafts content\n"
+        "version: 1.0.0\n"
+        "tools:\n"
+        "  - dispatch_task\n"
+        "---\n"
+        "Write clearly.\n",
+        encoding="utf-8",
+    )
+
+    role = RoleLoader().load_one(role_file)
+
+    assert role.tools == ("dispatch_task", "office_read_markdown")
+
+
+def test_role_loader_keeps_coordinator_tools_unchanged(tmp_path: Path) -> None:
+    role_file = tmp_path / "coordinator.md"
+    role_file.write_text(
+        "---\n"
+        "role_id: dispatch_lead\n"
+        "name: Dispatch Lead\n"
+        "description: Coordinates delegated work\n"
+        "version: 1.0.0\n"
+        "tools:\n"
+        "  - create_tasks\n"
+        "  - update_task\n"
+        "  - dispatch_task\n"
+        "---\n"
+        "Coordinate tasks.\n",
+        encoding="utf-8",
+    )
+
+    role = RoleLoader().load_one(role_file)
+
+    assert role.tools == ("create_tasks", "update_task", "dispatch_task")
+
+
 def test_role_registry_resolves_dynamic_coordinator_role() -> None:
     registry = RoleRegistry()
     registry.register(

@@ -10,9 +10,9 @@ from pydantic_ai import Agent
 from relay_teams.paths import path_exists, path_is_dir, path_is_file
 from relay_teams.tools._description_loader import load_tool_description
 from relay_teams.tools.office_tools import (
-    OfficeConversionResult,
+    OfficeConversionPage,
     SUPPORTED_OFFICE_EXTENSIONS,
-    convert_office_document,
+    paginate_office_document_markdown,
 )
 from relay_teams.tools.runtime import (
     ToolContext,
@@ -24,8 +24,10 @@ from relay_teams.tools.workspace_tools.edit_state import record_file_read
 from relay_teams.tools.workspace_tools.read_support import (
     DEFAULT_READ_LIMIT,
     MAX_BYTES_LABEL,
+    MAX_BYTES,
+    MAX_LINE_LENGTH,
+    MAX_LINE_SUFFIX,
     _project_read_result,
-    paginate_text_content,
     resolve_read_instruction_sections,
     validate_pagination_args,
 )
@@ -47,7 +49,7 @@ def _render_content_lines(
 def _append_office_content_metadata(
     *,
     output: list[str],
-    converted: OfficeConversionResult,
+    converted: OfficeConversionPage,
     include_line_numbers: bool,
 ) -> None:
     output.append("<content_format>markdown</content_format>")
@@ -66,7 +68,7 @@ def _append_office_content_metadata(
 def _build_file_metadata(
     *,
     include_line_numbers: bool,
-    converted: OfficeConversionResult,
+    converted: OfficeConversionPage,
 ) -> dict[str, JsonValue]:
     return {
         "line_numbers": include_line_numbers,
@@ -118,13 +120,19 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 raise ValueError(f"Not a file: {path}")
 
             _validate_office_path(file_path=file_path, path=path)
-            converted = await asyncio.to_thread(convert_office_document, file_path)
-            (
-                lines,
-                total_lines,
-                truncated_by_lines,
-                truncated_by_bytes,
-            ) = paginate_text_content(converted.markdown, offset, limit)
+            converted = await asyncio.to_thread(
+                paginate_office_document_markdown,
+                file_path,
+                offset=offset,
+                limit=limit,
+                max_bytes=MAX_BYTES,
+                max_line_length=MAX_LINE_LENGTH,
+                max_line_suffix=MAX_LINE_SUFFIX,
+            )
+            lines = list(converted.lines)
+            total_lines = converted.total_lines
+            truncated_by_lines = converted.truncated_by_lines
+            truncated_by_bytes = converted.truncated_by_bytes
 
             if offset > total_lines and not (offset == 1 and total_lines == 0):
                 raise ValueError(
