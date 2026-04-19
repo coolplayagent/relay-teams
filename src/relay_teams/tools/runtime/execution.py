@@ -12,7 +12,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from enum import Enum
 from json import dumps
-from typing import Protocol, cast, get_args, get_origin
+from typing import Protocol, cast, get_args, get_origin, get_type_hints
 from uuid import uuid4
 
 from relay_teams.logger import get_logger, log_event, log_tool_error
@@ -549,7 +549,11 @@ def _invoke_tool_action(
             action,
         )
         return input_action(tool_input)
-    kwargs = _bind_tool_action_kwargs(parameters=parameters, tool_input=tool_input)
+    kwargs = _bind_tool_action_kwargs(
+        parameters=parameters,
+        tool_input=tool_input,
+        resolved_annotations=_resolve_tool_action_annotations(action),
+    )
     named_action = cast(Callable[..., object | Awaitable[object]], action)
     return named_action(**kwargs)
 
@@ -604,6 +608,7 @@ def _bind_tool_action_kwargs(
     *,
     parameters: list[inspect.Parameter],
     tool_input: dict[str, JsonValue],
+    resolved_annotations: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     kwargs: dict[str, object] = {}
     for parameter in parameters:
@@ -622,6 +627,10 @@ def _bind_tool_action_kwargs(
         kwargs[parameter.name] = _coerce_tool_argument_for_parameter(
             value=tool_input[parameter.name],
             parameter=parameter,
+            annotation=_resolved_parameter_annotation(
+                parameter=parameter,
+                resolved_annotations=resolved_annotations,
+            ),
         )
     return kwargs
 
@@ -630,38 +639,52 @@ def _coerce_tool_argument_for_parameter(
     *,
     value: JsonValue,
     parameter: inspect.Parameter,
+    annotation: object,
 ) -> object:
     if value is None:
         return None
-    model_list_type = _resolve_pydantic_model_list_type(parameter)
+    model_list_type = _resolve_pydantic_model_list_type(annotation)
     if model_list_type is not None and isinstance(value, list):
         return [model_list_type.model_validate(item) for item in value]
-    model_type = _resolve_pydantic_model_type(parameter)
+    model_type = _resolve_pydantic_model_type(annotation)
     if model_type is not None and isinstance(value, dict):
         return model_type.model_validate(value)
-    enum_type = _resolve_enum_type(parameter)
+    enum_type = _resolve_enum_type(annotation=annotation, parameter=parameter)
     if enum_type is not None and isinstance(value, str):
         return enum_type(value)
-    if _parameter_accepts_type(parameter, bool):
+    if _parameter_accepts_type(
+        annotation=annotation, parameter=parameter, expected_type=bool
+    ):
         return _coerce_bool(value)
-    if _parameter_accepts_type(parameter, int):
+    if _parameter_accepts_type(
+        annotation=annotation, parameter=parameter, expected_type=int
+    ):
         return _coerce_int(value)
-    if _parameter_accepts_type(parameter, float):
+    if _parameter_accepts_type(
+        annotation=annotation, parameter=parameter, expected_type=float
+    ):
         return _coerce_float(value)
-    if _parameter_accepts_type(parameter, str):
+    if _parameter_accepts_type(
+        annotation=annotation, parameter=parameter, expected_type=str
+    ):
         return str(value)
-    if _parameter_accepts_type(parameter, tuple) and isinstance(value, list):
+    if _parameter_accepts_type(
+        annotation=annotation, parameter=parameter, expected_type=tuple
+    ) and isinstance(value, list):
         return tuple(value)
-    if _parameter_accepts_type(parameter, list) and isinstance(value, tuple):
+    if _parameter_accepts_type(
+        annotation=annotation, parameter=parameter, expected_type=list
+    ) and isinstance(value, tuple):
         return list(value)
     return value
 
 
 def _parameter_accepts_type(
+    *,
+    annotation: object,
     parameter: inspect.Parameter,
     expected_type: type[object],
 ) -> bool:
-    annotation = parameter.annotation
     if annotation is not inspect._empty and _annotation_contains_type(
         annotation=annotation,
         expected_type=expected_type,
@@ -689,9 +712,8 @@ def _annotation_contains_type(
 
 
 def _resolve_pydantic_model_list_type(
-    parameter: inspect.Parameter,
+    annotation: object,
 ) -> type[BaseModel] | None:
-    annotation = parameter.annotation
     origin = get_origin(annotation)
     if origin not in {list, tuple}:
         return None
@@ -702,9 +724,8 @@ def _resolve_pydantic_model_list_type(
 
 
 def _resolve_pydantic_model_type(
-    parameter: inspect.Parameter,
+    annotation: object,
 ) -> type[BaseModel] | None:
-    annotation = parameter.annotation
     if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
         return cast(type[BaseModel], annotation)
     origin = get_origin(annotation)
@@ -719,9 +740,10 @@ def _resolve_pydantic_model_type(
 
 
 def _resolve_enum_type(
+    *,
+    annotation: object,
     parameter: inspect.Parameter,
 ) -> type[Enum] | None:
-    annotation = parameter.annotation
     if annotation is not inspect._empty:
         candidate = _enum_type_from_annotation(annotation)
         if candidate is not None:
@@ -744,6 +766,27 @@ def _enum_type_from_annotation(annotation: object) -> type[Enum] | None:
         if inspect.isclass(item) and issubclass(item, Enum):
             return cast(type[Enum], item)
     return None
+
+
+def _resolve_tool_action_annotations(
+    action: Callable[..., object | Awaitable[object]] | object,
+) -> dict[str, object]:
+    if not callable(action):
+        return {}
+    try:
+        return get_type_hints(action)
+    except (AttributeError, NameError, TypeError):
+        return {}
+
+
+def _resolved_parameter_annotation(
+    *,
+    parameter: inspect.Parameter,
+    resolved_annotations: Mapping[str, object] | None,
+) -> object:
+    if resolved_annotations is None:
+        return parameter.annotation
+    return resolved_annotations.get(parameter.name, parameter.annotation)
 
 
 def _coerce_bool(value: JsonValue) -> bool:
