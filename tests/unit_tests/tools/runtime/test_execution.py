@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
 import asyncio
 import sqlite3
@@ -37,9 +37,15 @@ from relay_teams.tools.runtime import (
     ToolExecutionError,
     ToolResultProjection,
     execute_tool,
+    execute_tool_call,
 )
 from relay_teams.tools.runtime.persisted_state import load_tool_call_state
 from relay_teams.tools.runtime.persisted_state import ToolApprovalMode
+
+
+class _TaskDraftPayload(BaseModel):
+    objective: str
+    title: str | None = None
 
 
 class _FakeRunEventHub:
@@ -501,6 +507,82 @@ def test_execute_tool_marks_value_error_as_non_retryable() -> None:
     assert result["ok"] is False
     assert error["type"] == "validation_error"
     assert error["retryable"] is False
+
+
+def test_execute_tool_call_rehydrates_pydantic_model_lists_from_future_annotations() -> (
+    None
+):
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    captured_types: list[type[object]] = []
+
+    async def _action(tasks: list[_TaskDraftPayload]) -> dict[str, JsonValue]:
+        captured_types.extend(type(task) for task in tasks)
+        return {
+            "titles": [task.title for task in tasks],
+        }
+
+    result = asyncio.run(
+        execute_tool_call(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="create_tasks",
+            args_summary={"task_count": 1},
+            action=_action,
+            raw_args={
+                "ctx": ctx,
+                "tasks": [
+                    _TaskDraftPayload(
+                        objective="Implement the endpoint",
+                        title="Endpoint implementation",
+                    )
+                ],
+            },
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["data"] == {"titles": ["Endpoint implementation"]}
+    assert captured_types == [_TaskDraftPayload]
+
+
+def test_execute_tool_call_rehydrates_optional_pydantic_models_from_future_annotations() -> (
+    None
+):
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    captured_type: list[type[object]] = []
+
+    async def _action(task: _TaskDraftPayload | None = None) -> dict[str, JsonValue]:
+        if task is None:
+            return {"title": None}
+        captured_type.append(type(task))
+        return {"title": task.title}
+
+    result = asyncio.run(
+        execute_tool_call(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="create_task",
+            args_summary={"has_task": True},
+            action=_action,
+            raw_args={
+                "ctx": ctx,
+                "task": _TaskDraftPayload(
+                    objective="Implement the endpoint",
+                    title="Endpoint implementation",
+                ),
+            },
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["data"] == {"title": "Endpoint implementation"}
+    assert captured_type == [_TaskDraftPayload]
 
 
 def _raise_tool_execution_error() -> object:
