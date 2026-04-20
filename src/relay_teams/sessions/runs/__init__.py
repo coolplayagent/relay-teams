@@ -51,6 +51,21 @@ if TYPE_CHECKING:
         RunRuntimeRepository,
         RunRuntimeStatus,
     )
+    from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
+    from relay_teams.sessions.runs.user_question_models import (
+        NONE_OF_THE_ABOVE_OPTION_LABEL,
+        PendingUserQuestionState,
+        UserQuestionAnswer,
+        UserQuestionAnswerSubmission,
+        UserQuestionOption,
+        UserQuestionPrompt,
+        UserQuestionSelection,
+        UserQuestionRequestRecord,
+        UserQuestionRequestStatus,
+    )
+    from relay_teams.sessions.runs.user_question_repository import (
+        UserQuestionRepository,
+    )
     from relay_teams.sessions.runs.run_state_models import (
         RunSnapshotRecord,
         RunStatePhase,
@@ -79,6 +94,7 @@ __all__ = [
     "InjectionMessage",
     "InjectionSource",
     "IntentInput",
+    "NONE_OF_THE_ABOVE_OPTION_LABEL",
     "RunControlManager",
     "RunCompletionReason",
     "RunEvent",
@@ -95,6 +111,7 @@ __all__ = [
     "RunRuntimeRecord",
     "RunRuntimeRepository",
     "RunRuntimeStatus",
+    "PendingUserQuestionState",
     "RunSnapshotRecord",
     "RunStatePhase",
     "RunStateRecord",
@@ -103,6 +120,15 @@ __all__ = [
     "RuntimeConfig",
     "RuntimePaths",
     "TraceId",
+    "UserQuestionAnswer",
+    "UserQuestionAnswerSubmission",
+    "UserQuestionManager",
+    "UserQuestionOption",
+    "UserQuestionPrompt",
+    "UserQuestionSelection",
+    "UserQuestionRepository",
+    "UserQuestionRequestRecord",
+    "UserQuestionRequestStatus",
     "apply_run_event_to_state",
     "load_runtime_config",
     "new_trace_id",
@@ -195,6 +221,14 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "relay_teams.sessions.runs.run_runtime_repo",
         "RunRuntimeStatus",
     ),
+    "PendingUserQuestionState": (
+        "relay_teams.sessions.runs.user_question_models",
+        "PendingUserQuestionState",
+    ),
+    "NONE_OF_THE_ABOVE_OPTION_LABEL": (
+        "relay_teams.sessions.runs.user_question_models",
+        "NONE_OF_THE_ABOVE_OPTION_LABEL",
+    ),
     "RunSnapshotRecord": (
         "relay_teams.sessions.runs.run_state_models",
         "RunSnapshotRecord",
@@ -218,6 +252,42 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "RuntimeConfig": ("relay_teams.sessions.runs.runtime_config", "RuntimeConfig"),
     "RuntimePaths": ("relay_teams.sessions.runs.runtime_config", "RuntimePaths"),
     "TraceId": ("relay_teams.sessions.runs.ids", "TraceId"),
+    "UserQuestionAnswer": (
+        "relay_teams.sessions.runs.user_question_models",
+        "UserQuestionAnswer",
+    ),
+    "UserQuestionAnswerSubmission": (
+        "relay_teams.sessions.runs.user_question_models",
+        "UserQuestionAnswerSubmission",
+    ),
+    "UserQuestionManager": (
+        "relay_teams.sessions.runs.user_question_manager",
+        "UserQuestionManager",
+    ),
+    "UserQuestionOption": (
+        "relay_teams.sessions.runs.user_question_models",
+        "UserQuestionOption",
+    ),
+    "UserQuestionPrompt": (
+        "relay_teams.sessions.runs.user_question_models",
+        "UserQuestionPrompt",
+    ),
+    "UserQuestionSelection": (
+        "relay_teams.sessions.runs.user_question_models",
+        "UserQuestionSelection",
+    ),
+    "UserQuestionRepository": (
+        "relay_teams.sessions.runs.user_question_repository",
+        "UserQuestionRepository",
+    ),
+    "UserQuestionRequestRecord": (
+        "relay_teams.sessions.runs.user_question_models",
+        "UserQuestionRequestRecord",
+    ),
+    "UserQuestionRequestStatus": (
+        "relay_teams.sessions.runs.user_question_models",
+        "UserQuestionRequestStatus",
+    ),
     "apply_run_event_to_state": (
         "relay_teams.sessions.runs.run_state_models",
         "apply_run_event_to_state",

@@ -56,8 +56,15 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "const resumeBtn = ensureResumeRunButton();" in recovery_script
     assert "function ensureRecoveryApprovalHost()" in recovery_script
     assert "function ensureResumeRunButton()" in recovery_script
+    assert 'type="text"' in recovery_script
+    assert "compositionstart" in recovery_script
+    assert "restoreFocusedUserQuestionSupplement(" in recovery_script
     assert (
-        "function shouldShowResumeAction(activeRun, approvals, pausedSubagent)"
+        "handleUserQuestionSubmit(userQuestion.runId || runId, userQuestion);"
+        in recovery_script
+    )
+    assert (
+        "function shouldShowResumeAction(activeRun, approvals, userQuestions, pausedSubagent)"
         in recovery_script
     )
     assert "resumeBtn.style.display = 'inline-flex';" in recovery_script
@@ -178,6 +185,8 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "const RUN_NOT_FOUND_COOLDOWN_MS = 30000;" in stream_script
     assert "status: 'stopping'," in stream_script
     assert "phase: 'stopping'," in stream_script
+    assert "pending_user_question_count: 0," in stream_script
+    assert "pending_user_questions: []," in stream_script
     assert "if (isRunNotFoundError(data.error)) {" in stream_script
     assert "if (e?.status === 404) {" in stream_script
     assert "markSessionUnavailable(sessionId);" in stream_script

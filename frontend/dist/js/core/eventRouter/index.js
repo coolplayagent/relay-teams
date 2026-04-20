@@ -48,6 +48,12 @@ export function routeEvent(evType, payload, eventMeta) {
     if (isSubagentRun && evType === 'token_usage') {
         scheduleSessionTokenUsageRefresh({ immediate: true });
     }
+    if (
+        isSubagentRun
+        && (evType === 'user_question_requested' || evType === 'user_question_answered')
+    ) {
+        scheduleContinuityRefreshForEvent(evType);
+    }
     if (!isSubagentRun) {
         if (eventMeta?.run_id) state.activeRunId = eventMeta.run_id;
         if (eventMeta?.trace_id && !state.activeRunId) state.activeRunId = eventMeta.trace_id;
@@ -150,6 +156,8 @@ export function routeEvent(evType, payload, eventMeta) {
         handleToolApprovalRequested(payload, eventMeta, instanceId);
     } else if (evType === 'tool_approval_resolved') {
         handleToolApprovalResolved(payload, instanceId, eventMeta, roleId);
+    } else if (evType === 'user_question_requested' || evType === 'user_question_answered') {
+        return;
     } else if (evType === 'notification_requested') {
         handleNotificationRequested(payload);
     } else if (evType === 'subagent_gate') {
@@ -221,6 +229,8 @@ function scheduleContinuityRefreshForEvent(evType) {
         || evType === 'generation_progress'
         || evType === 'tool_approval_requested'
         || evType === 'tool_approval_resolved'
+        || evType === 'user_question_requested'
+        || evType === 'user_question_answered'
         || evType === 'subagent_stopped'
         || evType === 'subagent_resumed'
         || evType === 'background_task_started'

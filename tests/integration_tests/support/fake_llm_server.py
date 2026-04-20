@@ -255,6 +255,8 @@ def plan_fake_response(payload: object) -> dict[str, object]:
         return _plan_slow_stream_response()
     if _webfetch_approval_validation_mode(messages):
         return _plan_webfetch_approval_validation_response(payload, messages)
+    if _ask_question_validation_mode(messages):
+        return _plan_ask_question_validation_response(payload, messages)
     computer_validation_mode = _computer_validation_mode(messages)
     if computer_validation_mode is not None:
         response_spec = _plan_computer_validation_response(
@@ -548,6 +550,79 @@ def _plan_slow_stream_response() -> dict[str, object]:
 
 def _webfetch_approval_validation_mode(messages: list[object]) -> bool:
     return _messages_contain_user_text(messages, "[webfetch-approval-validation]")
+
+
+def _ask_question_validation_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[ask-question-validation]")
+
+
+def _plan_ask_question_validation_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    available_tools = _extract_available_tools(payload)
+    if "ask_question" not in available_tools:
+        return {
+            "kind": "text",
+            "content": "[fake-llm] ask_question is not available for this role.",
+        }
+
+    last_tool_call_id = _extract_last_tool_call_id(messages)
+    if last_tool_call_id is None:
+        return {
+            "kind": "tool_call",
+            "tool_name": "ask_question",
+            "tool_call_id": "call-question-1",
+            "arguments": {
+                "questions": [
+                    {
+                        "header": "Labels",
+                        "question": "Pick the labels to apply",
+                        "options": [
+                            {"label": "Ship", "description": "Ready to go now"},
+                            {
+                                "label": "Blocker",
+                                "description": "Needs a follow-up first",
+                            },
+                            {
+                                "label": "Docs",
+                                "description": "Requires documentation work",
+                            },
+                        ],
+                        "multiple": True,
+                    },
+                    {
+                        "header": "Note",
+                        "question": "Pick the handoff mode",
+                        "options": [
+                            {
+                                "label": "Ready",
+                                "description": "Use the default handoff",
+                            },
+                            {
+                                "label": "Blocked",
+                                "description": "Mark it blocked for follow-up",
+                            },
+                        ],
+                        "placeholder": "Write one short note",
+                    },
+                ],
+            },
+        }
+
+    if last_tool_call_id == "call-question-1":
+        return {
+            "kind": "text",
+            "content": (
+                "[fake-llm] Ask question validation completed after collecting "
+                "labels and a handoff note."
+            ),
+        }
+
+    return {
+        "kind": "text",
+        "content": "[fake-llm] Ask question validation reached an unknown step.",
+    }
 
 
 def _plan_webfetch_approval_validation_response(

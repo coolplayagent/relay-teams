@@ -160,7 +160,12 @@ def test_delete_skill_rejects_symlink_outside_managed_root(tmp_path: Path) -> No
     )
     linked_skill_dir = config_dir / "skills" / "linked-skill"
     linked_skill_dir.parent.mkdir(parents=True)
-    linked_skill_dir.symlink_to(external_skill_dir, target_is_directory=True)
+    try:
+        linked_skill_dir.symlink_to(external_skill_dir, target_is_directory=True)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Creating directory symlinks requires elevated privileges")
+        raise
     service = ClawHubSkillService(config_dir=config_dir)
 
     with pytest.raises(

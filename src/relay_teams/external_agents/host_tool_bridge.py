@@ -41,6 +41,8 @@ from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
+from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime import (
@@ -146,6 +148,7 @@ class ExternalAcpHostToolBridge:
         run_event_hub: RunEventHub,
         agent_repo: AgentInstanceRepository,
         approval_ticket_repo: ApprovalTicketRepository,
+        user_question_repo: UserQuestionRepository | None,
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         background_task_service: BackgroundTaskService | None,
@@ -161,6 +164,7 @@ class ExternalAcpHostToolBridge:
         get_task_service: Callable[[], TaskOrchestrationService],
         run_control_manager: RunControlManager,
         tool_approval_manager: ToolApprovalManager,
+        user_question_manager: UserQuestionManager | None,
         tool_approval_policy: ToolApprovalPolicy,
         get_notification_service: Callable[[], NotificationService | None],
         media_asset_service: MediaAssetService | None = None,
@@ -176,6 +180,7 @@ class ExternalAcpHostToolBridge:
         self._run_event_hub = run_event_hub
         self._agent_repo = agent_repo
         self._approval_ticket_repo = approval_ticket_repo
+        self._user_question_repo = user_question_repo
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._background_task_service = background_task_service
@@ -192,6 +197,7 @@ class ExternalAcpHostToolBridge:
         self._get_task_service = get_task_service
         self._run_control_manager = run_control_manager
         self._tool_approval_manager = tool_approval_manager
+        self._user_question_manager = user_question_manager
         self._tool_approval_policy = tool_approval_policy
         self._get_notification_service = get_notification_service
         self._metric_recorder = metric_recorder
@@ -491,6 +497,7 @@ class ExternalAcpHostToolBridge:
             event_bus=self._event_bus,
             message_repo=self._message_repo,
             approval_ticket_repo=self._approval_ticket_repo,
+            user_question_repo=self._user_question_repo,
             run_runtime_repo=self._run_runtime_repo,
             injection_manager=self._injection_manager,
             run_event_hub=self._run_event_hub,
@@ -521,6 +528,7 @@ class ExternalAcpHostToolBridge:
             task_execution_service=self._get_task_execution_service(),
             run_control_manager=self._run_control_manager,
             tool_approval_manager=self._tool_approval_manager,
+            user_question_manager=self._user_question_manager,
             tool_approval_policy=self._tool_approval_policy.with_yolo(yolo),
             shell_approval_repo=self._shell_approval_repo,
             metric_recorder=self._metric_recorder,

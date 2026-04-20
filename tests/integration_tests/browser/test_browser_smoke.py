@@ -190,6 +190,158 @@ def test_browser_webfetch_approval_reuses_host_scoped_ticket(
     expect(page.locator("#stop-btn")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
 
 
+def test_browser_ask_question_recovery_card_submits_answers(
+    browser_page: Page,
+    integration_env: IntegrationEnvironment,
+    api_client: httpx.Client,
+) -> None:
+    page = browser_page
+    _open_app(page, integration_env)
+
+    session_id = _create_session_via_sidebar(page)
+    prompt = "[ask-question-validation] 用 ask_question 收集标签和备注。"
+
+    expect(page.locator("#prompt-input")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    with page.expect_request(
+        lambda request: (
+            request.method == "POST"
+            and request.url == f"{integration_env.api_base_url}/api/runs"
+        )
+    ) as run_request_info:
+        page.locator("#prompt-input").fill(prompt)
+        page.locator("#send-btn").click()
+
+    run_request_payload = json.loads(run_request_info.value.post_data or "{}")
+    assert run_request_payload["session_id"] == session_id
+    assert run_request_payload["input"] == [{"kind": "text", "text": prompt}]
+
+    run_id = _wait_for_run_id(api_client, session_id)
+    questions = _wait_for_open_user_questions(
+        api_client,
+        run_id=run_id,
+        expected_count=1,
+    )
+    assert questions[0]["question_id"] == "call-question-1"
+
+    question_cards = page.locator(".recovery-question-card")
+    expect(question_cards).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
+    expect(page.locator("#recovery-question-host")).to_be_visible(
+        timeout=_WAIT_TIMEOUT_MS
+    )
+    expect(question_cards.first).to_contain_text(
+        "Pick the labels to apply",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(question_cards.first).to_contain_text("Pick the handoff mode")
+    expect(question_cards.first).to_contain_text("以上都不是")
+    docs_supplement_selector = (
+        '[data-user-question-answer="supplement"]'
+        '[data-question-id="call-question-1"]'
+        '[data-prompt-index="0"]'
+        '[data-option-label="Docs"]'
+    )
+    fallback_supplement_selector = (
+        '[data-user-question-answer="supplement"]'
+        '[data-question-id="call-question-1"]'
+        '[data-prompt-index="1"]'
+        '[data-option-label="__none_of_the_above__"]'
+    )
+
+    page.locator(
+        '[data-user-question-answer="option"][data-question-id="call-question-1"][data-option-label="Ship"]'
+    ).check()
+    page.locator(
+        '[data-user-question-answer="option"][data-question-id="call-question-1"][data-option-label="Docs"]'
+    ).check()
+    docs_supplement = page.locator(docs_supplement_selector)
+    assert docs_supplement.evaluate("el => el.tagName") == "INPUT"
+    docs_supplement.fill("Ship code now, docs follow immediately.")
+    docs_supplement.focus()
+    page.evaluate(
+        """selector => {
+            const input = document.querySelector(selector);
+            if (input) {
+                input.dispatchEvent(new CompositionEvent('compositionstart', { data: '测' }));
+            }
+        }""",
+        docs_supplement_selector,
+    )
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "GET"
+            and response.url
+            == f"{integration_env.api_base_url}/api/sessions/{session_id}/recovery"
+        )
+    ):
+        page.evaluate("window.dispatchEvent(new Event('focus'))")
+    expect(docs_supplement).to_be_focused(timeout=_WAIT_TIMEOUT_MS)
+    assert docs_supplement.input_value() == "Ship code now, docs follow immediately."
+    page.evaluate(
+        """selector => {
+            const input = document.querySelector(selector);
+            if (input) {
+                input.dispatchEvent(new CompositionEvent('compositionend', { data: '试' }));
+            }
+        }""",
+        docs_supplement_selector,
+    )
+    page.locator(
+        '[data-user-question-answer="option"][data-question-id="call-question-1"][data-option-label="__none_of_the_above__"][name="question-call-question-1-1"]'
+    ).check()
+    fallback_supplement = page.locator(fallback_supplement_selector)
+    assert fallback_supplement.evaluate("el => el.tagName") == "INPUT"
+    fallback_supplement.fill("Ship now, docs follow immediately.")
+
+    with page.expect_request(
+        lambda request: (
+            request.method == "POST"
+            and request.url
+            == (
+                f"{integration_env.api_base_url}/api/runs/{run_id}/questions/"
+                "call-question-1:answer"
+            )
+        )
+    ) as answer_request_info:
+        page.locator('[data-user-question-submit="true"]').click()
+
+    answer_payload = json.loads(answer_request_info.value.post_data or "{}")
+    assert answer_payload == {
+        "answers": [
+            {
+                "selections": [
+                    {"label": "Ship"},
+                    {
+                        "label": "Docs",
+                        "supplement": "Ship code now, docs follow immediately.",
+                    },
+                ]
+            },
+            {
+                "selections": [
+                    {
+                        "label": "__none_of_the_above__",
+                        "supplement": "Ship now, docs follow immediately.",
+                    }
+                ]
+            },
+        ]
+    }
+
+    round_section = page.locator(f'.session-round-section[data-run-id="{run_id}"]')
+    expect(round_section).to_contain_text(
+        "[fake-llm] Ask question validation completed after collecting labels and a handoff note.",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(question_cards).to_have_count(0, timeout=_WAIT_TIMEOUT_MS)
+
+    remaining_questions = _wait_for_open_user_questions(
+        api_client,
+        run_id=run_id,
+        expected_count=0,
+    )
+    assert remaining_questions == []
+
+
 def test_browser_shell_settings_and_session_management(
     browser_page: Page,
     integration_env: IntegrationEnvironment,
@@ -1734,6 +1886,28 @@ def _wait_for_open_tool_approvals(
         time.sleep(0.2)
     raise AssertionError(
         f"Timed out waiting for {expected_count} tool approvals for run {run_id}."
+    )
+
+
+def _wait_for_open_user_questions(
+    client: httpx.Client,
+    *,
+    run_id: str,
+    expected_count: int,
+    timeout_seconds: float = 15.0,
+) -> list[dict[str, object]]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = client.get(f"/api/runs/{run_id}/questions")
+        response.raise_for_status()
+        questions = response.json()
+        if not isinstance(questions, list):
+            raise AssertionError(f"Invalid user questions response: {questions}")
+        if len(questions) == expected_count:
+            return questions
+        time.sleep(0.2)
+    raise AssertionError(
+        f"Timed out waiting for {expected_count} user questions for run {run_id}."
     )
 
 

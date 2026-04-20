@@ -1006,6 +1006,8 @@ def _run_blocking_reason(runtime: RunRuntimeRecord | None) -> str | None:
         return None
     if runtime.phase == RunRuntimePhase.AWAITING_TOOL_APPROVAL:
         return "awaiting_tool_approval"
+    if runtime.phase == RunRuntimePhase.AWAITING_MANUAL_ACTION:
+        return "awaiting_manual_action"
     if runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP:
         return "awaiting_subagent_followup"
     if runtime.phase == RunRuntimePhase.AWAITING_RECOVERY:

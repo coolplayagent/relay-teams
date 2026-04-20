@@ -150,9 +150,15 @@ def build_clawhub_subprocess_env(
     registry: str | None = None,
 ) -> dict[str, str]:
     resolved_base_env = os.environ if base_env is None else base_env
+    resolved_config_dir = (
+        None if config_dir is None else config_dir.expanduser().resolve()
+    )
     proxy_config = load_proxy_env_config(
-        extra_env_files=_clawhub_proxy_env_files(config_dir),
+        extra_env_files=_clawhub_proxy_env_files(resolved_config_dir),
         include_process_env=True,
+        user_home_dir=(
+            None if resolved_config_dir is None else resolved_config_dir.parent
+        ),
     )
     extra_env = extract_proxy_env_vars(proxy_config.normalized_env())
     extra_env.update(

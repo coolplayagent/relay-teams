@@ -11,6 +11,7 @@ import {
 } from '../components/rounds.js';
 import { scheduleSessionsRefresh } from '../components/sidebar.js';
 import {
+    answerUserQuestion,
     fetchSessionRecovery,
     resolveToolApproval,
     resumeRun,
@@ -32,12 +33,18 @@ import { sysLog } from '../utils/logger.js';
 let recoveryActionBusy = false;
 const approvalActionBusyIds = new Set();
 const approvalActionErrors = new Map();
+const userQuestionActionBusyIds = new Set();
+const userQuestionActionErrors = new Map();
+const userQuestionDrafts = new Map();
+const userQuestionSupplementCompositionKeys = new Set();
 const backgroundTaskActionBusyIds = new Set();
 const backgroundTaskActionErrors = new Map();
 const backgroundTaskPanelExpandedRunIds = new Set();
 let recoveryBannerRenderSignature = '';
+let activeUserQuestionSupplementState = null;
 const CONTINUITY_POLL_ACTIVE_MS = 1500;
 const CONTINUITY_POLL_IDLE_MS = 4000;
+const USER_QUESTION_NONE_OPTION_LABEL = '__none_of_the_above__';
 const continuity = {
     sessionId: '',
     pollTimer: null,
@@ -171,6 +178,11 @@ export function clearSessionRecovery() {
     state.pausedSubagent = null;
     approvalActionBusyIds.clear();
     approvalActionErrors.clear();
+    userQuestionActionBusyIds.clear();
+    userQuestionActionErrors.clear();
+    userQuestionDrafts.clear();
+    userQuestionSupplementCompositionKeys.clear();
+    activeUserQuestionSupplementState = null;
     backgroundTaskActionBusyIds.clear();
     backgroundTaskActionErrors.clear();
     recoveryBannerRenderSignature = '';
@@ -209,6 +221,7 @@ export function applyRecoverySnapshot(snapshot) {
     }
 
     reconcileApprovalActionState(normalized.pendingToolApprovals);
+    reconcileUserQuestionActionState(normalized.pendingUserQuestions);
     reconcileBackgroundTaskActionState(normalized.backgroundTasks);
     state.currentRecoverySnapshot = normalized;
     state.pausedSubagent = normalized.pausedSubagent;
@@ -546,6 +559,11 @@ function normalizeRecoverySnapshot(snapshot) {
     const pendingToolApprovals = Array.isArray(snapshot?.pending_tool_approvals)
         ? snapshot.pending_tool_approvals.map(item => ({ ...item }))
         : [];
+    const pendingUserQuestions = Array.isArray(snapshot?.pending_user_questions)
+        ? snapshot.pending_user_questions
+            .map(item => normalizeUserQuestion(item, activeRun?.run_id || null))
+            .filter(Boolean)
+        : [];
     const pausedSubagent = normalizePausedSubagent(snapshot?.paused_subagent, activeRun?.run_id || null);
     const backgroundTasks = Array.isArray(snapshot?.background_tasks)
         ? snapshot.background_tasks
@@ -558,9 +576,62 @@ function normalizeRecoverySnapshot(snapshot) {
     return {
         activeRun,
         pendingToolApprovals,
+        pendingUserQuestions,
         backgroundTasks,
         pausedSubagent,
         roundSnapshot,
+    };
+}
+
+function normalizeUserQuestion(raw, runId = null) {
+    if (!raw || typeof raw !== 'object') return null;
+    const questionId = typeof raw.question_id === 'string' ? raw.question_id : '';
+    if (!questionId) return null;
+    const questions = Array.isArray(raw.questions)
+        ? raw.questions
+            .map(prompt => normalizeUserQuestionPrompt(prompt))
+            .filter(Boolean)
+        : [];
+    return {
+        questionId,
+        runId: String(raw.run_id || runId || ''),
+        sessionId: String(raw.session_id || ''),
+        taskId: String(raw.task_id || ''),
+        instanceId: String(raw.instance_id || ''),
+        roleId: String(raw.role_id || ''),
+        status: String(raw.status || 'requested'),
+        createdAt: raw.created_at ? String(raw.created_at) : '',
+        updatedAt: raw.updated_at ? String(raw.updated_at) : '',
+        questions,
+    };
+}
+
+function normalizeUserQuestionPrompt(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const question = typeof raw.question === 'string' ? raw.question.trim() : '';
+    if (!question) return null;
+    const options = Array.isArray(raw.options)
+        ? raw.options
+            .map(option => normalizeUserQuestionOption(option))
+            .filter(Boolean)
+        : [];
+    return {
+        header: typeof raw.header === 'string' ? raw.header.trim() : '',
+        question,
+        options,
+        multiple: raw.multiple === true,
+        placeholder: typeof raw.placeholder === 'string' ? raw.placeholder : '',
+    };
+}
+
+function normalizeUserQuestionOption(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const label = typeof raw.label === 'string' ? raw.label.trim() : '';
+    if (!label) return null;
+    return {
+        label,
+        description: typeof raw.description === 'string' ? raw.description : '',
+        isNoneOfTheAbove: label === USER_QUESTION_NONE_OPTION_LABEL,
     };
 }
 
@@ -639,18 +710,21 @@ function syncRecoveryRoundOverlay() {
     const activeRun = getActiveRecoveryRun();
     const pausedSubagent = state.pausedSubagent || state.currentRecoverySnapshot?.pausedSubagent || null;
     const approvals = state.currentRecoverySnapshot?.pendingToolApprovals || [];
+    const userQuestions = state.currentRecoverySnapshot?.pendingUserQuestions || [];
     const runId = String(activeRun?.run_id || state.activeRunId || '').trim();
     if (!runId) return;
 
     const runStatus = activeRun?.status
-        || (pausedSubagent || approvals.length > 0 ? 'paused' : '');
+        || (pausedSubagent || approvals.length > 0 || userQuestions.length > 0 ? 'paused' : '');
     const runPhase = activeRun?.phase
         || (approvals.length > 0
             ? 'awaiting_tool_approval'
+            : userQuestions.length > 0
+                ? 'awaiting_manual_action'
             : pausedSubagent
                 ? 'awaiting_subagent_followup'
                 : '');
-    if (!runStatus && !runPhase && approvals.length === 0) return;
+    if (!runStatus && !runPhase && approvals.length === 0 && userQuestions.length === 0) return;
 
     overlayRoundRecoveryState(runId, {
         run_status: runStatus || undefined,
@@ -658,6 +732,8 @@ function syncRecoveryRoundOverlay() {
         is_recoverable: activeRun ? activeRun.is_recoverable !== false : true,
         pending_tool_approval_count: approvals.length,
         pending_tool_approvals: approvals,
+        pending_user_question_count: userQuestions.length,
+        pending_user_questions: userQuestions,
     });
 }
 
@@ -708,6 +784,7 @@ function shouldPollContinuity() {
 
     const activeRun = getActiveRecoveryRun();
     const hasApprovals = (state.currentRecoverySnapshot?.pendingToolApprovals || []).length > 0;
+    const hasUserQuestions = (state.currentRecoverySnapshot?.pendingUserQuestions || []).length > 0;
     const hasActiveBackgroundTasks = (state.currentRecoverySnapshot?.backgroundTasks || [])
         .filter(task => isBackgroundTaskActive(task)).length > 0;
     const hasPausedSubagent = !!(state.pausedSubagent || state.currentRecoverySnapshot?.pausedSubagent);
@@ -715,6 +792,7 @@ function shouldPollContinuity() {
         state.isGenerating
         || state.activeEventSource
         || hasApprovals
+        || hasUserQuestions
         || hasActiveBackgroundTasks
         || hasPausedSubagent
         || activeRun?.is_recoverable
@@ -883,6 +961,43 @@ function reconcileApprovalActionState(approvals) {
     });
 }
 
+function reconcileUserQuestionActionState(questions) {
+    const pendingIds = new Set(
+        Array.isArray(questions)
+            ? questions
+                .map(item => String(item?.questionId || '').trim())
+                .filter(Boolean)
+            : [],
+    );
+    Array.from(userQuestionActionBusyIds).forEach(questionId => {
+        if (!pendingIds.has(questionId)) {
+            userQuestionActionBusyIds.delete(questionId);
+        }
+    });
+    Array.from(userQuestionActionErrors.keys()).forEach(questionId => {
+        if (!pendingIds.has(questionId)) {
+            userQuestionActionErrors.delete(questionId);
+        }
+    });
+    Array.from(userQuestionDrafts.keys()).forEach(questionId => {
+        if (!pendingIds.has(questionId)) {
+            userQuestionDrafts.delete(questionId);
+        }
+    });
+    Array.from(userQuestionSupplementCompositionKeys).forEach(key => {
+        const questionId = String(key.split('::')[0] || '').trim();
+        if (!pendingIds.has(questionId)) {
+            userQuestionSupplementCompositionKeys.delete(key);
+        }
+    });
+    if (
+        activeUserQuestionSupplementState?.questionId
+        && !pendingIds.has(activeUserQuestionSupplementState.questionId)
+    ) {
+        activeUserQuestionSupplementState = null;
+    }
+}
+
 function reconcileBackgroundTaskActionState(tasks) {
     const pendingIds = new Set(
         Array.isArray(tasks)
@@ -914,6 +1029,9 @@ function recoverySnapshotSignature(snapshot) {
         pendingToolApprovals: Array.isArray(snapshot.pendingToolApprovals)
             ? snapshot.pendingToolApprovals.map(signatureApproval)
             : [],
+        pendingUserQuestions: Array.isArray(snapshot.pendingUserQuestions)
+            ? snapshot.pendingUserQuestions.map(signatureUserQuestion)
+            : [],
         backgroundTasks: Array.isArray(snapshot.backgroundTasks)
             ? snapshot.backgroundTasks.map(signatureBackgroundTask)
             : [],
@@ -932,6 +1050,7 @@ function signatureActiveRun(activeRun) {
         checkpoint_event_id: Number(activeRun.checkpoint_event_id || 0),
         last_event_id: Number(activeRun.last_event_id || 0),
         pending_tool_approval_count: Number(activeRun.pending_tool_approval_count || 0),
+        pending_user_question_count: Number(activeRun.pending_user_question_count || 0),
         background_task_count: Number(activeRun.background_task_count || 0),
         stream_connected: !!activeRun.stream_connected,
         should_show_recover: !!activeRun.should_show_recover,
@@ -956,6 +1075,27 @@ function signaturePausedSubagent(pausedSubagent) {
         instanceId: String(pausedSubagent.instanceId || ''),
         roleId: String(pausedSubagent.roleId || ''),
         taskId: String(pausedSubagent.taskId || ''),
+    };
+}
+
+function signatureUserQuestion(question) {
+    if (!question || typeof question !== 'object') return null;
+    return {
+        questionId: String(question.questionId || ''),
+        status: String(question.status || ''),
+        roleId: String(question.roleId || ''),
+        instanceId: String(question.instanceId || ''),
+        createdAt: String(question.createdAt || ''),
+        questions: Array.isArray(question.questions)
+            ? question.questions.map(prompt => ({
+                header: String(prompt?.header || ''),
+                question: String(prompt?.question || ''),
+                optionLabels: Array.isArray(prompt?.options)
+                    ? prompt.options.map(option => String(option?.label || ''))
+                    : [],
+                multiple: prompt?.multiple === true,
+            }))
+            : [],
     };
 }
 
@@ -990,14 +1130,23 @@ function renderRecoveryBanner() {
     const activeRun = getActiveRecoveryRun();
     const pausedSubagent = state.pausedSubagent || snapshot?.pausedSubagent || null;
     const approvals = snapshot?.pendingToolApprovals || [];
+    const userQuestions = snapshot?.pendingUserQuestions || [];
+    const questionHost = ensureRecoveryQuestionHost();
     const approvalsHost = ensureRecoveryApprovalHost();
     const resumeBtn = ensureResumeRunButton();
-    const showResumeAction = shouldShowResumeAction(activeRun, approvals, pausedSubagent);
+    const showResumeAction = shouldShowResumeAction(
+        activeRun,
+        approvals,
+        userQuestions,
+        pausedSubagent,
+    );
+    const showQuestions = userQuestions.length > 0;
     const showApprovals = approvals.length > 0;
     const nextSignature = recoveryBannerSignature({
         showResumeAction,
         activeRun,
         approvals,
+        userQuestions,
         backgroundTasks: [],
         pausedSubagent,
     });
@@ -1005,6 +1154,28 @@ function renderRecoveryBanner() {
         return;
     }
     recoveryBannerRenderSignature = nextSignature;
+
+    if (questionHost) {
+        if (showQuestions && activeRun?.run_id) {
+            questionHost.style.display = 'flex';
+            if (!hasUserQuestionSupplementComposition()) {
+                const activeSupplementState = getFocusedUserQuestionSupplementState(
+                    questionHost,
+                );
+                questionHost.innerHTML = renderUserQuestionList(activeRun, userQuestions);
+                bindUserQuestionInteractions(activeRun.run_id, userQuestions, questionHost);
+                restoreFocusedUserQuestionSupplement(
+                    questionHost,
+                    activeSupplementState,
+                );
+            }
+        } else {
+            questionHost.style.display = 'none';
+            questionHost.innerHTML = '';
+            activeUserQuestionSupplementState = null;
+            userQuestionSupplementCompositionKeys.clear();
+        }
+    }
 
     if (approvalsHost) {
         if (showApprovals && activeRun?.run_id) {
@@ -1045,10 +1216,21 @@ function renderRecoveryBanner() {
     }
 }
 
-function recoveryBannerSignature({ showResumeAction, activeRun, approvals, backgroundTasks, pausedSubagent }) {
+function recoveryBannerSignature({
+    showResumeAction,
+    activeRun,
+    approvals,
+    userQuestions,
+    backgroundTasks,
+    pausedSubagent,
+}) {
     const busyIds = Array.from(approvalActionBusyIds).sort();
     const errorEntries = Array.from(approvalActionErrors.entries())
         .map(([toolCallId, message]) => [String(toolCallId), String(message || '')])
+        .sort((left, right) => left[0].localeCompare(right[0]));
+    const questionBusyIds = Array.from(userQuestionActionBusyIds).sort();
+    const questionErrorEntries = Array.from(userQuestionActionErrors.entries())
+        .map(([questionId, message]) => [String(questionId), String(message || '')])
         .sort((left, right) => left[0].localeCompare(right[0]));
     const backgroundTaskBusyIds = Array.from(backgroundTaskActionBusyIds).sort();
     const backgroundTaskErrorEntries = Array.from(backgroundTaskActionErrors.entries())
@@ -1058,6 +1240,9 @@ function recoveryBannerSignature({ showResumeAction, activeRun, approvals, backg
         showResumeAction: !!showResumeAction,
         activeRun: signatureActiveRun(activeRun),
         approvals: Array.isArray(approvals) ? approvals.map(signatureApproval) : [],
+        userQuestions: Array.isArray(userQuestions)
+            ? userQuestions.map(signatureUserQuestion)
+            : [],
         backgroundTasks: Array.isArray(backgroundTasks)
             ? backgroundTasks.map(signatureBackgroundTask)
             : [],
@@ -1065,12 +1250,51 @@ function recoveryBannerSignature({ showResumeAction, activeRun, approvals, backg
         recoveryActionBusy: !!recoveryActionBusy,
         approvalBusyIds: busyIds,
         approvalErrors: errorEntries,
+        questionBusyIds,
+        questionErrors: questionErrorEntries,
+        questionSelections: Array.isArray(userQuestions)
+            ? userQuestions.map(question => signatureUserQuestionSelections(question?.questionId))
+            : [],
         backgroundTaskBusyIds,
         backgroundTaskErrors: backgroundTaskErrorEntries,
         localStreamingRunId: activeRun && isLocallyStreaming(activeRun.run_id)
             ? String(activeRun.run_id || '')
             : '',
     });
+}
+
+function signatureUserQuestionSelections(questionId) {
+    const safeQuestionId = String(questionId || '').trim();
+    const drafts = userQuestionDrafts.get(safeQuestionId);
+    if (!safeQuestionId || !Array.isArray(drafts)) return null;
+    return {
+        questionId: safeQuestionId,
+        prompts: drafts.map(draft => ({
+            labels: Array.isArray(draft?.selections)
+                ? draft.selections
+                    .map(item => String(item?.label || '').trim())
+                    .filter(Boolean)
+                : [],
+        })),
+    };
+}
+
+function ensureRecoveryQuestionHost() {
+    if (els.recoveryQuestionHost) return els.recoveryQuestionHost;
+    const inputContainer = document.querySelector('.input-container');
+    if (!inputContainer) return null;
+    const host = document.createElement('div');
+    host.id = 'recovery-question-host';
+    host.className = 'recovery-question-host';
+    host.style.display = 'none';
+    const approvalHost = els.recoveryApprovalHost || document.getElementById('recovery-approval-host');
+    if (approvalHost && approvalHost.parentNode === inputContainer) {
+        inputContainer.insertBefore(host, approvalHost);
+    } else {
+        inputContainer.insertBefore(host, inputContainer.firstChild);
+    }
+    els.recoveryQuestionHost = host;
+    return host;
 }
 
 function ensureRecoveryApprovalHost() {
@@ -1081,7 +1305,12 @@ function ensureRecoveryApprovalHost() {
     host.id = 'recovery-approval-host';
     host.className = 'recovery-approval-host';
     host.style.display = 'none';
-    inputContainer.insertBefore(host, inputContainer.firstChild);
+    const questionHost = els.recoveryQuestionHost || document.getElementById('recovery-question-host');
+    if (questionHost && questionHost.parentNode === inputContainer) {
+        inputContainer.insertBefore(host, questionHost.nextSibling);
+    } else {
+        inputContainer.insertBefore(host, inputContainer.firstChild);
+    }
     els.recoveryApprovalHost = host;
     return host;
 }
@@ -1108,10 +1337,11 @@ function ensureBackgroundTaskHost() {
     return host;
 }
 
-function shouldShowResumeAction(activeRun, approvals, pausedSubagent) {
+function shouldShowResumeAction(activeRun, approvals, userQuestions, pausedSubagent) {
     if (!activeRun?.is_recoverable) return false;
     if (!activeRun?.run_id || isLocallyStreaming(activeRun.run_id)) return false;
     if (Array.isArray(approvals) && approvals.length > 0) return false;
+    if (Array.isArray(userQuestions) && userQuestions.length > 0) return false;
     if (pausedSubagent) return false;
     if (activeRun.status === 'stopping' || activeRun.phase === 'stopping') return false;
     return (
@@ -1120,6 +1350,84 @@ function shouldShowResumeAction(activeRun, approvals, pausedSubagent) {
         || activeRun.status === 'paused'
         || activeRun.phase === 'awaiting_recovery'
     );
+}
+
+function hasUserQuestionSupplementComposition() {
+    return userQuestionSupplementCompositionKeys.size > 0;
+}
+
+function rememberActiveUserQuestionSupplement(input) {
+    const state = getUserQuestionSupplementState(input);
+    if (!state) return;
+    activeUserQuestionSupplementState = state;
+}
+
+function getFocusedUserQuestionSupplementState(questionHost) {
+    const activeElement = document.activeElement;
+    if (
+        questionHost
+        && activeElement instanceof HTMLInputElement
+        && questionHost.contains(activeElement)
+    ) {
+        return getUserQuestionSupplementState(activeElement);
+    }
+    return activeUserQuestionSupplementState;
+}
+
+function getUserQuestionSupplementState(input) {
+    if (
+        !(input instanceof HTMLInputElement)
+        || input.dataset.userQuestionAnswer !== 'supplement'
+    ) {
+        return null;
+    }
+    const questionId = String(input.dataset.questionId || '').trim();
+    const promptIndex = String(input.dataset.promptIndex || '').trim();
+    const optionLabel = String(input.dataset.optionLabel || '').trim();
+    if (!questionId || !promptIndex || !optionLabel) return null;
+    return {
+        key: userQuestionSupplementKey(questionId, promptIndex, optionLabel),
+        questionId,
+        promptIndex,
+        optionLabel,
+        value: String(input.value || ''),
+        selectionStart: Number.isInteger(input.selectionStart)
+            ? input.selectionStart
+            : null,
+        selectionEnd: Number.isInteger(input.selectionEnd)
+            ? input.selectionEnd
+            : null,
+    };
+}
+
+function userQuestionSupplementKey(questionId, promptIndex, optionLabel) {
+    return `${questionId}::${promptIndex}::${optionLabel}`;
+}
+
+function restoreFocusedUserQuestionSupplement(questionHost, state) {
+    if (!questionHost || !state?.key) return;
+    const input = Array.from(
+        questionHost.querySelectorAll('[data-user-question-answer="supplement"]'),
+    ).find(candidate => {
+        if (!(candidate instanceof HTMLInputElement)) return false;
+        return userQuestionSupplementKey(
+            String(candidate.dataset.questionId || '').trim(),
+            String(candidate.dataset.promptIndex || '').trim(),
+            String(candidate.dataset.optionLabel || '').trim(),
+        ) === state.key;
+    });
+    if (!(input instanceof HTMLInputElement)) return;
+    if (String(input.value || '') !== state.value) {
+        input.value = state.value;
+    }
+    input.focus({ preventScroll: true });
+    if (
+        Number.isInteger(state.selectionStart)
+        && Number.isInteger(state.selectionEnd)
+    ) {
+        input.setSelectionRange(state.selectionStart, state.selectionEnd);
+    }
+    activeUserQuestionSupplementState = getUserQuestionSupplementState(input);
 }
 
 async function handleRecoveryAction(actionDef, activeRun, pausedSubagent) {
@@ -1415,6 +1723,430 @@ function backgroundTaskStatusLabel(backgroundTask) {
     }
 }
 
+function renderUserQuestionList(activeRun, userQuestions) {
+    return `
+        <div class="recovery-question-list">
+            ${userQuestions.map(item => renderUserQuestionItem(activeRun, item)).join('')}
+        </div>
+    `;
+}
+
+function renderUserQuestionItem(activeRun, userQuestion) {
+    const questionId = String(userQuestion?.questionId || '');
+    const busy = userQuestionActionBusyIds.has(questionId);
+    const error = userQuestionActionErrors.get(questionId) || '';
+    const statusText = error || (busy ? t('recovery.question.submitting') : '');
+    const actor = humanizeRoleLabel(userQuestion?.roleId || userQuestion?.instanceId || 'Agent');
+    const requestedAt = formatRelativeTimeValue(userQuestion?.createdAt || userQuestion?.updatedAt || '');
+    const meta = [
+        formatMessage('recovery.requested_by', { actor }),
+        requestedAt,
+    ].filter(Boolean).join(' · ');
+
+    return `
+        <section class="recovery-question-card" data-question-card-id="${escapeAttribute(questionId)}">
+            <div class="recovery-question-header-row">
+                <div class="recovery-question-copy">
+                    <div class="recovery-question-title">${escapeHtml(t('recovery.question.requested'))}</div>
+                    ${meta ? `<div class="recovery-question-meta">${escapeHtml(meta)}</div>` : ''}
+                </div>
+                <div class="recovery-question-actions">
+                    <button
+                        type="button"
+                        class="recovery-question-submit"
+                        data-user-question-submit="true"
+                        data-question-id="${escapeAttribute(questionId)}"
+                        ${busy || recoveryActionBusy ? 'disabled' : ''}
+                    >
+                        ${escapeHtml(busy ? t('recovery.question.submitting') : t('recovery.question.submit'))}
+                    </button>
+                    ${statusText
+        ? `<span class="recovery-question-status ${error ? 'is-error' : ''}">${escapeHtml(statusText)}</span>`
+        : ''
+    }
+                </div>
+            </div>
+            <div class="recovery-question-body">
+                ${(Array.isArray(userQuestion?.questions) ? userQuestion.questions : [])
+        .map((prompt, index) => renderUserQuestionPrompt(questionId, prompt, index))
+        .join('')}
+            </div>
+        </section>
+    `;
+}
+
+function renderUserQuestionPrompt(questionId, prompt, promptIndex) {
+    const draft = getUserQuestionDraft(questionId, promptIndex);
+    const options = Array.isArray(prompt?.options) ? prompt.options : [];
+    const selectedLabels = draft.selections.map(item => item.label);
+
+    return `
+        <fieldset class="recovery-question-field">
+            ${prompt?.header
+        ? `<div class="recovery-question-field-header">${escapeHtml(prompt.header)}</div>`
+        : ''
+    }
+            <legend class="recovery-question-text">${escapeHtml(prompt?.question || '')}</legend>
+            <div class="recovery-question-options">
+                ${options.map(option => renderUserQuestionOption(
+        questionId,
+        promptIndex,
+        prompt?.multiple === true,
+        option,
+        draft,
+        selectedLabels,
+        prompt?.placeholder || '',
+    )).join('')}
+            </div>
+        </fieldset>
+    `;
+}
+
+function renderUserQuestionOption(
+    questionId,
+    promptIndex,
+    multiple,
+    option,
+    draft,
+    selectedLabels,
+    placeholder,
+) {
+    const label = String(option?.label || '');
+    const description = option?.isNoneOfTheAbove
+        ? t('recovery.question.none_option_description')
+        : String(option?.description || '');
+    const checked = Array.isArray(selectedLabels) && selectedLabels.includes(label);
+    const inputType = multiple ? 'checkbox' : 'radio';
+    const inputName = `question-${questionId}-${promptIndex}`;
+    const selection = getDraftSelection(draft, label);
+    const supplement = selection?.supplement || '';
+    return `
+        <label class="recovery-question-option">
+            <input
+                type="${inputType}"
+                name="${escapeAttribute(inputName)}"
+                value="${escapeAttribute(label)}"
+                data-user-question-answer="option"
+                data-question-id="${escapeAttribute(questionId)}"
+                data-prompt-index="${promptIndex}"
+                data-option-label="${escapeAttribute(label)}"
+                ${checked ? 'checked' : ''}
+            >
+            <span class="recovery-question-option-copy">
+                <span class="recovery-question-option-label">${escapeHtml(userQuestionOptionLabel(option))}</span>
+                ${description
+        ? `<span class="recovery-question-option-description">${escapeHtml(description)}</span>`
+        : ''
+    }
+                ${checked
+        ? `<input
+                        type="text"
+                        class="recovery-question-input recovery-question-option-supplement"
+                        placeholder="${escapeAttribute(
+        placeholder || t('recovery.question.supplement_placeholder'),
+    )}"
+                        value="${escapeAttribute(supplement)}"
+                        autocomplete="off"
+                        data-user-question-answer="supplement"
+                        data-question-id="${escapeAttribute(questionId)}"
+                        data-prompt-index="${promptIndex}"
+                        data-option-label="${escapeAttribute(label)}"
+                    >`
+        : ''
+    }
+            </span>
+        </label>
+    `;
+}
+
+function bindUserQuestionInteractions(runId, userQuestions, host) {
+    host.querySelectorAll('[data-user-question-answer="option"]').forEach(input => {
+        input.addEventListener('change', () => {
+            handleUserQuestionOptionInput(input);
+        });
+    });
+    host.querySelectorAll('[data-user-question-answer="supplement"]').forEach(input => {
+        input.addEventListener('input', () => {
+            handleUserQuestionSupplementInput(input);
+        });
+        input.addEventListener('focus', () => {
+            handleUserQuestionSupplementFocus(input);
+        });
+        input.addEventListener('blur', () => {
+            handleUserQuestionSupplementBlur(input);
+        });
+        input.addEventListener('compositionstart', () => {
+            handleUserQuestionSupplementCompositionStart(input);
+        });
+        input.addEventListener('compositionend', () => {
+            handleUserQuestionSupplementCompositionEnd(input);
+        });
+    });
+    host.querySelectorAll('[data-user-question-submit]').forEach(button => {
+        button.addEventListener('click', () => {
+            const questionId = String(button.dataset.questionId || '');
+            const userQuestion = userQuestions.find(item => item.questionId === questionId);
+            if (!userQuestion) return;
+            void handleUserQuestionSubmit(userQuestion.runId || runId, userQuestion);
+        });
+    });
+}
+
+function handleUserQuestionOptionInput(input) {
+    const questionId = String(input?.dataset?.questionId || '').trim();
+    const promptIndex = Number(input?.dataset?.promptIndex ?? -1);
+    const optionLabel = String(input?.dataset?.optionLabel || '').trim();
+    if (!questionId || promptIndex < 0 || !optionLabel) return;
+
+    const draft = getUserQuestionDraft(questionId, promptIndex);
+    const optionSelection = getDraftSelection(draft, optionLabel) || {
+        label: optionLabel,
+        supplement: '',
+    };
+    if (input.type === 'radio') {
+        draft.selections = input.checked ? [optionSelection] : [];
+    } else if (input.checked) {
+        const nextSelections = draft.selections.filter(item => item.label !== optionLabel);
+        if (optionLabel === USER_QUESTION_NONE_OPTION_LABEL) {
+            draft.selections = [optionSelection];
+        } else {
+            draft.selections = nextSelections.filter(
+                item => item.label !== USER_QUESTION_NONE_OPTION_LABEL,
+            );
+            draft.selections.push(optionSelection);
+        }
+    } else {
+        draft.selections = draft.selections.filter(item => item.label !== optionLabel);
+    }
+    setUserQuestionDraft(questionId, promptIndex, draft);
+    renderRecoveryBanner();
+}
+
+function handleUserQuestionSupplementInput(input) {
+    rememberActiveUserQuestionSupplement(input);
+    const questionId = String(input?.dataset?.questionId || '').trim();
+    const promptIndex = Number(input?.dataset?.promptIndex ?? -1);
+    const optionLabel = String(input?.dataset?.optionLabel || '').trim();
+    if (!questionId || promptIndex < 0 || !optionLabel) return;
+    const draft = getUserQuestionDraft(questionId, promptIndex);
+    draft.selections = draft.selections.map(item => (
+        item.label === optionLabel
+            ? { ...item, supplement: String(input.value || '') }
+            : item
+    ));
+    if (!draft.selections.some(item => item.label === optionLabel)) {
+        draft.selections.push({
+            label: optionLabel,
+            supplement: String(input.value || ''),
+        });
+    }
+    setUserQuestionDraft(questionId, promptIndex, draft);
+}
+
+function handleUserQuestionSupplementFocus(input) {
+    rememberActiveUserQuestionSupplement(input);
+}
+
+function handleUserQuestionSupplementBlur(input) {
+    const state = getUserQuestionSupplementState(input);
+    if (!state) return;
+    if (activeUserQuestionSupplementState?.key === state.key) {
+        activeUserQuestionSupplementState = null;
+    }
+    userQuestionSupplementCompositionKeys.delete(state.key);
+}
+
+function handleUserQuestionSupplementCompositionStart(input) {
+    const state = getUserQuestionSupplementState(input);
+    if (!state) return;
+    activeUserQuestionSupplementState = state;
+    userQuestionSupplementCompositionKeys.add(state.key);
+}
+
+function handleUserQuestionSupplementCompositionEnd(input) {
+    const state = getUserQuestionSupplementState(input);
+    if (!state) return;
+    activeUserQuestionSupplementState = state;
+    userQuestionSupplementCompositionKeys.delete(state.key);
+    renderRecoveryBanner();
+}
+
+async function handleUserQuestionSubmit(runId, userQuestion) {
+    const safeRunId = String(runId || '').trim();
+    const questionId = String(userQuestion?.questionId || '').trim();
+    if (!safeRunId || !questionId) return;
+    if (userQuestionActionBusyIds.has(questionId)) return;
+
+    const submission = buildUserQuestionSubmission(userQuestion);
+    if (!submission.ok) {
+        userQuestionActionErrors.set(questionId, submission.error);
+        renderRecoveryBanner();
+        return;
+    }
+
+    userQuestionActionBusyIds.add(questionId);
+    userQuestionActionErrors.delete(questionId);
+    renderRecoveryBanner();
+
+    try {
+        await answerUserQuestion(safeRunId, questionId, submission.answers);
+        userQuestionActionBusyIds.delete(questionId);
+        userQuestionActionErrors.delete(questionId);
+        userQuestionDrafts.delete(questionId);
+        markUserQuestionResolved(questionId);
+        scheduleRecoveryContinuityRefresh({
+            sessionId: state.currentSessionId,
+            delayMs: 0,
+            includeRounds: false,
+            quiet: true,
+            reason: 'user-question-answered',
+        });
+    } catch (e) {
+        userQuestionActionBusyIds.delete(questionId);
+        userQuestionActionErrors.set(
+            questionId,
+            e?.message || t('recovery.resolve_user_question_failed'),
+        );
+        sysLog(
+            e?.message || t('recovery.resolve_user_question_failed'),
+            'log-error',
+        );
+    }
+
+    renderRecoveryBanner();
+}
+
+function buildUserQuestionSubmission(userQuestion) {
+    const prompts = Array.isArray(userQuestion?.questions) ? userQuestion.questions : [];
+    const answers = [];
+    for (let index = 0; index < prompts.length; index += 1) {
+        const prompt = prompts[index];
+        const draft = getUserQuestionDraft(userQuestion.questionId, index);
+        const selections = Array.isArray(draft.selections)
+            ? draft.selections
+                .map(item => ({
+                    label: String(item?.label || '').trim(),
+                    supplement: String(item?.supplement || '').trim(),
+                }))
+                .filter(item => item.label)
+            : [];
+        if (!prompt?.multiple && selections.length > 1) {
+            return {
+                ok: false,
+                error: t('recovery.question.single_choice_only'),
+            };
+        }
+        const labels = selections.map(item => item.label);
+        if (
+            labels.includes(USER_QUESTION_NONE_OPTION_LABEL)
+            && labels.length > 1
+        ) {
+            return {
+                ok: false,
+                error: t('recovery.question.none_conflict'),
+            };
+        }
+        if (selections.length === 0) {
+            return {
+                ok: false,
+                error: t('recovery.question.answer_required'),
+            };
+        }
+        answers.push({
+            selections: selections.map(item => (
+                item.supplement
+                    ? { label: item.label, supplement: item.supplement }
+                    : { label: item.label }
+            )),
+        });
+    }
+    return { ok: true, answers };
+}
+
+function markUserQuestionResolved(questionId) {
+    const snapshot = state.currentRecoverySnapshot;
+    if (!snapshot) return;
+    const nextQuestions = (snapshot.pendingUserQuestions || []).filter(
+        item => item.questionId !== questionId,
+    );
+    const hasPendingApprovals = (snapshot.pendingToolApprovals || []).length > 0;
+    const hasPendingQuestions = nextQuestions.length > 0;
+    const hasPausedSubagent = !!(state.pausedSubagent || snapshot.pausedSubagent);
+    state.currentRecoverySnapshot = {
+        ...snapshot,
+        activeRun: snapshot.activeRun
+            ? {
+                ...snapshot.activeRun,
+                status: hasPendingApprovals || hasPendingQuestions || hasPausedSubagent
+                    ? 'paused'
+                    : snapshot.activeRun.status,
+                pending_user_question_count: nextQuestions.length,
+                phase: hasPendingApprovals
+                    ? 'awaiting_tool_approval'
+                    : hasPendingQuestions
+                        ? 'awaiting_manual_action'
+                        : hasPausedSubagent
+                            ? 'awaiting_subagent_followup'
+                            : snapshot.activeRun.status === 'stopped'
+                                ? 'stopped'
+                                : snapshot.activeRun.status === 'paused'
+                                    ? 'paused'
+                                    : snapshot.activeRun.phase,
+            }
+            : snapshot.activeRun,
+        pendingUserQuestions: nextQuestions,
+    };
+    syncRecoveryRoundOverlay();
+    scheduleSessionsRefresh();
+    syncSessionContinuity();
+}
+
+function getUserQuestionDraft(questionId, promptIndex) {
+    const drafts = userQuestionDrafts.get(questionId);
+    if (Array.isArray(drafts) && drafts[promptIndex]) {
+        return {
+            selections: Array.isArray(drafts[promptIndex].selections)
+                ? drafts[promptIndex].selections.map(item => ({
+                    label: String(item?.label || ''),
+                    supplement: String(item?.supplement || ''),
+                }))
+                : [],
+        };
+    }
+    return {
+        selections: [],
+    };
+}
+
+function setUserQuestionDraft(questionId, promptIndex, draft) {
+    const drafts = Array.isArray(userQuestionDrafts.get(questionId))
+        ? [...userQuestionDrafts.get(questionId)]
+        : [];
+    drafts[promptIndex] = {
+        selections: Array.isArray(draft?.selections)
+            ? draft.selections
+                .map(item => ({
+                    label: String(item?.label || '').trim(),
+                    supplement: String(item?.supplement || ''),
+                }))
+                .filter(item => item.label)
+            : [],
+    };
+    userQuestionDrafts.set(questionId, drafts);
+}
+
+function getDraftSelection(draft, label) {
+    return (Array.isArray(draft?.selections) ? draft.selections : []).find(
+        item => item.label === label,
+    ) || null;
+}
+
+function userQuestionOptionLabel(option) {
+    return option?.isNoneOfTheAbove
+        ? t('recovery.question.none_option')
+        : String(option?.label || '');
+}
+
 function renderApprovalList(activeRun, approvals) {
     return `
         <div class="recovery-approval-list">
@@ -1517,6 +2249,25 @@ function humanizeToolName(value) {
         .filter(Boolean)
         .map(part => part.charAt(0).toUpperCase() + part.slice(1))
         .join(' ');
+}
+
+function formatRelativeTimeValue(value) {
+    const safeValue = String(value || '').trim();
+    if (!safeValue) return '';
+    const timestamp = Date.parse(safeValue);
+    if (Number.isNaN(timestamp)) return '';
+    const diffMinutes = Math.max(0, Math.round((Date.now() - timestamp) / 60000));
+    if (diffMinutes < 1) return t('time.just_now');
+    if (diffMinutes < 60) return `${diffMinutes}${t('time.minute_short')}`;
+    const diffHours = Math.round(diffMinutes / 60);
+    if (diffHours < 24) return `${diffHours}${t('time.hour_short')}`;
+    const diffDays = Math.round(diffHours / 24);
+    if (diffDays < 7) return `${diffDays}${t('time.day_short')}`;
+    const diffWeeks = Math.round(diffDays / 7);
+    if (diffWeeks < 5) return `${diffWeeks}${t('time.week_short')}`;
+    const diffMonths = Math.round(diffDays / 30);
+    if (diffMonths < 12) return `${diffMonths}${t('time.month_short')}`;
+    return `${Math.round(diffDays / 365)}${t('time.year_short')}`;
 }
 
 function escapeHtml(value) {

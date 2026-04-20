@@ -739,6 +739,7 @@ def _build_provider(
         run_event_hub=cast(RunEventHub, cast(object, hub)),
         agent_repo=AgentInstanceRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
+        user_question_repo=None,
         run_runtime_repo=RunRuntimeRepository(db_path),
         run_intent_repo=RunIntentRepository(db_path),
         background_task_service=None,

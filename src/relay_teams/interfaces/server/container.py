@@ -156,6 +156,8 @@ from relay_teams.sessions.runs.background_tasks.repository import (
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
+from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
+from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
@@ -334,6 +336,9 @@ class ServerContainer:
         self.approval_ticket_repo: ApprovalTicketRepository = ApprovalTicketRepository(
             runtime.paths.db_path
         )
+        self.user_question_repo: UserQuestionRepository = UserQuestionRepository(
+            runtime.paths.db_path
+        )
         self.shell_approval_repo: ShellApprovalRepository = ShellApprovalRepository(
             runtime.paths.db_path
         )
@@ -508,6 +513,7 @@ class ServerContainer:
         )
         self.gate_manager: GateManager = GateManager()
         self.tool_approval_manager: ToolApprovalManager = ToolApprovalManager()
+        self.user_question_manager: UserQuestionManager = UserQuestionManager()
         self.tool_approval_policy: ToolApprovalPolicy = ToolApprovalPolicy()
         self.external_acp_session_manager = ExternalAcpSessionManager(
             config_dir=self.config_dir,
@@ -523,6 +529,7 @@ class ServerContainer:
             injection_manager=self.injection_manager,
             agent_repo=self.agent_repo,
             approval_ticket_repo=self.approval_ticket_repo,
+            user_question_repo=self.user_question_repo,
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             background_task_service=self.background_task_service,
@@ -536,6 +543,7 @@ class ServerContainer:
             get_task_service=lambda: self.task_service,
             run_control_manager=self.run_control_manager,
             tool_approval_manager=self.tool_approval_manager,
+            user_question_manager=self.user_question_manager,
             tool_approval_policy=self.tool_approval_policy,
             shell_approval_repo=self.shell_approval_repo,
             get_notification_service=lambda: self.notification_service,
@@ -605,6 +613,7 @@ class ServerContainer:
             agent_repo=self.agent_repo,
             message_repo=self.message_repo,
             approval_ticket_repo=self.approval_ticket_repo,
+            user_question_repo=self.user_question_repo,
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             run_state_repo=self.run_state_repo,
@@ -616,6 +625,7 @@ class ServerContainer:
             media_asset_service=self.media_asset_service,
             runtime_role_resolver=self.runtime_role_resolver,
             shell_approval_repo=self.shell_approval_repo,
+            user_question_manager=self.user_question_manager,
             hook_service=self.hook_service,
         )
         self.monitor_service.bind_action_sink(self.run_service)
@@ -625,6 +635,7 @@ class ServerContainer:
             agent_repo=self.agent_repo,
             message_repo=self.message_repo,
             approval_ticket_repo=self.approval_ticket_repo,
+            user_question_repo=self.user_question_repo,
             run_runtime_repo=self.run_runtime_repo,
             token_usage_repo=self.token_usage_repo,
             monitor_repository=self.monitor_repository,
@@ -854,6 +865,7 @@ class ServerContainer:
             run_event_hub=self.run_event_hub,
             agent_repo=self.agent_repo,
             approval_ticket_repo=self.approval_ticket_repo,
+            user_question_repo=self.user_question_repo,
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             background_task_service=self.background_task_service,
@@ -872,6 +884,7 @@ class ServerContainer:
             get_task_service=get_task_service,
             run_control_manager=self.run_control_manager,
             tool_approval_manager=self.tool_approval_manager,
+            user_question_manager=self.user_question_manager,
             tool_approval_policy=self.tool_approval_policy,
             shell_approval_repo=self.shell_approval_repo,
             notification_service=self.notification_service,

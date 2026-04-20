@@ -18,6 +18,7 @@ tools:
   - notebook_edit
   - write
   - shell
+  - ask_question
   - spawn_subagent
   - list_background_tasks
   - wait_background_task

@@ -206,10 +206,12 @@ def load_proxy_env_config(
     *,
     extra_env_files: tuple[Path, ...] = (),
     include_process_env: bool = True,
+    user_home_dir: Path | None = None,
 ) -> ProxyEnvConfig:
     merged_env = load_merged_env_vars(
         extra_env_files=extra_env_files,
         include_process_env=include_process_env,
+        user_home_dir=user_home_dir,
     )
     return hydrate_proxy_config_with_saved_password(
         resolve_proxy_env_config(merged_env),

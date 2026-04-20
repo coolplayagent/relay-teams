@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Annotated, ClassVar, Literal
+from typing import Annotated, ClassVar, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -19,6 +19,9 @@ from relay_teams.media import (
 from relay_teams.monitors import MonitorActionType, MonitorRule, MonitorSourceKind
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.enums import ExecutionMode, InjectionSource
+from relay_teams.sessions.runs.user_question_models import (
+    UserQuestionAnswerSubmission,
+)
 from relay_teams.sessions.runs.run_models import (
     IntentInput,
     MediaGenerationConfig,
@@ -71,6 +74,12 @@ class ResolveToolApprovalRequest(BaseModel):
         "deny",
     ]
     feedback: str = ""
+
+
+class AnswerUserQuestionRequest(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    answers: tuple[dict[str, object], ...] = Field(min_length=1)
 
 
 class StopRunRequest(BaseModel):
@@ -342,6 +351,55 @@ def list_tool_approvals(
             payload={"count": len(result)},
         )
         return result
+
+
+@router.get("/{run_id}/questions")
+def list_user_questions(
+    run_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> list[dict[str, object]]:
+    try:
+        return cast(list[dict[str, object]], service.list_user_questions(run_id))
+    except KeyError as exc:
+        raise http_exception_for(exc) from exc
+
+
+@router.post("/{run_id}/questions/{question_id}:answer")
+def answer_user_question(
+    run_id: RequiredIdentifierStr,
+    question_id: RequiredIdentifierStr,
+    req: AnswerUserQuestionRequest,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> dict[str, object]:
+    try:
+        submission = UserQuestionAnswerSubmission.model_validate(
+            {"answers": list(req.answers)}
+        )
+        result = service.answer_user_question(
+            run_id=run_id,
+            question_id=question_id,
+            answers=submission,
+        )
+        with bind_trace_context(
+            trace_id=run_id,
+            run_id=run_id,
+            tool_call_id=question_id,
+        ):
+            log_event(
+                logger,
+                logging.INFO,
+                event="user.question.answered",
+                message="User question answered",
+                payload={"answer_count": len(submission.answers)},
+            )
+        return cast(dict[str, object], result)
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 400),),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/{run_id}/background-tasks")
