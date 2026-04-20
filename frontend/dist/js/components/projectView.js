@@ -89,12 +89,14 @@ let currentGatewayFeatureState = createInitialGatewayFeatureState();
 let currentAutomationEditorState = createInitialAutomationEditorState();
 let currentSnapshot = null;
 let currentSnapshotWorkspaceId = null;
+let currentMountName = null;
 let currentLoadToken = 0;
 let languageBound = false;
 let gatewayModalRoot = null;
 let automationEditorModalRoot = null;
 let selectedTreePath = null;
 let currentDiffState = createInitialDiffState();
+const currentMountTrees = new Map();
 const expandedTreePaths = new Set();
 const loadingTreePaths = new Set();
 const treeLoadErrors = new Map();
@@ -2562,6 +2564,7 @@ export async function openWorkspaceProjectView(workspace) {
         }
     } else {
         resetProjectViewState(workspaceId);
+        currentMountName = resolveWorkspaceInitialMountName(workspace);
         currentDiffState = {
             ...createInitialDiffState(),
             status: 'loading',
@@ -2727,8 +2730,10 @@ export function hideProjectView() {
 function resetProjectViewState(workspaceId) {
     currentSnapshot = null;
     currentSnapshotWorkspaceId = workspaceId;
+    currentMountName = null;
     selectedTreePath = null;
     currentDiffState = createInitialDiffState();
+    currentMountTrees.clear();
     expandedTreePaths.clear();
     loadingTreePaths.clear();
     treeLoadErrors.clear();
@@ -2737,6 +2742,7 @@ function resetProjectViewState(workspaceId) {
 function createInitialDiffState() {
     return {
         status: 'idle',
+        mountName: null,
         diffFiles: [],
         diffMessage: null,
         isGitRepository: null,
@@ -2757,7 +2763,12 @@ function cacheProjectViewState() {
     }
     workspaceViewCache.set(workspaceId, {
         snapshot: cloneSnapshot(currentSnapshot),
+        currentMountName,
         selectedTreePath,
+        mountTrees: Array.from(currentMountTrees.entries()).map(([mountName, tree]) => [
+            String(mountName || '').trim(),
+            cloneTreeNode(tree),
+        ]),
         expandedTreePaths: Array.from(expandedTreePaths),
         diffState: cloneDiffState(currentDiffState),
     });
@@ -2771,8 +2782,21 @@ function restoreProjectViewState(workspaceId) {
     }
 
     currentSnapshot = cloneSnapshot(cachedState.snapshot);
+    currentMountName = String(cachedState.currentMountName || '').trim() || null;
     selectedTreePath = String(cachedState.selectedTreePath || '').trim() || null;
     currentDiffState = cloneDiffState(cachedState.diffState);
+    currentMountTrees.clear();
+    for (const entry of Array.isArray(cachedState.mountTrees) ? cachedState.mountTrees : []) {
+        if (!Array.isArray(entry) || entry.length < 2) {
+            continue;
+        }
+        const mountName = String(entry[0] || '').trim();
+        const tree = cloneTreeNode(entry[1]);
+        if (!mountName || !tree) {
+            continue;
+        }
+        currentMountTrees.set(mountName, tree);
+    }
 
     for (const path of Array.isArray(cachedState.expandedTreePaths) ? cachedState.expandedTreePaths : []) {
         const normalizedPath = String(path || '').trim();
@@ -2791,14 +2815,13 @@ async function loadWorkspaceSnapshot(workspaceId, loadToken) {
             return;
         }
 
-        const nextSnapshot = normalizeSnapshot(snapshot);
-        if (currentSnapshot && currentSnapshotWorkspaceId === workspaceId) {
-            mergeTreeState(nextSnapshot?.tree, currentSnapshot?.tree);
-        }
+        const nextSnapshot = normalizeSnapshot(snapshot, currentWorkspace);
         currentSnapshot = nextSnapshot;
         currentSnapshotWorkspaceId = workspaceId;
+        currentMountName = resolveWorkspaceMountName(currentMountName, nextSnapshot);
+        primeSnapshotMountTrees(nextSnapshot);
 
-        renderWorkspaceSnapshot(currentWorkspace, currentSnapshot);
+        ensureActiveMountTreeLoaded(loadToken);
         cacheProjectViewState();
     } catch (error) {
         if (loadToken !== currentLoadToken || workspaceId !== currentSnapshotWorkspaceId) {
@@ -2817,8 +2840,9 @@ async function loadWorkspaceSnapshot(workspaceId, loadToken) {
 }
 
 async function loadWorkspaceDiffs(workspaceId, loadToken) {
+    const mountName = resolveActiveMountName();
     try {
-        const payload = await fetchWorkspaceDiffs(workspaceId);
+        const payload = await fetchWorkspaceDiffs(workspaceId, mountName);
         if (loadToken !== currentLoadToken || workspaceId !== currentSnapshotWorkspaceId) {
             return;
         }
@@ -2826,6 +2850,7 @@ async function loadWorkspaceDiffs(workspaceId, loadToken) {
         const diffFiles = Array.isArray(payload?.diff_files) ? payload.diff_files : [];
         currentDiffState = {
             status: 'ready',
+            mountName,
             diffFiles,
             diffMessage: String(payload?.diff_message || '').trim() || null,
             isGitRepository: payload?.is_git_repository === true,
@@ -5075,25 +5100,29 @@ function renderWorkspaceSnapshot(workspace, snapshot) {
     if (!els.projectViewContent) {
         return;
     }
+    const activeTree = getCurrentMountTree();
 
     els.projectViewContent.innerHTML = `
-        <div class="workspace-view-grid">
-            <section class="workspace-view-panel">
-                <div class="workspace-view-panel-header">
-                    <h3>${escapeHtml(t('workspace_view.tree'))}</h3>
-                    <span class="workspace-view-panel-meta">${renderWorkspaceRootMeta(snapshot)}</span>
-                </div>
-                <div class="workspace-tree-shell">
-                    ${renderTree(snapshot?.tree)}
-                </div>
-            </section>
-            <section class="workspace-view-panel workspace-diff-panel">
-                <div class="workspace-view-panel-header">
-                    <h3>${escapeHtml(t('workspace_view.diffs'))}</h3>
-                    <span class="workspace-view-panel-meta">${escapeHtml(summarizeDiffState())}</span>
-                </div>
-                ${renderDiffSection()}
-            </section>
+        <div class="workspace-view-layout">
+            ${renderWorkspaceMountStrip(snapshot)}
+            <div class="workspace-view-grid">
+                <section class="workspace-view-panel">
+                    <div class="workspace-view-panel-header">
+                        <h3>${escapeHtml(t('workspace_view.tree'))}</h3>
+                        <span class="workspace-view-panel-meta">${renderWorkspaceRootMeta(snapshot)}</span>
+                    </div>
+                    <div class="workspace-tree-shell">
+                        ${renderTree(activeTree)}
+                    </div>
+                </section>
+                <section class="workspace-view-panel workspace-diff-panel">
+                    <div class="workspace-view-panel-header">
+                        <h3>${escapeHtml(t('workspace_view.diffs'))}</h3>
+                        <span class="workspace-view-panel-meta">${escapeHtml(summarizeDiffState())}</span>
+                    </div>
+                    ${renderDiffSection()}
+                </section>
+            </div>
         </div>
     `;
 
@@ -5103,9 +5132,18 @@ function renderWorkspaceSnapshot(workspace, snapshot) {
 }
 
 function renderWorkspaceRootMeta(snapshot) {
-    const rootPath = String(snapshot?.root_path || '').trim();
+    const mount = resolveCurrentMount(snapshot);
+    const rootPath = String(mount?.rootReference || snapshot?.root_path || '').trim();
     if (!rootPath) {
         return '';
+    }
+    if (mount?.provider !== 'local') {
+        return `
+            <span class="workspace-view-root-meta" title="${escapeHtml(rootPath)}">
+                <span class="workspace-view-provider-badge is-remote">${escapeHtml(renderMountProviderLabel(mount))}</span>
+                <span class="workspace-view-path-text">${escapeHtml(rootPath)}</span>
+            </span>
+        `;
     }
     const openLabel = t('workspace_view.open_root');
     return `
@@ -5183,11 +5221,283 @@ function summarizeDiffState() {
     });
 }
 
-function normalizeSnapshot(snapshot) {
+function resolveWorkspaceInitialMountName(workspace) {
+    const explicitMountName = String(workspace?.default_mount_name || '').trim();
+    if (explicitMountName) {
+        return explicitMountName;
+    }
+    const firstMount = Array.isArray(workspace?.mounts) ? workspace.mounts.find(Boolean) : null;
+    return String(firstMount?.mount_name || '').trim() || null;
+}
+
+function isMountShellSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') {
+        return false;
+    }
+    return Object.prototype.hasOwnProperty.call(snapshot, 'default_mount_name')
+        || Object.prototype.hasOwnProperty.call(snapshot, 'default_mount_root');
+}
+
+function normalizeWorkspaceMounts(workspace, snapshot, defaultMountName, rootPath) {
+    const workspaceMounts = Array.isArray(workspace?.mounts)
+        ? workspace.mounts
+            .map(mount => normalizeWorkspaceMount(mount, defaultMountName, rootPath))
+            .filter(Boolean)
+        : [];
+    if (workspaceMounts.length > 0) {
+        return workspaceMounts;
+    }
+    const shellChildren = Array.isArray(snapshot?.tree?.children) ? snapshot.tree.children : [];
+    if (shellChildren.length > 0 && isMountShellSnapshot(snapshot)) {
+        const mounts = shellChildren
+            .map(child => {
+                const mountName = String(child?.path || child?.name || '').trim();
+                if (!mountName) {
+                    return null;
+                }
+                const fallbackProvider = mountName === defaultMountName && rootPath ? 'local' : 'unknown';
+                return {
+                    mountName,
+                    provider: fallbackProvider,
+                    rootReference: mountName === defaultMountName ? rootPath : '',
+                    sshProfileId: '',
+                    isDefault: mountName === defaultMountName,
+                    hasChildren: child?.has_children === true || child?.hasChildren === true,
+                };
+            })
+            .filter(Boolean);
+        if (mounts.length > 0) {
+            return mounts;
+        }
+    }
+    return [
+        {
+            mountName: defaultMountName,
+            provider: rootPath ? 'local' : 'unknown',
+            rootReference: rootPath,
+            sshProfileId: '',
+            isDefault: true,
+            hasChildren: snapshot?.tree?.has_children === true || snapshot?.tree?.hasChildren === true,
+        },
+    ];
+}
+
+function normalizeWorkspaceMount(mount, defaultMountName, rootPath) {
+    if (!mount || typeof mount !== 'object') {
+        return null;
+    }
+    const mountName = String(mount.mount_name || '').trim();
+    if (!mountName) {
+        return null;
+    }
+    const provider = String(mount.provider || '').trim() || 'unknown';
+    const providerConfig = mount.provider_config && typeof mount.provider_config === 'object'
+        ? mount.provider_config
+        : {};
+    const localRoot = String(providerConfig.root_path || '').trim();
+    const remoteRoot = String(providerConfig.remote_root || '').trim();
+    const sshProfileId = String(providerConfig.ssh_profile_id || '').trim();
     return {
-        workspace_id: snapshot?.workspace_id || '',
-        root_path: snapshot?.root_path || '',
-        tree: normalizeTreeNode(snapshot?.tree, true),
+        mountName,
+        provider,
+        rootReference: localRoot || remoteRoot || (mountName === defaultMountName ? rootPath : ''),
+        sshProfileId,
+        isDefault: mountName === defaultMountName,
+        hasChildren: mount?.has_children === true || mount?.hasChildren === true,
+    };
+}
+
+function renderWorkspaceMountStrip(snapshot) {
+    const mounts = Array.isArray(snapshot?.mounts) ? snapshot.mounts : [];
+    if (!shouldRenderWorkspaceMountStrip(snapshot)) {
+        return '';
+    }
+    return `
+        <section class="workspace-mount-strip workspace-view-panel">
+            <div class="workspace-view-panel-header">
+                <h3>${escapeHtml(t('workspace_view.mounts'))}</h3>
+                <span class="workspace-view-panel-meta">${escapeHtml(String(mounts.length))}</span>
+            </div>
+            <div class="workspace-mount-list">
+                ${mounts.map(mount => renderWorkspaceMountCard(mount)).join('')}
+            </div>
+        </section>
+    `;
+}
+
+function shouldRenderWorkspaceMountStrip(snapshot) {
+    const mounts = Array.isArray(snapshot?.mounts) ? snapshot.mounts : [];
+    return mounts.length > 1 || mounts.some(mount => String(mount?.provider || '').trim() !== 'local');
+}
+
+function renderWorkspaceMountCard(mount) {
+    const mountName = String(mount?.mountName || '').trim();
+    const rootReference = String(mount?.rootReference || '').trim();
+    const sshProfileId = String(mount?.sshProfileId || '').trim();
+    const isActive = resolveActiveMountName() === mountName;
+    return `
+        <button
+            type="button"
+            class="workspace-mount-card${isActive ? ' is-active' : ''}"
+            data-workspace-mount="${escapeHtml(mountName)}"
+            aria-pressed="${isActive ? 'true' : 'false'}"
+        >
+            <span class="workspace-mount-card-head">
+                <strong>${escapeHtml(mountName)}</strong>
+                <span class="workspace-mount-card-badges">
+                    <span class="workspace-view-provider-badge">${escapeHtml(renderMountProviderLabel(mount))}</span>
+                    ${mount?.isDefault ? `<span class="workspace-view-provider-badge is-default">${escapeHtml(t('workspace_view.mount_default'))}</span>` : ''}
+                </span>
+            </span>
+            ${rootReference ? `<span class="workspace-mount-card-path">${escapeHtml(rootReference)}</span>` : ''}
+            ${sshProfileId ? `<span class="workspace-mount-card-meta">${escapeHtml(`${t('workspace_view.mount_profile')}: ${sshProfileId}`)}</span>` : ''}
+        </button>
+    `;
+}
+
+function renderMountProviderLabel(mount) {
+    const provider = String(mount?.provider || '').trim() || 'unknown';
+    return t(`workspace_view.mount_provider.${provider}`);
+}
+
+function resolveWorkspaceMountName(candidateMountName, snapshot) {
+    const mounts = Array.isArray(snapshot?.mounts) ? snapshot.mounts : [];
+    const normalizedCandidate = String(candidateMountName || '').trim();
+    if (normalizedCandidate && mounts.some(mount => mount?.mountName === normalizedCandidate)) {
+        return normalizedCandidate;
+    }
+    const defaultMountName = String(snapshot?.default_mount_name || '').trim();
+    if (defaultMountName && mounts.some(mount => mount?.mountName === defaultMountName)) {
+        return defaultMountName;
+    }
+    const firstMountName = String(mounts[0]?.mountName || '').trim();
+    return firstMountName || null;
+}
+
+function resolveActiveMountName() {
+    return currentSnapshot
+        ? resolveWorkspaceMountName(currentMountName, currentSnapshot)
+        : String(currentMountName || '').trim() || null;
+}
+
+function resolveCurrentMount(snapshot = currentSnapshot) {
+    const mountName = resolveWorkspaceMountName(currentMountName, snapshot);
+    if (!mountName) {
+        return null;
+    }
+    const mounts = Array.isArray(snapshot?.mounts) ? snapshot.mounts : [];
+    return mounts.find(mount => mount?.mountName === mountName) || null;
+}
+
+function createMountTreeRoot({ label = '.', hasChildren = false } = {}) {
+    return {
+        name: String(label || '.'),
+        path: '.',
+        kind: 'directory',
+        hasChildren: hasChildren === true,
+        children: [],
+        childrenLoaded: false,
+    };
+}
+
+function primeSnapshotMountTrees(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') {
+        return;
+    }
+    if (snapshot.isMountShell === true) {
+        for (const mount of Array.isArray(snapshot.mounts) ? snapshot.mounts : []) {
+            if (currentMountTrees.has(mount.mountName)) {
+                continue;
+            }
+            currentMountTrees.set(
+                mount.mountName,
+                createMountTreeRoot({
+                    label: mount.mountName,
+                    hasChildren: mount.hasChildren === true,
+                }),
+            );
+        }
+        return;
+    }
+    const mount = resolveCurrentMount(snapshot);
+    const normalizedTree = cloneTreeNode(snapshot.tree);
+    if (!mount || !normalizedTree) {
+        return;
+    }
+    const existingTree = currentMountTrees.get(mount.mountName);
+    if (existingTree) {
+        mergeTreeState(normalizedTree, existingTree);
+    }
+    currentMountTrees.set(mount.mountName, normalizedTree);
+}
+
+function ensureCurrentMountTree() {
+    const mount = resolveCurrentMount();
+    if (!mount) {
+        return null;
+    }
+    if (!currentMountTrees.has(mount.mountName)) {
+        currentMountTrees.set(
+            mount.mountName,
+            createMountTreeRoot({
+                label: mount.mountName,
+                hasChildren: mount.hasChildren === true,
+            }),
+        );
+    }
+    return currentMountTrees.get(mount.mountName) || null;
+}
+
+function getCurrentMountTree() {
+    const mountName = resolveActiveMountName();
+    if (!mountName) {
+        return null;
+    }
+    return currentMountTrees.get(mountName) || null;
+}
+
+function ensureActiveMountTreeLoaded(loadToken) {
+    const tree = ensureCurrentMountTree();
+    if (!currentSnapshot || !currentWorkspace) {
+        return;
+    }
+    if (tree?.childrenLoaded === true) {
+        loadingTreePaths.delete(buildTreeStateKey('.'));
+        treeLoadErrors.delete(buildTreeStateKey('.'));
+        renderWorkspaceSnapshot(currentWorkspace, currentSnapshot);
+        return;
+    }
+    loadingTreePaths.add(buildTreeStateKey('.'));
+    treeLoadErrors.delete(buildTreeStateKey('.'));
+    renderWorkspaceSnapshot(currentWorkspace, currentSnapshot);
+    if (loadToken === currentLoadToken) {
+        void loadWorkspaceTree('.');
+    }
+}
+
+function buildTreeStateKey(path, mountName = resolveActiveMountName()) {
+    const normalizedPath = String(path || '.').trim() || '.';
+    const normalizedMountName = String(mountName || '').trim() || 'default';
+    return `${normalizedMountName}:${normalizedPath}`;
+}
+
+function normalizeSnapshot(snapshot, workspace) {
+    const isMountShell = isMountShellSnapshot(snapshot);
+    const defaultMountName = String(
+        snapshot?.default_mount_name
+        || workspace?.default_mount_name
+        || resolveWorkspaceInitialMountName(workspace)
+        || 'default',
+    ).trim() || 'default';
+    const rootPath = String(snapshot?.root_path || snapshot?.default_mount_root || '').trim();
+    const mounts = normalizeWorkspaceMounts(workspace, snapshot, defaultMountName, rootPath);
+    return {
+        workspace_id: String(snapshot?.workspace_id || workspace?.workspace_id || '').trim(),
+        root_path: rootPath,
+        default_mount_name: defaultMountName,
+        isMountShell,
+        mounts,
+        tree: isMountShell ? null : normalizeTreeNode(snapshot?.tree, true),
     };
 }
 
@@ -5205,7 +5515,7 @@ function normalizeTreeNode(node, childrenLoaded) {
         name: String(node.name || node.path || '.'),
         path: String(node.path || '.').trim() || '.',
         kind: isDirectory ? 'directory' : 'file',
-        hasChildren: node.has_children === true,
+        hasChildren: node.has_children === true || node.hasChildren === true,
         children,
         childrenLoaded: childrenLoaded === true,
     };
@@ -5213,6 +5523,13 @@ function normalizeTreeNode(node, childrenLoaded) {
 
 function renderTree(tree) {
     if (!tree || typeof tree !== 'object') {
+        return renderInlineState(t('workspace_view.loading_tree'));
+    }
+    const rootError = treeLoadErrors.get(buildTreeStateKey('.')) || '';
+    if (tree.childrenLoaded !== true) {
+        if (rootError) {
+            return renderInlineState(rootError, 'is-error');
+        }
         return renderInlineState(t('workspace_view.loading_tree'));
     }
 
@@ -5254,9 +5571,10 @@ function renderTreeNode(node) {
         `;
     }
 
-    const isExpanded = expandedTreePaths.has(nodePath);
-    const isLoading = loadingTreePaths.has(nodePath);
-    const loadError = treeLoadErrors.get(nodePath) || '';
+    const scopedPath = buildTreeStateKey(nodePath);
+    const isExpanded = expandedTreePaths.has(scopedPath);
+    const isLoading = loadingTreePaths.has(scopedPath);
+    const loadError = treeLoadErrors.get(scopedPath) || '';
     return `
         <div class="workspace-tree-node is-directory">
             <button
@@ -5513,6 +5831,15 @@ function renderInlineState(message, extraClass = '') {
 }
 
 function bindWorkspaceHeaderInteractions() {
+    if (!els.projectViewContent) {
+        return;
+    }
+    for (const mountButton of els.projectViewContent.querySelectorAll('[data-workspace-mount]')) {
+        const mountName = String(mountButton.getAttribute('data-workspace-mount') || '').trim();
+        mountButton.onclick = () => {
+            void switchWorkspaceMount(mountName);
+        };
+    }
     const openRootButton = els.projectViewContent?.querySelector('[data-open-workspace-root]');
     if (!openRootButton) {
         return;
@@ -5569,11 +5896,12 @@ function bindDiffInteractions() {
 
 async function handleOpenWorkspaceRoot() {
     const workspaceId = String(currentWorkspace?.workspace_id || '').trim();
+    const mountName = resolveActiveMountName();
     if (!workspaceId) {
         return;
     }
     try {
-        await openWorkspaceRoot(workspaceId);
+        await openWorkspaceRoot(workspaceId, mountName);
     } catch (error) {
         showToast({
             title: t('workspace_view.open_root_failed'),
@@ -5583,23 +5911,42 @@ async function handleOpenWorkspaceRoot() {
     }
 }
 
+async function switchWorkspaceMount(mountName) {
+    const nextMountName = resolveWorkspaceMountName(mountName, currentSnapshot);
+    if (!nextMountName || nextMountName === resolveActiveMountName() || !currentWorkspace || !currentSnapshot) {
+        return;
+    }
+    currentMountName = nextMountName;
+    selectedTreePath = null;
+    currentDiffState = {
+        ...createInitialDiffState(),
+        status: 'loading',
+        mountName: nextMountName,
+    };
+    const loadToken = ++currentLoadToken;
+    ensureActiveMountTreeLoaded(loadToken);
+    cacheProjectViewState();
+    void loadWorkspaceDiffs(String(currentWorkspace.workspace_id || '').trim(), loadToken);
+}
+
 async function toggleTreePath(path) {
     if (!path || !currentWorkspace || !currentSnapshot) {
         return;
     }
+    const scopedPath = buildTreeStateKey(path);
 
-    if (expandedTreePaths.has(path)) {
-        expandedTreePaths.delete(path);
+    if (expandedTreePaths.has(scopedPath)) {
+        expandedTreePaths.delete(scopedPath);
         renderWorkspaceSnapshot(currentWorkspace, currentSnapshot);
         cacheProjectViewState();
         return;
     }
 
-    expandedTreePaths.add(path);
-    treeLoadErrors.delete(path);
-    const node = findTreeNode(currentSnapshot.tree, path);
+    expandedTreePaths.add(scopedPath);
+    treeLoadErrors.delete(scopedPath);
+    const node = findTreeNode(getCurrentMountTree(), path);
     if (node?.kind === 'directory' && node.hasChildren && node.childrenLoaded !== true) {
-        loadingTreePaths.add(path);
+        loadingTreePaths.add(scopedPath);
         renderWorkspaceSnapshot(currentWorkspace, currentSnapshot);
         await loadWorkspaceTree(path);
         return;
@@ -5613,13 +5960,14 @@ async function loadWorkspaceTree(path) {
         return;
     }
     const workspaceId = String(currentWorkspace.workspace_id || '').trim();
+    const mountName = resolveActiveMountName();
     const loadToken = currentLoadToken;
     try {
-        const listing = await fetchWorkspaceTree(workspaceId, path);
+        const listing = await fetchWorkspaceTree(workspaceId, path, mountName);
         if (loadToken !== currentLoadToken || workspaceId !== currentSnapshotWorkspaceId || !currentSnapshot) {
             return;
         }
-        const node = findTreeNode(currentSnapshot.tree, path);
+        const node = findTreeNode(getCurrentMountTree(), path);
         if (node) {
             node.children = Array.isArray(listing?.children)
                 ? listing.children
@@ -5628,16 +5976,19 @@ async function loadWorkspaceTree(path) {
                 : [];
             node.childrenLoaded = true;
         }
-        loadingTreePaths.delete(path);
-        treeLoadErrors.delete(path);
+        loadingTreePaths.delete(buildTreeStateKey(path, mountName));
+        treeLoadErrors.delete(buildTreeStateKey(path, mountName));
         renderWorkspaceSnapshot(currentWorkspace, currentSnapshot);
         cacheProjectViewState();
     } catch (error) {
         if (loadToken !== currentLoadToken || workspaceId !== currentSnapshotWorkspaceId) {
             return;
         }
-        loadingTreePaths.delete(path);
-        treeLoadErrors.set(path, String(error?.message || error || t('workspace_view.load_failed')));
+        loadingTreePaths.delete(buildTreeStateKey(path, mountName));
+        treeLoadErrors.set(
+            buildTreeStateKey(path, mountName),
+            String(error?.message || error || t('workspace_view.load_failed')),
+        );
         renderWorkspaceSnapshot(currentWorkspace, currentSnapshot);
         cacheProjectViewState();
         sysLog(`Failed to load project tree path ${path}: ${error?.message || error}`, 'log-error');
@@ -5687,9 +6038,10 @@ async function loadWorkspaceDiffFile(path) {
     }
 
     const workspaceId = String(currentWorkspace.workspace_id || '').trim();
+    const mountName = resolveActiveMountName();
     const loadToken = currentLoadToken;
     try {
-        const diffFile = await fetchWorkspaceDiffFile(workspaceId, path);
+        const diffFile = await fetchWorkspaceDiffFile(workspaceId, path, mountName);
         if (loadToken !== currentLoadToken || workspaceId !== currentSnapshotWorkspaceId || currentDiffState.status !== 'ready') {
             return;
         }
@@ -5716,10 +6068,10 @@ async function revealTreePath(path) {
     }
     const parentPaths = buildParentPaths(path);
     for (const parentPath of parentPaths) {
-        expandedTreePaths.add(parentPath);
-        const node = findTreeNode(currentSnapshot.tree, parentPath);
+        expandedTreePaths.add(buildTreeStateKey(parentPath));
+        const node = findTreeNode(getCurrentMountTree(), parentPath);
         if (node?.kind === 'directory' && node.hasChildren && node.childrenLoaded !== true) {
-            loadingTreePaths.add(parentPath);
+            loadingTreePaths.add(buildTreeStateKey(parentPath));
             renderWorkspaceSnapshot(currentWorkspace, currentSnapshot);
             await loadWorkspaceTree(parentPath);
         }
@@ -5825,6 +6177,18 @@ function cloneSnapshot(snapshot) {
     return {
         workspace_id: String(snapshot.workspace_id || ''),
         root_path: String(snapshot.root_path || ''),
+        default_mount_name: String(snapshot.default_mount_name || 'default'),
+        isMountShell: snapshot.isMountShell === true,
+        mounts: Array.isArray(snapshot.mounts)
+            ? snapshot.mounts.map(mount => ({
+                mountName: String(mount?.mountName || '').trim(),
+                provider: String(mount?.provider || '').trim() || 'unknown',
+                rootReference: String(mount?.rootReference || '').trim(),
+                sshProfileId: String(mount?.sshProfileId || '').trim(),
+                isDefault: mount?.isDefault === true,
+                hasChildren: mount?.hasChildren === true,
+            }))
+            : [],
         tree: cloneTreeNode(snapshot.tree),
     };
 }
@@ -5851,6 +6215,7 @@ function cloneDiffState(diffState) {
     }
     return {
         status: String(diffState.status || 'idle'),
+        mountName: diffState.mountName ? String(diffState.mountName) : null,
         diffFiles: Array.isArray(diffState.diffFiles)
             ? diffState.diffFiles.map(file => ({ ...file }))
             : [],

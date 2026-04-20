@@ -167,11 +167,22 @@ class WorkspaceService:
     def get_workspace(self, workspace_id: str) -> WorkspaceRecord:
         return self._repository.get(workspace_id)
 
-    def open_workspace_root(self, workspace_id: str) -> Path:
+    def open_workspace_root(
+        self,
+        workspace_id: str,
+        *,
+        mount_name: str | None = None,
+    ) -> Path:
         record = self._repository.get(workspace_id)
-        target_mount = self._primary_local_mount(record)
+        target_mount = (
+            self._resolve_mount(record, mount_name)
+            if mount_name is not None
+            else self._primary_local_mount(record)
+        )
         if target_mount is None:
             raise ValueError("Workspace has no local mount to open")
+        if target_mount.provider != WorkspaceMountProvider.LOCAL:
+            raise ValueError(f"Workspace mount is not local: {target_mount.mount_name}")
         root_path = self._resolve_local_mount_root(target_mount)
         try:
             open_workspace_directory(root_path)

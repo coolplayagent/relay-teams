@@ -123,10 +123,14 @@ def get_workspace(
 @router.post("/{workspace_id}:open-root")
 def open_workspace_root(
     workspace_id: RequiredIdentifierStr,
+    mount: Annotated[str | None, Query()] = None,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> dict[str, str]:
     try:
-        _ = service.open_workspace_root(workspace_id)
+        if mount is None:
+            _ = service.open_workspace_root(workspace_id)
+        else:
+            _ = service.open_workspace_root(workspace_id, mount_name=mount)
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc

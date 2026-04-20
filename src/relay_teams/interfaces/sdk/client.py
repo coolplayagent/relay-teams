@@ -629,10 +629,18 @@ class AgentTeamsClient:
     def get_workspace_snapshot(self, workspace_id: str) -> dict[str, JsonValue]:
         return self._request_json("GET", f"/api/workspaces/{workspace_id}/snapshot")
 
-    def open_workspace_root(self, workspace_id: str) -> dict[str, JsonValue]:
+    def open_workspace_root(
+        self,
+        workspace_id: str,
+        *,
+        mount: str | None = None,
+    ) -> dict[str, JsonValue]:
+        path = f"/api/workspaces/{workspace_id}:open-root"
+        if mount is not None:
+            path += f"?mount={quote(mount, safe='')}"
         return self._request_json(
             "POST",
-            f"/api/workspaces/{workspace_id}:open-root",
+            path,
         )
 
     def get_workspace_tree(

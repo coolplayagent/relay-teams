@@ -137,6 +137,32 @@ def test_open_workspace_root_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
+def test_open_workspace_root_supports_mount_query_parameter(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.open_workspace_root("project-alpha", mount="ops")
+
+    assert response == {"status": "ok"}
+    assert captured == {
+        "method": "POST",
+        "path": "/api/workspaces/project-alpha:open-root?mount=ops",
+        "payload": None,
+    }
+
+
 def test_create_workspace_supports_mount_payload(monkeypatch) -> None:
     client = AgentTeamsClient()
     captured: dict[str, object] = {}
