@@ -219,3 +219,56 @@ def test_reload_mcp_config_skips_uv_cache_clean_for_uv_run_projects(
     service.reload_mcp_config()
 
     assert recorded_commands == []
+
+
+def test_reload_mcp_config_retries_without_force_for_legacy_uv(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir()
+    role_registry = RoleRegistry()
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "uvx"}}},
+                server_config={
+                    "command": "uvx",
+                    "args": ["mcp-server-filesystem"],
+                },
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    recorded_commands: list[tuple[str, ...]] = []
+
+    def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        argv = tuple(args[0])
+        recorded_commands.append(argv)
+        if argv == ("uv", "cache", "clean", "--force", "mcp-server-filesystem"):
+            return subprocess.CompletedProcess(
+                args[0],
+                2,
+                stdout="",
+                stderr="error: unexpected argument '--force' found",
+            )
+        return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.config_reload_service.subprocess.run", _fake_run
+    )
+    service = McpConfigReloadService(
+        mcp_config_manager=manager,
+        role_registry=role_registry,
+        on_mcp_reloaded=lambda _registry: None,
+    )
+
+    service.reload_mcp_config()
+
+    assert recorded_commands == [
+        ("uv", "cache", "clean", "--force", "mcp-server-filesystem"),
+        ("uv", "cache", "clean", "mcp-server-filesystem"),
+    ]

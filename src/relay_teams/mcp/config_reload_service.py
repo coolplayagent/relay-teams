@@ -127,14 +127,72 @@ def _run_uv_cache_clean_command(
     argv: tuple[str, ...],
     server_names: tuple[str, ...],
 ) -> None:
-    cache_target = argv[4] if len(argv) > 4 else "all"
-    payload: dict[str, JsonValue] = {
+    payload_base: dict[str, JsonValue] = {
         "server_names": list(server_names),
-        "command": list(argv),
-        "cache_target": cache_target,
+        "cache_target": _uv_cache_target(argv),
     }
+    result = _run_uv_cache_clean_subprocess(
+        argv=argv,
+        payload={**payload_base, "command": list(argv)},
+    )
+    if result is None:
+        return
+
+    if result.returncode != 0 and _is_unsupported_uv_force_error(result.stderr):
+        legacy_argv = _build_legacy_uv_cache_clean_argv(argv)
+        if legacy_argv is not None:
+            legacy_payload: dict[str, JsonValue] = {
+                **payload_base,
+                "command": list(legacy_argv),
+                "fallback_from_command": list(argv),
+            }
+            initial_stderr = result.stderr.strip()
+            if initial_stderr:
+                legacy_payload["initial_stderr"] = initial_stderr
+            legacy_result = _run_uv_cache_clean_subprocess(
+                argv=legacy_argv,
+                payload=legacy_payload,
+            )
+            if legacy_result is None:
+                return
+            _log_uv_cache_clean_result(result=legacy_result, payload=legacy_payload)
+            return
+
+    _log_uv_cache_clean_result(
+        result=result,
+        payload={**payload_base, "command": list(argv)},
+    )
+
+
+def _uv_cache_target(argv: tuple[str, ...]) -> str:
+    trailing_args = argv[3:]
+    if trailing_args and trailing_args[0] == "--force":
+        trailing_args = trailing_args[1:]
+    if not trailing_args:
+        return "all"
+    return trailing_args[0]
+
+
+def _build_legacy_uv_cache_clean_argv(argv: tuple[str, ...]) -> tuple[str, ...] | None:
+    if len(argv) < 4 or argv[3] != "--force":
+        return None
+    return argv[:3] + argv[4:]
+
+
+def _is_unsupported_uv_force_error(stderr: str) -> bool:
+    normalized = stderr.casefold()
+    if "--force" not in normalized:
+        return False
+    return "unexpected argument" in normalized or "unexpected option" in normalized
+
+
+def _run_uv_cache_clean_subprocess(
+    *,
+    argv: tuple[str, ...],
+    payload: dict[str, JsonValue],
+) -> subprocess.CompletedProcess[str] | None:
     try:
-        result = subprocess.run(
+        return subprocess.run(
             argv,
             capture_output=True,
             check=False,
@@ -150,7 +208,7 @@ def _run_uv_cache_clean_command(
             payload=payload,
             exc_info=exc,
         )
-        return
+        return None
     except subprocess.TimeoutExpired as exc:
         log_event(
             LOGGER,
@@ -160,8 +218,14 @@ def _run_uv_cache_clean_command(
             payload=payload,
             exc_info=exc,
         )
-        return
+        return None
 
+
+def _log_uv_cache_clean_result(
+    *,
+    result: subprocess.CompletedProcess[str],
+    payload: dict[str, JsonValue],
+) -> None:
     payload["returncode"] = result.returncode
     stdout = result.stdout.strip()
     stderr = result.stderr.strip()
