@@ -10,7 +10,6 @@ from integration_tests.support.api_helpers import (
     create_task_batch,
     create_run,
     create_session,
-    dispatch_task,
     get_coordinator_role_id,
     new_session_id,
     stream_run_until_terminal,
@@ -214,7 +213,7 @@ def test_ai_run_completes_over_slow_stream(api_client: httpx.Client) -> None:
     assert elapsed >= 0.45
 
 
-def test_task_dispatch_updates_round_task_maps(api_client: httpx.Client) -> None:
+def test_manual_task_dispatch_endpoint_is_not_exposed(api_client: httpx.Client) -> None:
     session_id = create_session(api_client, session_id=new_session_id("session-task"))
     run_id = create_run(
         api_client,
@@ -231,41 +230,18 @@ def test_task_dispatch_updates_round_task_maps(api_client: httpx.Client) -> None
     )
     tasks = task_batch.get("tasks")
     assert isinstance(tasks, list)
-    coordinator_role_id = get_coordinator_role_id(api_client)
     task_ids = [
         str(item.get("task_id") or "") for item in tasks if isinstance(item, dict)
     ]
     assert len(task_ids) == 2
     assert all(task_ids)
 
-    first_dispatch = dispatch_task(
-        api_client,
-        task_id=task_ids[0],
-        role_id=coordinator_role_id,
+    response = api_client.post(
+        f"/api/tasks/{task_ids[0]}/dispatch",
+        json={"role_id": get_coordinator_role_id(api_client)},
     )
-    second_dispatch = dispatch_task(
-        api_client,
-        task_id=task_ids[1],
-        role_id=coordinator_role_id,
-    )
-    first_task = first_dispatch.get("task")
-    second_task = second_dispatch.get("task")
-    assert isinstance(first_task, dict)
-    assert isinstance(second_task, dict)
-    assert first_task.get("task_id") == task_ids[0]
-    assert second_task.get("task_id") == task_ids[1]
 
-    round_response = api_client.get(f"/api/sessions/{session_id}/rounds/{run_id}")
-    round_response.raise_for_status()
-    round_payload = round_response.json()
-
-    task_instance_map = round_payload.get("task_instance_map")
-    task_status_map = round_payload.get("task_status_map")
-    assert isinstance(task_instance_map, dict)
-    assert isinstance(task_status_map, dict)
-    assert len(task_instance_map) >= 2
-    assert len(set(str(value) for value in task_instance_map.values())) == 1
-    assert "completed" in set(str(value) for value in task_status_map.values())
+    assert response.status_code == 405
 
 
 def test_ai_run_executes_builtin_computer_tools_with_fake_runtime(

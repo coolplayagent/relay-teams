@@ -4,4 +4,5 @@ Usage:
 - `task_id` must be a task created in the current run.
 - `role_id` selects the executing role. The first dispatch binds that role to the task.
 - `prompt` carries the coordinator's execution instruction for this dispatch attempt.
-- Re-dispatching a completed task requires a non-empty `prompt`.
+- `assigned` and `stopped` tasks can be re-dispatched with the same bound role and instance.
+- `completed`, `failed`, and `timeout` tasks cannot be re-dispatched. Create a replacement task instead.
