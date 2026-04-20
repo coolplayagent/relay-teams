@@ -1646,6 +1646,11 @@ def _assert_builtin_searxng_instances(page: Page) -> None:
 
 def _create_session_via_sidebar(page: Page) -> str:
     existing_session_ids = set(_session_ids(page))
+    first_project_row = page.locator(".project-row").first
+    first_project_row.hover()
+    expect(page.locator(".project-new-session-btn").first).to_be_visible(
+        timeout=_WAIT_TIMEOUT_MS
+    )
     with page.expect_response(
         lambda response: (
             response.request.method == "POST"
@@ -1654,7 +1659,7 @@ def _create_session_via_sidebar(page: Page) -> str:
         ),
         timeout=_WAIT_TIMEOUT_MS,
     ) as response_info:
-        page.locator(".project-new-session-btn").first.click(force=True)
+        page.locator(".project-new-session-btn").first.click()
 
     response_payload = response_info.value.json()
     session_id = (

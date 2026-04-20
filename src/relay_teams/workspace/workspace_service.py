@@ -153,6 +153,10 @@ class WorkspaceService:
                 ),
             )
             resolved_default_mount_name = mount_name
+            self._validate_local_mount_scope_paths(
+                mount=resolved_mounts[0],
+                root_path=resolved_root,
+            )
         else:
             resolved_mounts = tuple(mounts)
             if len(resolved_mounts) == 0:
@@ -164,7 +168,11 @@ class WorkspaceService:
                         raise ValueError(
                             f"Workspace local mount is missing root path: {mount.mount_name}"
                         )
-                    _ = self._validate_root(local_root)
+                    resolved_local_root = self._validate_root(local_root)
+                    self._validate_local_mount_scope_paths(
+                        mount=mount,
+                        root_path=resolved_local_root,
+                    )
                 if mount.provider == WorkspaceMountProvider.SSH:
                     provider_config = mount.provider_config
                     if not isinstance(provider_config, WorkspaceSshMountConfig):
@@ -173,10 +181,20 @@ class WorkspaceService:
                         )
                     ssh_profile_id = provider_config.ssh_profile_id
                     if self._ssh_profile_service is not None:
-                        self._ssh_profile_service.require_profile(ssh_profile_id)
+                        try:
+                            self._ssh_profile_service.require_profile(ssh_profile_id)
+                        except KeyError as exc:
+                            raise ValueError(
+                                "Workspace ssh mount references unknown ssh profile: "
+                                f"{ssh_profile_id}"
+                            ) from exc
             resolved_default_mount_name = (
                 default_mount_name or resolved_mounts[0].mount_name
             )
+        self._validate_default_mount(
+            mounts=resolved_mounts,
+            default_mount_name=resolved_default_mount_name,
+        )
         return resolved_mounts, resolved_default_mount_name
 
     def create_workspace_for_root(
@@ -566,6 +584,44 @@ class WorkspaceService:
         if not path_is_dir(resolved_root):
             raise ValueError(f"Workspace root is not a directory: {resolved_root}")
         return resolved_root
+
+    def _validate_local_mount_scope_paths(
+        self,
+        *,
+        mount: WorkspaceMountRecord,
+        root_path: Path,
+    ) -> None:
+        self._validate_mount_relative_root(root_path, mount.working_directory)
+        for relative_path in mount.readable_paths:
+            self._validate_mount_relative_root(root_path, relative_path)
+        for relative_path in mount.writable_paths:
+            self._validate_mount_relative_root(root_path, relative_path)
+
+    def _validate_mount_relative_root(
+        self, root_path: Path, relative_path: str
+    ) -> None:
+        candidate = (root_path / relative_path).resolve()
+        resolved_root = root_path.resolve()
+        if candidate != resolved_root and resolved_root not in candidate.parents:
+            raise ValueError(
+                f"Workspace file scope escapes mount root: {relative_path}"
+            )
+
+    def _validate_default_mount(
+        self,
+        *,
+        mounts: tuple[WorkspaceMountRecord, ...],
+        default_mount_name: str,
+    ) -> None:
+        for mount in mounts:
+            if mount.mount_name != default_mount_name:
+                continue
+            if mount.provider != WorkspaceMountProvider.LOCAL:
+                raise ValueError(
+                    f"Workspace default mount must be local: {default_mount_name}"
+                )
+            return
+        raise ValueError(f"default mount does not exist: {default_mount_name}")
 
     def _resolve_mount(
         self,

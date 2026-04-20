@@ -14,6 +14,8 @@ from relay_teams.interfaces.server.routers import workspaces
 from relay_teams.workspace import (
     FileScopeBackend,
     GitWorktreeClient,
+    SshProfileRepository,
+    SshProfileService,
     WorkspaceRecord,
     WorkspaceFileScope,
     WorkspaceProfile,
@@ -236,6 +238,52 @@ def test_update_workspace_replaces_mounts_and_default_mount(tmp_path: Path) -> N
     assert payload["default_mount_name"] == "ops"
     assert payload["root_path"] == str(ops_root.resolve())
     assert [item["mount_name"] for item in payload["mounts"]] == ["app", "ops"]
+
+
+def test_update_workspace_rejects_missing_ssh_profile_as_client_error(
+    tmp_path: Path,
+) -> None:
+    app_root = tmp_path / "app-root"
+    app_root.mkdir()
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspaces_router.db"),
+        ssh_profile_service=SshProfileService(
+            repository=SshProfileRepository(tmp_path / "ssh_profiles.db"),
+            config_dir=tmp_path,
+        ),
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=app_root,
+    )
+    client, _ = _create_test_client(tmp_path, service=service)
+
+    response = client.put(
+        "/api/workspaces/project-alpha",
+        json={
+            "default_mount_name": "app",
+            "mounts": [
+                {
+                    "mount_name": "app",
+                    "provider": "local",
+                    "provider_config": {"root_path": str(app_root)},
+                },
+                {
+                    "mount_name": "prod",
+                    "provider": "ssh",
+                    "provider_config": {
+                        "ssh_profile_id": "missing",
+                        "remote_root": "/srv/app",
+                    },
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Workspace ssh mount references unknown ssh profile: missing"
+    }
 
 
 def test_get_workspace_rejects_none_like_path_identifier(tmp_path: Path) -> None:

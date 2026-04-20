@@ -246,11 +246,14 @@ class WorkspaceHandle(BaseModel):
                 )
             except ValueError:
                 continue
-            logical_path = (
-                resolved_path.relative_to(root_path.resolve()).as_posix()
-                if resolved_path != root_path.resolve()
-                else "."
-            )
+            if self._is_path_within_root(resolved_path, root_path):
+                logical_path = (
+                    resolved_path.relative_to(root_path.resolve()).as_posix()
+                    if resolved_path != root_path.resolve()
+                    else "."
+                )
+            else:
+                logical_path = resolved_path.as_posix()
             return ResolvedWorkspacePath(
                 mount_name=mount.mount_name,
                 provider=WorkspaceMountProvider.LOCAL,

@@ -130,6 +130,54 @@ def test_workspace_service_updates_mounts_and_default_mount(tmp_path: Path) -> N
     assert updated.root_path == ops_root.resolve()
 
 
+def test_workspace_service_rejects_local_mount_scope_escape_on_create(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "workspace_service.db"
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    service = WorkspaceService(repository=WorkspaceRepository(db_path))
+
+    with pytest.raises(ValueError, match="Workspace file scope escapes mount root"):
+        _ = service.create_workspace(
+            workspace_id="project-alpha",
+            mounts=(
+                build_local_workspace_mount(
+                    mount_name="default",
+                    root_path=root_path,
+                    working_directory="../outside",
+                ),
+            ),
+            default_mount_name="default",
+        )
+
+
+def test_workspace_service_rejects_local_mount_scope_escape_on_update(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "workspace_service.db"
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    service = WorkspaceService(repository=WorkspaceRepository(db_path))
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    with pytest.raises(ValueError, match="Workspace file scope escapes mount root"):
+        _ = service.update_workspace(
+            "project-alpha",
+            mounts=(
+                build_local_workspace_mount(
+                    mount_name="default",
+                    root_path=root_path,
+                    writable_paths=("../outside",),
+                ),
+            ),
+            default_mount_name="default",
+        )
+
+
 def test_workspace_service_rejects_missing_root(tmp_path: Path) -> None:
     service = WorkspaceService(
         repository=WorkspaceRepository(tmp_path / "workspace.db")

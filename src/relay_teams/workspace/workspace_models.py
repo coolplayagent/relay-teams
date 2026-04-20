@@ -5,7 +5,14 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
@@ -95,6 +102,14 @@ class WorkspaceSshMountConfig(BaseModel):
 
     ssh_profile_id: RequiredIdentifierStr
     remote_root: str = Field(min_length=1)
+
+    @field_validator("remote_root")
+    @classmethod
+    def _normalize_remote_root(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("remote_root must not be empty")
+        return normalized
 
 
 class WorkspaceMountRecord(BaseModel):

@@ -387,18 +387,22 @@ class WorkspaceRepository:
             mount_name = (
                 str(row["default_mount_name"] or "default").strip() or "default"
             )
-            profile_raw = str(row["profile_json"] or "{}")
-            loaded = json.loads(profile_raw)
-            profile = (
-                WorkspaceProfile.model_validate(loaded)
-                if isinstance(loaded, dict) and loaded
-                else default_workspace_profile()
-            )
-            mount = legacy_workspace_mount_from_profile(
-                root_path=Path(str(row["root_path"])).resolve(),
-                profile=profile,
-                mount_name=mount_name,
-            )
+            try:
+                profile_raw = str(row["profile_json"] or "{}")
+                loaded = json.loads(profile_raw)
+                profile = (
+                    WorkspaceProfile.model_validate(loaded)
+                    if isinstance(loaded, dict) and loaded
+                    else default_workspace_profile()
+                )
+                mount = legacy_workspace_mount_from_profile(
+                    root_path=Path(str(row["root_path"])).resolve(),
+                    profile=profile,
+                    mount_name=mount_name,
+                )
+            except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+                _log_invalid_workspace_row(row=row, error=exc)
+                continue
             created_at = (
                 str(row["created_at"])
                 if str(row["created_at"]).strip()

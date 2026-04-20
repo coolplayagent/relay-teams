@@ -10,6 +10,7 @@ from relay_teams.workspace import (
     SshProfileRepository,
     SshProfileStoredConfig,
     SshProfileService,
+    WorkspaceLocalMountConfig,
     WorkspaceMountRecord,
     WorkspaceMountProvider,
     WorkspaceRepository,
@@ -65,12 +66,26 @@ def test_workspace_service_requires_existing_ssh_profile(tmp_path: Path) -> None
             remote_root="/srv/app",
         ),
     )
+    local_root = tmp_path / "workspace-root"
+    local_root.mkdir()
 
-    with pytest.raises(KeyError):
+    with pytest.raises(
+        ValueError,
+        match="Workspace ssh mount references unknown ssh profile: prod",
+    ):
         workspace_service.create_workspace(
             workspace_id="project-alpha",
-            mounts=(mount,),
-            default_mount_name="prod",
+            mounts=(
+                WorkspaceMountRecord(
+                    mount_name="default",
+                    provider=WorkspaceMountProvider.LOCAL,
+                    provider_config=WorkspaceLocalMountConfig(
+                        root_path=local_root.resolve()
+                    ),
+                ),
+                mount,
+            ),
+            default_mount_name="default",
         )
 
     _ = ssh_profile_service.save_profile(
@@ -78,11 +93,35 @@ def test_workspace_service_requires_existing_ssh_profile(tmp_path: Path) -> None
         config=SshProfileConfig(host="prod-alias"),
     )
 
+    with pytest.raises(ValueError, match="Workspace default mount must be local: prod"):
+        workspace_service.create_workspace(
+            workspace_id="project-alpha",
+            mounts=(mount,),
+            default_mount_name="prod",
+        )
+
     created = workspace_service.create_workspace(
         workspace_id="project-alpha",
-        mounts=(mount,),
-        default_mount_name="prod",
+        mounts=(
+            WorkspaceMountRecord(
+                mount_name="default",
+                provider=WorkspaceMountProvider.LOCAL,
+                provider_config=WorkspaceLocalMountConfig(
+                    root_path=local_root.resolve()
+                ),
+            ),
+            mount,
+        ),
+        default_mount_name="default",
     )
 
-    assert created.default_mount_name == "prod"
-    assert created.mounts[0].provider.value == "ssh"
+    assert created.default_mount_name == "default"
+    assert [item.provider.value for item in created.mounts] == ["local", "ssh"]
+
+
+def test_workspace_ssh_mount_config_rejects_blank_remote_root() -> None:
+    with pytest.raises(ValueError, match="remote_root must not be empty"):
+        _ = WorkspaceSshMountConfig(
+            ssh_profile_id="prod",
+            remote_root="   ",
+        )

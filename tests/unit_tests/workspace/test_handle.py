@@ -77,6 +77,28 @@ def test_resolve_read_path_allows_absolute_path_outside_workspace(
     assert resolved == external_file.resolve()
 
 
+def test_resolve_workspace_path_allows_absolute_path_in_extra_read_root(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    extra_read_root = tmp_path / "skills"
+    workspace = _build_workspace_handle(
+        workspace_dir=workspace_root,
+        scope_root=workspace_root,
+        readable_roots=(workspace_root, workspace_root / "tmp", extra_read_root),
+    )
+    external_file = extra_read_root / "notes.txt"
+    external_file.parent.mkdir(parents=True, exist_ok=True)
+    external_file.write_text("notes\n", encoding="utf-8")
+
+    resolved = workspace.resolve_workspace_path(str(external_file), write=False)
+
+    assert resolved.mount_name == "default"
+    assert resolved.host_bypass is False
+    assert resolved.local_path == external_file.resolve()
+    assert resolved.logical_path == external_file.resolve().as_posix()
+
+
 def test_resolve_read_path_allows_absolute_path_inside_workspace(
     tmp_path: Path,
 ) -> None:
