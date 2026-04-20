@@ -205,7 +205,9 @@ def test_update_task_allows_created_only(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_dispatch_task_reuses_bound_instance_for_followup(tmp_path: Path) -> None:
+async def test_dispatch_task_rejects_followup_prompt_for_completed_task(
+    tmp_path: Path,
+) -> None:
     (
         service,
         task_repo,
@@ -233,12 +235,16 @@ async def test_dispatch_task_reuses_bound_instance_for_followup(tmp_path: Path) 
     )
     first_task = cast(dict[str, JsonValue], first_dispatch["task"])
     bound_instance_id = str(first_task["assigned_instance_id"])
-    await service.dispatch_task(
-        run_id=None,
-        task_id="task-1",
-        role_id="spec_coder",
-        prompt="Add pagination to the response.",
-    )
+    with pytest.raises(
+        ValueError,
+        match="Create a replacement task instead of re-dispatching this one",
+    ):
+        await service.dispatch_task(
+            run_id=None,
+            task_id="task-1",
+            role_id="spec_coder",
+            prompt="Add pagination to the response.",
+        )
 
     assert execution_service.calls == [
         (
@@ -247,15 +253,7 @@ async def test_dispatch_task_reuses_bound_instance_for_followup(tmp_path: Path) 
             created.envelope.task_id,
             "Execute this task contract and return the requested result.",
         ),
-        (
-            bound_instance_id,
-            "spec_coder",
-            created.envelope.task_id,
-            "Add pagination to the response.",
-        ),
     ]
-    assert execution_service.calls[-1][3] is not None
-    assert "Add pagination to the response." in str(execution_service.calls[-1][3])
 
 
 @pytest.mark.asyncio
@@ -428,8 +426,8 @@ async def test_dispatch_task_rejects_same_role_while_other_task_is_in_progress(
         (TaskStatus.RUNNING, "", "already running"),
         (
             TaskStatus.COMPLETED,
-            "",
-            "prompt is required to re-dispatch a completed task",
+            "Add pagination to the response.",
+            "Create a replacement task instead of re-dispatching this one",
         ),
         (
             TaskStatus.FAILED,

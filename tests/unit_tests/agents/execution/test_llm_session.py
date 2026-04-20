@@ -31,6 +31,10 @@ from relay_teams.providers.llm_retry import LlmRetryErrorInfo, LlmRetrySchedule
 from relay_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
 from relay_teams.providers.model_fallback import LlmFallbackDecision
 from relay_teams.providers.provider_contracts import LLMRequest
+from relay_teams.tools.runtime.persisted_state import (
+    PersistedToolCallState,
+    ToolExecutionStatus,
+)
 from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventName
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.assistant_errors import AssistantRunError
@@ -1135,6 +1139,224 @@ async def test_execute_attempt_recovery_clears_cached_transport_before_resume(
 
     assert result.response == "resumed"
     assert cleared == ["cleared"]
+
+
+def test_restore_pending_tool_results_from_state_backfills_completed_dispatch_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_shared_store"] = cast(object, None)
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_task_repo"] = cast(object, None)
+
+    persisted_state = PersistedToolCallState(
+        tool_call_id="call-dispatch-1",
+        tool_name="dispatch_task",
+        instance_id="inst-1",
+        role_id="writer",
+        execution_status=ToolExecutionStatus.COMPLETED,
+        result_envelope={
+            "tool": "dispatch_task",
+            "visible_result": {
+                "ok": True,
+                "data": {
+                    "task": {
+                        "task_id": "task-child-1",
+                        "status": "completed",
+                        "result": "Shanghai weather collected.",
+                    }
+                },
+                "meta": {"tool_result_event_published": True},
+            },
+            "runtime_meta": {"tool_result_event_published": True},
+        },
+    )
+
+    monkeypatch.setattr(
+        llm_module,
+        "load_or_recover_tool_call_state",
+        lambda **kwargs: persisted_state,
+    )
+
+    recovered_messages, recovered_count = (
+        AgentLlmSession._restore_pending_tool_results_from_state(
+            session,
+            request=_build_request(),
+            pending_messages=[
+                ModelResponse(
+                    parts=[
+                        ToolCallPart(
+                            tool_name="dispatch_task",
+                            args='{"task_id":"task-child-1","role_id":"Crafter"}',
+                            tool_call_id="call-dispatch-1",
+                        )
+                    ]
+                )
+            ],
+        )
+    )
+
+    assert recovered_count == 1
+    assert len(recovered_messages) == 2
+    synthetic_request = recovered_messages[-1]
+    assert isinstance(synthetic_request, ModelRequest)
+    assert len(synthetic_request.parts) == 1
+    recovered_part = synthetic_request.parts[0]
+    assert isinstance(recovered_part, ToolReturnPart)
+    assert recovered_part.tool_name == "dispatch_task"
+    assert recovered_part.tool_call_id == "call-dispatch-1"
+    assert recovered_part.content == {
+        "ok": True,
+        "data": {
+            "task": {
+                "task_id": "task-child-1",
+                "status": "completed",
+                "result": "Shanghai weather collected.",
+            }
+        },
+        "meta": {"tool_result_event_published": True},
+    }
+
+
+def test_publish_committed_tool_outcome_events_skips_visible_only_recovered_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_shared_store"] = cast(object, None)
+    published_events: list[object] = []
+    session.__dict__["_run_event_hub"] = type(
+        "_RunEventHub",
+        (),
+        {"publish": lambda self, event: published_events.append(event)},
+    )()
+
+    persisted_state = PersistedToolCallState(
+        tool_call_id="call-dispatch-1",
+        tool_name="dispatch_task",
+        instance_id="inst-1",
+        role_id="writer",
+        execution_status=ToolExecutionStatus.COMPLETED,
+        result_envelope={
+            "ok": True,
+            "data": {"task": {"task_id": "task-child-1", "status": "completed"}},
+            "meta": {"tool_result_event_published": True},
+        },
+    )
+
+    monkeypatch.setattr(
+        llm_module,
+        "load_tool_call_state",
+        lambda **kwargs: persisted_state,
+    )
+
+    AgentLlmSession._publish_committed_tool_outcome_events_from_messages(
+        session,
+        request=_build_request(),
+        messages=[
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="dispatch_task",
+                        tool_call_id="call-dispatch-1",
+                        content={
+                            "ok": True,
+                            "data": {
+                                "task": {
+                                    "task_id": "task-child-1",
+                                    "status": "completed",
+                                }
+                            },
+                        },
+                    )
+                ]
+            )
+        ],
+    )
+
+    assert published_events == []
+
+
+@pytest.mark.asyncio
+async def test_resume_after_tool_outcomes_commits_backfilled_tool_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_shared_store"] = cast(object, None)
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_task_repo"] = cast(object, None)
+
+    persisted_state = PersistedToolCallState(
+        tool_call_id="call-dispatch-1",
+        tool_name="dispatch_task",
+        instance_id="inst-1",
+        role_id="writer",
+        execution_status=ToolExecutionStatus.COMPLETED,
+        result_envelope={
+            "visible_result": {
+                "ok": True,
+                "data": {"task": {"task_id": "task-child-1", "status": "completed"}},
+                "meta": {"tool_result_event_published": True},
+            },
+            "runtime_meta": {"tool_result_event_published": True},
+        },
+    )
+
+    monkeypatch.setattr(
+        llm_module,
+        "load_or_recover_tool_call_state",
+        lambda **kwargs: persisted_state,
+    )
+
+    captured_pending_messages: list[ModelRequest | ModelResponse] = []
+
+    def _capture_commit_all_safe_messages(**kwargs: object):
+        pending_messages = kwargs["pending_messages"]
+        assert isinstance(pending_messages, list)
+        captured_pending_messages.extend(
+            cast(list[ModelRequest | ModelResponse], pending_messages)
+        )
+        synthetic_request = cast(
+            ModelRequest,
+            cast(list[ModelRequest | ModelResponse], pending_messages)[-1],
+        )
+        recovered_part = synthetic_request.parts[0]
+        assert isinstance(recovered_part, ToolReturnPart)
+        assert recovered_part.tool_call_id == "call-dispatch-1"
+        return [], [], False, False
+
+    session.__dict__["_commit_all_safe_messages"] = _capture_commit_all_safe_messages
+    session.__dict__["_publish_synthetic_tool_results_for_pending_calls"] = (
+        lambda **kwargs: 0
+    )
+
+    async def _generate_async(*args: object, **kwargs: object) -> str:
+        _ = (args, kwargs)
+        return "resumed"
+
+    session.__dict__["_generate_async"] = _generate_async
+
+    result = await AgentLlmSession._resume_after_tool_outcomes(
+        session,
+        request=_build_request(),
+        retry_number=0,
+        total_attempts=2,
+        history=[],
+        pending_messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="dispatch_task",
+                        args='{"task_id":"task-child-1","role_id":"Crafter"}',
+                        tool_call_id="call-dispatch-1",
+                    )
+                ]
+            )
+        ],
+        fallback_state=_FallbackAttemptState.initial("default"),
+    )
+
+    assert result == "resumed"
+    assert len(captured_pending_messages) == 2
 
 
 @pytest.mark.asyncio

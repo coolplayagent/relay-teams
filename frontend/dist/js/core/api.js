@@ -21,7 +21,6 @@ export {
     sendUserPrompt,
     resolveGate,
     resolveToolApproval,
-    dispatchHumanTask,
     injectMessage,
     injectSubagentMessage,
     resumeRun,

@@ -33,9 +33,7 @@ import {
     handleToolResult,
 } from './toolEvents.js';
 import {
-    handleAwaitingHumanDispatch,
     handleGateResolved,
-    handleHumanTaskDispatched,
     handleSubagentResumed,
     handleSubagentStopped,
     handleSubagentGate,
@@ -154,10 +152,6 @@ export function routeEvent(evType, payload, eventMeta) {
         handleToolApprovalResolved(payload, instanceId, eventMeta, roleId);
     } else if (evType === 'notification_requested') {
         handleNotificationRequested(payload);
-    } else if (evType === 'awaiting_human_dispatch') {
-        handleAwaitingHumanDispatch(payload);
-    } else if (evType === 'human_task_dispatched') {
-        handleHumanTaskDispatched(payload);
     } else if (evType === 'subagent_gate') {
         handleSubagentGate(payload);
     } else if (evType === 'subagent_stopped') {
@@ -233,8 +227,6 @@ function scheduleContinuityRefreshForEvent(evType) {
         || evType === 'background_task_completed'
         || evType === 'background_task_stopped'
         || evType === 'notification_requested'
-        || evType === 'awaiting_human_dispatch'
-        || evType === 'human_task_dispatched'
         || evType === 'gate_resolved'
     ) {
         scheduleRecoveryContinuityRefresh({

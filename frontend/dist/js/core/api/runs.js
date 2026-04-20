@@ -54,18 +54,6 @@ export async function resolveToolApproval(runId, toolCallId, action, feedback = 
     );
 }
 
-export async function dispatchHumanTask(sessionId, runId, taskId) {
-    return requestJson(
-        `/api/runs/${runId}/dispatch`,
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ task_id: taskId, session_id: sessionId }),
-        },
-        'Failed to dispatch task',
-    );
-}
-
 export async function injectMessage(runId, content) {
     return requestJson(
         `/api/runs/${runId}/inject`,

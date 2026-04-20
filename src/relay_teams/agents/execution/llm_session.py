@@ -130,8 +130,10 @@ from relay_teams.tools.runtime import (
     ToolDeps,
 )
 from relay_teams.tools.runtime.persisted_state import (
+    PersistedToolCallState,
     ToolExecutionStatus,
     load_tool_call_state,
+    load_or_recover_tool_call_state,
 )
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
@@ -1682,6 +1684,12 @@ class AgentLlmSession:
         fallback_state: _FallbackAttemptState,
     ) -> str:
         next_retry_number = retry_number + 1
+        recovered_pending_messages, recovered_tool_result_count = (
+            self._restore_pending_tool_results_from_state(
+                request=request,
+                pending_messages=pending_messages,
+            )
+        )
         (
             next_history,
             remaining_pending_messages,
@@ -1690,7 +1698,7 @@ class AgentLlmSession:
         ) = self._commit_all_safe_messages(
             request=request,
             history=history,
-            pending_messages=pending_messages,
+            pending_messages=recovered_pending_messages,
         )
         closed_pending_tool_call_count = (
             self._publish_synthetic_tool_results_for_pending_calls(
@@ -1717,6 +1725,7 @@ class AgentLlmSession:
                 "next_attempt_number": next_retry_number + 1,
                 "history_message_count": len(next_history),
                 "dropped_pending_message_count": len(remaining_pending_messages),
+                "recovered_tool_result_count": recovered_tool_result_count,
                 "closed_pending_tool_call_count": closed_pending_tool_call_count,
             },
         )
@@ -3055,6 +3064,126 @@ class AgentLlmSession:
                     pending_tool_call_ids.pop(tool_call_id, None)
         return list(pending_tool_call_ids.items())
 
+    def _restore_pending_tool_results_from_state(
+        self,
+        *,
+        request: LLMRequest,
+        pending_messages: Sequence[ModelRequest | ModelResponse],
+    ) -> tuple[list[ModelRequest | ModelResponse], int]:
+        recovered_parts: list[ToolReturnPart] = []
+        recovered_tool_call_ids: list[str] = []
+        recovered_tool_names: list[str] = []
+        for tool_call_id, tool_name in self._collect_pending_tool_calls(
+            pending_messages
+        ):
+            state = load_or_recover_tool_call_state(
+                shared_store=self._shared_store,
+                event_log=self._event_bus,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                tool_call_id=tool_call_id,
+                task_repo=self._task_repo,
+            )
+            visible_envelope = self._visible_tool_result_from_state(
+                state=state,
+                expected_tool_name=tool_name,
+            )
+            if visible_envelope is None:
+                continue
+            recovered_parts.append(
+                ToolReturnPart(
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    content=visible_envelope,
+                )
+            )
+            recovered_tool_call_ids.append(tool_call_id)
+            recovered_tool_names.append(tool_name)
+        if not recovered_parts:
+            return list(pending_messages), 0
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="llm.request.recovered_tool_results_for_resume",
+            message=(
+                "Recovered persisted tool results for pending tool calls before resume"
+            ),
+            payload=cast(
+                dict[str, JsonValue],
+                {
+                    "run_id": request.run_id,
+                    "task_id": request.task_id,
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                    "recovered_tool_call_ids": recovered_tool_call_ids,
+                    "recovered_tool_names": recovered_tool_names,
+                    "recovered_count": len(recovered_parts),
+                },
+            ),
+        )
+        next_pending_messages = list(pending_messages)
+        next_pending_messages.append(ModelRequest(parts=recovered_parts))
+        return next_pending_messages, len(recovered_parts)
+
+    def _visible_tool_result_from_state(
+        self,
+        *,
+        state: PersistedToolCallState | None,
+        expected_tool_name: str,
+    ) -> dict[str, JsonValue] | None:
+        if state is None:
+            return None
+        tool_name = str(state.tool_name or "").strip()
+        if tool_name != expected_tool_name:
+            return None
+        if state.execution_status not in (
+            ToolExecutionStatus.COMPLETED,
+            ToolExecutionStatus.FAILED,
+        ):
+            return None
+        raw_result_envelope = state.result_envelope
+        if not isinstance(raw_result_envelope, dict):
+            return None
+        visible_result = self._visible_tool_result_from_envelope(raw_result_envelope)
+        if not isinstance(visible_result, dict):
+            return None
+        if not self._tool_result_event_was_published(
+            result_envelope=raw_result_envelope,
+            visible_result=visible_result,
+        ):
+            return None
+        normalized = self._to_json_compatible(visible_result)
+        if not isinstance(normalized, dict):
+            return None
+        sanitized = sanitize_task_status_payload(normalized)
+        if not isinstance(sanitized, dict):
+            return None
+        return cast(dict[str, JsonValue], sanitized)
+
+    @staticmethod
+    def _visible_tool_result_from_envelope(
+        result_envelope: dict[str, JsonValue],
+    ) -> dict[str, JsonValue] | None:
+        raw_visible_result = result_envelope.get("visible_result")
+        if isinstance(raw_visible_result, dict):
+            return cast(dict[str, JsonValue], raw_visible_result)
+        return result_envelope
+
+    @staticmethod
+    def _tool_result_event_was_published(
+        *,
+        result_envelope: dict[str, JsonValue],
+        visible_result: dict[str, JsonValue] | None = None,
+    ) -> bool:
+        runtime_meta = result_envelope.get("runtime_meta")
+        if isinstance(runtime_meta, dict):
+            return runtime_meta.get("tool_result_event_published") is True
+        envelope = result_envelope if visible_result is None else visible_result
+        meta = envelope.get("meta")
+        if not isinstance(meta, dict):
+            return False
+        return meta.get("tool_result_event_published") is True
+
     def _has_tool_side_effect_messages(
         self,
         messages: Sequence[ModelRequest | ModelResponse],
@@ -4252,10 +4381,11 @@ class AgentLlmSession:
         result_envelope = state.result_envelope
         if not isinstance(result_envelope, dict):
             return False
-        runtime_meta = result_envelope.get("runtime_meta")
-        if not isinstance(runtime_meta, dict):
-            return False
-        return runtime_meta.get("tool_result_event_published") is True
+        visible_result = self._visible_tool_result_from_envelope(result_envelope)
+        return self._tool_result_event_was_published(
+            result_envelope=result_envelope,
+            visible_result=visible_result,
+        )
 
     def _to_json_compatible(self, value: object) -> JsonValue:
         if isinstance(value, (str, int, float, bool)) or value is None:

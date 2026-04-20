@@ -529,7 +529,6 @@
 .round-detail-header,
 .round-nav-float,
 .recovery-banner,
-.human-dispatch-panel,
 .gate-card {
     border-radius: 10px;
     box-shadow: none;
@@ -626,20 +625,10 @@
     border-radius: 8px;
 }
 
-.human-dispatch-panel,
 .gate-card {
     padding: 0.95rem 1rem;
     border: 1px solid var(--border-color);
     background: var(--bg-surface);
-}
-
-.human-dispatch-panel .dispatch-header {
-    font-size: 0.82rem;
-    font-weight: 600;
-}
-
-.dispatch-task-row {
-    border-top-color: var(--border-color);
 }
 
 .subagent-role-select,
@@ -685,7 +674,6 @@ body.light-theme .round-clear-divider-chip,
 body.light-theme .round-history-divider-chip,
 body.light-theme .message-history-divider-chip,
 body.light-theme .system-intro,
-body.light-theme .human-dispatch-panel,
 body.light-theme .gate-card,
 body.light-theme .round-nav-float,
 body.light-theme .recovery-banner,
