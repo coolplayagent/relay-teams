@@ -190,6 +190,8 @@ from relay_teams.hooks import HookLoader, HookRuntimeState, HookService
 from relay_teams.hooks.executors.command_executor import CommandHookExecutor
 from relay_teams.hooks.executors.http_executor import HttpHookExecutor
 from relay_teams.workspace import (
+    SshProfileRepository,
+    SshProfileService,
     WorkspaceManager,
     WorkspaceRepository,
     WorkspaceService,
@@ -292,8 +294,16 @@ class ServerContainer:
         self.workspace_repo: WorkspaceRepository = WorkspaceRepository(
             runtime.paths.db_path
         )
+        self.ssh_profile_repo: SshProfileRepository = SshProfileRepository(
+            runtime.paths.db_path
+        )
+        self.ssh_profile_service: SshProfileService = SshProfileService(
+            repository=self.ssh_profile_repo,
+            config_dir=app_config_dir,
+        )
         self.workspace_service: WorkspaceService = WorkspaceService(
-            repository=self.workspace_repo
+            repository=self.workspace_repo,
+            ssh_profile_service=self.ssh_profile_service,
         )
         self.workspace_manager: WorkspaceManager = WorkspaceManager(
             project_root=Path.cwd(),

@@ -173,9 +173,10 @@ def test_workspace_automation_and_feishu_gateway_routes(
     snapshot_response.raise_for_status()
     snapshot_payload = snapshot_response.json()
     assert snapshot_payload["workspace_id"] == workspace_id
+    assert snapshot_payload["default_mount_name"] == "default"
     tree_children = snapshot_payload["tree"]["children"]
-    assert any(child["path"] == "README.md" for child in tree_children)
-    assert any(child["path"] == "src" for child in tree_children)
+    assert [child["path"] for child in tree_children] == ["default"]
+    assert tree_children[0]["has_children"] is True
 
     tree_response = api_client.get(
         f"/api/workspaces/{workspace_id}/tree", params={"path": "src"}

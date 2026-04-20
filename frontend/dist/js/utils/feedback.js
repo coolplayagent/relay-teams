@@ -171,7 +171,7 @@ function renderNextDialog() {
                                 const fieldType = String(field.type || '').trim().toLowerCase();
                                 if (fieldType === 'checkbox') {
                                     return `
-                                        <label class="feedback-dialog-input-wrap feedback-dialog-checkbox-wrap">
+                                        <label class="feedback-dialog-input-wrap feedback-dialog-checkbox-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             <span class="feedback-dialog-checkbox">
                                                 <input type="checkbox" class="feedback-dialog-checkbox-input" data-feedback-form-input="${escapeHtml(fieldId)}" ${fieldValue === true ? 'checked' : ''} />
@@ -189,7 +189,7 @@ function renderNextDialog() {
                                         ? fieldValue.map(value => String(value ?? ''))
                                         : [String(fieldValue ?? '')];
                                     return `
-                                        <div class="feedback-dialog-input-wrap">
+                                        <div class="feedback-dialog-input-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             ${fieldCopy}
                                             <details class="feedback-dialog-multiselect" data-feedback-form-input="${escapeHtml(fieldId)}" data-feedback-form-type="multiselect" data-feedback-multiselect-placeholder="${placeholder}">
@@ -214,7 +214,7 @@ function renderNextDialog() {
                                 if (fieldType === 'select') {
                                     const options = Array.isArray(field.options) ? field.options : [];
                                     return `
-                                        <label class="feedback-dialog-input-wrap">
+                                        <label class="feedback-dialog-input-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             ${fieldCopy}
                                             <select class="feedback-dialog-input feedback-dialog-select" data-feedback-form-input="${escapeHtml(fieldId)}">
@@ -230,7 +230,7 @@ function renderNextDialog() {
                                 }
                                 if (String(field.multiline || '').trim() === 'true' || field.multiline === true || fieldType === 'textarea') {
                                     return `
-                                        <label class="feedback-dialog-input-wrap">
+                                        <label class="feedback-dialog-input-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             ${fieldCopy}
                                             <textarea class="feedback-dialog-input feedback-dialog-textarea" data-feedback-form-input="${escapeHtml(fieldId)}" placeholder="${placeholder}">${escapeHtml(fieldValue)}</textarea>
@@ -243,7 +243,7 @@ function renderNextDialog() {
                                     const hasValue = String(fieldValue ?? '').trim().length > 0;
                                     const allowEmptyReveal = field.allowEmptyReveal === true;
                                     return `
-                                        <label class="feedback-dialog-input-wrap">
+                                        <label class="feedback-dialog-input-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             ${fieldCopy}
                                             <div class="secure-input-row feedback-dialog-secure-row">
@@ -256,7 +256,7 @@ function renderNextDialog() {
                                     `;
                                 }
                                 return `
-                                    <label class="feedback-dialog-input-wrap">
+                                    <label class="feedback-dialog-input-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                         <span class="feedback-dialog-input-label">${inputLabel}</span>
                                         ${fieldCopy}
                                         <input type="text" class="feedback-dialog-input" data-feedback-form-input="${escapeHtml(fieldId)}" placeholder="${placeholder}" value="${escapeHtml(fieldValue)}" />
@@ -288,6 +288,7 @@ function renderNextDialog() {
     const submitError = hosts.dialogRoot.querySelector('[data-feedback-submit-error]');
     bindMultiselectControls(hosts.dialogRoot);
     bindPasswordInputControls(hosts.dialogRoot);
+    bindConditionalFieldVisibility(hosts.dialogRoot, activeDialog.fields, formInputs);
     if (confirmBtn) {
         confirmBtn.onclick = async () => {
             if (activeDialog?.submitting === true) {
@@ -373,8 +374,9 @@ function renderNextDialog() {
                 }
             };
         });
-        formInputs[0].focus();
-        formInputs[0].select?.();
+        const firstVisibleInput = findFirstVisibleFormInput(formInputs);
+        firstVisibleInput?.focus();
+        firstVisibleInput?.select?.();
     } else if (confirmBtn) {
         confirmBtn.focus();
     }
@@ -448,6 +450,9 @@ function escapeHtml(value) {
 function collectFormDialogValues(formInputs) {
     const payload = {};
     formInputs.forEach(node => {
+        if (isDialogFormInputHidden(node)) {
+            return;
+        }
         const key = String(node.getAttribute('data-feedback-form-input') || '').trim();
         if (!key) return;
         const formType = String(node.getAttribute('data-feedback-form-type') || '').trim();
@@ -470,6 +475,148 @@ function collectFormDialogValues(formInputs) {
         payload[key] = String(node.value || '').trim();
     });
     return payload;
+}
+
+function bindConditionalFieldVisibility(dialogNode, fields, formInputs) {
+    const fieldConfigs = new Map(
+        (Array.isArray(fields) ? fields : [])
+            .map((field, index) => {
+                const fieldId = String(field?.id || `field_${index}`).trim();
+                return fieldId ? [fieldId, field] : null;
+            })
+            .filter(Boolean),
+    );
+    if (fieldConfigs.size === 0) {
+        return;
+    }
+    const applyVisibility = () => {
+        const currentValues = collectCurrentDialogFieldValues(formInputs);
+        dialogNode.querySelectorAll('[data-feedback-form-field]').forEach(wrapper => {
+            if (!(wrapper instanceof HTMLElement)) {
+                return;
+            }
+            const fieldId = String(wrapper.getAttribute('data-feedback-field-id') || '').trim();
+            if (!fieldId) {
+                return;
+            }
+            const field = fieldConfigs.get(fieldId);
+            const isVisible = evaluateDialogFieldVisibility(field, currentValues);
+            wrapper.hidden = !isVisible;
+            wrapper.setAttribute('aria-hidden', isVisible ? 'false' : 'true');
+            wrapper.querySelectorAll('[data-feedback-form-input]').forEach(node => {
+                if (
+                    node instanceof HTMLInputElement
+                    || node instanceof HTMLSelectElement
+                    || node instanceof HTMLTextAreaElement
+                ) {
+                    node.disabled = !isVisible;
+                    return;
+                }
+                if (node instanceof HTMLElement) {
+                    node.dataset.feedbackHidden = isVisible ? 'false' : 'true';
+                    node.classList.toggle('is-disabled', !isVisible);
+                    node.querySelectorAll('input').forEach(option => {
+                        if (option instanceof HTMLInputElement) {
+                            option.disabled = !isVisible;
+                        }
+                    });
+                }
+            });
+        });
+    };
+    formInputs.forEach(node => {
+        if (
+            node instanceof HTMLInputElement
+            || node instanceof HTMLSelectElement
+            || node instanceof HTMLTextAreaElement
+        ) {
+            node.addEventListener('change', applyVisibility);
+            node.addEventListener('input', applyVisibility);
+            return;
+        }
+        if (node instanceof HTMLElement) {
+            node.querySelectorAll('input').forEach(option => {
+                option.addEventListener('change', applyVisibility);
+                option.addEventListener('input', applyVisibility);
+            });
+        }
+    });
+    applyVisibility();
+}
+
+function collectCurrentDialogFieldValues(formInputs) {
+    const payload = {};
+    formInputs.forEach(node => {
+        const key = String(node.getAttribute('data-feedback-form-input') || '').trim();
+        if (!key) {
+            return;
+        }
+        payload[key] = readDialogFieldValue(node);
+    });
+    return payload;
+}
+
+function readDialogFieldValue(node) {
+    const formType = String(node.getAttribute?.('data-feedback-form-type') || '').trim();
+    if (formType === 'multiselect' && node instanceof HTMLElement) {
+        return Array.from(node.querySelectorAll('[data-feedback-multiselect-option]:checked'))
+            .map(option => String(option.value || '').trim())
+            .filter(Boolean);
+    }
+    if (node instanceof HTMLInputElement && node.type === 'checkbox') {
+        return node.checked;
+    }
+    if (node instanceof HTMLSelectElement && node.multiple) {
+        return Array.from(node.selectedOptions)
+            .map(option => String(option.value || '').trim())
+            .filter(Boolean);
+    }
+    return String(node.value || '').trim();
+}
+
+function evaluateDialogFieldVisibility(field, currentValues) {
+    const visibleWhen = field?.visibleWhen;
+    if (!visibleWhen) {
+        return true;
+    }
+    const rules = Array.isArray(visibleWhen) ? visibleWhen : [visibleWhen];
+    return rules.every(rule => {
+        if (!rule || typeof rule !== 'object') {
+            return true;
+        }
+        const targetField = String(rule.field || '').trim();
+        if (!targetField) {
+            return true;
+        }
+        const currentValue = currentValues[targetField];
+        if (Object.prototype.hasOwnProperty.call(rule, 'equals')) {
+            return currentValue === rule.equals;
+        }
+        if (Array.isArray(rule.oneOf)) {
+            return rule.oneOf.includes(currentValue);
+        }
+        if (rule.truthy === true) {
+            return Boolean(currentValue);
+        }
+        if (rule.notEmpty === true) {
+            return Array.isArray(currentValue)
+                ? currentValue.length > 0
+                : String(currentValue ?? '').trim().length > 0;
+        }
+        return true;
+    });
+}
+
+function findFirstVisibleFormInput(formInputs) {
+    return formInputs.find(node => !isDialogFormInputHidden(node) && node.disabled !== true) || null;
+}
+
+function isDialogFormInputHidden(node) {
+    const wrapper = node.closest?.('[data-feedback-form-field]');
+    if (!(wrapper instanceof HTMLElement)) {
+        return false;
+    }
+    return wrapper.hidden === true || wrapper.getAttribute('aria-hidden') === 'true';
 }
 
 function formatMultiselectSummary(selectedValues, options, placeholder = '') {
@@ -583,14 +730,15 @@ function setDialogSubmittingState(context, isSubmitting) {
     }
     formInputs.forEach(node => {
         if (node instanceof HTMLInputElement || node instanceof HTMLSelectElement || node instanceof HTMLTextAreaElement) {
-            node.disabled = isSubmitting;
+            node.disabled = isSubmitting || isDialogFormInputHidden(node);
             return;
         }
         if (String(node.getAttribute?.('data-feedback-form-type') || '').trim() === 'multiselect' && node instanceof HTMLElement) {
-            node.classList.toggle('is-disabled', isSubmitting);
+            const isHidden = isDialogFormInputHidden(node);
+            node.classList.toggle('is-disabled', isSubmitting || isHidden);
             Array.from(node.querySelectorAll('input')).forEach(option => {
                 if (option instanceof HTMLInputElement) {
-                    option.disabled = isSubmitting;
+                    option.disabled = isSubmitting || isHidden;
                 }
             });
         }

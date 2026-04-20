@@ -100,6 +100,7 @@ const agentsTab = tabs.find(tab => tab.dataset.tab === "agents");
 const notificationsTab = tabs.find(tab => tab.dataset.tab === "notifications");
 const webTab = tabs.find(tab => tab.dataset.tab === "web");
 const proxyTab = tabs.find(tab => tab.dataset.tab === "proxy");
+const workspaceTab = tabs.find(tab => tab.dataset.tab === "workspace");
 const mcpTab = tabs.find(tab => tab.dataset.tab === "mcp");
 
 const modelTab = tabs.find(tab => tab.dataset.tab === "model");
@@ -115,6 +116,8 @@ await webTab.onclick();
 const webSaveDisplay = document.getElementById("save-web-btn").style.display;
 await proxyTab.onclick();
 const proxySaveDisplay = document.getElementById("save-proxy-btn").style.display;
+await workspaceTab.onclick();
+const workspaceAddDisplay = document.getElementById("add-ssh-profile-btn").style.display;
 await mcpTab.onclick();
 const mcpReloadDisplay = document.getElementById("reload-mcp-btn").style.display;
 const hasGitHubSaveButton = Boolean(document.getElementById("save-github-btn"));
@@ -126,6 +129,7 @@ console.log(JSON.stringify({
     notificationsSaveDisplay,
     webSaveDisplay,
     proxySaveDisplay,
+    workspaceAddDisplay,
     mcpReloadDisplay,
     hasGitHubSaveButton,
 }));
@@ -138,6 +142,7 @@ console.log(JSON.stringify({
     assert payload["notificationsSaveDisplay"] == "inline-flex"
     assert payload["webSaveDisplay"] == "inline-flex"
     assert payload["proxySaveDisplay"] == "inline-flex"
+    assert payload["workspaceAddDisplay"] == "inline-flex"
     assert payload["mcpReloadDisplay"] == "inline-flex"
     assert payload["hasGitHubSaveButton"] is False
 
@@ -168,13 +173,15 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
         'data-tab="web"'
     )
     assert tabs_html.index('data-tab="web"') < tabs_html.index('data-tab="proxy"')
-    assert tabs_html.index('data-tab="proxy"') < tabs_html.index(
+    assert tabs_html.index('data-tab="proxy"') < tabs_html.index('data-tab="workspace"')
+    assert tabs_html.index('data-tab="workspace"') < tabs_html.index(
         'data-tab="environment"'
     )
     assert ">Model</span>" in tabs_html
     assert ">MCP</span>" in tabs_html
     assert ">Agents</span>" in tabs_html
     assert ">Web</span>" in tabs_html
+    assert ">Workspace</span>" in tabs_html
     assert ">Environment</span>" in tabs_html
     assert ">GitHub</span>" not in tabs_html
     assert ">Skills</span>" not in tabs_html
@@ -396,6 +403,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     mock_roles_settings_path = tmp_path / "mockRolesSettings.mjs"
     mock_trigger_settings_path = tmp_path / "mockTriggerSettings.mjs"
     mock_web_settings_path = tmp_path / "mockWebSettings.mjs"
+    mock_workspace_settings_path = tmp_path / "mockWorkspaceSettings.mjs"
     mock_clawhub_settings_path = tmp_path / "mockClawHubSettings.mjs"
     mock_github_settings_path = tmp_path / "mockGitHubSettings.mjs"
     mock_system_status_path = tmp_path / "mockSystemStatus.mjs"
@@ -512,6 +520,18 @@ export async function loadWebSettingsPanel() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_workspace_settings_path.write_text(
+        """
+export function bindWorkspaceSettingsHandlers() {
+    globalThis.__bindCalls.workspace += 1;
+}
+
+export async function loadWorkspaceSettingsPanel() {
+    globalThis.__loadCalls.workspace += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_clawhub_settings_path.write_text(
         """
 export function bindClawHubSettingsHandlers() {
@@ -570,6 +590,7 @@ export function initAppearanceOnStartup() {}
         """
 export function t(key) {
     return {
+        'settings.tab.workspace': 'Workspace',
         'settings.panel.appearance.title': 'Appearance',
         'settings.panel.appearance.description': 'Customize accent color, background, fonts, and sizing.',
         'settings.panel.model.title': 'Model',
@@ -594,6 +615,8 @@ export function t(key) {
         'settings.panel.github.description': 'Store a GitHub token for the bundled gh CLI and verify the current shell integration.',
         'settings.panel.proxy.title': 'Proxy',
         'settings.panel.proxy.description': 'Edit runtime proxy values, default network SSL policy, and test outbound web connectivity.',
+        'settings.panel.workspace.title': 'Workspace',
+        'settings.panel.workspace.description': 'Manage reusable SSH profiles referenced by workspace mounts.',
         'settings.panel.environment.title': 'Environment',
         'settings.panel.environment.description': 'Inspect effective runtime environment values and manage Agent Teams app environment variables.',
     }[key] || key;
@@ -615,6 +638,7 @@ export function translateDocument() {
         .replace("./orchestrationSettings.js", "./mockOrchestrationSettings.mjs")
         .replace("./triggerSettings.js", "./mockTriggerSettings.mjs")
         .replace("./webSettings.js", "./mockWebSettings.mjs")
+        .replace("./workspaceSettings.js", "./mockWorkspaceSettings.mjs")
         .replace("./clawhubSettings.js", "./mockClawHubSettings.mjs")
         .replace("./githubSettings.js", "./mockGitHubSettings.mjs")
         .replace("./proxySettings.js", "./mockProxySettings.mjs")
@@ -784,32 +808,34 @@ function createDocument() {{
     }};
 }}
 
-globalThis.__bindCalls = {{
-    model: 0,
-    agents: 0,
-    roles: 0,
-    orchestration: 0,
-    triggers: 0,
-    environment: 0,
-    notifications: 0,
-    web: 0,
-    clawhub: 0,
-    github: 0,
-    proxy: 0,
-    system: 0,
-}};
+    globalThis.__bindCalls = {{
+        model: 0,
+        agents: 0,
+        roles: 0,
+        orchestration: 0,
+        triggers: 0,
+        environment: 0,
+        notifications: 0,
+        web: 0,
+        workspace: 0,
+        clawhub: 0,
+        github: 0,
+        proxy: 0,
+        system: 0,
+    }};
 globalThis.__loadCalls = {{
     model: 0,
     agents: 0,
     roles: 0,
     orchestration: 0,
     triggers: 0,
-    environment: 0,
-    notifications: 0,
-    web: 0,
-    clawhub: 0,
-    github: 0,
-    proxy: 0,
+        environment: 0,
+        notifications: 0,
+        web: 0,
+        workspace: 0,
+        clawhub: 0,
+        github: 0,
+        proxy: 0,
     mcp: 0,
     skills: 0,
 }};
@@ -871,6 +897,33 @@ console.log(JSON.stringify({
     assert payload["envPanelDisplay"] == "block"
     assert payload["envAddDisplay"] == "inline-flex"
     assert load_calls["environment"] == 1
+
+
+def test_workspace_settings_tab_uses_add_ssh_profile_action(
+    tmp_path: Path,
+) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+initSettings();
+openSettings("workspace");
+
+console.log(JSON.stringify({
+    panelTitle: document.getElementById("settings-panel-title").textContent,
+    workspacePanelDisplay: document.getElementById("workspace-panel").style.display,
+    workspaceAddDisplay: document.getElementById("add-ssh-profile-btn").style.display,
+    loadCalls: globalThis.__loadCalls,
+}));
+""".strip(),
+    )
+
+    load_calls = cast(dict[str, JsonValue], payload["loadCalls"])
+    assert payload["panelTitle"] == "Workspace"
+    assert payload["workspacePanelDisplay"] == "block"
+    assert payload["workspaceAddDisplay"] == "inline-flex"
+    assert load_calls["workspace"] == 1
 
 
 def test_settings_modal_only_closes_for_direct_overlay_click(tmp_path: Path) -> None:

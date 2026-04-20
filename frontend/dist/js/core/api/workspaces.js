@@ -8,6 +8,18 @@ export async function fetchWorkspaces() {
     return requestJson('/api/workspaces', undefined, 'Failed to fetch projects');
 }
 
+export async function updateWorkspace(workspaceId, payload) {
+    return requestJson(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}`,
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to update project workspace',
+    );
+}
+
 export function buildWorkspaceImagePreviewUrl(workspaceId, path) {
     const safeWorkspaceId = String(workspaceId || '').trim();
     const safePath = String(path || '').trim();
@@ -26,9 +38,14 @@ export async function fetchWorkspaceSnapshot(workspaceId) {
     );
 }
 
-export async function openWorkspaceRoot(workspaceId) {
+export async function openWorkspaceRoot(workspaceId, mount = null) {
+    const query = new URLSearchParams();
+    const safeMount = String(mount || '').trim();
+    if (safeMount) {
+        query.set('mount', safeMount);
+    }
     return requestJson(
-        `/api/workspaces/${encodeURIComponent(workspaceId)}:open-root`,
+        `/api/workspaces/${encodeURIComponent(workspaceId)}:open-root${query.toString() ? `?${query.toString()}` : ''}`,
         {
             method: 'POST',
         },
@@ -36,8 +53,12 @@ export async function openWorkspaceRoot(workspaceId) {
     );
 }
 
-export async function fetchWorkspaceTree(workspaceId, path = '.') {
+export async function fetchWorkspaceTree(workspaceId, path = '.', mount = null) {
     const query = new URLSearchParams({ path: String(path || '.').trim() || '.' });
+    const safeMount = String(mount || '').trim();
+    if (safeMount) {
+        query.set('mount', safeMount);
+    }
     return requestJson(
         `/api/workspaces/${encodeURIComponent(workspaceId)}/tree?${query.toString()}`,
         undefined,
@@ -45,16 +66,25 @@ export async function fetchWorkspaceTree(workspaceId, path = '.') {
     );
 }
 
-export async function fetchWorkspaceDiffs(workspaceId) {
+export async function fetchWorkspaceDiffs(workspaceId, mount = null) {
+    const query = new URLSearchParams();
+    const safeMount = String(mount || '').trim();
+    if (safeMount) {
+        query.set('mount', safeMount);
+    }
     return requestJson(
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/diffs`,
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/diffs${query.toString() ? `?${query.toString()}` : ''}`,
         undefined,
         'Failed to fetch project workspace diffs',
     );
 }
 
-export async function fetchWorkspaceDiffFile(workspaceId, path) {
+export async function fetchWorkspaceDiffFile(workspaceId, path, mount = null) {
     const query = new URLSearchParams({ path: String(path || '.').trim() || '.' });
+    const safeMount = String(mount || '').trim();
+    if (safeMount) {
+        query.set('mount', safeMount);
+    }
     return requestJson(
         `/api/workspaces/${encodeURIComponent(workspaceId)}/diff?${query.toString()}`,
         undefined,

@@ -12,14 +12,15 @@ This replaces the older mixed design where workspace, memory, reflection, and fi
 
 ## 2. Workspace
 
-`workspace` means execution workspace only.
+`workspace` means execution scope only.
 
 Responsibilities:
 
 - store a stable `workspace_id`
-- point to a concrete `root_path`
-- resolve execution root, readable roots, writable roots
-- enforce path boundaries for tools and shell execution
+- own one or more execution mounts
+- expose a stable runtime boundary to sessions, automation, and tools
+- resolve provider-routed execution roots, readable roots, and writable roots
+- enforce path boundaries for tools and shell execution inside the selected workspace mount
 
 Non-responsibilities:
 
@@ -29,6 +30,10 @@ Non-responsibilities:
 
 One workspace can be shared by multiple sessions.
 
+Current and future workspace storage may include multiple mounts backed by
+different providers, but that does not change the meaning of `workspace_id`
+for other domains.
+
 ## 3. Session Binding
 
 Each session must bind to an existing workspace.
@@ -37,10 +42,12 @@ Rules:
 
 - session creation requires `workspace_id`
 - deleting a session does not delete the workspace
-- subagents inherit the session workspace
-- `workspace_id` on runtime records means execution workspace ID
+- subagents inherit the session workspace scope
+- `workspace_id` on runtime records means execution workspace ID, not a single root directory
 
-The default server bootstrap may create a `default` workspace rooted at the current project directory for convenience, but that is an application bootstrap choice, not the workspace model itself.
+The default server bootstrap may create a `default` workspace with one local
+mount rooted at the current project directory for convenience, but that is an
+application bootstrap choice, not the workspace model itself.
 
 ## 4. Role Memory
 

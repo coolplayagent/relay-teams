@@ -15,6 +15,7 @@ import {
 } from './orchestrationSettings.js';
 import { bindProxySettingsHandlers, loadProxyStatusPanel } from './proxySettings.js';
 import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings.js';
+import { bindWorkspaceSettingsHandlers, loadWorkspaceSettingsPanel } from './workspaceSettings.js';
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from './webSettings.js';
 import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
 import { bindAppearanceHandlers, loadAppearancePanel, initAppearanceOnStartup } from './appearanceSettings.js';
@@ -61,6 +62,10 @@ const TAB_METADATA = {
     proxy: {
         titleKey: 'settings.panel.proxy.title',
         descriptionKey: 'settings.panel.proxy.description',
+    },
+    workspace: {
+        titleKey: 'settings.panel.workspace.title',
+        descriptionKey: 'settings.panel.workspace.description',
     },
     environment: {
         titleKey: 'settings.panel.environment.title',
@@ -112,6 +117,9 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="proxy">
                         <span class="settings-tab-label" data-i18n="settings.tab.proxy">Proxy</span>
+                    </button>
+                    <button class="settings-tab" data-tab="workspace">
+                        <span class="settings-tab-label" data-i18n="settings.tab.workspace">Workspace</span>
                     </button>
                     <button class="settings-tab" data-tab="environment">
                         <span class="settings-tab-label" data-i18n="settings.tab.environment">Environment</span>
@@ -759,6 +767,82 @@ function createModal() {
                             </div>
                         </div>
                     </div>
+                    <div class="settings-panel" id="workspace-panel" style="display:none;">
+                        <div class="settings-section settings-section-model">
+                            <div class="settings-content-stack settings-model-stack">
+                                <div class="profiles-list" id="workspace-ssh-profile-list"></div>
+                                <div class="profile-editor" id="workspace-ssh-profile-editor" style="display:none;">
+                                    <div class="profile-editor-header">
+                                        <h4 id="workspace-ssh-profile-editor-title" data-i18n="settings.workspace.add_profile">Add SSH Profile</h4>
+                                        <p data-i18n="settings.workspace.editor_copy">Reusable SSH profiles are referenced by workspace mounts. You can save a username, an optional password, or import a private key.</p>
+                                    </div>
+                                    <form class="profile-editor-form" id="workspace-ssh-profile-form" autocomplete="off">
+                                        <div class="profile-editor-grid">
+                                            <div class="form-group">
+                                                <label for="workspace-ssh-profile-id" data-i18n="settings.workspace.profile_id">Profile ID</label>
+                                                <input type="text" id="workspace-ssh-profile-id" placeholder="e.g. prod, staging" data-i18n-placeholder="settings.workspace.profile_id_placeholder" autocomplete="off">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="workspace-ssh-profile-host" data-i18n="settings.workspace.host">Host</label>
+                                                <input type="text" id="workspace-ssh-profile-host" placeholder="e.g. prod-alias" data-i18n-placeholder="settings.workspace.host_placeholder" autocomplete="off">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="workspace-ssh-profile-username" data-i18n="settings.workspace.username">Username</label>
+                                                <input type="text" id="workspace-ssh-profile-username" placeholder="Optional username" data-i18n-placeholder="settings.workspace.username_placeholder" autocomplete="username">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="workspace-ssh-profile-port" data-i18n="settings.workspace.port">Port</label>
+                                                <input type="text" id="workspace-ssh-profile-port" placeholder="22" data-i18n-placeholder="settings.workspace.port_placeholder" inputmode="numeric" autocomplete="off">
+                                            </div>
+                                            <div class="form-group form-group-span-2">
+                                                <label for="workspace-ssh-profile-shell" data-i18n="settings.workspace.remote_shell">Remote Shell</label>
+                                                <input type="text" id="workspace-ssh-profile-shell" placeholder="e.g. /bin/bash" data-i18n-placeholder="settings.workspace.remote_shell_placeholder" autocomplete="off">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="workspace-ssh-profile-timeout" data-i18n="settings.workspace.connect_timeout_seconds">Connect Timeout (s)</label>
+                                                <input type="text" id="workspace-ssh-profile-timeout" placeholder="15" data-i18n-placeholder="settings.workspace.connect_timeout_seconds_placeholder" inputmode="numeric" autocomplete="off">
+                                            </div>
+                                        </div>
+                                        <div class="profile-editor-subsection">
+                                            <div class="profile-editor-subsection-header">
+                                                <h5 data-i18n="settings.workspace.auth_title">Authentication</h5>
+                                                <p data-i18n="settings.workspace.auth_copy">Set a username, optionally save a password, or import a private key. Leaving password and private key blank keeps the current stored secret or falls back to the system SSH environment.</p>
+                                            </div>
+                                            <div class="profile-editor-grid">
+                                                <div class="form-group">
+                                                    <label for="workspace-ssh-profile-password" data-i18n="settings.workspace.password">Password</label>
+                                                    <div class="secure-input-row">
+                                                        <input type="password" id="workspace-ssh-profile-password" placeholder="Optional password" data-i18n-placeholder="settings.workspace.password_placeholder" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+                                                        <button class="secure-input-btn" id="toggle-workspace-ssh-profile-password-btn" type="button" title="Show password" aria-label="Show password" style="display:none;">
+                                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                                                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                                            </svg>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="form-group">
+                                                    <label for="workspace-ssh-profile-private-key-name" data-i18n="settings.workspace.private_key_name">Imported Key File</label>
+                                                    <input type="text" id="workspace-ssh-profile-private-key-name" placeholder="Optional key filename" data-i18n-placeholder="settings.workspace.private_key_name_placeholder" autocomplete="off" spellcheck="false">
+                                                </div>
+                                                <div class="form-group form-group-span-2">
+                                                    <div class="form-label-row">
+                                                        <label for="workspace-ssh-profile-private-key" data-i18n="settings.workspace.private_key">Private Key</label>
+                                                        <div class="settings-inline-action-row">
+                                                            <button class="secondary-btn section-action-btn" id="workspace-ssh-profile-import-private-key-btn" type="button" data-i18n="settings.workspace.private_key_import">Import Private Key</button>
+                                                        </div>
+                                                    </div>
+                                                    <textarea class="config-textarea workspace-private-key-textarea" id="workspace-ssh-profile-private-key" placeholder="Paste a private key or import one from a file" data-i18n-placeholder="settings.workspace.private_key_placeholder" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+                                                    <input type="file" id="workspace-ssh-profile-private-key-file" style="display:none;" accept=".pem,.key,.ppk,text/plain">
+                                                </div>
+                                            </div>
+                                            <p class="workspace-auth-state" id="workspace-ssh-profile-auth-state"></p>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div class="settings-panel" id="web-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack proxy-panel-body">
@@ -840,8 +924,11 @@ function createModal() {
                         </div>
                         <div class="settings-panel-actions-group settings-panel-actions-group-end">
                             <button class="secondary-btn section-action-btn settings-action" id="add-profile-btn" type="button" style="display:none;" data-i18n="settings.action.add_profile">Add Profile</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="add-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.workspace.add_profile">Add SSH Profile</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-profile-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-profile-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="cancel-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-agent-btn" type="button" style="display:none;" data-i18n="settings.action.add_agent">Add Agent</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-agent-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="delete-agent-btn" type="button" style="display:none;" data-i18n="settings.action.delete">Delete</button>
@@ -858,6 +945,7 @@ function createModal() {
                             <button class="primary-btn section-action-btn settings-action" id="save-notifications-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-web-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-proxy-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="delete-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.delete">Delete</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reload-mcp-btn" type="button" style="display:none;" data-i18n="settings.action.reload">Reload</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reset-appearance-btn" type="button" style="display:none;" data-i18n="settings.action.reset">Reset</button>
                         </div>
@@ -903,6 +991,7 @@ function setupEventListeners() {
     bindNotificationSettingsHandlers();
     bindWebSettingsHandlers();
     bindProxySettingsHandlers();
+    bindWorkspaceSettingsHandlers();
     bindSystemStatusHandlers();
     try { bindAppearanceHandlers(); } catch (e) { console.error('appearance bind failed', e); }
     if (typeof document.addEventListener === 'function') {
@@ -936,6 +1025,7 @@ async function showPanel(tab) {
     bindEnvironmentVariableSettingsHandlers();
     bindWebSettingsHandlers();
     bindProxySettingsHandlers();
+    bindWorkspaceSettingsHandlers();
     bindSystemStatusHandlers();
 
     if (tab === 'model') {
@@ -954,6 +1044,8 @@ async function showPanel(tab) {
         await loadWebSettingsPanel();
     } else if (tab === 'proxy') {
         await loadProxyStatusPanel();
+    } else if (tab === 'workspace') {
+        await loadWorkspaceSettingsPanel();
     } else if (tab === 'mcp') {
         await loadMcpStatusPanel();
     } else if (tab === 'skills') {
@@ -1011,6 +1103,10 @@ function renderPanelActions(tab) {
         document.getElementById('save-proxy-btn').style.display = 'inline-flex';
         return;
     }
+    if (tab === 'workspace') {
+        document.getElementById('add-ssh-profile-btn').style.display = 'inline-flex';
+        return;
+    }
     if (tab === 'mcp') {
         document.getElementById('reload-mcp-btn').style.display = 'inline-flex';
         return;
@@ -1022,8 +1118,12 @@ function renderPanelActions(tab) {
     if (actionsBar) actionsBar.style.display = 'none';
 }
 
-export function openSettings() {
+export function openSettings(tab = null) {
     if (!initialized) initSettings();
+    const normalizedTab = String(tab || '').trim();
+    if (normalizedTab && TAB_METADATA[normalizedTab]) {
+        currentTab = normalizedTab;
+    }
     settingsModal.style.display = 'flex';
     settingsModal.classList.add('settings-modal-visible');
     showPanel(currentTab);

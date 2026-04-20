@@ -66,6 +66,7 @@ from relay_teams.interfaces.server.deps import (
     get_notification_settings_service,
     get_orchestration_settings_service,
     get_proxy_config_service,
+    get_ssh_profile_service,
     get_skills_config_reload_service,
     get_ui_language_settings_service,
     get_web_config_service,
@@ -111,6 +112,7 @@ from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.triggers import GitHubTriggerService
 from relay_teams.hooks import HookService, HooksConfig
 from relay_teams.validation import RequiredIdentifierStr
+from relay_teams.workspace import SshProfileConfig, SshProfileRecord, SshProfileService
 
 router = APIRouter(prefix="/system", tags=["System"])
 
@@ -137,6 +139,12 @@ class OrchestrationConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     config: OrchestrationSettings
+
+
+class SshProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    config: SshProfileConfig
 
 
 def _raise_system_http_error(
@@ -183,6 +191,64 @@ def get_config_status(
     service: ConfigStatusService = Depends(get_config_status_service),
 ) -> dict[str, JsonValue]:
     return service.get_config_status()
+
+
+@router.get("/configs/workspace/ssh-profiles")
+def list_ssh_profiles(
+    service: SshProfileService = Depends(get_ssh_profile_service),
+) -> list[SshProfileRecord]:
+    return list(service.list_profiles())
+
+
+@router.get("/configs/workspace/ssh-profiles/{ssh_profile_id}")
+def get_ssh_profile(
+    ssh_profile_id: RequiredIdentifierStr,
+    service: SshProfileService = Depends(get_ssh_profile_service),
+) -> SshProfileRecord:
+    try:
+        return service.get_profile(ssh_profile_id)
+    except Exception as exc:
+        _raise_system_http_error(
+            exc,
+            key_error_status=404,
+            key_error_detail="SSH profile not found",
+            value_error_status=400,
+        )
+
+
+@router.put("/configs/workspace/ssh-profiles/{ssh_profile_id}")
+def save_ssh_profile(
+    ssh_profile_id: RequiredIdentifierStr,
+    req: SshProfileRequest,
+    service: SshProfileService = Depends(get_ssh_profile_service),
+) -> SshProfileRecord:
+    try:
+        return service.save_profile(
+            ssh_profile_id=ssh_profile_id,
+            config=req.config,
+        )
+    except Exception as exc:
+        _raise_system_http_error(
+            exc,
+            value_error_status=400,
+        )
+
+
+@router.delete("/configs/workspace/ssh-profiles/{ssh_profile_id}")
+def delete_ssh_profile(
+    ssh_profile_id: RequiredIdentifierStr,
+    service: SshProfileService = Depends(get_ssh_profile_service),
+) -> dict[str, str]:
+    try:
+        service.delete_profile(ssh_profile_id)
+        return {"status": "ok"}
+    except Exception as exc:
+        _raise_system_http_error(
+            exc,
+            key_error_status=404,
+            key_error_detail="SSH profile not found",
+            value_error_status=400,
+        )
 
 
 @router.get("/configs/ui-language")

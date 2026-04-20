@@ -596,21 +596,54 @@ class AgentTeamsClient:
         self,
         *,
         workspace_id: str,
-        root_path: str,
+        root_path: str | None = None,
+        default_mount_name: str | None = None,
+        mounts: list[dict[str, JsonValue]] | None = None,
     ) -> dict[str, JsonValue]:
+        payload: dict[str, object] = {"workspace_id": workspace_id}
+        if root_path is not None:
+            payload["root_path"] = root_path
+        if default_mount_name is not None:
+            payload["default_mount_name"] = default_mount_name
+        if mounts is not None:
+            payload["mounts"] = mounts
         return self._request_json(
             "POST",
             "/api/workspaces",
-            {"workspace_id": workspace_id, "root_path": root_path},
+            payload,
+        )
+
+    def update_workspace(
+        self,
+        workspace_id: str,
+        *,
+        default_mount_name: str,
+        mounts: list[dict[str, JsonValue]],
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "PUT",
+            f"/api/workspaces/{quote(workspace_id, safe='')}",
+            {
+                "default_mount_name": default_mount_name,
+                "mounts": mounts,
+            },
         )
 
     def get_workspace_snapshot(self, workspace_id: str) -> dict[str, JsonValue]:
         return self._request_json("GET", f"/api/workspaces/{workspace_id}/snapshot")
 
-    def open_workspace_root(self, workspace_id: str) -> dict[str, JsonValue]:
+    def open_workspace_root(
+        self,
+        workspace_id: str,
+        *,
+        mount: str | None = None,
+    ) -> dict[str, JsonValue]:
+        path = f"/api/workspaces/{workspace_id}:open-root"
+        if mount is not None:
+            path += f"?mount={quote(mount, safe='')}"
         return self._request_json(
             "POST",
-            f"/api/workspaces/{workspace_id}:open-root",
+            path,
         )
 
     def get_workspace_tree(
@@ -618,24 +651,69 @@ class AgentTeamsClient:
         workspace_id: str,
         *,
         path: str = ".",
+        mount: str | None = None,
     ) -> dict[str, JsonValue]:
+        query = f"path={quote(path, safe='')}"
+        if mount is not None:
+            query += f"&mount={quote(mount, safe='')}"
         return self._request_json(
             "GET",
-            f"/api/workspaces/{workspace_id}/tree?path={quote(path, safe='')}",
+            f"/api/workspaces/{workspace_id}/tree?{query}",
         )
 
-    def get_workspace_diffs(self, workspace_id: str) -> dict[str, JsonValue]:
-        return self._request_json("GET", f"/api/workspaces/{workspace_id}/diffs")
+    def get_workspace_diffs(
+        self,
+        workspace_id: str,
+        *,
+        mount: str | None = None,
+    ) -> dict[str, JsonValue]:
+        path = f"/api/workspaces/{workspace_id}/diffs"
+        if mount is not None:
+            path += f"?mount={quote(mount, safe='')}"
+        return self._request_json("GET", path)
 
     def get_workspace_diff_file(
         self,
         workspace_id: str,
         *,
         path: str,
+        mount: str | None = None,
     ) -> dict[str, JsonValue]:
+        query = f"path={quote(path, safe='')}"
+        if mount is not None:
+            query += f"&mount={quote(mount, safe='')}"
         return self._request_json(
             "GET",
-            f"/api/workspaces/{workspace_id}/diff?path={quote(path, safe='')}",
+            f"/api/workspaces/{workspace_id}/diff?{query}",
+        )
+
+    def list_ssh_profiles(self) -> list[dict[str, JsonValue]]:
+        data = self._request_json("GET", "/api/system/configs/workspace/ssh-profiles")
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        return []
+
+    def get_ssh_profile(self, ssh_profile_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "GET",
+            f"/api/system/configs/workspace/ssh-profiles/{quote(ssh_profile_id, safe='')}",
+        )
+
+    def save_ssh_profile(
+        self,
+        ssh_profile_id: str,
+        payload: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "PUT",
+            f"/api/system/configs/workspace/ssh-profiles/{quote(ssh_profile_id, safe='')}",
+            {"config": payload},
+        )
+
+    def delete_ssh_profile(self, ssh_profile_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "DELETE",
+            f"/api/system/configs/workspace/ssh-profiles/{quote(ssh_profile_id, safe='')}",
         )
 
     def delete_workspace(
