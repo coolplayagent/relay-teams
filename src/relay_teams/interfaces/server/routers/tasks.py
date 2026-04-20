@@ -32,13 +32,6 @@ class UpdateTaskRequest(BaseModel):
     title: str | None = None
 
 
-class DispatchTaskRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    role_id: RequiredIdentifierStr
-    prompt: str = ""
-
-
 @router.get("", response_model=list[TaskRecord])
 def list_tasks(task_repo: TaskRepository = Depends(get_task_repo)) -> list[TaskRecord]:
     return list(task_repo.list_all())
@@ -99,26 +92,6 @@ def update_task_by_id(
                 objective=req.objective,
                 title=req.title,
             ),
-        )
-    except (KeyError, ValueError) as exc:
-        raise http_exception_for(
-            exc,
-            mappings=((ValueError, 400),),
-        ) from exc
-
-
-@router.post("/{task_id}/dispatch")
-async def dispatch_task_by_id(
-    task_id: RequiredIdentifierStr,
-    req: DispatchTaskRequest,
-    service: TaskOrchestrationService = Depends(get_task_service),
-) -> dict[str, JsonValue]:
-    try:
-        return await service.dispatch_task(
-            run_id=None,
-            task_id=task_id,
-            role_id=req.role_id,
-            prompt=req.prompt,
         )
     except (KeyError, ValueError) as exc:
         raise http_exception_for(

@@ -221,8 +221,11 @@ class TaskOrchestrationService:
                 raise ValueError(
                     f"Task is already bound to role {bound_role_id}; create a replacement task to change roles."
                 )
-        if record.status == TaskStatus.COMPLETED and not normalized_prompt:
-            raise ValueError("prompt is required to re-dispatch a completed task")
+        if record.status == TaskStatus.COMPLETED:
+            raise ValueError(
+                f"Task '{record.envelope.title}' (role={bound_role_id}) "
+                "is completed. Create a replacement task instead of re-dispatching this one."
+            )
         elif record.status in {TaskStatus.FAILED, TaskStatus.TIMEOUT}:
             raise ValueError(
                 f"Task '{record.envelope.title}' (role={bound_role_id}) "

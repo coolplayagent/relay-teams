@@ -30,64 +30,6 @@
     color: var(--text-primary);
 }
 
-/* 鈹€鈹€ Human Dispatch Panel 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€ */
-
-.human-dispatch-panel {
-    margin: 0.75rem 0;
-    border: 1px solid var(--warning);
-    border-radius: var(--radius-md);
-    background: linear-gradient(135deg, rgba(245, 158, 11, 0.06), rgba(245, 158, 11, 0.02));
-    padding: 1rem;
-    animation: slideUp 0.3s ease;
-}
-
-.dispatch-header {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--warning);
-    margin-bottom: 0.75rem;
-}
-
-.dispatch-task-row {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.5rem 0;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.dispatch-task-row:last-child {
-    border-bottom: none;
-}
-
-.dispatch-task-obj {
-    flex: 1;
-    font-size: 0.875rem;
-    color: var(--text-primary);
-}
-
-.dispatch-task-role {
-    font-size: 0.75rem;
-    color: var(--text-secondary);
-    font-family: var(--font-mono);
-    padding: 0.125rem 0.4rem;
-    background: var(--bg-hover-strong);
-    border-radius: 4px;
-}
-
-.dispatch-btn {
-    background-color: var(--warning);
-    color: #000;
-    border: none;
-    border-radius: var(--radius-md);
-    padding: 0.3rem 0.75rem;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: opacity 0.2s;
-    white-space: nowrap;
-}
-
 .dispatch-btn:hover {
     opacity: 0.85;
 }

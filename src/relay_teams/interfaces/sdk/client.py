@@ -396,19 +396,6 @@ class AgentTeamsClient:
             payload,
         )
 
-    def dispatch_task(
-        self,
-        task_id: str,
-        *,
-        role_id: str,
-        prompt: str = "",
-    ) -> dict[str, JsonValue]:
-        return self._request_json(
-            "POST",
-            f"/api/tasks/{task_id}/dispatch",
-            {"role_id": role_id, "prompt": prompt},
-        )
-
     def inject_message(self, run_id: str, content: str) -> dict[str, JsonValue]:
         return self._request_json(
             "POST",

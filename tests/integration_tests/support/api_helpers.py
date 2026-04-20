@@ -117,21 +117,3 @@ def get_coordinator_role_id(client: httpx.Client) -> str:
     if not isinstance(role_id, str) or not role_id:
         raise AssertionError(f"Missing coordinator_role_id in response: {body}")
     return role_id
-
-
-def dispatch_task(
-    client: httpx.Client,
-    *,
-    task_id: str,
-    role_id: str,
-    prompt: str = "",
-) -> dict[str, object]:
-    response = client.post(
-        f"/api/tasks/{task_id}/dispatch",
-        json={"role_id": role_id, "prompt": prompt},
-    )
-    response.raise_for_status()
-    body = response.json()
-    if not isinstance(body, dict):
-        raise AssertionError(f"Invalid dispatch response: {body}")
-    return body

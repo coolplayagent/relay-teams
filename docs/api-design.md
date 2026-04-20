@@ -29,7 +29,8 @@ Common validation rules:
 - Session mode and orchestration preset can be changed only before the session starts its first run.
 - Every delegated task is a persisted task record under that root task.
 - A delegated task binds to exactly one delegated role and one subagent instance on first dispatch.
-- Re-dispatching the same task reuses its bound instance.
+- Re-dispatching an `assigned` or `stopped` task reuses its bound instance.
+- `completed`, `failed`, and `timeout` tasks must be replaced instead of re-dispatched.
 - In one session, delegated tasks with the same bound `role_id` reuse the same session-level subagent instance.
 - Same-role task dispatch is serial only. If a role instance is already busy or paused on another task, dispatch returns a runtime conflict.
 
@@ -1432,22 +1433,15 @@ Rules:
 - `role_id` cannot be updated through task APIs.
 - Root coordinator tasks cannot be updated through task APIs.
 
-### `POST /tasks/{task_id}/dispatch`
+There is no public manual dispatch endpoint for delegated tasks.
 
-Dispatches or re-dispatches a delegated task.
+Delegated task dispatch is performed internally by the Coordinator through the `dispatch_task` tool.
 
-Request:
-
-```json
-{"role_id": "spec_coder", "prompt": "Address pagination concerns"}
-```
-
-Rules:
+Internal dispatch rules:
 - `created`: bind the task to the provided `role_id`, create or reuse the session-level subagent instance for that role, then execute.
 - `assigned` or `stopped`: reuse the bound instance and continue.
-- `completed`: requires non-empty `prompt`, then reuses the same instance.
+- `completed`, `failed`, or `timeout`: rejected; create a replacement task instead.
 - `running`: rejected as a conflict.
-- `failed` or `timeout`: rejected; create a new task instead.
 - After the first dispatch, the delegated role is fixed for that task. To change roles, create a replacement task.
 - If another task already holds the same role instance in `assigned`, `running`, or `stopped`, dispatch is rejected as a conflict.
 

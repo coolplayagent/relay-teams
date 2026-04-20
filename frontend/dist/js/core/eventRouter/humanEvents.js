@@ -1,6 +1,6 @@
 /**
  * core/eventRouter/humanEvents.js
- * Handlers for human-in-the-loop dispatch and gate events.
+ * Handlers for gate and subagent control events.
  */
 import { state } from '../state.js';
 import {
@@ -13,16 +13,6 @@ import {
     showGateCard,
 } from '../../components/agentPanel.js';
 import { markSubagentStatus } from '../../components/subagentRail.js';
-import { renderHumanDispatchPanel } from './utils.js';
-
-export function handleAwaitingHumanDispatch(payload) {
-    renderHumanDispatchPanel(payload);
-}
-
-export function handleHumanTaskDispatched(payload) {
-    document.querySelectorAll('.human-dispatch-panel').forEach(el => el.remove());
-    sysLog(`Task dispatched: ${payload.task_id}`, 'log-info');
-}
 
 export function handleSubagentGate(payload) {
     showGateCard(payload.instance_id, payload.role_id, {
