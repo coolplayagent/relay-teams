@@ -178,6 +178,7 @@ def _uv_option_requires_value(arg: str) -> bool:
 _UV_OPTIONS_WITH_VALUE: frozenset[str] = frozenset(
     {
         "--allow-insecure-host",
+        "--cache-dir",
         "--color",
         "--config-file",
         "--directory",
