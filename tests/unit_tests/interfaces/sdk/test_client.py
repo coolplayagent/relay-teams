@@ -137,6 +137,117 @@ def test_open_workspace_root_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
+def test_create_workspace_supports_mount_payload(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"workspace_id": "project-alpha"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.create_workspace(
+        workspace_id="project-alpha",
+        default_mount_name="app",
+        mounts=[
+            {
+                "mount_name": "app",
+                "provider": "local",
+                "provider_config": {"root_path": "/work/app"},
+            }
+        ],
+    )
+
+    assert response == {"workspace_id": "project-alpha"}
+    assert captured == {
+        "method": "POST",
+        "path": "/api/workspaces",
+        "payload": {
+            "workspace_id": "project-alpha",
+            "default_mount_name": "app",
+            "mounts": [
+                {
+                    "mount_name": "app",
+                    "provider": "local",
+                    "provider_config": {"root_path": "/work/app"},
+                }
+            ],
+        },
+    }
+
+
+def test_workspace_sdk_supports_mount_query_parameters(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    calls: list[tuple[str, str, object | None]] = []
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        calls.append((method, path, payload))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    _ = client.get_workspace_tree("project-alpha", path=".", mount="ops")
+    _ = client.get_workspace_diffs("project-alpha", mount="ops")
+    _ = client.get_workspace_diff_file(
+        "project-alpha",
+        path="deploy.sh",
+        mount="ops",
+    )
+
+    assert calls == [
+        ("GET", "/api/workspaces/project-alpha/tree?path=.&mount=ops", None),
+        ("GET", "/api/workspaces/project-alpha/diffs?mount=ops", None),
+        (
+            "GET",
+            "/api/workspaces/project-alpha/diff?path=deploy.sh&mount=ops",
+            None,
+        ),
+    ]
+
+
+def test_ssh_profile_sdk_calls_expected_endpoints(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    calls: list[tuple[str, str, object | None]] = []
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object] | list[object]:
+        calls.append((method, path, payload))
+        if method == "GET" and path == "/api/system/configs/workspace/ssh-profiles":
+            return [{"ssh_profile_id": "prod"}]
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert client.list_ssh_profiles() == [{"ssh_profile_id": "prod"}]
+    assert client.get_ssh_profile("prod") == {"status": "ok"}
+    assert client.save_ssh_profile("prod", {"host": "prod-alias"}) == {"status": "ok"}
+    assert client.delete_ssh_profile("prod") == {"status": "ok"}
+    assert calls == [
+        ("GET", "/api/system/configs/workspace/ssh-profiles", None),
+        ("GET", "/api/system/configs/workspace/ssh-profiles/prod", None),
+        (
+            "PUT",
+            "/api/system/configs/workspace/ssh-profiles/prod",
+            {"config": {"host": "prod-alias"}},
+        ),
+        ("DELETE", "/api/system/configs/workspace/ssh-profiles/prod", None),
+    ]
+
+
 def test_delete_workspace_supports_remove_directory(monkeypatch) -> None:
     client = AgentTeamsClient()
     captured: dict[str, object] = {}

@@ -26,6 +26,7 @@ from relay_teams.workspace import (
     WorkspaceTreeListing,
     WorkspaceTreeNode,
     WorkspaceTreeNodeKind,
+    build_local_workspace_mount,
 )
 
 
@@ -138,6 +139,50 @@ def test_create_workspace_rejects_none_like_workspace_id(tmp_path: Path) -> None
     assert response.status_code == 422
 
 
+def test_create_workspace_with_mounts_and_mount_scoped_tree_query(
+    tmp_path: Path,
+) -> None:
+    client, _ = _create_test_client(tmp_path)
+    app_root = tmp_path / "app-root"
+    ops_root = tmp_path / "ops-root"
+    app_root.mkdir()
+    ops_root.mkdir()
+    (ops_root / "deploy.sh").write_text("echo deploy\n", encoding="utf-8")
+
+    response = client.post(
+        "/api/workspaces",
+        json={
+            "workspace_id": "project-alpha",
+            "default_mount_name": "app",
+            "mounts": [
+                {
+                    "mount_name": "app",
+                    "provider": "local",
+                    "provider_config": {"root_path": str(app_root)},
+                },
+                {
+                    "mount_name": "ops",
+                    "provider": "local",
+                    "provider_config": {"root_path": str(ops_root)},
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["default_mount_name"] == "app"
+    assert payload["root_path"] == str(app_root.resolve())
+    assert [item["mount_name"] for item in payload["mounts"]] == ["app", "ops"]
+
+    tree_response = client.get("/api/workspaces/project-alpha/tree?path=.&mount=ops")
+
+    assert tree_response.status_code == 200
+    tree_payload = tree_response.json()
+    assert tree_payload["mount_name"] == "ops"
+    assert [item["path"] for item in tree_payload["children"]] == ["deploy.sh"]
+
+
 def test_list_and_get_workspaces(tmp_path: Path) -> None:
     client, service = _create_test_client(tmp_path)
     root_path = tmp_path / "workspace-root"
@@ -240,11 +285,13 @@ def test_get_workspace_snapshot_tree_and_diffs(tmp_path: Path) -> None:
     class SnapshotWorkspaceService(WorkspaceService):
         def get_workspace_snapshot(self, workspace_id: str) -> WorkspaceSnapshot:
             record = self.get_workspace(workspace_id)
+            root_path = record.root_path
+            assert root_path is not None
             return WorkspaceSnapshot(
                 workspace_id=record.workspace_id,
-                root_path=record.root_path,
+                default_mount_root=root_path,
                 tree=WorkspaceTreeNode(
-                    name=record.root_path.name,
+                    name=root_path.name,
                     path=".",
                     kind=WorkspaceTreeNodeKind.DIRECTORY,
                     has_children=True,
@@ -265,8 +312,9 @@ def test_get_workspace_snapshot_tree_and_diffs(tmp_path: Path) -> None:
             workspace_id: str,
             *,
             directory_path: str,
+            mount_name: str | None = None,
         ) -> WorkspaceTreeListing:
-            _ = workspace_id
+            _ = (workspace_id, mount_name)
             return WorkspaceTreeListing(
                 workspace_id="project-alpha",
                 directory_path=directory_path,
@@ -281,14 +329,22 @@ def test_get_workspace_snapshot_tree_and_diffs(tmp_path: Path) -> None:
                 ),
             )
 
-        def get_workspace_diffs(self, workspace_id: str) -> WorkspaceDiffListing:
+        def get_workspace_diffs(
+            self,
+            workspace_id: str,
+            *,
+            mount_name: str | None = None,
+        ) -> WorkspaceDiffListing:
             record = self.get_workspace(workspace_id)
+            _ = mount_name
+            root_path = record.root_path
+            assert root_path is not None
             return WorkspaceDiffListing(
                 workspace_id=record.workspace_id,
-                root_path=record.root_path,
+                root_path=root_path,
                 diff_files=(),
                 is_git_repository=True,
-                git_root_path=record.root_path,
+                git_root_path=root_path,
                 diff_message=None,
             )
 
@@ -297,8 +353,9 @@ def test_get_workspace_snapshot_tree_and_diffs(tmp_path: Path) -> None:
             workspace_id: str,
             *,
             path: str,
+            mount_name: str | None = None,
         ) -> WorkspaceDiffFile:
-            _ = self.get_workspace(workspace_id)
+            _ = (self.get_workspace(workspace_id), mount_name)
             return WorkspaceDiffFile(
                 path=path,
                 change_type=WorkspaceDiffChangeType.MODIFIED,
@@ -491,7 +548,15 @@ def test_fork_workspace_forwards_start_ref(tmp_path: Path) -> None:
             self.calls.append((source_workspace_id, name, start_ref))
             return WorkspaceRecord(
                 workspace_id="alpha-project-fork",
-                root_path=(tmp_path / "storage" / "alpha-project-fork").resolve(),
+                default_mount_name="default",
+                mounts=(
+                    build_local_workspace_mount(
+                        mount_name="default",
+                        root_path=(
+                            tmp_path / "storage" / "alpha-project-fork"
+                        ).resolve(),
+                    ),
+                ),
             )
 
     service = CaptureForkWorkspaceService()

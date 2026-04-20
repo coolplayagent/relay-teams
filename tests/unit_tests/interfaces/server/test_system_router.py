@@ -56,6 +56,7 @@ from relay_teams.interfaces.server.deps import (
     get_notification_settings_service,
     get_orchestration_settings_service,
     get_proxy_config_service,
+    get_ssh_profile_service,
     get_skills_config_reload_service,
     get_ui_language_settings_service,
     get_web_config_service,
@@ -87,6 +88,7 @@ from relay_teams.skills.clawhub_models import (
 from relay_teams.skills.skill_models import SkillScope
 from relay_teams.notifications.models import NotificationConfig
 from relay_teams.agents.orchestration.settings_models import OrchestrationSettings
+from relay_teams.workspace import SshProfileConfig, SshProfileRecord
 
 
 class _FakeSystemService:
@@ -139,6 +141,14 @@ class _FakeSystemService:
                 instructions="Create skills safely.",
                 manifest_content="---\nname: skill-creator\n---\nCreate skills safely.\n",
                 files=(),
+            )
+        }
+        self.ssh_profiles: dict[str, SshProfileRecord] = {
+            "prod": SshProfileRecord(
+                ssh_profile_id="prod",
+                host="prod-alias",
+                username="deploy",
+                port=22,
             )
         }
 
@@ -630,6 +640,43 @@ class _FakeSystemService:
             }
         )
 
+    def list_profiles(self) -> tuple[SshProfileRecord, ...]:
+        return tuple(self.ssh_profiles.values())
+
+    def get_profile(self, ssh_profile_id: str) -> SshProfileRecord:
+        return self.ssh_profiles[ssh_profile_id]
+
+    def save_profile(
+        self,
+        *,
+        ssh_profile_id: str,
+        config: SshProfileConfig,
+    ) -> SshProfileRecord:
+        existing = self.ssh_profiles.get(ssh_profile_id)
+        record = SshProfileRecord(
+            ssh_profile_id=ssh_profile_id,
+            host=config.host,
+            username=config.username,
+            port=config.port,
+            remote_shell=config.remote_shell,
+            connect_timeout_seconds=config.connect_timeout_seconds,
+            created_at=(
+                existing.created_at
+                if existing is not None
+                else SshProfileRecord(
+                    ssh_profile_id=ssh_profile_id,
+                    host=config.host,
+                ).created_at
+            ),
+        )
+        self.ssh_profiles[ssh_profile_id] = record
+        return record
+
+    def delete_profile(self, ssh_profile_id: str) -> None:
+        if ssh_profile_id not in self.ssh_profiles:
+            raise KeyError(ssh_profile_id)
+        del self.ssh_profiles[ssh_profile_id]
+
 
 def _create_test_client(fake_service: object) -> TestClient:
     app = FastAPI()
@@ -641,6 +688,7 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_mcp_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_skills_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_proxy_config_service] = lambda: fake_service
+    app.dependency_overrides[get_ssh_profile_service] = lambda: fake_service
     app.dependency_overrides[get_ui_language_settings_service] = lambda: fake_service
     app.dependency_overrides[get_web_config_service] = lambda: fake_service
     app.dependency_overrides[get_clawhub_config_service] = lambda: fake_service
@@ -695,6 +743,49 @@ def test_get_ui_language_settings() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"language": "zh-CN"}
+
+
+def test_list_and_get_ssh_profiles() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    list_response = client.get("/api/system/configs/workspace/ssh-profiles")
+    get_response = client.get("/api/system/configs/workspace/ssh-profiles/prod")
+
+    assert list_response.status_code == 200
+    assert list_response.json()[0]["ssh_profile_id"] == "prod"
+    assert list_response.json()[0]["host"] == "prod-alias"
+    assert get_response.status_code == 200
+    assert get_response.json()["username"] == "deploy"
+
+
+def test_save_and_delete_ssh_profile() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    save_response = client.put(
+        "/api/system/configs/workspace/ssh-profiles/staging",
+        json={
+            "config": {
+                "host": "staging-alias",
+                "username": "ops",
+                "port": 2222,
+                "remote_shell": "/bin/bash",
+                "connect_timeout_seconds": 15,
+            }
+        },
+    )
+
+    assert save_response.status_code == 200
+    assert save_response.json()["ssh_profile_id"] == "staging"
+    assert service.ssh_profiles["staging"].remote_shell == "/bin/bash"
+
+    delete_response = client.delete(
+        "/api/system/configs/workspace/ssh-profiles/staging"
+    )
+
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"status": "ok"}
+    assert "staging" not in service.ssh_profiles
 
 
 def test_save_ui_language_settings() -> None:

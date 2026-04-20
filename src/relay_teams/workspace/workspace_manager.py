@@ -10,14 +10,12 @@ from relay_teams.paths import get_project_config_dir
 from relay_teams.workspace.handle import WorkspaceHandle
 from relay_teams.workspace.ids import build_conversation_id
 from relay_teams.workspace.workspace_models import (
-    BranchBinding,
-    FileScopeBackend,
-    WorkspaceRecord,
     WorkspaceLocations,
-    WorkspaceFileScope,
-    WorkspaceProfile,
+    WorkspaceMountProvider,
+    WorkspaceRecord,
     WorkspaceRef,
     default_workspace_profile,
+    legacy_workspace_mount_from_profile,
 )
 from relay_teams.workspace.workspace_repository import WorkspaceRepository
 
@@ -38,44 +36,54 @@ class WorkspaceManager(BaseModel):
         session_id: str,
         role_id: str,
         instance_id: str | None,
-        profile: WorkspaceProfile | None = None,
+        profile: object | None = None,
         workspace_id: str,
         conversation_id: str | None = None,
     ) -> WorkspaceHandle:
+        del profile
         resolved_conversation_id = conversation_id or build_conversation_id(
             session_id, role_id
         )
-        record = self._resolve_record(workspace_id, profile)
+        record = self._resolve_record(workspace_id)
         ref = WorkspaceRef(
             workspace_id=record.workspace_id,
             session_id=session_id,
             role_id=role_id,
             conversation_id=resolved_conversation_id,
+            default_mount_name=record.default_mount_name,
+            mount_names=tuple(mount.mount_name for mount in record.mounts),
             instance_id=instance_id,
-            profile=record.profile,
         )
-        locations = self._resolve_locations(
-            record=record,
-            profile=record.profile,
-        )
+        locations = self._resolve_locations(record=record)
         return WorkspaceHandle(
             ref=ref,
-            profile=record.profile,
+            mounts=record.mounts,
             locations=locations,
         )
 
     def locations_for(self, workspace_id: str) -> WorkspaceLocations:
-        record = self._resolve_record(workspace_id, None)
-        config_dir = self._resolve_app_config_dir(project_root=record.root_path)
+        record = self._resolve_record(workspace_id)
+        config_dir = self._resolve_app_config_dir(
+            project_root=self._config_root(record)
+        )
         workspace_dir = config_dir / "workspaces" / workspace_id
         tmp_root = workspace_dir / "tmp"
-        return WorkspaceLocations(
+        primary_mount = self._primary_local_mount(record)
+        if primary_mount is None:
+            return WorkspaceLocations(
+                workspace_dir=workspace_dir,
+                mount_name=record.default_mount_name,
+                provider=record.default_mount.provider,
+                scope_root=tmp_root,
+                execution_root=tmp_root,
+                tmp_root=tmp_root,
+                readable_roots=(tmp_root,),
+                writable_roots=(tmp_root,),
+            )
+        return self._build_local_mount_locations(
             workspace_dir=workspace_dir,
-            scope_root=record.root_path,
-            execution_root=record.root_path,
+            mount=primary_mount,
             tmp_root=tmp_root,
-            readable_roots=(record.root_path, tmp_root),
-            writable_roots=(record.root_path, tmp_root),
         )
 
     def delete_workspace(self, workspace_id: str) -> None:
@@ -84,60 +92,51 @@ class WorkspaceManager(BaseModel):
         )
 
     def session_artifact_dir(self, *, workspace_id: str, session_id: str) -> Path:
-        record = self._resolve_record(workspace_id, None)
-        config_dir = self._resolve_app_config_dir(project_root=record.root_path)
+        record = self._resolve_record(workspace_id)
+        config_dir = self._resolve_app_config_dir(
+            project_root=self._config_root(record)
+        )
         return config_dir / "sessions" / workspace_id / session_id
 
-    def _resolve_locations(
+    def _resolve_locations(self, *, record: WorkspaceRecord) -> WorkspaceLocations:
+        return self.locations_for(record.workspace_id)
+
+    def _build_local_mount_locations(
         self,
         *,
-        record: WorkspaceRecord,
-        profile: WorkspaceProfile,
+        workspace_dir: Path,
+        mount,
+        tmp_root: Path,
     ) -> WorkspaceLocations:
-        base_locations = self.locations_for(record.workspace_id)
-        file_scope = profile.file_scope
-        worktree_root = (
-            record.root_path
-            if file_scope.backend == FileScopeBackend.GIT_WORKTREE
-            else None
-        )
-        scope_root = worktree_root or record.root_path
-        execution_root = self._resolve_relative_root(
-            scope_root,
-            file_scope.working_directory,
-        )
+        root_path = mount.local_root_path()
+        if root_path is None:
+            raise ValueError(f"Workspace mount is not local: {mount.mount_name}")
+        execution_root = self._resolve_relative_root(root_path, mount.working_directory)
         readable_roots = self._append_unique_roots(
-            self._resolve_roots(scope_root, file_scope, write=False),
-            (base_locations.tmp_root, *self._skill_roots()),
+            tuple(
+                self._resolve_relative_root(root_path, raw_path)
+                for raw_path in mount.readable_paths
+            ),
+            (tmp_root, *self._skill_roots()),
         )
         writable_roots = self._append_unique_roots(
-            self._resolve_roots(scope_root, file_scope, write=True),
-            (base_locations.tmp_root,),
+            tuple(
+                self._resolve_relative_root(root_path, raw_path)
+                for raw_path in mount.writable_paths
+            ),
+            (tmp_root,),
         )
-        return base_locations.model_copy(
-            update={
-                "scope_root": scope_root,
-                "execution_root": execution_root,
-                "readable_roots": readable_roots,
-                "writable_roots": writable_roots,
-                "worktree_root": worktree_root,
-                "branch_name": self._resolve_branch_name(
-                    record.workspace_id, file_scope
-                ),
-            }
-        )
-
-    def _resolve_roots(
-        self,
-        filesystem_root: Path,
-        file_scope: WorkspaceFileScope,
-        *,
-        write: bool,
-    ) -> tuple[Path, ...]:
-        raw_paths = file_scope.writable_paths if write else file_scope.readable_paths
-        return tuple(
-            self._resolve_relative_root(filesystem_root, raw_path)
-            for raw_path in raw_paths
+        return WorkspaceLocations(
+            workspace_dir=workspace_dir,
+            mount_name=mount.mount_name,
+            provider=WorkspaceMountProvider.LOCAL,
+            scope_root=root_path,
+            execution_root=execution_root,
+            tmp_root=tmp_root,
+            readable_roots=readable_roots,
+            writable_roots=writable_roots,
+            worktree_root=root_path if mount.source_root_path is not None else None,
+            branch_name=mount.branch_name,
         )
 
     def _append_unique_roots(
@@ -168,33 +167,36 @@ class WorkspaceManager(BaseModel):
         resolved_root = filesystem_root.resolve()
         if candidate != resolved_root and resolved_root not in candidate.parents:
             raise ValueError(
-                f"Workspace file scope escapes filesystem root: {relative_path}"
+                f"Workspace file scope escapes mount root: {relative_path}"
             )
         return candidate
 
-    def _resolve_branch_name(
-        self,
-        workspace_id: str,
-        file_scope: WorkspaceFileScope,
-    ) -> str | None:
-        if file_scope.branch_name:
-            return file_scope.branch_name
-        if file_scope.branch_binding == BranchBinding.SHARED:
-            return None
-        return f"{file_scope.branch_binding.value}/{workspace_id}"
-
-    def _resolve_record(
-        self,
-        workspace_id: str,
-        profile: WorkspaceProfile | None,
-    ) -> WorkspaceRecord:
+    def _resolve_record(self, workspace_id: str) -> WorkspaceRecord:
         if self.workspace_repo is not None and self.workspace_repo.exists(workspace_id):
             return self.workspace_repo.get(workspace_id)
+        mount = legacy_workspace_mount_from_profile(
+            root_path=self.project_root.resolve(),
+            profile=default_workspace_profile(),
+        )
         return WorkspaceRecord(
             workspace_id=workspace_id,
-            root_path=self.project_root.resolve(),
-            profile=profile or default_workspace_profile(),
+            default_mount_name="default",
+            mounts=(mount,),
         )
+
+    def _primary_local_mount(self, record: WorkspaceRecord):
+        default_mount = record.default_mount
+        if default_mount.provider == WorkspaceMountProvider.LOCAL:
+            return default_mount
+        return record.first_local_mount()
+
+    def _config_root(self, record: WorkspaceRecord) -> Path:
+        local_mount = self._primary_local_mount(record)
+        if local_mount is not None:
+            local_root = local_mount.local_root_path()
+            if local_root is not None:
+                return local_root
+        return self.project_root.resolve()
 
     def _resolve_app_config_dir(self, *, project_root: Path) -> Path:
         if self.app_config_dir is not None:

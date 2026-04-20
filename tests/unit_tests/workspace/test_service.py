@@ -370,17 +370,13 @@ def test_workspace_service_returns_progressive_snapshot_and_tree_listing(
 
     assert snapshot.workspace_id == "project-alpha"
     assert snapshot.root_path == root_path.resolve()
+    assert snapshot.default_mount_name == "default"
     assert snapshot.tree.path == "."
-    assert [item.path for item in snapshot.tree.children] == [
-        "docs",
-        "src",
-        "package.json",
-    ]
+    assert [item.path for item in snapshot.tree.children] == ["default"]
     assert snapshot.tree.children[0].has_children is True
     assert snapshot.tree.children[0].children == ()
-    assert snapshot.tree.children[1].has_children is True
-    assert snapshot.tree.children[1].children == ()
     assert src_listing.workspace_id == "project-alpha"
+    assert src_listing.mount_name == "default"
     assert src_listing.directory_path == "src"
     assert [item.path for item in src_listing.children] == [
         "src/nested",
