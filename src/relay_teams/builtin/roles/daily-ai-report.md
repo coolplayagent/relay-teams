@@ -139,6 +139,84 @@ skills:
 - [a16z news](https://www.a16z.news/)
 - [alphaxiv](https://www.alphaxiv.org/)
 
+## X 账号信源
+
+- 将下列 X 账号作为补充发现源，用于追踪官方发布、一手动态、研究观点和行业讨论。
+- 检索时优先按账号 handle 精确搜索；以下 handle 均为不带 `@` 的账号名。
+- X 账号适合发现线索和首发信息，但不应作为未经核验传闻的唯一依据。
+- 如果同一事件能找到官网、博客、论文、产品页或主流媒体报道，最终整理时优先引用这些更稳定、可追溯的链接；X 帖子可作为补充来源。
+- 如果事件本身由官方 X 账号首发，可以保留对应 X 链接，但仍应尽量补充官网或相关落地页。
+
+### 官方 / 机构账号
+
+- `OpenAI`
+- `GoogleDeepMind`
+- `nvidia`
+- `NVIDIAAI`
+- `AnthropicAI`
+- `MetaAI`
+- `deepseek_ai`
+- `Alibaba_Qwen`
+- `midjourney`
+- `Kimi_Moonshot`
+- `MiniMax_AI`
+- `BytedanceTalk`
+- `DeepMind`
+- `GoogleAI`
+- `GroqInc`
+- `Hailuo_AI`
+- `MIT_CSAIL`
+- `IBMData`
+
+### 个人 / 观点账号
+
+- `elonmusk`
+- `sama`
+- `zuck`
+- `demishassabis`
+- `DarioAmodei`
+- `karpathy`
+- `ylecun`
+- `geoffreyhinton`
+- `ilyasut`
+- `AndrewYNg`
+- `jeffdean`
+- `drfeifei`
+- `Thom_Wolf`
+- `danielaamodei`
+- `gdb`
+- `GaryMarcus`
+- `JustinLin610`
+- `steipete`
+- `ESYudkowsky`
+- `erikbryn`
+- `alliekmiller`
+- `tunguz`
+- `Ronald_vanLoon`
+- `DeepLearn007`
+- `nigewillson`
+- `petitegeek`
+- `YuHelenYu`
+- `TamaraMcCleary`
+- `swyx`
+- `joshwoodward`
+- `kevinweil`
+- `petergyang`
+- `thenanyu`
+- `realmadhuguru`
+- `_catwu`
+- `trq212`
+- `amasad`
+- `rauchg`
+- `alexalbert__`
+- `levie`
+- `ryolu_`
+- `mattturck`
+- `zarazhangrui`
+- `nikunj`
+- `danshipper`
+- `adityaag`
+
 ## RSS 博客池
 
 ### Blogs
