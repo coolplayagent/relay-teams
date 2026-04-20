@@ -29,6 +29,7 @@ from relay_teams.workspace.workspace_models import (
     WorkspaceMountProvider,
     WorkspaceMountRecord,
     WorkspaceMountCapabilities,
+    WorkspaceLocalMountConfig,
     WorkspaceProfile,
     WorkspaceRecord,
     WorkspaceSshMountConfig,
@@ -158,10 +159,12 @@ class WorkspaceService:
                 root_path=resolved_root,
             )
         else:
-            resolved_mounts = tuple(mounts)
-            if len(resolved_mounts) == 0:
+            provided_mounts = tuple(mounts)
+            if len(provided_mounts) == 0:
                 raise ValueError("Workspace must include at least one mount")
-            for mount in resolved_mounts:
+            normalized_mounts: list[WorkspaceMountRecord] = []
+            for mount in provided_mounts:
+                normalized_mount = mount
                 if mount.provider == WorkspaceMountProvider.LOCAL:
                     local_root = mount.local_root_path()
                     if local_root is None:
@@ -172,6 +175,13 @@ class WorkspaceService:
                     self._validate_local_mount_scope_paths(
                         mount=mount,
                         root_path=resolved_local_root,
+                    )
+                    normalized_mount = mount.model_copy(
+                        update={
+                            "provider_config": WorkspaceLocalMountConfig(
+                                root_path=resolved_local_root
+                            )
+                        }
                     )
                 if mount.provider == WorkspaceMountProvider.SSH:
                     provider_config = mount.provider_config
@@ -188,6 +198,8 @@ class WorkspaceService:
                                 "Workspace ssh mount references unknown ssh profile: "
                                 f"{ssh_profile_id}"
                             ) from exc
+                normalized_mounts.append(normalized_mount)
+            resolved_mounts = tuple(normalized_mounts)
             resolved_default_mount_name = (
                 default_mount_name or resolved_mounts[0].mount_name
             )

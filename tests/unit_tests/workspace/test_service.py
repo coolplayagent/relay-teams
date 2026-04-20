@@ -152,6 +152,34 @@ def test_workspace_service_rejects_local_mount_scope_escape_on_create(
         )
 
 
+def test_workspace_service_persists_local_mount_root_as_absolute_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "workspace_service.db"
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    service = WorkspaceService(repository=WorkspaceRepository(db_path))
+    monkeypatch.chdir(tmp_path)
+
+    created = service.create_workspace(
+        workspace_id="project-alpha",
+        mounts=(
+            build_local_workspace_mount(
+                mount_name="default",
+                root_path=Path("workspace-root"),
+            ),
+        ),
+        default_mount_name="default",
+    )
+
+    assert created.mounts[0].local_root_path() == root_path.resolve()
+    assert (
+        service.get_workspace("project-alpha").mounts[0].local_root_path()
+        == root_path.resolve()
+    )
+
+
 def test_workspace_service_rejects_local_mount_scope_escape_on_update(
     tmp_path: Path,
 ) -> None:
