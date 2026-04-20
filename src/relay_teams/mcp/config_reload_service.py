@@ -58,25 +58,58 @@ class McpConfigReloadService:
 
 
 def _resolve_uv_cache_clean_argv(spec: McpServerSpec) -> tuple[str, ...] | None:
-    command_name = _normalize_command_name(
-        _required_server_config_string(spec.server_config, "command")
+    configured_command = _required_server_config_string(spec.server_config, "command")
+    command_name = _normalize_command_name(configured_command)
+    uv_cache_clean_command = _resolve_uv_cache_clean_command(
+        configured_command=configured_command,
+        command_name=command_name,
     )
+    if uv_cache_clean_command is None:
+        return None
     args = _server_config_args(spec.server_config)
     if command_name == "uvx":
-        return _build_uv_cache_clean_argv(_resolve_uv_tool_package(args))
-    if command_name != "uv":
-        return None
-    if len(args) >= 2 and args[:2] == ("tool", "run"):
-        return _build_uv_cache_clean_argv(_resolve_uv_tool_package(args[2:]))
-    if args and args[0] == "x":
-        return _build_uv_cache_clean_argv(_resolve_uv_tool_package(args[1:]))
+        return _build_uv_cache_clean_argv(
+            command=uv_cache_clean_command,
+            package_name=_resolve_uv_tool_package(args),
+        )
+    subcommand_args = _strip_uv_global_args(args)
+    if len(subcommand_args) >= 2 and subcommand_args[:2] == ("tool", "run"):
+        return _build_uv_cache_clean_argv(
+            command=uv_cache_clean_command,
+            package_name=_resolve_uv_tool_package(subcommand_args[2:]),
+        )
+    if subcommand_args and subcommand_args[0] == "x":
+        return _build_uv_cache_clean_argv(
+            command=uv_cache_clean_command,
+            package_name=_resolve_uv_tool_package(subcommand_args[1:]),
+        )
     return None
 
 
-def _build_uv_cache_clean_argv(package_name: str | None) -> tuple[str, ...]:
+def _resolve_uv_cache_clean_command(
+    *,
+    configured_command: str,
+    command_name: str,
+) -> str | None:
+    stripped_command = configured_command.strip()
+    if command_name == "uv":
+        return stripped_command or "uv"
+    if command_name != "uvx":
+        return None
+    return _replace_command_basename(
+        command=stripped_command or "uvx",
+        replacement_name="uv",
+    )
+
+
+def _build_uv_cache_clean_argv(
+    *,
+    command: str,
+    package_name: str | None,
+) -> tuple[str, ...]:
     if package_name is None:
-        return ("uv", "cache", "clean", "--force")
-    return ("uv", "cache", "clean", "--force", package_name)
+        return (command, "cache", "clean", "--force")
+    return (command, "cache", "clean", "--force", package_name)
 
 
 def _resolve_uv_tool_package(args: tuple[str, ...]) -> str | None:
@@ -117,9 +150,58 @@ def _server_config_args(server_config: dict[str, JsonValue]) -> tuple[str, ...]:
     return tuple(str(item).strip() for item in raw_args if str(item).strip())
 
 
+def _strip_uv_global_args(args: tuple[str, ...]) -> tuple[str, ...]:
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if not arg.startswith("-"):
+            break
+        if arg == "--":
+            index += 1
+            break
+        if _uv_option_requires_value(arg):
+            next_index = index + 1
+            if next_index >= len(args):
+                return ()
+            index += 2
+            continue
+        index += 1
+    return args[index:]
+
+
+def _uv_option_requires_value(arg: str) -> bool:
+    if "=" in arg:
+        return False
+    return arg in _UV_OPTIONS_WITH_VALUE
+
+
+_UV_OPTIONS_WITH_VALUE: frozenset[str] = frozenset(
+    {
+        "--allow-insecure-host",
+        "--color",
+        "--config-file",
+        "--directory",
+        "--project",
+    }
+)
+
+
 def _normalize_command_name(command: str) -> str:
     resolved_name = Path(command.strip()).name.lower()
     return resolved_name.removesuffix(".exe")
+
+
+def _replace_command_basename(command: str, replacement_name: str) -> str:
+    stripped_command = command.strip()
+    if not stripped_command:
+        return replacement_name
+    separator_index = max(stripped_command.rfind("/"), stripped_command.rfind("\\"))
+    if separator_index < 0:
+        suffix = ".exe" if stripped_command.lower().endswith(".exe") else ""
+        return replacement_name + suffix
+    prefix = stripped_command[: separator_index + 1]
+    suffix = ".exe" if stripped_command.lower().endswith(".exe") else ""
+    return prefix + replacement_name + suffix
 
 
 def _run_uv_cache_clean_command(
