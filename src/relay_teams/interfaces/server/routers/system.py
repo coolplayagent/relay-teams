@@ -933,6 +933,18 @@ class CommandResolveRequest(BaseModel):
     mode: str = "normal"
 
 
+class CommandDetailResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str
+    argument_hint: str
+    allowed_modes: list[str]
+    body: str
+    scope: str
+    path: str
+
+
 def _get_command_registry() -> CommandRegistry:
     return CommandRegistry.from_default_scopes()
 
@@ -946,21 +958,21 @@ def list_commands() -> list[CommandSummary]:
     return list(registry.list_summaries())
 
 
-@router.get("/commands/{name}")
-def get_command(name: str) -> dict[str, JsonValue]:
+@router.get("/commands/{name}", response_model=CommandDetailResponse)
+def get_command(name: str) -> CommandDetailResponse:
     registry = _get_command_registry()
     command = registry.get_command(name)
     if command is None:
         raise HTTPException(status_code=404, detail=f"Command not found: {name}")
-    return {
-        "name": command.name,
-        "description": command.description,
-        "argument_hint": command.argument_hint,
-        "allowed_modes": command.allowed_modes,
-        "body": command.body,
-        "scope": command.scope.value,
-        "path": command.path.resolve().as_posix(),
-    }
+    return CommandDetailResponse(
+        name=command.name,
+        description=command.description,
+        argument_hint=command.argument_hint,
+        allowed_modes=command.allowed_modes,
+        body=command.body,
+        scope=command.scope.value,
+        path=command.path.resolve().as_posix(),
+    )
 
 
 @router.post("/commands:resolve")
