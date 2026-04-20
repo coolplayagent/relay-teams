@@ -631,7 +631,7 @@ export async function requestJson(url, options, errorMessage) {
             (
                 f"const mod = await import({module_under_test_path.as_uri()!r}); "
                 "await mod.fetchSshProfiles(); "
-                "await mod.saveSshProfile('prod', { host: 'prod-alias', username: 'deploy' }); "
+                "await mod.saveSshProfile('prod', { host: 'prod-alias', username: 'deploy', password: 'secret', private_key: 'KEY', private_key_name: 'id_ed25519' }); "
                 "await mod.deleteSshProfile('prod'); "
                 "console.log(JSON.stringify(globalThis.__capturedRequests));"
             ),
@@ -663,10 +663,18 @@ export async function requestJson(url, options, errorMessage) {
             "options": {
                 "method": "PUT",
                 "headers": {"Content-Type": "application/json"},
-                "body": '{"config":{"host":"prod-alias","username":"deploy"}}',
+                "body": '{"config":{"host":"prod-alias","username":"deploy","password":"secret","private_key":"KEY","private_key_name":"id_ed25519"}}',
             },
             "errorMessage": "Failed to save SSH profile",
-            "body": {"config": {"host": "prod-alias", "username": "deploy"}},
+            "body": {
+                "config": {
+                    "host": "prod-alias",
+                    "username": "deploy",
+                    "password": "secret",
+                    "private_key": "KEY",
+                    "private_key_name": "id_ed25519",
+                }
+            },
         },
         {
             "url": "/api/system/configs/workspace/ssh-profiles/prod",

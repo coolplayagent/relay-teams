@@ -528,6 +528,61 @@ Rules:
 - `MainAgent` and `Coordinator` base role prompts are edited through `/roles/configs/*`, not this config.
 - `orchestration_prompt` is appended only for `Coordinator` in `orchestration` session mode.
 
+### `GET /system/configs/workspace/ssh-profiles`
+
+Returns the saved SSH profile list used by workspace mounts.
+Each item includes:
+- `ssh_profile_id`
+- `host`
+- optional `username`
+- optional `port`
+- optional `remote_shell`
+- optional `connect_timeout_seconds`
+- optional `private_key_name`
+- `has_password`
+- `has_private_key`
+- `created_at`
+- `updated_at`
+
+Passwords and private key bodies are not echoed by the API.
+
+### `GET /system/configs/workspace/ssh-profiles/{ssh_profile_id}`
+
+Returns one SSH profile with the same response shape as the list endpoint.
+
+### `PUT /system/configs/workspace/ssh-profiles/{ssh_profile_id}`
+
+Upserts one SSH profile.
+
+Request body:
+
+```json
+{
+  "config": {
+    "host": "prod-alias",
+    "username": "deploy",
+    "password": "optional-password",
+    "port": 22,
+    "remote_shell": "/bin/bash",
+    "connect_timeout_seconds": 15,
+    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+    "private_key_name": "id_ed25519"
+  }
+}
+```
+
+Rules:
+- `host` is required and whitespace-only values are rejected.
+- `password` is optional.
+- `private_key` is optional and may be pasted or imported from the settings UI.
+- `password` and `private_key` are stored through the unified secret store, not in the SQLite row.
+- Omitting `password` or `private_key` on edit preserves the existing stored secret for that field.
+- Responses only return `has_password`, `has_private_key`, and `private_key_name`; they do not return the secret contents.
+
+### `DELETE /system/configs/workspace/ssh-profiles/{ssh_profile_id}`
+
+Deletes one SSH profile and its stored password/private key secrets.
+
 ### `GET /system/configs/environment-variables`
 
 Returns environment variables grouped by `system` and `app` scope.

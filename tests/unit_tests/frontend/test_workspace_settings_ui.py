@@ -32,6 +32,9 @@ document.getElementById("workspace-ssh-profile-username").value = "deploy";
 document.getElementById("workspace-ssh-profile-port").value = "22";
 document.getElementById("workspace-ssh-profile-shell").value = "/bin/bash";
 document.getElementById("workspace-ssh-profile-timeout").value = "15";
+document.getElementById("workspace-ssh-profile-password").value = "secret";
+document.getElementById("workspace-ssh-profile-private-key-name").value = "id_ed25519";
+document.getElementById("workspace-ssh-profile-private-key").value = "-----BEGIN KEY-----\\ncontent\\n-----END KEY-----";
 
 await document.getElementById("save-ssh-profile-btn").onclick();
 
@@ -50,9 +53,12 @@ console.log(JSON.stringify({
         "config": {
             "host": "prod-alias",
             "username": "deploy",
+            "password": "secret",
             "port": 22,
             "remote_shell": "/bin/bash",
             "connect_timeout_seconds": 15,
+            "private_key": "-----BEGIN KEY-----\ncontent\n-----END KEY-----",
+            "private_key_name": "id_ed25519",
         },
     }
     assert "prod" in str(payload["listHtml"])
@@ -90,6 +96,9 @@ globalThis.__mockProfiles = [
         port: 22,
         remote_shell: "/bin/bash",
         connect_timeout_seconds: 15,
+        has_password: true,
+        has_private_key: true,
+        private_key_name: "id_ed25519",
     },
 ];
 
@@ -104,9 +113,13 @@ const prefilled = {
     sshProfileId: document.getElementById("workspace-ssh-profile-id").value,
     host: document.getElementById("workspace-ssh-profile-host").value,
     username: document.getElementById("workspace-ssh-profile-username").value,
+    password: document.getElementById("workspace-ssh-profile-password").value,
     port: document.getElementById("workspace-ssh-profile-port").value,
     remoteShell: document.getElementById("workspace-ssh-profile-shell").value,
     timeout: document.getElementById("workspace-ssh-profile-timeout").value,
+    privateKeyName: document.getElementById("workspace-ssh-profile-private-key-name").value,
+    privateKey: document.getElementById("workspace-ssh-profile-private-key").value,
+    authState: document.getElementById("workspace-ssh-profile-auth-state").textContent,
 };
 
 await document.getElementById("delete-ssh-profile-btn").onclick();
@@ -124,9 +137,13 @@ console.log(JSON.stringify({
         "sshProfileId": "prod",
         "host": "prod-alias",
         "username": "deploy",
+        "password": "",
         "port": "22",
         "remoteShell": "/bin/bash",
         "timeout": "15",
+        "privateKeyName": "id_ed25519",
+        "privateKey": "",
+        "authState": 'Stored password will be kept unless you enter a new one. Stored private key "id_ed25519" will be kept unless you paste or import a new one.',
     }
     assert payload["deleteProfileId"] == "prod"
     assert "No SSH profiles configured" in str(payload["listHtml"])
@@ -168,7 +185,20 @@ export async function fetchSshProfiles() {
 export async function saveSshProfile(sshProfileId, config) {
     globalThis.__saveSshProfilePayload = { sshProfileId, config };
     const profiles = Array.isArray(globalThis.__mockProfiles) ? [...globalThis.__mockProfiles] : [];
-    const nextRecord = { ssh_profile_id: sshProfileId, ...config };
+    const existing = profiles.find(profile => profile?.ssh_profile_id === sshProfileId) || null;
+    const hasPassword = typeof config?.password === "string" ? config.password.trim().length > 0 : Boolean(existing?.has_password);
+    const hasPrivateKey = typeof config?.private_key === "string" ? config.private_key.trim().length > 0 : Boolean(existing?.has_private_key);
+    const nextRecord = {
+        ssh_profile_id: sshProfileId,
+        host: config?.host || "",
+        username: config?.username || null,
+        port: config?.port || null,
+        remote_shell: config?.remote_shell || null,
+        connect_timeout_seconds: config?.connect_timeout_seconds || null,
+        has_password: hasPassword,
+        has_private_key: hasPrivateKey,
+        private_key_name: hasPrivateKey ? (config?.private_key_name || existing?.private_key_name || null) : null,
+    };
     const nextProfiles = profiles.filter(profile => profile?.ssh_profile_id !== sshProfileId);
     nextProfiles.push(nextRecord);
     globalThis.__mockProfiles = nextProfiles;
@@ -212,6 +242,26 @@ const translations = {
     "settings.workspace.timeout_value": "{value}s timeout",
     "settings.workspace.add_profile": "Add SSH Profile",
     "settings.workspace.edit_profile": "Edit SSH Profile",
+    "settings.workspace.password": "Password",
+    "settings.workspace.password_placeholder": "Optional password",
+    "settings.workspace.private_key": "Private Key",
+    "settings.workspace.private_key_placeholder": "Paste a private key or import one from a file",
+    "settings.workspace.private_key_name": "Imported Key File",
+    "settings.workspace.private_key_name_placeholder": "Optional key filename",
+    "settings.workspace.private_key_import": "Import Private Key",
+    "settings.workspace.private_key_inline": "pasted key",
+    "settings.workspace.private_key_import_failed_title": "Private Key Import Failed",
+    "settings.workspace.private_key_import_failed_detail": "Failed to import private key: {error}",
+    "settings.workspace.auth_method_password": "Password",
+    "settings.workspace.auth_method_private_key": "Private key",
+    "settings.workspace.auth_method_private_key_named": "Private key: {name}",
+    "settings.workspace.auth_method_system": "System auth",
+    "settings.workspace.auth_state_password": "Stored password will be kept unless you enter a new one.",
+    "settings.workspace.auth_state_private_key": "Stored private key will be kept unless you paste or import a new one.",
+    "settings.workspace.auth_state_private_key_named": "Stored private key \\"{name}\\" will be kept unless you paste or import a new one.",
+    "settings.workspace.auth_state_new_password": "A new password will be saved when you click Save.",
+    "settings.workspace.auth_state_new_private_key": "Private key \\"{name}\\" will replace the stored key when you click Save.",
+    "settings.workspace.auth_state_system": "If password and private key are empty, Agent Teams falls back to your system SSH configuration.",
     "settings.workspace.saved_title": "SSH Profile Saved",
     "settings.workspace.saved_detail": "Saved profile {ssh_profile_id}.",
     "settings.workspace.save_failed_title": "Save Failed",
@@ -322,7 +372,23 @@ function createInput() {{
     return {{
         value: "",
         style: {{}},
+        oninput: null,
+        onchange: null,
+        type: "text",
+        placeholder: "",
         focus() {{
+            return undefined;
+        }},
+    }};
+}}
+
+function createFileInput() {{
+    return {{
+        value: "",
+        files: [],
+        style: {{}},
+        onchange: null,
+        click() {{
             return undefined;
         }},
     }};
@@ -333,16 +399,23 @@ function createElements() {{
         ["workspace-ssh-profile-list", createHtmlElement()],
         ["workspace-ssh-profile-editor", createHtmlElement()],
         ["workspace-ssh-profile-editor-title", {{ textContent: "", style: {{}} }}],
+        ["workspace-ssh-profile-auth-state", {{ textContent: "", style: {{}} }}],
         ["workspace-ssh-profile-id", createInput()],
         ["workspace-ssh-profile-host", createInput()],
         ["workspace-ssh-profile-username", createInput()],
+        ["workspace-ssh-profile-password", createInput()],
         ["workspace-ssh-profile-port", createInput()],
         ["workspace-ssh-profile-shell", createInput()],
         ["workspace-ssh-profile-timeout", createInput()],
+        ["workspace-ssh-profile-private-key-name", createInput()],
+        ["workspace-ssh-profile-private-key", createInput()],
+        ["workspace-ssh-profile-private-key-file", createFileInput()],
         ["add-ssh-profile-btn", {{ onclick: null, style: {{}} }}],
         ["save-ssh-profile-btn", {{ onclick: null, style: {{}} }}],
         ["cancel-ssh-profile-btn", {{ onclick: null, style: {{}} }}],
         ["delete-ssh-profile-btn", {{ onclick: null, style: {{}} }}],
+        ["workspace-ssh-profile-import-private-key-btn", {{ onclick: null, style: {{}} }}],
+        ["toggle-workspace-ssh-profile-password-btn", createButton()],
     ]);
 }}
 

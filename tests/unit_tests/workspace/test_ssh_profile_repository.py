@@ -8,6 +8,7 @@ import pytest
 from relay_teams.workspace import (
     SshProfileConfig,
     SshProfileRepository,
+    SshProfileStoredConfig,
     SshProfileService,
     WorkspaceMountRecord,
     WorkspaceMountProvider,
@@ -22,12 +23,13 @@ def test_ssh_profile_repository_save_get_list_and_delete(tmp_path: Path) -> None
 
     saved = repository.save(
         ssh_profile_id="prod",
-        config=SshProfileConfig(
+        config=SshProfileStoredConfig(
             host="prod-alias",
             username="deploy",
             port=22,
             remote_shell="/bin/bash",
             connect_timeout_seconds=15,
+            private_key_name="id_ed25519",
         ),
     )
 
@@ -37,6 +39,7 @@ def test_ssh_profile_repository_save_get_list_and_delete(tmp_path: Path) -> None
     assert saved.ssh_profile_id == "prod"
     assert fetched.host == "prod-alias"
     assert fetched.username == "deploy"
+    assert fetched.private_key_name == "id_ed25519"
     assert [item.ssh_profile_id for item in listed] == ["prod"]
 
     repository.delete("prod")
@@ -47,7 +50,8 @@ def test_ssh_profile_repository_save_get_list_and_delete(tmp_path: Path) -> None
 
 def test_workspace_service_requires_existing_ssh_profile(tmp_path: Path) -> None:
     ssh_profile_service = SshProfileService(
-        repository=SshProfileRepository(tmp_path / "workspace.db")
+        repository=SshProfileRepository(tmp_path / "workspace.db"),
+        config_dir=tmp_path,
     )
     workspace_service = WorkspaceService(
         repository=WorkspaceRepository(tmp_path / "workspace-workspaces.db"),

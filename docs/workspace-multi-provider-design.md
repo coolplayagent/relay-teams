@@ -32,7 +32,6 @@
 - 本次不实现对象存储 provider
 - 本次不在 session 或 automation 中新增 provider 级绑定
 - 本次不把角色长期记忆拆分到 mount 级别
-- 本次不实现自定义 SSH 密码登录或私钥托管
 - 本次不做跨 mount 聚合 diff
 
 ## 4. 核心概念
@@ -134,15 +133,18 @@ provider 配置使用判别联合：
 新增 `SshProfileRecord`：
 
 - `ssh_profile_id`
-- `host_alias`
+- `host`
 - `port`
 - `username`
-- `shell`
+- `remote_shell`
 - `connect_timeout_seconds`
+- `private_key_name`
+- `has_password`
+- `has_private_key`
 - `created_at`
 - `updated_at`
 
-首版推荐优先通过 `host_alias` 对接系统 OpenSSH 配置；`port`、`username`、`shell` 作为可选覆盖字段。
+密码和私钥正文通过 unified secret store 持久化，不写入 `ssh_profiles` 表；`password` 为可选字段，私钥支持从设置页导入或粘贴录入。
 
 ## 6. 持久化与迁移
 
@@ -156,7 +158,7 @@ provider 配置使用判别联合：
 
 ### 6.3 SSH Profiles 表
 
-新增 `ssh_profiles` 表，用于保存系统级 SSH profile。
+新增 `ssh_profiles` 表，用于保存系统级 SSH profile 的非敏感字段；密码和私钥写入 unified secret store。
 
 ### 6.4 旧数据迁移
 
@@ -285,7 +287,8 @@ SSH provider 的设置分成两层：
 
 - 列出所有 SSH profile
 - 新增、编辑、删除 SSH profile
-- 明确提示认证仍依赖系统 `ssh`、`ssh-agent` 和 `~/.ssh/config`
+- 支持保存用户名、可选密码、私钥导入
+- 未配置密码或私钥时，仍可回退到系统 `ssh`、`ssh-agent` 和 `~/.ssh/config`
 
 workspace 详情页保留 mount 作为主要操作入口：
 
@@ -461,6 +464,5 @@ provider 私有错误必须映射到统一 workspace 域错误，例如：
 
 - object storage provider
 - mount 级长期记忆
-- SSH 密码托管
 - 远端指令文件自动发现
 - 跨 mount 聚合 diff

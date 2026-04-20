@@ -149,6 +149,9 @@ class _FakeSystemService:
                 host="prod-alias",
                 username="deploy",
                 port=22,
+                has_password=True,
+                has_private_key=True,
+                private_key_name="id_ed25519",
             )
         }
 
@@ -653,6 +656,12 @@ class _FakeSystemService:
         config: SshProfileConfig,
     ) -> SshProfileRecord:
         existing = self.ssh_profiles.get(ssh_profile_id)
+        has_password = config.password is not None or (
+            existing.has_password if existing is not None else False
+        )
+        has_private_key = config.private_key is not None or (
+            existing.has_private_key if existing is not None else False
+        )
         record = SshProfileRecord(
             ssh_profile_id=ssh_profile_id,
             host=config.host,
@@ -660,6 +669,17 @@ class _FakeSystemService:
             port=config.port,
             remote_shell=config.remote_shell,
             connect_timeout_seconds=config.connect_timeout_seconds,
+            has_password=has_password,
+            has_private_key=has_private_key,
+            private_key_name=(
+                config.private_key_name
+                if config.private_key is not None
+                else (
+                    existing.private_key_name
+                    if existing is not None and has_private_key
+                    else None
+                )
+            ),
             created_at=(
                 existing.created_at
                 if existing is not None
@@ -754,8 +774,11 @@ def test_list_and_get_ssh_profiles() -> None:
     assert list_response.status_code == 200
     assert list_response.json()[0]["ssh_profile_id"] == "prod"
     assert list_response.json()[0]["host"] == "prod-alias"
+    assert list_response.json()[0]["has_password"] is True
     assert get_response.status_code == 200
     assert get_response.json()["username"] == "deploy"
+    assert get_response.json()["has_private_key"] is True
+    assert get_response.json()["private_key_name"] == "id_ed25519"
 
 
 def test_save_and_delete_ssh_profile() -> None:
@@ -768,15 +791,21 @@ def test_save_and_delete_ssh_profile() -> None:
             "config": {
                 "host": "staging-alias",
                 "username": "ops",
+                "password": "relay-secret",
                 "port": 2222,
                 "remote_shell": "/bin/bash",
                 "connect_timeout_seconds": 15,
+                "private_key": "-----BEGIN KEY-----\ncontent\n-----END KEY-----",
+                "private_key_name": "id_rsa",
             }
         },
     )
 
     assert save_response.status_code == 200
     assert save_response.json()["ssh_profile_id"] == "staging"
+    assert save_response.json()["has_password"] is True
+    assert save_response.json()["has_private_key"] is True
+    assert save_response.json()["private_key_name"] == "id_rsa"
     assert service.ssh_profiles["staging"].remote_shell == "/bin/bash"
 
     delete_response = client.delete(

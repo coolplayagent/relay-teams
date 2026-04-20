@@ -774,7 +774,7 @@ function createModal() {
                                 <div class="profile-editor" id="workspace-ssh-profile-editor" style="display:none;">
                                     <div class="profile-editor-header">
                                         <h4 id="workspace-ssh-profile-editor-title" data-i18n="settings.workspace.add_profile">Add SSH Profile</h4>
-                                        <p data-i18n="settings.workspace.editor_copy">Reusable SSH profiles are referenced by workspace mounts. Authentication continues to use the system SSH environment.</p>
+                                        <p data-i18n="settings.workspace.editor_copy">Reusable SSH profiles are referenced by workspace mounts. You can save a username, an optional password, or import a private key.</p>
                                     </div>
                                     <form class="profile-editor-form" id="workspace-ssh-profile-form" autocomplete="off">
                                         <div class="profile-editor-grid">
@@ -806,8 +806,37 @@ function createModal() {
                                         <div class="profile-editor-subsection">
                                             <div class="profile-editor-subsection-header">
                                                 <h5 data-i18n="settings.workspace.auth_title">Authentication</h5>
-                                                <p data-i18n="settings.workspace.auth_copy">Passwords and private keys are not stored here. Agent Teams uses your system SSH configuration, ssh-agent, and ~/.ssh/config.</p>
+                                                <p data-i18n="settings.workspace.auth_copy">Set a username, optionally save a password, or import a private key. Leaving password and private key blank keeps the current stored secret or falls back to the system SSH environment.</p>
                                             </div>
+                                            <div class="profile-editor-grid">
+                                                <div class="form-group">
+                                                    <label for="workspace-ssh-profile-password" data-i18n="settings.workspace.password">Password</label>
+                                                    <div class="secure-input-row">
+                                                        <input type="password" id="workspace-ssh-profile-password" placeholder="Optional password" data-i18n-placeholder="settings.workspace.password_placeholder" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+                                                        <button class="secure-input-btn" id="toggle-workspace-ssh-profile-password-btn" type="button" title="Show password" aria-label="Show password" style="display:none;">
+                                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                                                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                                            </svg>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                <div class="form-group">
+                                                    <label for="workspace-ssh-profile-private-key-name" data-i18n="settings.workspace.private_key_name">Imported Key File</label>
+                                                    <input type="text" id="workspace-ssh-profile-private-key-name" placeholder="Optional key filename" data-i18n-placeholder="settings.workspace.private_key_name_placeholder" autocomplete="off" spellcheck="false">
+                                                </div>
+                                                <div class="form-group form-group-span-2">
+                                                    <div class="form-label-row">
+                                                        <label for="workspace-ssh-profile-private-key" data-i18n="settings.workspace.private_key">Private Key</label>
+                                                        <div class="settings-inline-action-row">
+                                                            <button class="secondary-btn section-action-btn" id="workspace-ssh-profile-import-private-key-btn" type="button" data-i18n="settings.workspace.private_key_import">Import Private Key</button>
+                                                        </div>
+                                                    </div>
+                                                    <textarea class="config-textarea workspace-private-key-textarea" id="workspace-ssh-profile-private-key" placeholder="Paste a private key or import one from a file" data-i18n-placeholder="settings.workspace.private_key_placeholder" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+                                                    <input type="file" id="workspace-ssh-profile-private-key-file" style="display:none;" accept=".pem,.key,.ppk,text/plain">
+                                                </div>
+                                            </div>
+                                            <p class="workspace-auth-state" id="workspace-ssh-profile-auth-state"></p>
                                         </div>
                                     </form>
                                 </div>

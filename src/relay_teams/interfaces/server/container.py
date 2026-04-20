@@ -298,7 +298,8 @@ class ServerContainer:
             runtime.paths.db_path
         )
         self.ssh_profile_service: SshProfileService = SshProfileService(
-            repository=self.ssh_profile_repo
+            repository=self.ssh_profile_repo,
+            config_dir=app_config_dir,
         )
         self.workspace_service: WorkspaceService = WorkspaceService(
             repository=self.workspace_repo,

@@ -15,7 +15,10 @@ from relay_teams.validation import (
     parse_persisted_datetime_or_none,
     require_persisted_identifier,
 )
-from relay_teams.workspace.ssh_profile_models import SshProfileConfig, SshProfileRecord
+from relay_teams.workspace.ssh_profile_models import (
+    SshProfileRecord,
+    SshProfileStoredConfig,
+)
 
 LOGGER = get_logger(__name__)
 
@@ -39,10 +42,16 @@ class SshProfileRepository:
                     port INTEGER,
                     remote_shell TEXT,
                     connect_timeout_seconds INTEGER,
+                    private_key_name TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
+            )
+            self._ensure_column(
+                table_name="ssh_profiles",
+                column_name="private_key_name",
+                column_type="TEXT",
             )
 
         run_sqlite_write_with_retry(
@@ -85,7 +94,7 @@ class SshProfileRepository:
         self,
         *,
         ssh_profile_id: str,
-        config: SshProfileConfig,
+        config: SshProfileStoredConfig,
     ) -> SshProfileRecord:
         existing = None
         try:
@@ -105,6 +114,7 @@ class SshProfileRepository:
             port=config.port,
             remote_shell=config.remote_shell,
             connect_timeout_seconds=config.connect_timeout_seconds,
+            private_key_name=config.private_key_name,
             created_at=created_at,
             updated_at=updated_at,
         )
@@ -119,16 +129,18 @@ class SshProfileRepository:
                     port,
                     remote_shell,
                     connect_timeout_seconds,
+                    private_key_name,
                     created_at,
                     updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(ssh_profile_id) DO UPDATE SET
                     host=excluded.host,
                     username=excluded.username,
                     port=excluded.port,
                     remote_shell=excluded.remote_shell,
                     connect_timeout_seconds=excluded.connect_timeout_seconds,
+                    private_key_name=excluded.private_key_name,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -138,6 +150,7 @@ class SshProfileRepository:
                     record.port,
                     record.remote_shell,
                     record.connect_timeout_seconds,
+                    record.private_key_name,
                     record.created_at.isoformat(),
                     record.updated_at.isoformat(),
                 ),
@@ -195,8 +208,24 @@ class SshProfileRepository:
             connect_timeout_seconds=_normalize_optional_int(
                 row["connect_timeout_seconds"]
             ),
+            private_key_name=_normalize_optional_text(row["private_key_name"]),
             created_at=created_at,
             updated_at=updated_at,
+        )
+
+    def _ensure_column(
+        self,
+        *,
+        table_name: str,
+        column_name: str,
+        column_type: str,
+    ) -> None:
+        rows = self._conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        for row in rows:
+            if str(row["name"]).strip() == column_name:
+                return
+        self._conn.execute(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
         )
 
 

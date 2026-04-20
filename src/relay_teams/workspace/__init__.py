@@ -4,13 +4,21 @@ from __future__ import annotations
 from relay_teams.workspace.directory_picker import pick_workspace_directory
 from relay_teams.workspace.git_worktree import GitWorktreeClient
 from relay_teams.workspace.handle import WorkspaceHandle
+from relay_teams.workspace.ssh_profile_secret_store import (
+    SshProfileSecretStore,
+    get_ssh_profile_secret_store,
+)
 from relay_teams.workspace.ids import (
     build_conversation_id,
     build_instance_conversation_id,
     build_instance_role_scope_id,
     build_instance_session_scope_id,
 )
-from relay_teams.workspace.ssh_profile_models import SshProfileConfig, SshProfileRecord
+from relay_teams.workspace.ssh_profile_models import (
+    SshProfileConfig,
+    SshProfileRecord,
+    SshProfileStoredConfig,
+)
 from relay_teams.workspace.ssh_profile_repository import SshProfileRepository
 from relay_teams.workspace.ssh_profile_service import SshProfileService
 from relay_teams.workspace.workspace_manager import WorkspaceManager
@@ -71,8 +79,10 @@ __all__ = [
     "WorkspaceTreeNodeKind",
     "SshProfileConfig",
     "SshProfileRecord",
+    "SshProfileStoredConfig",
     "SshProfileRepository",
     "SshProfileService",
+    "SshProfileSecretStore",
     "BranchBinding",
     "FileScopeBackend",
     "build_local_workspace_mount",
@@ -84,4 +94,5 @@ __all__ = [
     "legacy_workspace_mount_from_profile",
     "legacy_workspace_profile_from_mount",
     "pick_workspace_directory",
+    "get_ssh_profile_secret_store",
 ]

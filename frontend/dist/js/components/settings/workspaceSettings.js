@@ -11,8 +11,11 @@ import { showConfirmDialog, showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
+const MASKED_SECRET_PLACEHOLDER = '************';
+
 let sshProfiles = [];
 let editingSshProfileId = null;
+let sshPasswordState = createWorkspacePasswordState();
 
 function formatMessage(key, values = {}) {
     return Object.entries(values).reduce(
@@ -26,6 +29,9 @@ export function bindWorkspaceSettingsHandlers() {
     bindActionButton('save-ssh-profile-btn', handleSaveSshProfile);
     bindActionButton('cancel-ssh-profile-btn', handleCancelSshProfile);
     bindActionButton('delete-ssh-profile-btn', handleDeleteSshProfile);
+    bindPrivateKeyImportHandlers();
+    bindSecretStateHandlers();
+    bindPasswordHandlers();
 }
 
 export async function loadWorkspaceSettingsPanel() {
@@ -91,6 +97,7 @@ function renderSshProfileCard(profile, index) {
     const port = formatOptionalNumber(profile?.port);
     const remoteShell = String(profile?.remote_shell || '').trim();
     const timeout = formatOptionalNumber(profile?.connect_timeout_seconds);
+    const authSummary = buildAuthSummary(profile);
     const summaryParts = [];
     if (username) {
         summaryParts.push(username);
@@ -121,6 +128,9 @@ function renderSshProfileCard(profile, index) {
                             <span class="profile-record-summary-separator">/</span>
                             <span class="profile-record-summary-secondary">${escapeHtml(timeout ? formatMessage('settings.workspace.timeout_value', { value: timeout }) : t('settings.workspace.timeout_default'))}</span>
                         </div>
+                        <div class="profile-record-summary" title="${escapeHtml(authSummary)}">
+                            <span class="profile-record-summary-primary">${escapeHtml(authSummary)}</span>
+                        </div>
                     </div>
                 </div>
                 <div class="profile-card-actions">
@@ -134,17 +144,22 @@ function renderSshProfileCard(profile, index) {
 
 function handleAddSshProfile() {
     editingSshProfileId = null;
+    sshPasswordState = createWorkspacePasswordState();
     setInputValue('workspace-ssh-profile-id', '');
     setInputValue('workspace-ssh-profile-host', '');
     setInputValue('workspace-ssh-profile-username', '');
     setInputValue('workspace-ssh-profile-port', '');
     setInputValue('workspace-ssh-profile-shell', '');
     setInputValue('workspace-ssh-profile-timeout', '');
+    setInputValue('workspace-ssh-profile-private-key', '');
+    setInputValue('workspace-ssh-profile-private-key-name', '');
     const title = document.getElementById('workspace-ssh-profile-editor-title');
     if (title) {
         title.textContent = t('settings.workspace.add_profile');
     }
     showSshProfileEditor();
+    renderWorkspacePasswordField();
+    updateSshProfileAuthState(null);
     document.getElementById('workspace-ssh-profile-id')?.focus?.();
 }
 
@@ -155,17 +170,22 @@ function handleEditSshProfile(sshProfileId) {
         return;
     }
     editingSshProfileId = normalizedId;
+    sshPasswordState = createWorkspacePasswordState(Boolean(matched.has_password));
     setInputValue('workspace-ssh-profile-id', normalizedId);
     setInputValue('workspace-ssh-profile-host', matched.host);
     setInputValue('workspace-ssh-profile-username', matched.username);
     setInputValue('workspace-ssh-profile-port', formatOptionalNumber(matched.port));
     setInputValue('workspace-ssh-profile-shell', matched.remote_shell);
     setInputValue('workspace-ssh-profile-timeout', formatOptionalNumber(matched.connect_timeout_seconds));
+    setInputValue('workspace-ssh-profile-private-key', '');
+    setInputValue('workspace-ssh-profile-private-key-name', matched.private_key_name);
     const title = document.getElementById('workspace-ssh-profile-editor-title');
     if (title) {
         title.textContent = t('settings.workspace.edit_profile');
     }
     showSshProfileEditor();
+    renderWorkspacePasswordField();
+    updateSshProfileAuthState(matched);
     document.getElementById('workspace-ssh-profile-host')?.focus?.();
 }
 
@@ -190,13 +210,26 @@ async function handleSaveSshProfile() {
     }
 
     try {
-        const saved = await saveSshProfile(sshProfileId, {
+        const password = readWorkspacePasswordValue();
+        const privateKey = normalizeOptionalMultilineText(readInputValue('workspace-ssh-profile-private-key'));
+        const privateKeyName = normalizeOptionalText(readInputValue('workspace-ssh-profile-private-key-name'));
+        const payload = {
             host,
             username: normalizeOptionalText(readInputValue('workspace-ssh-profile-username')),
             port: parseOptionalInteger(readInputValue('workspace-ssh-profile-port')),
             remote_shell: normalizeOptionalText(readInputValue('workspace-ssh-profile-shell')),
             connect_timeout_seconds: parseOptionalInteger(readInputValue('workspace-ssh-profile-timeout')),
-        });
+        };
+        if (password !== null) {
+            payload.password = password;
+        }
+        if (privateKey !== null) {
+            payload.private_key = privateKey;
+            if (privateKeyName !== null) {
+                payload.private_key_name = privateKeyName;
+            }
+        }
+        const saved = await saveSshProfile(sshProfileId, payload);
         await loadWorkspaceSettingsPanel();
         editingSshProfileId = String(saved?.ssh_profile_id || sshProfileId).trim();
         showToast({
@@ -291,6 +324,51 @@ function bindActionButton(id, handler) {
     }
 }
 
+function bindPrivateKeyImportHandlers() {
+    const importButton = document.getElementById('workspace-ssh-profile-import-private-key-btn');
+    const fileInput = document.getElementById('workspace-ssh-profile-private-key-file');
+    if (importButton && fileInput) {
+        importButton.onclick = () => {
+            fileInput.value = '';
+            fileInput.click?.();
+        };
+        fileInput.onchange = () => {
+            void handlePrivateKeyFileInput(fileInput);
+        };
+    }
+}
+
+function bindSecretStateHandlers() {
+    const privateKeyInput = document.getElementById('workspace-ssh-profile-private-key');
+    if (privateKeyInput) {
+        privateKeyInput.oninput = () => {
+            updateSshProfileAuthState(findEditingSshProfile());
+        };
+    }
+    const privateKeyNameInput = document.getElementById('workspace-ssh-profile-private-key-name');
+    if (privateKeyNameInput) {
+        privateKeyNameInput.oninput = () => {
+            updateSshProfileAuthState(findEditingSshProfile());
+        };
+    }
+}
+
+function bindPasswordHandlers() {
+    const passwordInput = document.getElementById('workspace-ssh-profile-password');
+    if (passwordInput) {
+        passwordInput.oninput = handleWorkspacePasswordInput;
+        passwordInput.onchange = handleWorkspacePasswordInput;
+        passwordInput.onfocus = armWorkspacePasswordInput;
+        passwordInput.onpointerdown = armWorkspacePasswordInput;
+        passwordInput.onkeydown = armWorkspacePasswordInput;
+        passwordInput.onblur = disarmWorkspacePasswordInput;
+    }
+    const togglePasswordBtn = document.getElementById('toggle-workspace-ssh-profile-password-btn');
+    if (togglePasswordBtn) {
+        togglePasswordBtn.onclick = toggleWorkspacePasswordVisibility;
+    }
+}
+
 function setActionDisplay(id, visible) {
     const button = document.getElementById(id);
     if (button) {
@@ -322,6 +400,11 @@ function normalizeOptionalText(value) {
     return normalized || null;
 }
 
+function normalizeOptionalMultilineText(value) {
+    const normalized = String(value || '').replaceAll('\r\n', '\n').replaceAll('\r', '\n').trim();
+    return normalized || null;
+}
+
 function parseOptionalInteger(value) {
     const normalized = String(value || '').trim();
     if (!normalized) {
@@ -336,6 +419,209 @@ function formatOptionalNumber(value) {
         return '';
     }
     return String(value);
+}
+
+function createWorkspacePasswordState(hasPersistedValue = false) {
+    return {
+        draftValue: '',
+        hasPersistedValue,
+        isDirty: false,
+        armedForInput: false,
+        revealed: false,
+    };
+}
+
+function handleWorkspacePasswordInput() {
+    const passwordInput = document.getElementById('workspace-ssh-profile-password');
+    const nextValue = passwordInput ? passwordInput.value : '';
+    if (
+        sshPasswordState.hasPersistedValue
+        && !sshPasswordState.revealed
+        && !canAcceptWorkspacePasswordInput(passwordInput)
+    ) {
+        sshPasswordState.draftValue = '';
+        sshPasswordState.isDirty = false;
+        sshPasswordState.armedForInput = false;
+        sshPasswordState.revealed = false;
+        renderWorkspacePasswordField();
+        updateSshProfileAuthState(findEditingSshProfile());
+        return;
+    }
+    sshPasswordState.draftValue = nextValue;
+    sshPasswordState.isDirty = nextValue.trim().length > 0;
+    if (!readWorkspacePasswordValue()) {
+        sshPasswordState.revealed = false;
+    }
+    renderWorkspacePasswordField();
+    updateSshProfileAuthState(findEditingSshProfile());
+}
+
+function toggleWorkspacePasswordVisibility() {
+    if (!hasWorkspacePasswordValue()) {
+        return;
+    }
+    sshPasswordState.revealed = !sshPasswordState.revealed;
+    renderWorkspacePasswordField();
+}
+
+function readWorkspacePasswordValue() {
+    const passwordInput = document.getElementById('workspace-ssh-profile-password');
+    const inputValue = passwordInput ? passwordInput.value.trim() : '';
+    if (sshPasswordState.hasPersistedValue && !sshPasswordState.isDirty) {
+        return null;
+    }
+    return inputValue || null;
+}
+
+function renderWorkspacePasswordField() {
+    const passwordInput = document.getElementById('workspace-ssh-profile-password');
+    if (!passwordInput) {
+        return;
+    }
+    if (sshPasswordState.hasPersistedValue && !sshPasswordState.isDirty) {
+        passwordInput.type = 'password';
+        passwordInput.value = '';
+        passwordInput.placeholder = MASKED_SECRET_PLACEHOLDER;
+    } else {
+        passwordInput.type = sshPasswordState.revealed ? 'text' : 'password';
+        passwordInput.value = sshPasswordState.draftValue;
+        passwordInput.placeholder = t('settings.workspace.password_placeholder');
+    }
+    renderWorkspacePasswordToggle();
+}
+
+function renderWorkspacePasswordToggle() {
+    const togglePasswordBtn = document.getElementById('toggle-workspace-ssh-profile-password-btn');
+    if (!togglePasswordBtn) {
+        return;
+    }
+    togglePasswordBtn.style.display = hasWorkspacePasswordValue() ? 'inline-flex' : 'none';
+    togglePasswordBtn.className = sshPasswordState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
+    togglePasswordBtn.title = sshPasswordState.revealed
+        ? t('settings.proxy.hide_password')
+        : t('settings.proxy.show_password');
+    if (typeof togglePasswordBtn.setAttribute === 'function') {
+        togglePasswordBtn.setAttribute('aria-label', togglePasswordBtn.title);
+    } else {
+        togglePasswordBtn.ariaLabel = togglePasswordBtn.title;
+    }
+}
+
+function hasWorkspacePasswordValue() {
+    const passwordInput = document.getElementById('workspace-ssh-profile-password');
+    const inputValue = passwordInput ? passwordInput.value.trim() : '';
+    return Boolean(sshPasswordState.draftValue.trim() || inputValue);
+}
+
+function armWorkspacePasswordInput() {
+    sshPasswordState.armedForInput = true;
+}
+
+function disarmWorkspacePasswordInput() {
+    sshPasswordState.armedForInput = false;
+}
+
+function canAcceptWorkspacePasswordInput(passwordInput) {
+    if (!passwordInput) {
+        return false;
+    }
+    if (sshPasswordState.armedForInput) {
+        return true;
+    }
+    if (typeof document !== 'object' || document === null) {
+        return false;
+    }
+    if (!('activeElement' in document)) {
+        return true;
+    }
+    return document.activeElement === passwordInput;
+}
+
+async function handlePrivateKeyFileInput(fileInput) {
+    const files = Array.isArray(fileInput?.files) ? fileInput.files : Array.from(fileInput?.files || []);
+    const selectedFile = files[0];
+    if (!selectedFile || typeof selectedFile.text !== 'function') {
+        return;
+    }
+    try {
+        const content = await selectedFile.text();
+        setInputValue('workspace-ssh-profile-private-key', content);
+        setInputValue('workspace-ssh-profile-private-key-name', selectedFile.name || '');
+        updateSshProfileAuthState(findEditingSshProfile());
+    } catch (error) {
+        showToast({
+            title: t('settings.workspace.private_key_import_failed_title'),
+            message: formatMessage('settings.workspace.private_key_import_failed_detail', {
+                error: String(error?.message || error || ''),
+            }),
+            tone: 'danger',
+        });
+    }
+}
+
+function findEditingSshProfile() {
+    const normalizedId = String(editingSshProfileId || '').trim();
+    if (!normalizedId) {
+        return null;
+    }
+    return (
+        sshProfiles.find(profile => String(profile?.ssh_profile_id || '').trim() === normalizedId)
+        || null
+    );
+}
+
+function updateSshProfileAuthState(profile) {
+    const stateEl = document.getElementById('workspace-ssh-profile-auth-state');
+    if (!stateEl) {
+        return;
+    }
+    const password = normalizeOptionalText(readInputValue('workspace-ssh-profile-password'));
+    const privateKey = normalizeOptionalMultilineText(readInputValue('workspace-ssh-profile-private-key'));
+    const privateKeyName = normalizeOptionalText(readInputValue('workspace-ssh-profile-private-key-name'));
+    const messages = [];
+    if (password !== null) {
+        messages.push(t('settings.workspace.auth_state_new_password'));
+    } else if (profile?.has_password) {
+        messages.push(t('settings.workspace.auth_state_password'));
+    }
+    if (privateKey !== null) {
+        messages.push(formatMessage('settings.workspace.auth_state_new_private_key', {
+            name: privateKeyName || t('settings.workspace.private_key_inline'),
+        }));
+    } else if (profile?.has_private_key) {
+        messages.push(
+            privateKeyName
+                ? formatMessage('settings.workspace.auth_state_private_key_named', {
+                    name: privateKeyName,
+                })
+                : t('settings.workspace.auth_state_private_key'),
+        );
+    }
+    if (messages.length === 0) {
+        messages.push(t('settings.workspace.auth_state_system'));
+    }
+    stateEl.textContent = messages.join(' ');
+}
+
+function buildAuthSummary(profile) {
+    const segments = [];
+    if (profile?.has_password) {
+        segments.push(t('settings.workspace.auth_method_password'));
+    }
+    if (profile?.has_private_key) {
+        const privateKeyName = normalizeOptionalText(profile?.private_key_name);
+        segments.push(
+            privateKeyName
+                ? formatMessage('settings.workspace.auth_method_private_key_named', {
+                    name: privateKeyName,
+                })
+                : t('settings.workspace.auth_method_private_key'),
+        );
+    }
+    if (segments.length === 0) {
+        segments.push(t('settings.workspace.auth_method_system'));
+    }
+    return segments.join(' / ');
 }
 
 function escapeHtml(value) {
