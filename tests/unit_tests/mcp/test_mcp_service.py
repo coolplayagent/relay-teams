@@ -197,6 +197,35 @@ def test_build_mcp_server_allows_stdio_timeout_override() -> None:
     assert server.read_timeout == 123.0
 
 
+def test_build_mcp_server_stdio_inherits_process_env_and_prefers_explicit_env(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MCP_PROCESS_ONLY", "from-process")
+    monkeypatch.setenv("MCP_SHARED_ENV", "from-process")
+
+    server = build_mcp_server(
+        McpServerSpec(
+            name="context7",
+            config={"mcpServers": {"context7": {"command": "npx"}}},
+            server_config={
+                "command": "npx",
+                "args": ["-y", "@upstash/context7-mcp"],
+                "env": {
+                    "MCP_SHARED_ENV": "from-spec",
+                    "MCP_SPEC_ONLY": "from-spec",
+                },
+            },
+            source=McpConfigScope.SESSION,
+        )
+    )
+
+    assert isinstance(server, MCPServerStdio)
+    assert server.env is not None
+    assert server.env["MCP_PROCESS_ONLY"] == "from-process"
+    assert server.env["MCP_SHARED_ENV"] == "from-spec"
+    assert server.env["MCP_SPEC_ONLY"] == "from-spec"
+
+
 def test_registry_resolve_server_names_ignores_unknown_servers_when_not_strict() -> (
     None
 ):

@@ -12,6 +12,7 @@ from relay_teams.env import (
     apply_proxy_env_to_process_env,
     extract_proxy_env_vars,
     load_merged_env_vars,
+    sync_app_env_to_process_env,
 )
 from relay_teams.logger import get_logger
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
@@ -46,6 +47,7 @@ class McpConfigManager:
 
     def load_registry(self) -> McpRegistry:
         ensure_app_config_bootstrap(self._app_config_dir)
+        sync_app_env_to_process_env(self._app_config_dir / _ENV_FILE_NAME)
         with trace_span(
             logger,
             component="mcp.config",

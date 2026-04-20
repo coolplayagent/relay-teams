@@ -1088,6 +1088,24 @@ class ServerContainer:
         self.feishu_subscription_service.reload()
         self.wechat_gateway_service.reload()
 
+    def _reload_mcp_runtime_after_app_env_change(self) -> None:
+        try:
+            self._on_mcp_reloaded(self.mcp_config_manager.load_registry())
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed to reload MCP runtime after app environment change: %s",
+                exc,
+            )
+
+    def _reload_skills_runtime_after_app_env_change(self) -> None:
+        try:
+            self.skills_config_reload_service.reload_skills_config()
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed to reload skills runtime after app environment change: %s",
+                exc,
+            )
+
     def _on_app_environment_changed(self, changed_keys: frozenset[str]) -> None:
         self.model_config_service.reload_model_config()
         proxy_related_keys = {
@@ -1099,8 +1117,10 @@ class ServerContainer:
         }
         normalized_keys = {key.upper() for key in changed_keys}
         if normalized_keys.isdisjoint(proxy_related_keys):
-            return
-        self.proxy_config_service.reload_proxy_config()
+            self._reload_mcp_runtime_after_app_env_change()
+        else:
+            self.proxy_config_service.reload_proxy_config()
+        self._reload_skills_runtime_after_app_env_change()
 
     def _ensure_default_workspace(self) -> None:
         if self.workspace_repo.exists("default"):
