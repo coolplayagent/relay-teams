@@ -6176,6 +6176,10 @@ function buildWorkspaceMountDialogFields({
                 ? String(mount.mountName).trim() === defaultMountName
                 : provider === 'local' && !defaultMountName,
             description: t('workspace_view.mount_field_default_copy'),
+            visibleWhen: {
+                field: 'provider',
+                equals: 'local',
+            },
         },
     ];
 }
@@ -6211,7 +6215,7 @@ async function submitWorkspaceMountChange({
         : [...existingMounts, nextMountRecord];
     const nextDefaultMountName = resolveUpdatedDefaultMountName({
         nextMounts,
-        requestedDefaultMountName: values?.set_default === true
+        requestedDefaultMountName: values?.set_default === true && String(nextMountRecord?.provider || '').trim() === 'local'
             ? nextMountRecord.mount_name
             : String(currentWorkspace.default_mount_name || '').trim(),
         removedMountName: mode === 'edit' ? normalizedSourceMountName : '',
@@ -6352,13 +6356,37 @@ function resolveUpdatedDefaultMountName({
     const nextMountNames = nextMounts
         .map(mount => String(mount?.mount_name || '').trim())
         .filter(Boolean);
-    if (normalizedRequested && nextMountNames.includes(normalizedRequested)) {
+    const requestedMount = findWorkspaceMountByName(nextMounts, normalizedRequested);
+    if (requestedMount && isLocalWorkspaceMount(requestedMount)) {
         return normalizedRequested;
     }
-    if (normalizedRequested && normalizedRemoved && normalizedRequested === normalizedRemoved && normalizedReplacement && nextMountNames.includes(normalizedReplacement)) {
+    const replacementMount = findWorkspaceMountByName(nextMounts, normalizedReplacement);
+    if (
+        normalizedRequested
+        && normalizedRemoved
+        && normalizedRequested === normalizedRemoved
+        && replacementMount
+        && isLocalWorkspaceMount(replacementMount)
+    ) {
         return normalizedReplacement;
     }
+    const firstLocalMount = nextMounts.find(mount => isLocalWorkspaceMount(mount)) || null;
+    if (firstLocalMount) {
+        return String(firstLocalMount.mount_name || '').trim() || 'default';
+    }
     return nextMountNames[0] || 'default';
+}
+
+function findWorkspaceMountByName(mounts = [], mountName = '') {
+    const normalizedMountName = String(mountName || '').trim();
+    if (!normalizedMountName) {
+        return null;
+    }
+    return mounts.find(mount => String(mount?.mount_name || '').trim() === normalizedMountName) || null;
+}
+
+function isLocalWorkspaceMount(mount) {
+    return String(mount?.provider || '').trim() === 'local';
 }
 
 async function applyUpdatedWorkspaceRecord(updatedWorkspace, preferredMountName = '') {

@@ -390,7 +390,7 @@ import {
     initializeProjectView,
     openWorkspaceProjectView,
 } from "./projectView.mjs";
-import { flushTasks } from "./mockDom.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
 
 globalThis.__mockSshProfiles = [
     {
@@ -465,7 +465,7 @@ console.log(JSON.stringify({
         },
         {"id": "ssh_profile_id", "visibleWhen": {"field": "provider", "equals": "ssh"}},
         {"id": "remote_root", "visibleWhen": {"field": "provider", "equals": "ssh"}},
-        {"id": "set_default", "visibleWhen": None},
+        {"id": "set_default", "visibleWhen": {"field": "provider", "equals": "local"}},
     ]
     assert payload["sshProfileOptions"] == [
         {"value": "", "label": "Select an SSH profile"},
@@ -474,7 +474,7 @@ console.log(JSON.stringify({
     assert payload["updatedWorkspacePayload"] == {
         "workspaceId": "alpha-project",
         "payload": {
-            "default_mount_name": "prod",
+            "default_mount_name": "default",
             "mounts": [
                 {
                     "mount_name": "default",
@@ -513,7 +513,7 @@ import {
     initializeProjectView,
     openWorkspaceProjectView,
 } from "./projectView.mjs";
-import { flushTasks } from "./mockDom.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
 
 globalThis.__mockSshProfiles = [
     {
@@ -605,6 +605,7 @@ console.log(JSON.stringify({
         "field": "provider",
         "equals": "ssh",
     }
+    assert cast(dict[str, object], payload["providerField"])["value"] == "ssh"
 
 
 def test_project_view_edit_mount_action_preserves_worktree_metadata(
@@ -617,7 +618,7 @@ import {
     initializeProjectView,
     openWorkspaceProjectView,
 } from "./projectView.mjs";
-import { flushTasks } from "./mockDom.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
 
 globalThis.__showFormDialogResult = {
     mount_name: "fork",
@@ -699,6 +700,102 @@ console.log(JSON.stringify({
             ],
         },
     }
+
+
+def test_project_view_remove_default_mount_falls_back_to_first_local_mount(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openWorkspaceProjectView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__showConfirmDialogResult = true;
+
+initializeProjectView();
+await openWorkspaceProjectView({
+    workspace_id: "alpha-project",
+    default_mount_name: "default",
+    mounts: [
+        {
+            mount_name: "default",
+            provider: "local",
+            provider_config: {
+                root_path: "/work/default",
+            },
+        },
+        {
+            mount_name: "prod",
+            provider: "ssh",
+            provider_config: {
+                ssh_profile_id: "prod",
+                remote_root: "/srv/app",
+            },
+        },
+        {
+            mount_name: "ops",
+            provider: "local",
+            provider_config: {
+                root_path: "/work/ops",
+            },
+        },
+    ],
+});
+await flushTasks();
+await flushTasks();
+
+const mountButtons = Array.from(els.projectViewContent.querySelectorAll("[data-workspace-mount]"));
+const defaultMountButton = mountButtons.find(button => button.getAttribute("data-mount-name") === "default") || null;
+defaultMountButton?.click();
+await flushTasks();
+await flushTasks();
+
+const removeButton = els.projectViewContent.querySelector("[data-workspace-delete-mount]");
+await removeButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    updatedWorkspacePayload: globalThis.__updatedWorkspacePayload,
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+    )
+
+    assert payload["updatedWorkspacePayload"] == {
+        "workspaceId": "alpha-project",
+        "payload": {
+            "default_mount_name": "ops",
+            "mounts": [
+                {
+                    "mount_name": "prod",
+                    "provider": "ssh",
+                    "provider_config": {
+                        "ssh_profile_id": "prod",
+                        "remote_root": "/srv/app",
+                    },
+                },
+                {
+                    "mount_name": "ops",
+                    "provider": "local",
+                    "provider_config": {
+                        "root_path": "/work/ops",
+                    },
+                },
+            ],
+        },
+    }
+    assert payload["toastCalls"] == [
+        {
+            "title": "Mount Removed",
+            "message": "Removed mount default.",
+            "tone": "success",
+        }
+    ]
 
 
 def test_project_view_mount_profiles_button_opens_workspace_settings(
