@@ -5,8 +5,11 @@ import json
 import os
 from pathlib import Path
 
+from pydantic_ai.mcp import MCPServerStdio
+
 from relay_teams.mcp import mcp_config_manager as config_manager
 from relay_teams.mcp.mcp_models import McpConfigScope
+from relay_teams.mcp.mcp_registry import build_mcp_server
 
 
 def _clear_proxy_env(monkeypatch) -> None:
@@ -167,17 +170,17 @@ def test_load_registry_preserves_explicit_server_env_over_proxy_defaults(
     manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
 
     registry = manager.load_registry()
+    server_env = registry.get_spec("remote").server_config["env"]
 
-    assert registry.get_spec("remote").server_config["env"] == {
-        "HTTP_PROXY": "http://custom-proxy.internal:9000",
-        "http_proxy": "http://custom-proxy.internal:9000",
-        "NODE_USE_ENV_PROXY": "1",
-        "NPM_CONFIG_PROXY": "http://custom-proxy.internal:9000",
-        "npm_config_proxy": "http://custom-proxy.internal:9000",
-        "NPM_CONFIG_HTTPS_PROXY": "http://custom-proxy.internal:9000",
-        "npm_config_https_proxy": "http://custom-proxy.internal:9000",
-        "CUSTOM_TOKEN": "secret",
-    }
+    assert isinstance(server_env, dict)
+    assert server_env["HTTP_PROXY"] == "http://custom-proxy.internal:9000"
+    assert server_env["http_proxy"] == "http://custom-proxy.internal:9000"
+    assert server_env["NODE_USE_ENV_PROXY"] == "1"
+    assert server_env["NPM_CONFIG_PROXY"] == "http://custom-proxy.internal:9000"
+    assert server_env["npm_config_proxy"] == "http://custom-proxy.internal:9000"
+    assert server_env["NPM_CONFIG_HTTPS_PROXY"] == "http://custom-proxy.internal:9000"
+    assert server_env["npm_config_https_proxy"] == "http://custom-proxy.internal:9000"
+    assert server_env["CUSTOM_TOKEN"] == "secret"
 
 
 def test_load_registry_accepts_utf8_bom(tmp_path: Path) -> None:
@@ -201,6 +204,35 @@ def test_load_registry_accepts_utf8_bom(tmp_path: Path) -> None:
     registry = manager.load_registry()
 
     assert registry.list_names() == ("time-mcp",)
+
+
+def test_load_registry_syncs_app_environment_for_stdio_mcp(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    env_key = "MCP_SYNCED_APP_ENV"
+    (app_config_dir / ".env").write_text(f"{env_key}=from-app\n", encoding="utf-8")
+    (app_config_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "time-mcp": {
+                        "command": "npx",
+                        "args": ["-y", "@upstash/context7-mcp"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    registry = manager.load_registry()
+    server = build_mcp_server(registry.get_spec("time-mcp"))
+
+    assert isinstance(server, MCPServerStdio)
+    assert os.environ[env_key] == "from-app"
+    assert server.env is not None
+    assert server.env[env_key] == "from-app"
 
 
 def test_get_mcp_file_paths_follow_scope_conventions(

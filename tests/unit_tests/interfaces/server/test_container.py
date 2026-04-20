@@ -182,6 +182,40 @@ def test_saving_environment_variable_reloads_model_runtime(
     assert container.runtime.llm_profiles["default"].api_key == "secret-key"
 
 
+def test_saving_app_environment_variable_reloads_mcp_and_skills_runtime(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    env_key = "AGENT_TEAMS_RUNTIME_RELOAD_TEST_ENV"
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.delenv(env_key, raising=False)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    container = ServerContainer(config_dir=config_dir)
+    mcp_reload_calls: list[str] = []
+    skill_reload_calls: list[str] = []
+
+    monkeypatch.setattr(
+        container.mcp_config_manager,
+        "load_registry",
+        lambda: (mcp_reload_calls.append("mcp"), container.mcp_registry)[1],
+    )
+    monkeypatch.setattr(
+        container.skills_config_reload_service,
+        "reload_skills_config",
+        lambda: skill_reload_calls.append("skills"),
+    )
+
+    container.environment_variable_service.save_environment_variable(
+        scope=EnvironmentVariableScope.APP,
+        key=env_key,
+        request=EnvironmentVariableSaveRequest(value="enabled"),
+    )
+
+    assert mcp_reload_calls == ["mcp"]
+    assert skill_reload_calls == ["skills"]
+
+
 def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
     monkeypatch,
     tmp_path: Path,
@@ -193,6 +227,7 @@ def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
     feishu_reload_calls: list[str] = []
     wechat_reload_calls: list[str] = []
     mcp_reload_calls: list[str] = []
+    skill_reload_calls: list[str] = []
 
     monkeypatch.setattr(
         container.feishu_subscription_service,
@@ -209,6 +244,11 @@ def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
         "load_registry",
         lambda: (mcp_reload_calls.append("mcp"), container.mcp_registry)[1],
     )
+    monkeypatch.setattr(
+        container.skills_config_reload_service,
+        "reload_skills_config",
+        lambda: skill_reload_calls.append("skills"),
+    )
 
     container.environment_variable_service.save_environment_variable(
         scope=EnvironmentVariableScope.APP,
@@ -223,6 +263,7 @@ def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
     assert feishu_reload_calls == ["feishu"]
     assert wechat_reload_calls == ["wechat"]
     assert mcp_reload_calls == ["mcp"]
+    assert skill_reload_calls == ["skills"]
 
 
 @pytest.mark.asyncio

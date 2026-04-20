@@ -479,6 +479,7 @@ This updates process-level proxy variables for future HTTP requests and shell/MC
 ### `POST /system/configs/mcp:reload`
 
 Reloads MCP config into runtime.
+For stdio MCP servers launched through `uvx` or `uv tool run`, the backend clears the relevant `uv` package cache before rebuilding runtime state so newly added MCP tools are visible on the next load.
 If persisted MCP config is semantically invalid, the backend returns `400`.
 
 ### `POST /system/configs/skills:reload`
@@ -545,12 +546,14 @@ Request body fields:
 Sensitive app keys are written to the secret store instead of `.env`, and any managed plaintext copy is removed from `.env`.
 The backend preserves the existing value kind on edit or rename when possible, otherwise it infers `expandable` when the value contains `%NAME%` placeholders.
 Saving an app variable also reloads runtime model config immediately, so `model.json` placeholders such as `${OPENAI_API_KEY}` take effect without a restart.
+Saving an app variable also refreshes MCP runtime state and skills runtime state for future tool and skill use, so newly spawned stdio MCP subprocesses observe the updated environment without a server restart.
 Changes to `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, or `SSL_VERIFY` also trigger the same proxy runtime refresh side effects as the dedicated proxy settings API.
 `system` scope is read-only and returns a user-facing validation error on mutation.
 
 ### `DELETE /system/configs/environment-variables/{scope}/{key}`
 
 Deletes one app environment variable from the target scope.
+Deleting an app variable also refreshes MCP runtime state and skills runtime state for future tool and skill use.
 Deleting a missing key returns a user-facing validation error.
 
 ### `POST /system/configs/web:probe`

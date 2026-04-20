@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import logging
+import os
 from typing import Protocol, cast
 
 from pydantic import JsonValue
@@ -171,7 +172,7 @@ def build_mcp_server(spec: McpServerSpec) -> MCPServer:
         return MCPServerStdio(
             command=command,
             args=_string_list(server_config.get("args")),
-            env=_string_dict(server_config.get("env")),
+            env=_build_stdio_env(server_config),
             cwd=_optional_string(server_config.get("cwd")),
             tool_prefix=get_mcp_tool_prefix(spec.name),
             timeout=(
@@ -246,3 +247,10 @@ def _string_dict(value: JsonValue) -> dict[str, str] | None:
     if not isinstance(value, dict):
         return None
     return {str(key): str(item) for key, item in value.items() if isinstance(key, str)}
+
+
+def _build_stdio_env(server_config: Mapping[str, JsonValue]) -> dict[str, str]:
+    merged_env = dict(os.environ)
+    explicit_env = _string_dict(server_config.get("env")) or {}
+    merged_env.update(explicit_env)
+    return merged_env

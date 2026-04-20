@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 from relay_teams.mcp import (
     McpConfigManager,
     McpConfigReloadService,
 )
+from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
+from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 
@@ -41,3 +44,178 @@ def test_reload_mcp_config_ignores_unknown_servers_on_existing_roles(
 
     assert len(reloaded_registries) == 1
     assert reloaded_registries[0].list_names() == ()
+
+
+def test_reload_mcp_config_cleans_uvx_package_cache_before_reload(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir()
+    role_registry = RoleRegistry()
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "uvx"}}},
+                server_config={
+                    "command": "uvx",
+                    "args": ["mcp-server-filesystem"],
+                },
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    recorded_commands: list[tuple[str, ...]] = []
+
+    def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        recorded_commands.append(tuple(args[0]))
+        return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.config_reload_service.subprocess.run", _fake_run
+    )
+    service = McpConfigReloadService(
+        mcp_config_manager=manager,
+        role_registry=role_registry,
+        on_mcp_reloaded=lambda _registry: None,
+    )
+
+    service.reload_mcp_config()
+
+    assert recorded_commands == [
+        ("uv", "cache", "clean", "--force", "mcp-server-filesystem")
+    ]
+
+
+def test_reload_mcp_config_cleans_uv_tool_run_package_from_from_flag(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir()
+    role_registry = RoleRegistry()
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "uv"}}},
+                server_config={
+                    "command": "uv",
+                    "args": [
+                        "tool",
+                        "run",
+                        "--from=context7-mcp",
+                        "context7",
+                    ],
+                },
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    recorded_commands: list[tuple[str, ...]] = []
+
+    def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        recorded_commands.append(tuple(args[0]))
+        return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.config_reload_service.subprocess.run", _fake_run
+    )
+    service = McpConfigReloadService(
+        mcp_config_manager=manager,
+        role_registry=role_registry,
+        on_mcp_reloaded=lambda _registry: None,
+    )
+
+    service.reload_mcp_config()
+
+    assert recorded_commands == [("uv", "cache", "clean", "--force", "context7-mcp")]
+
+
+def test_reload_mcp_config_falls_back_to_global_uv_cache_clean_when_package_unknown(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir()
+    role_registry = RoleRegistry()
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "uvx"}}},
+                server_config={
+                    "command": "uvx",
+                    "args": ["--isolated", "--env-file", ".env"],
+                },
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    recorded_commands: list[tuple[str, ...]] = []
+
+    def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        recorded_commands.append(tuple(args[0]))
+        return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.config_reload_service.subprocess.run", _fake_run
+    )
+    service = McpConfigReloadService(
+        mcp_config_manager=manager,
+        role_registry=role_registry,
+        on_mcp_reloaded=lambda _registry: None,
+    )
+
+    service.reload_mcp_config()
+
+    assert recorded_commands == [("uv", "cache", "clean", "--force")]
+
+
+def test_reload_mcp_config_skips_uv_cache_clean_for_uv_run_projects(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir()
+    role_registry = RoleRegistry()
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "uv"}}},
+                server_config={
+                    "command": "uv",
+                    "args": ["run", "python", "-m", "my_mcp_server"],
+                },
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    recorded_commands: list[tuple[str, ...]] = []
+
+    def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
+        recorded_commands.append(tuple(args[0]))
+        return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.config_reload_service.subprocess.run", _fake_run
+    )
+    service = McpConfigReloadService(
+        mcp_config_manager=manager,
+        role_registry=role_registry,
+        on_mcp_reloaded=lambda _registry: None,
+    )
+
+    service.reload_mcp_config()
+
+    assert recorded_commands == []
