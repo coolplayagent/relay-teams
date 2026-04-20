@@ -201,6 +201,67 @@ class WorkspaceRepository:
             _log_invalid_workspace_row(row=row, error=exc)
             raise KeyError(f"Unknown workspace_id: {workspace_id}") from exc
 
+    def update(
+        self,
+        *,
+        workspace_id: str,
+        mounts: tuple[WorkspaceMountRecord, ...],
+        default_mount_name: str,
+    ) -> WorkspaceRecord:
+        existing = self.get(workspace_id)
+        now = datetime.now(tz=timezone.utc).isoformat()
+        record = WorkspaceRecord(
+            workspace_id=workspace_id,
+            default_mount_name=default_mount_name,
+            mounts=mounts,
+            created_at=existing.created_at,
+            updated_at=datetime.fromisoformat(now),
+        )
+
+        def operation() -> None:
+            updated = self._conn.execute(
+                """
+                UPDATE workspaces
+                SET root_path=?,
+                    backend=?,
+                    profile_json=?,
+                    default_mount_name=?,
+                    updated_at=?
+                WHERE workspace_id=?
+                """,
+                (
+                    record.default_mount.root_reference,
+                    "filesystem",
+                    "{}",
+                    record.default_mount_name,
+                    now,
+                    workspace_id,
+                ),
+            )
+            if updated.rowcount == 0:
+                raise KeyError(f"Unknown workspace_id: {workspace_id}")
+            self._conn.execute(
+                "DELETE FROM workspace_mounts WHERE workspace_id=?",
+                (workspace_id,),
+            )
+            for mount in record.mounts:
+                self._insert_mount_row(
+                    workspace_id=record.workspace_id,
+                    mount=mount,
+                    created_at=existing.created_at.isoformat(),
+                    updated_at=now,
+                )
+
+        run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name="WorkspaceRepository",
+            operation_name="update",
+        )
+        return record
+
     def list_all(self) -> tuple[WorkspaceRecord, ...]:
         with self._lock:
             rows = self._conn.execute(

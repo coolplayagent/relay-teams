@@ -37,6 +37,7 @@ import {
     fetchGitHubTriggerRules,
     fetchOrchestrationConfig,
     fetchRoleConfigOptions,
+    fetchSshProfiles,
     fetchTriggers,
     fetchWeChatGatewayAccounts,
     fetchWorkspaceDiffFile,
@@ -48,6 +49,7 @@ import {
     reloadSkillsConfig,
     runAutomationProject,
     startWeChatGatewayLogin,
+    updateWorkspace,
     updateAutomationProject,
     updateGitHubRepoSubscription,
     updateGitHubTriggerAccount,
@@ -5118,7 +5120,7 @@ function renderWorkspaceSnapshot(workspace, snapshot) {
                 <section class="workspace-view-panel workspace-diff-panel">
                     <div class="workspace-view-panel-header">
                         <h3>${escapeHtml(t('workspace_view.diffs'))}</h3>
-                        <span class="workspace-view-panel-meta">${escapeHtml(summarizeDiffState())}</span>
+                        <span class="workspace-view-panel-meta">${escapeHtml(resolveDiffPanelMeta())}</span>
                     </div>
                     ${renderDiffSection()}
                 </section>
@@ -5221,6 +5223,19 @@ function summarizeDiffState() {
     });
 }
 
+function resolveDiffPanelMeta() {
+    if (currentDiffState.status === 'loading') {
+        return t('workspace_view.loading_diffs');
+    }
+    if (currentDiffState.status !== 'ready') {
+        return '';
+    }
+    if (currentDiffState.isGitRepository !== true || currentDiffState.diffMessage) {
+        return '';
+    }
+    return summarizeDiffState();
+}
+
 function resolveWorkspaceInitialMountName(workspace) {
     const explicitMountName = String(workspace?.default_mount_name || '').trim();
     if (explicitMountName) {
@@ -5315,8 +5330,16 @@ function renderWorkspaceMountStrip(snapshot) {
     return `
         <section class="workspace-mount-strip workspace-view-panel">
             <div class="workspace-view-panel-header">
-                <h3>${escapeHtml(t('workspace_view.mounts'))}</h3>
-                <span class="workspace-view-panel-meta">${escapeHtml(String(mounts.length))}</span>
+                <div class="workspace-view-panel-header-copy">
+                    <h3>${escapeHtml(t('workspace_view.mounts'))}</h3>
+                    <span class="workspace-view-panel-meta">${escapeHtml(String(mounts.length))}</span>
+                </div>
+                <div class="workspace-panel-header-actions">
+                    <button class="secondary-btn project-view-toolbar-btn workspace-panel-action-btn" type="button" data-workspace-add-mount>${escapeHtml(t('workspace_view.mount_add'))}</button>
+                    <button class="secondary-btn project-view-toolbar-btn workspace-panel-action-btn" type="button" data-workspace-edit-mount>${escapeHtml(t('workspace_view.mount_edit'))}</button>
+                    <button class="secondary-btn project-view-toolbar-btn workspace-panel-action-btn" type="button" data-workspace-open-settings>${escapeHtml(t('workspace_view.mount_profiles'))}</button>
+                    <button class="secondary-btn project-view-toolbar-btn workspace-panel-action-btn" type="button" data-workspace-delete-mount ${mounts.length <= 1 ? 'disabled' : ''}>${escapeHtml(t('workspace_view.mount_remove'))}</button>
+                </div>
             </div>
             <div class="workspace-mount-list">
                 ${mounts.map(mount => renderWorkspaceMountCard(mount)).join('')}
@@ -5327,7 +5350,7 @@ function renderWorkspaceMountStrip(snapshot) {
 
 function shouldRenderWorkspaceMountStrip(snapshot) {
     const mounts = Array.isArray(snapshot?.mounts) ? snapshot.mounts : [];
-    return mounts.length > 1 || mounts.some(mount => String(mount?.provider || '').trim() !== 'local');
+    return mounts.length > 0;
 }
 
 function renderWorkspaceMountCard(mount) {
@@ -5840,6 +5863,30 @@ function bindWorkspaceHeaderInteractions() {
             void switchWorkspaceMount(mountName);
         };
     }
+    const addMountButton = els.projectViewContent?.querySelector('[data-workspace-add-mount]');
+    if (addMountButton) {
+        addMountButton.onclick = () => {
+            void handleAddWorkspaceMount();
+        };
+    }
+    const editMountButton = els.projectViewContent?.querySelector('[data-workspace-edit-mount]');
+    if (editMountButton) {
+        editMountButton.onclick = () => {
+            void handleEditWorkspaceMount();
+        };
+    }
+    const deleteMountButton = els.projectViewContent?.querySelector('[data-workspace-delete-mount]');
+    if (deleteMountButton) {
+        deleteMountButton.onclick = () => {
+            void handleDeleteWorkspaceMount();
+        };
+    }
+    const openSettingsButton = els.projectViewContent?.querySelector('[data-workspace-open-settings]');
+    if (openSettingsButton) {
+        openSettingsButton.onclick = () => {
+            handleOpenWorkspaceSettings();
+        };
+    }
     const openRootButton = els.projectViewContent?.querySelector('[data-open-workspace-root]');
     if (!openRootButton) {
         return;
@@ -5909,6 +5956,382 @@ async function handleOpenWorkspaceRoot() {
             tone: 'danger',
         });
     }
+}
+
+function handleOpenWorkspaceSettings() {
+    const openSettingsHandler = globalThis.window?.openSettings || globalThis.openSettings;
+    if (typeof openSettingsHandler === 'function') {
+        openSettingsHandler('workspace');
+        return;
+    }
+    showToast({
+        title: t('workspace_view.mount_profiles'),
+        message: t('workspace_view.mount_profiles_unavailable'),
+        tone: 'warning',
+    });
+}
+
+async function handleAddWorkspaceMount() {
+    if (!currentWorkspace) {
+        return;
+    }
+    const sshProfiles = await loadWorkspaceSshProfiles();
+    await showFormDialog({
+        title: t('workspace_view.mount_add'),
+        message: t('workspace_view.mount_dialog_add'),
+        tone: 'info',
+        confirmLabel: t('settings.action.save'),
+        cancelLabel: t('settings.action.cancel'),
+        fields: buildWorkspaceMountDialogFields({
+            sshProfiles,
+            defaultMountName: String(currentWorkspace.default_mount_name || '').trim(),
+        }),
+        submitHandler: async values => submitWorkspaceMountChange({
+            mode: 'create',
+            values,
+        }),
+    });
+}
+
+async function handleEditWorkspaceMount() {
+    const activeMount = resolveCurrentMount();
+    if (!currentWorkspace || !activeMount) {
+        return;
+    }
+    const sshProfiles = await loadWorkspaceSshProfiles();
+    await showFormDialog({
+        title: t('workspace_view.mount_edit'),
+        message: formatMessage('workspace_view.mount_dialog_edit', {
+            mount: activeMount.mountName,
+        }),
+        tone: 'info',
+        confirmLabel: t('settings.action.save'),
+        cancelLabel: t('settings.action.cancel'),
+        fields: buildWorkspaceMountDialogFields({
+            mount: activeMount,
+            sshProfiles,
+            defaultMountName: String(currentWorkspace.default_mount_name || '').trim(),
+        }),
+        submitHandler: async values => submitWorkspaceMountChange({
+            mode: 'edit',
+            values,
+            sourceMountName: activeMount.mountName,
+        }),
+    });
+}
+
+async function handleDeleteWorkspaceMount() {
+    if (!currentWorkspace) {
+        return;
+    }
+    const activeMount = resolveCurrentMount();
+    const mounts = Array.isArray(currentWorkspace.mounts) ? currentWorkspace.mounts : [];
+    if (!activeMount) {
+        return;
+    }
+    if (mounts.length <= 1) {
+        showToast({
+            title: t('workspace_view.mount_remove_failed'),
+            message: t('workspace_view.mount_remove_last'),
+            tone: 'warning',
+        });
+        return;
+    }
+    const confirmed = await showConfirmDialog({
+        title: t('workspace_view.mount_remove'),
+        message: formatMessage('workspace_view.mount_remove_confirm', {
+            mount: activeMount.mountName,
+        }),
+        tone: 'warning',
+        confirmLabel: t('settings.action.delete'),
+        cancelLabel: t('settings.action.cancel'),
+    });
+    if (confirmed !== true) {
+        return;
+    }
+    const nextMounts = mounts.filter(mount => String(mount?.mount_name || '').trim() !== activeMount.mountName);
+    const nextDefaultMountName = resolveUpdatedDefaultMountName({
+        nextMounts,
+        requestedDefaultMountName: String(currentWorkspace.default_mount_name || '').trim(),
+        removedMountName: activeMount.mountName,
+    });
+    try {
+        const updatedWorkspace = await updateWorkspace(String(currentWorkspace.workspace_id || '').trim(), {
+            default_mount_name: nextDefaultMountName,
+            mounts: nextMounts,
+        });
+        await applyUpdatedWorkspaceRecord(updatedWorkspace, nextDefaultMountName);
+        showToast({
+            title: t('workspace_view.mount_removed_title'),
+            message: formatMessage('workspace_view.mount_removed_detail', {
+                mount: activeMount.mountName,
+            }),
+            tone: 'success',
+        });
+    } catch (error) {
+        showToast({
+            title: t('workspace_view.mount_remove_failed'),
+            message: String(error?.message || error || ''),
+            tone: 'danger',
+        });
+    }
+}
+
+async function loadWorkspaceSshProfiles() {
+    try {
+        const loadedProfiles = await fetchSshProfiles();
+        return Array.isArray(loadedProfiles) ? loadedProfiles : [];
+    } catch (error) {
+        showToast({
+            title: t('workspace_view.mount_profiles_failed'),
+            message: String(error?.message || error || ''),
+            tone: 'danger',
+        });
+        return [];
+    }
+}
+
+function buildWorkspaceMountDialogFields({
+    mount = null,
+    sshProfiles = [],
+    defaultMountName = '',
+} = {}) {
+    const provider = String(mount?.provider || 'local').trim() || 'local';
+    const isLocal = provider === 'local';
+    const sshProfileId = String(mount?.sshProfileId || '').trim();
+    const localRoot = isLocal ? String(mount?.rootReference || '').trim() : '';
+    const remoteRoot = provider === 'ssh' ? String(mount?.rootReference || '').trim() : '';
+    const sshProfileOptions = [
+        {
+            value: '',
+            label: t('workspace_view.mount_profile_select_placeholder'),
+        },
+        ...sshProfiles.map(profile => {
+            const sshProfileValue = String(profile?.ssh_profile_id || '').trim();
+            return {
+                value: sshProfileValue,
+                label: sshProfileValue,
+            };
+        }).filter(option => option.value),
+    ];
+    return [
+        {
+            id: 'mount_name',
+            label: t('workspace_view.mount_field_name'),
+            type: 'text',
+            value: String(mount?.mountName || '').trim(),
+            placeholder: t('workspace_view.mount_field_name_placeholder'),
+        },
+        {
+            id: 'provider',
+            label: t('workspace_view.mount_field_provider'),
+            type: 'select',
+            value: provider,
+            options: [
+                { value: 'local', label: t('workspace_view.mount_provider.local') },
+                { value: 'ssh', label: t('workspace_view.mount_provider.ssh') },
+            ],
+        },
+        {
+            id: 'local_root_path',
+            label: t('workspace_view.mount_field_local_root'),
+            type: 'text',
+            value: localRoot,
+            placeholder: t('workspace_view.mount_field_local_root_placeholder'),
+            description: t('workspace_view.mount_field_local_root_copy'),
+            visibleWhen: {
+                field: 'provider',
+                equals: 'local',
+            },
+        },
+        {
+            id: 'ssh_profile_id',
+            label: t('workspace_view.mount_field_ssh_profile'),
+            type: 'select',
+            value: sshProfileId,
+            options: sshProfileOptions,
+            description: t('workspace_view.mount_field_ssh_profile_copy'),
+            visibleWhen: {
+                field: 'provider',
+                equals: 'ssh',
+            },
+        },
+        {
+            id: 'remote_root',
+            label: t('workspace_view.mount_field_remote_root'),
+            type: 'text',
+            value: remoteRoot,
+            placeholder: t('workspace_view.mount_field_remote_root_placeholder'),
+            description: t('workspace_view.mount_field_remote_root_copy'),
+            visibleWhen: {
+                field: 'provider',
+                equals: 'ssh',
+            },
+        },
+        {
+            id: 'set_default',
+            label: t('workspace_view.mount_field_default'),
+            type: 'checkbox',
+            value: String(mount?.mountName || '').trim()
+                ? String(mount.mountName).trim() === defaultMountName
+                : provider === 'local' && !defaultMountName,
+            description: t('workspace_view.mount_field_default_copy'),
+        },
+    ];
+}
+
+async function submitWorkspaceMountChange({
+    mode,
+    values,
+    sourceMountName = '',
+} = {}) {
+    if (!currentWorkspace) {
+        return null;
+    }
+    const workspaceId = String(currentWorkspace.workspace_id || '').trim();
+    const existingMounts = Array.isArray(currentWorkspace.mounts) ? currentWorkspace.mounts : [];
+    const normalizedSourceMountName = String(sourceMountName || '').trim();
+    const nextMountRecord = buildWorkspaceMountRecordFromValues(values);
+    validateWorkspaceMountSubmission({
+        mount: nextMountRecord,
+        mode,
+        sourceMountName: normalizedSourceMountName,
+        existingMounts,
+    });
+    const nextMounts = mode === 'edit'
+        ? existingMounts.map(mount => {
+            return String(mount?.mount_name || '').trim() === normalizedSourceMountName ? nextMountRecord : mount;
+        })
+        : [...existingMounts, nextMountRecord];
+    const nextDefaultMountName = resolveUpdatedDefaultMountName({
+        nextMounts,
+        requestedDefaultMountName: values?.set_default === true
+            ? nextMountRecord.mount_name
+            : String(currentWorkspace.default_mount_name || '').trim(),
+        removedMountName: mode === 'edit' ? normalizedSourceMountName : '',
+        replacementMountName: nextMountRecord.mount_name,
+    });
+    const updatedWorkspace = await updateWorkspace(workspaceId, {
+        default_mount_name: nextDefaultMountName,
+        mounts: nextMounts,
+    });
+    await applyUpdatedWorkspaceRecord(updatedWorkspace, nextMountRecord.mount_name);
+    showToast({
+        title: mode === 'edit' ? t('workspace_view.mount_updated_title') : t('workspace_view.mount_added_title'),
+        message: formatMessage(
+            mode === 'edit' ? 'workspace_view.mount_updated_detail' : 'workspace_view.mount_added_detail',
+            { mount: nextMountRecord.mount_name },
+        ),
+        tone: 'success',
+    });
+    return updatedWorkspace;
+}
+
+function buildWorkspaceMountRecordFromValues(values) {
+    const mountName = String(values?.mount_name || '').trim();
+    const provider = String(values?.provider || 'local').trim() || 'local';
+    if (provider === 'ssh') {
+        return {
+            mount_name: mountName,
+            provider: 'ssh',
+            provider_config: {
+                ssh_profile_id: String(values?.ssh_profile_id || '').trim(),
+                remote_root: String(values?.remote_root || '').trim(),
+            },
+        };
+    }
+    return {
+        mount_name: mountName,
+        provider: 'local',
+        provider_config: {
+            root_path: String(values?.local_root_path || '').trim(),
+        },
+    };
+}
+
+function validateWorkspaceMountSubmission({
+    mount,
+    mode,
+    sourceMountName = '',
+    existingMounts = [],
+} = {}) {
+    const mountName = String(mount?.mount_name || '').trim();
+    const provider = String(mount?.provider || '').trim();
+    const normalizedSourceMountName = String(sourceMountName || '').trim();
+    if (!mountName) {
+        throw new Error(t('workspace_view.mount_validation_name'));
+    }
+    const duplicateMount = existingMounts.find(existingMount => {
+        const existingMountName = String(existingMount?.mount_name || '').trim();
+        if (!existingMountName) {
+            return false;
+        }
+        if (mode === 'edit' && existingMountName === normalizedSourceMountName) {
+            return false;
+        }
+        return existingMountName === mountName;
+    });
+    if (duplicateMount) {
+        throw new Error(formatMessage('workspace_view.mount_validation_duplicate', { mount: mountName }));
+    }
+    if (provider === 'ssh') {
+        const sshProfileId = String(mount?.provider_config?.ssh_profile_id || '').trim();
+        const remoteRoot = String(mount?.provider_config?.remote_root || '').trim();
+        if (!sshProfileId) {
+            throw new Error(t('workspace_view.mount_validation_ssh_profile'));
+        }
+        if (!remoteRoot) {
+            throw new Error(t('workspace_view.mount_validation_remote_root'));
+        }
+        return;
+    }
+    const localRootPath = String(mount?.provider_config?.root_path || '').trim();
+    if (!localRootPath) {
+        throw new Error(t('workspace_view.mount_validation_local_root'));
+    }
+}
+
+function resolveUpdatedDefaultMountName({
+    nextMounts = [],
+    requestedDefaultMountName = '',
+    removedMountName = '',
+    replacementMountName = '',
+} = {}) {
+    const normalizedRequested = String(requestedDefaultMountName || '').trim();
+    const normalizedRemoved = String(removedMountName || '').trim();
+    const normalizedReplacement = String(replacementMountName || '').trim();
+    const nextMountNames = nextMounts
+        .map(mount => String(mount?.mount_name || '').trim())
+        .filter(Boolean);
+    if (normalizedRequested && nextMountNames.includes(normalizedRequested)) {
+        return normalizedRequested;
+    }
+    if (normalizedRequested && normalizedRemoved && normalizedRequested === normalizedRemoved && normalizedReplacement && nextMountNames.includes(normalizedReplacement)) {
+        return normalizedReplacement;
+    }
+    return nextMountNames[0] || 'default';
+}
+
+async function applyUpdatedWorkspaceRecord(updatedWorkspace, preferredMountName = '') {
+    const workspaceId = String(updatedWorkspace?.workspace_id || '').trim();
+    if (!workspaceId) {
+        return;
+    }
+    currentWorkspace = updatedWorkspace;
+    currentSnapshotWorkspaceId = workspaceId;
+    state.currentWorkspaceId = workspaceId;
+    workspaceViewCache.delete(workspaceId);
+    resetProjectViewState(workspaceId);
+    currentMountName = String(preferredMountName || updatedWorkspace.default_mount_name || '').trim() || resolveWorkspaceInitialMountName(updatedWorkspace);
+    currentDiffState = {
+        ...createInitialDiffState(),
+        status: 'loading',
+        mountName: currentMountName,
+    };
+    renderLoadingState(updatedWorkspace);
+    const loadToken = ++currentLoadToken;
+    void loadWorkspaceSnapshot(workspaceId, loadToken);
+    void loadWorkspaceDiffs(workspaceId, loadToken);
 }
 
 async function switchWorkspaceMount(mountName) {

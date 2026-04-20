@@ -259,6 +259,58 @@ SSH provider 不把远端路径伪装成本地 Path。远端资源通过 provide
 
 `mount_name:/path/to/file`
 
+## 10. 设置与 UI
+
+### 10.1 SSH Provider 设置边界
+
+SSH provider 的设置分成两层：
+
+- 系统设置层维护可复用的 `SSH Profile`
+- workspace 详情层维护具体 `mount`
+
+其中：
+
+- `SSH Profile` 负责连接信息，例如 `host`、`username`、`port`、`remote_shell`
+- `SSH Mount` 只负责业务目录挂载，例如 `mount_name`、`ssh_profile_id`、`remote_root`
+
+这样可以保证：
+
+- workspace 仍然是稳定的作用域边界
+- 多个 workspace 可以复用同一个 SSH profile
+- 后续新增 provider 时，仍然沿用“系统级 provider 配置 + workspace 内挂载引用”的模式
+
+### 10.2 前端交互
+
+系统设置页新增 `Workspace` tab，用于管理 SSH profiles：
+
+- 列出所有 SSH profile
+- 新增、编辑、删除 SSH profile
+- 明确提示认证仍依赖系统 `ssh`、`ssh-agent` 和 `~/.ssh/config`
+
+workspace 详情页保留 mount 作为主要操作入口：
+
+- 展示 mount 列表、provider、本地/远端根路径、默认 mount、SSH profile 引用
+- 支持添加挂载、编辑当前挂载、删除当前挂载
+- 支持从 workspace 详情页直接跳转到 `Workspace` 设置页管理 SSH profiles
+
+### 10.3 Workspace 更新合同
+
+为了支撑前端 mount 编辑，workspace API 增加更新合同：
+
+- `PUT /api/workspaces/{workspace_id}`
+
+请求体包含：
+
+- `default_mount_name`
+- `mounts`
+
+更新时使用完整 mount 集合覆盖当前 workspace 挂载配置，仍由 workspace service 统一校验：
+
+- mount 名称唯一
+- 默认 mount 必须存在
+- local mount 必须有本地根路径
+- ssh mount 必须引用存在的 SSH profile 且包含 `remote_root`
+
 规则：
 
 - `mount_name` 必须存在于当前 workspace

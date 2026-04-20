@@ -103,6 +103,43 @@ class WorkspaceService:
     ) -> WorkspaceRecord:
         if self._repository.exists(workspace_id):
             raise ValueError(f"Workspace already exists: {workspace_id}")
+        resolved_mounts, resolved_default_mount_name = self._resolve_workspace_mounts(
+            root_path=root_path,
+            profile=profile,
+            mounts=mounts,
+            default_mount_name=default_mount_name,
+        )
+        return self._repository.create(
+            workspace_id=workspace_id,
+            mounts=resolved_mounts,
+            default_mount_name=resolved_default_mount_name,
+        )
+
+    def update_workspace(
+        self,
+        workspace_id: str,
+        *,
+        mounts: tuple[WorkspaceMountRecord, ...],
+        default_mount_name: str,
+    ) -> WorkspaceRecord:
+        resolved_mounts, resolved_default_mount_name = self._resolve_workspace_mounts(
+            mounts=mounts,
+            default_mount_name=default_mount_name,
+        )
+        return self._repository.update(
+            workspace_id=workspace_id,
+            mounts=resolved_mounts,
+            default_mount_name=resolved_default_mount_name,
+        )
+
+    def _resolve_workspace_mounts(
+        self,
+        *,
+        root_path: Path | None = None,
+        profile: WorkspaceProfile | None = None,
+        mounts: tuple[WorkspaceMountRecord, ...] | None = None,
+        default_mount_name: str | None = None,
+    ) -> tuple[tuple[WorkspaceMountRecord, ...], str]:
         if mounts is None:
             if root_path is None:
                 raise ValueError("Workspace creation requires root_path or mounts")
@@ -140,11 +177,7 @@ class WorkspaceService:
             resolved_default_mount_name = (
                 default_mount_name or resolved_mounts[0].mount_name
             )
-        return self._repository.create(
-            workspace_id=workspace_id,
-            mounts=resolved_mounts,
-            default_mount_name=resolved_default_mount_name,
-        )
+        return resolved_mounts, resolved_default_mount_name
 
     def create_workspace_for_root(
         self,

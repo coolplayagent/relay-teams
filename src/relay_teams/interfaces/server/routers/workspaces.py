@@ -44,6 +44,13 @@ class CreateWorkspaceRequest(BaseModel):
         return self
 
 
+class UpdateWorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    default_mount_name: RequiredIdentifierStr
+    mounts: tuple[WorkspaceMountRecord, ...]
+
+
 class PickWorkspaceResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -118,6 +125,24 @@ def get_workspace(
         return service.get_workspace(workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
+
+
+@router.put("/{workspace_id}", response_model=WorkspaceRecord)
+def update_workspace(
+    workspace_id: RequiredIdentifierStr,
+    req: UpdateWorkspaceRequest,
+    service: WorkspaceService = Depends(get_workspace_service),
+) -> WorkspaceRecord:
+    try:
+        return service.update_workspace(
+            workspace_id,
+            mounts=req.mounts,
+            default_mount_name=req.default_mount_name,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workspace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{workspace_id}:open-root")

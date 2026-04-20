@@ -209,6 +209,51 @@ def test_create_workspace_supports_mount_payload(monkeypatch) -> None:
     }
 
 
+def test_update_workspace_supports_mount_payload(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"workspace_id": "project-alpha"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.update_workspace(
+        "project-alpha",
+        default_mount_name="ops",
+        mounts=[
+            {
+                "mount_name": "ops",
+                "provider": "local",
+                "provider_config": {"root_path": "/work/ops"},
+            }
+        ],
+    )
+
+    assert response == {"workspace_id": "project-alpha"}
+    assert captured == {
+        "method": "PUT",
+        "path": "/api/workspaces/project-alpha",
+        "payload": {
+            "default_mount_name": "ops",
+            "mounts": [
+                {
+                    "mount_name": "ops",
+                    "provider": "local",
+                    "provider_config": {"root_path": "/work/ops"},
+                }
+            ],
+        },
+    }
+
+
 def test_workspace_sdk_supports_mount_query_parameters(monkeypatch) -> None:
     client = AgentTeamsClient()
     calls: list[tuple[str, str, object | None]] = []

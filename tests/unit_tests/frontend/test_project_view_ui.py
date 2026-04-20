@@ -361,6 +361,10 @@ console.log(JSON.stringify({
     assert "/srv/ops" in str(payload["switchedHtml"])
     assert "deploy.yaml" in str(payload["switchedHtml"])
     assert "Workspace mount does not support diff: ops" in str(payload["switchedHtml"])
+    assert (
+        str(payload["switchedHtml"]).count("Workspace mount does not support diff: ops")
+        == 1
+    )
     assert "data-open-workspace-root" not in str(payload["switchedHtml"])
     assert payload["snapshotRequests"] == ["alpha-project"]
     assert payload["diffRequests"] == [
@@ -374,6 +378,284 @@ console.log(JSON.stringify({
     assert payload["diffFileRequests"] == [
         {"workspaceId": "alpha-project", "path": "src/main.py", "mount": "app"},
     ]
+
+
+def test_project_view_add_mount_action_updates_workspace_with_ssh_profile(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openWorkspaceProjectView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockSshProfiles = [
+    {
+        ssh_profile_id: "prod",
+    },
+];
+globalThis.__showFormDialogResult = {
+    mount_name: "prod",
+    provider: "ssh",
+    local_root_path: "",
+    ssh_profile_id: "prod",
+    remote_root: "/srv/app",
+    set_default: true,
+};
+
+initializeProjectView();
+await openWorkspaceProjectView({
+    workspace_id: "alpha-project",
+    default_mount_name: "default",
+    mounts: [
+        {
+            mount_name: "default",
+            provider: "local",
+            provider_config: {
+                root_path: "/work/alpha-project",
+            },
+        },
+    ],
+});
+await flushTasks();
+await flushTasks();
+
+const button = document.querySelector("[data-workspace-add-mount]");
+await button?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+const sshProfileField = fields.find(field => field.id === "ssh_profile_id") || {};
+const fieldVisibilityRules = fields.map(field => ({
+    id: field.id,
+    visibleWhen: field.visibleWhen || null,
+}));
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(button),
+    updatedWorkspacePayload: globalThis.__updatedWorkspacePayload,
+    fieldIds: fields.map(field => field.id),
+    fieldVisibilityRules,
+    sshProfileOptions: sshProfileField.options || [],
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["fieldIds"] == [
+        "mount_name",
+        "provider",
+        "local_root_path",
+        "ssh_profile_id",
+        "remote_root",
+        "set_default",
+    ]
+    assert payload["fieldVisibilityRules"] == [
+        {"id": "mount_name", "visibleWhen": None},
+        {"id": "provider", "visibleWhen": None},
+        {
+            "id": "local_root_path",
+            "visibleWhen": {"field": "provider", "equals": "local"},
+        },
+        {"id": "ssh_profile_id", "visibleWhen": {"field": "provider", "equals": "ssh"}},
+        {"id": "remote_root", "visibleWhen": {"field": "provider", "equals": "ssh"}},
+        {"id": "set_default", "visibleWhen": None},
+    ]
+    assert payload["sshProfileOptions"] == [
+        {"value": "", "label": "Select an SSH profile"},
+        {"value": "prod", "label": "prod"},
+    ]
+    assert payload["updatedWorkspacePayload"] == {
+        "workspaceId": "alpha-project",
+        "payload": {
+            "default_mount_name": "prod",
+            "mounts": [
+                {
+                    "mount_name": "default",
+                    "provider": "local",
+                    "provider_config": {
+                        "root_path": "/work/alpha-project",
+                    },
+                },
+                {
+                    "mount_name": "prod",
+                    "provider": "ssh",
+                    "provider_config": {
+                        "ssh_profile_id": "prod",
+                        "remote_root": "/srv/app",
+                    },
+                },
+            ],
+        },
+    }
+    assert payload["toastCalls"] == [
+        {
+            "title": "Mount Added",
+            "message": "Added mount prod.",
+            "tone": "success",
+        }
+    ]
+
+
+def test_project_view_edit_mount_dialog_prefills_selected_provider_fields(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openWorkspaceProjectView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockSshProfiles = [
+    {
+        ssh_profile_id: "prod",
+    },
+];
+
+initializeProjectView();
+await openWorkspaceProjectView({
+    workspace_id: "alpha-project",
+    default_mount_name: "prod",
+    mounts: [
+        {
+            mount_name: "app",
+            provider: "local",
+            provider_config: {
+                root_path: "/work/app",
+            },
+        },
+        {
+            mount_name: "prod",
+            provider: "ssh",
+            provider_config: {
+                ssh_profile_id: "prod",
+                remote_root: "/srv/app",
+            },
+        },
+    ],
+});
+await flushTasks();
+await flushTasks();
+
+const editButton = document.querySelector("[data-workspace-edit-mount]");
+await editButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+const pickField = fieldId => fields.find(field => field.id === fieldId) || null;
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(editButton),
+    providerField: pickField("provider"),
+    localRootField: pickField("local_root_path"),
+    sshProfileField: pickField("ssh_profile_id"),
+    remoteRootField: pickField("remote_root"),
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["providerField"] == {
+        "id": "provider",
+        "label": "Provider",
+        "type": "select",
+        "value": "ssh",
+        "options": [
+            {"value": "local", "label": "Local"},
+            {"value": "ssh", "label": "SSH"},
+        ],
+    }
+    local_root_field = cast(dict[str, object], payload["localRootField"])
+    ssh_profile_field = cast(dict[str, object], payload["sshProfileField"])
+    remote_root_field = cast(dict[str, object], payload["remoteRootField"])
+
+    assert local_root_field["id"] == "local_root_path"
+    assert local_root_field["type"] == "text"
+    assert local_root_field["value"] == ""
+    assert local_root_field["visibleWhen"] == {
+        "field": "provider",
+        "equals": "local",
+    }
+    assert ssh_profile_field["id"] == "ssh_profile_id"
+    assert ssh_profile_field["type"] == "select"
+    assert ssh_profile_field["value"] == "prod"
+    assert ssh_profile_field["options"] == [
+        {"value": "", "label": "Select an SSH profile"},
+        {"value": "prod", "label": "prod"},
+    ]
+    assert ssh_profile_field["visibleWhen"] == {
+        "field": "provider",
+        "equals": "ssh",
+    }
+    assert remote_root_field["id"] == "remote_root"
+    assert remote_root_field["type"] == "text"
+    assert remote_root_field["value"] == "/srv/app"
+    assert remote_root_field["visibleWhen"] == {
+        "field": "provider",
+        "equals": "ssh",
+    }
+
+
+def test_project_view_mount_profiles_button_opens_workspace_settings(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openWorkspaceProjectView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.window = {
+    openSettings(tab) {
+        globalThis.__openedSettingsTab = tab;
+    },
+};
+
+initializeProjectView();
+await openWorkspaceProjectView({
+    workspace_id: "alpha-project",
+    default_mount_name: "default",
+    mounts: [
+        {
+            mount_name: "default",
+            provider: "local",
+            provider_config: {
+                root_path: "/work/alpha-project",
+            },
+        },
+    ],
+});
+await flushTasks();
+await flushTasks();
+
+const button = document.querySelector("[data-workspace-open-settings]");
+button?.onclick?.();
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(button),
+    openedSettingsTab: globalThis.__openedSettingsTab || "",
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["openedSettingsTab"] == "workspace"
+    assert payload["toastCalls"] == []
 
 
 def test_project_view_updates_automation_project_with_feishu_binding(
@@ -563,6 +845,19 @@ export async function fetchGitHubTriggerRules() {
 
 export async function reloadSkillsConfig() {
     return { status: "ok" };
+}
+
+export async function fetchSshProfiles() {
+    return globalThis.__mockSshProfiles || [];
+}
+
+export async function updateWorkspace(workspaceId, payload) {
+    globalThis.__updatedWorkspacePayload = { workspaceId, payload };
+    return {
+        workspace_id: workspaceId,
+        default_mount_name: payload?.default_mount_name || "default",
+        mounts: Array.isArray(payload?.mounts) ? payload.mounts : [],
+    };
 }
 
 export async function createTrigger() {
@@ -1194,6 +1489,22 @@ def test_feedback_form_dialog_supports_inline_submit_errors() -> None:
     assert "feedback-dialog-submit-error" in source
     assert "setDialogSubmittingState({" in source
     assert "submitError.hidden = false;" in source
+
+
+def test_feedback_form_dialog_supports_conditional_field_visibility() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "feedback.js"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "bindConditionalFieldVisibility(hosts.dialogRoot, activeDialog.fields, formInputs);"
+        in source
+    )
+    assert "data-feedback-form-field" in source
+    assert "function evaluateDialogFieldVisibility(field, currentValues)" in source
+    assert "function findFirstVisibleFormInput(formInputs)" in source
+    assert "visibleWhen" in source
 
 
 def test_project_view_updates_local_github_rule_state_after_mutations() -> None:
@@ -3337,6 +3648,21 @@ export async function disableGitHubTriggerRule(triggerRuleId) {
         else default_mock_api_source
     )
     required_api_fallbacks = {
+        "fetchSshProfiles": """
+export async function fetchSshProfiles() {
+    return globalThis.__mockSshProfiles || [];
+}
+""".strip(),
+        "updateWorkspace": """
+export async function updateWorkspace(workspaceId, payload) {
+    globalThis.__updatedWorkspacePayload = { workspaceId, payload };
+    return {
+        workspace_id: workspaceId,
+        default_mount_name: payload?.default_mount_name || "default",
+        mounts: Array.isArray(payload?.mounts) ? payload.mounts : [],
+    };
+}
+""".strip(),
         "openWorkspaceRoot": """
 export async function openWorkspaceRoot(workspaceId, mount = null) {
     globalThis.__openWorkspaceRootCalls = globalThis.__openWorkspaceRootCalls || [];
@@ -3482,8 +3808,44 @@ export const state = {
         "workspace_view.bindings": "Bindings",
         "workspace_view.tree": "Files",
         "workspace_view.mounts": "Mounts",
+        "workspace_view.mount_add": "Add Mount",
+        "workspace_view.mount_edit": "Edit Mount",
         "workspace_view.mount_default": "Default",
         "workspace_view.mount_profile": "SSH profile",
+        "workspace_view.mount_profiles": "SSH Profiles",
+        "workspace_view.mount_profiles_unavailable": "Open Settings to manage reusable SSH profiles.",
+        "workspace_view.mount_profiles_failed": "Failed to load SSH profiles",
+        "workspace_view.mount_remove": "Remove Mount",
+        "workspace_view.mount_remove_failed": "Failed to update mounts",
+        "workspace_view.mount_remove_last": "At least one mount must remain configured.",
+        "workspace_view.mount_remove_confirm": "Remove mount {mount}?",
+        "workspace_view.mount_added_title": "Mount Added",
+        "workspace_view.mount_added_detail": "Added mount {mount}.",
+        "workspace_view.mount_updated_title": "Mount Updated",
+        "workspace_view.mount_updated_detail": "Updated mount {mount}.",
+        "workspace_view.mount_removed_title": "Mount Removed",
+        "workspace_view.mount_removed_detail": "Removed mount {mount}.",
+        "workspace_view.mount_dialog_add": "Choose the provider and root.",
+        "workspace_view.mount_dialog_edit": "Update mount {mount}.",
+        "workspace_view.mount_field_name": "Mount Name",
+        "workspace_view.mount_field_name_placeholder": "e.g. app",
+        "workspace_view.mount_field_provider": "Provider",
+        "workspace_view.mount_field_local_root": "Local Root Path",
+        "workspace_view.mount_field_local_root_placeholder": "/path/to/project",
+        "workspace_view.mount_field_local_root_copy": "Used only when provider is Local.",
+        "workspace_view.mount_field_ssh_profile": "SSH Profile",
+        "workspace_view.mount_field_ssh_profile_copy": "Used only when provider is SSH.",
+        "workspace_view.mount_field_remote_root": "Remote Root",
+        "workspace_view.mount_field_remote_root_placeholder": "/srv/app",
+        "workspace_view.mount_field_remote_root_copy": "Used only when provider is SSH.",
+        "workspace_view.mount_field_default": "Set as default mount",
+        "workspace_view.mount_field_default_copy": "Unprefixed workspace paths resolve to the default mount.",
+        "workspace_view.mount_profile_select_placeholder": "Select an SSH profile",
+        "workspace_view.mount_validation_name": "Mount name is required.",
+        "workspace_view.mount_validation_duplicate": "Mount {mount} already exists.",
+        "workspace_view.mount_validation_local_root": "Local root path is required.",
+        "workspace_view.mount_validation_ssh_profile": "SSH profile is required.",
+        "workspace_view.mount_validation_remote_root": "Remote root is required.",
         "workspace_view.mount_provider.local": "Local",
         "workspace_view.mount_provider.ssh": "SSH",
         "workspace_view.mount_provider.unknown": "Mount",
@@ -3802,6 +4164,8 @@ globalThis.__diffRequests = [];
 globalThis.__diffFileRequests = [];
 globalThis.__treeRequests = [];
 globalThis.__openWorkspaceRootCalls = [];
+globalThis.__updatedWorkspacePayload = null;
+globalThis.__mockSshProfiles = [];
 globalThis.__showFormDialogResult = null;
 globalThis.__showFormDialogCalls = [];
 globalThis.__dispatchedEvents = [];

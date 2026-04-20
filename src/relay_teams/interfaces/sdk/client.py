@@ -613,6 +613,22 @@ class AgentTeamsClient:
             payload,
         )
 
+    def update_workspace(
+        self,
+        workspace_id: str,
+        *,
+        default_mount_name: str,
+        mounts: list[dict[str, JsonValue]],
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "PUT",
+            f"/api/workspaces/{quote(workspace_id, safe='')}",
+            {
+                "default_mount_name": default_mount_name,
+                "mounts": mounts,
+            },
+        )
+
     def get_workspace_snapshot(self, workspace_id: str) -> dict[str, JsonValue]:
         return self._request_json("GET", f"/api/workspaces/{workspace_id}/snapshot")
 

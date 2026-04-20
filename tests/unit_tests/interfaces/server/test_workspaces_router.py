@@ -201,6 +201,43 @@ def test_list_and_get_workspaces(tmp_path: Path) -> None:
     assert get_response.json()["root_path"] == str(root_path.resolve())
 
 
+def test_update_workspace_replaces_mounts_and_default_mount(tmp_path: Path) -> None:
+    client, service = _create_test_client(tmp_path)
+    app_root = tmp_path / "app-root"
+    ops_root = tmp_path / "ops-root"
+    app_root.mkdir()
+    ops_root.mkdir()
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=app_root,
+    )
+
+    response = client.put(
+        "/api/workspaces/project-alpha",
+        json={
+            "default_mount_name": "ops",
+            "mounts": [
+                {
+                    "mount_name": "app",
+                    "provider": "local",
+                    "provider_config": {"root_path": str(app_root)},
+                },
+                {
+                    "mount_name": "ops",
+                    "provider": "local",
+                    "provider_config": {"root_path": str(ops_root)},
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["default_mount_name"] == "ops"
+    assert payload["root_path"] == str(ops_root.resolve())
+    assert [item["mount_name"] for item in payload["mounts"]] == ["app", "ops"]
+
+
 def test_get_workspace_rejects_none_like_path_identifier(tmp_path: Path) -> None:
     client, _ = _create_test_client(tmp_path)
 

@@ -36,7 +36,7 @@ from relay_teams.workspace import WorkspaceHandle
 from relay_teams.workspace.workspace_models import (
     WorkspaceLocations,
     WorkspaceRef,
-    default_workspace_profile,
+    build_local_workspace_mount,
 )
 
 
@@ -46,16 +46,20 @@ def _build_workspace_handle(tmp_path: Path) -> WorkspaceHandle:
     scope_root.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     tmp_root = workspace_dir / "tmp"
-    profile = default_workspace_profile()
     return WorkspaceHandle(
         ref=WorkspaceRef(
             workspace_id="workspace-1",
             session_id="session-1",
             role_id="writer",
             conversation_id="conversation-1",
-            profile=profile,
+            default_mount_name="default",
         ),
-        profile=profile,
+        mounts=(
+            build_local_workspace_mount(
+                mount_name="default",
+                root_path=scope_root,
+            ),
+        ),
         locations=WorkspaceLocations(
             workspace_dir=workspace_dir,
             scope_root=scope_root,

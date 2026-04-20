@@ -80,6 +80,43 @@ def test_core_api_facade_exports_ui_language_helpers() -> None:
     assert completed.stdout.strip() == "function,function"
 
 
+def test_core_api_facade_exports_workspace_provider_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    api_module_path = repo_root / "frontend" / "dist" / "js" / "core" / "api.js"
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.document = {"
+                "querySelector() { return null; },"
+                "querySelectorAll() { return []; },"
+                "getElementById() { return null; },"
+                "body: null"
+                "}; "
+                f"const mod = await import({api_module_path.as_uri()!r}); "
+                "console.log([typeof mod.updateWorkspace, typeof mod.fetchSshProfiles, typeof mod.saveSshProfile, typeof mod.deleteSshProfile].join(','));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    assert completed.stdout.strip() == "function,function,function,function"
+
+
 def test_core_api_facade_exports_trigger_helpers() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     api_module_path = repo_root / "frontend" / "dist" / "js" / "core" / "api.js"
@@ -466,6 +503,176 @@ export async function requestJson(url, options, errorMessage) {
             "url": "/api/workspaces/project-alpha/diff?path=src%2Fmain.py&mount=ops",
             "options": None,
             "errorMessage": "Failed to fetch project workspace diff file",
+        },
+    ]
+
+
+def test_workspace_update_posts_mount_payload(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "workspaces.js"
+    )
+    module_under_test_path = tmp_path / "workspaces.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJson(url, options, errorMessage) {
+    globalThis.__capturedRequest = {
+        url,
+        options,
+        errorMessage,
+        body: JSON.parse(options.body),
+    };
+    return globalThis.__capturedRequest;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "import { requestJson } from './request.js';",
+        "import { requestJson } from './mockRequest.mjs';",
+    )
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "await mod.updateWorkspace('project-alpha', { "
+                "default_mount_name: 'ops', "
+                "mounts: [{ mount_name: 'ops', provider: 'ssh', provider_config: { ssh_profile_id: 'prod', remote_root: '/srv/app' } }] "
+                "}); "
+                "console.log(JSON.stringify(globalThis.__capturedRequest));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload == {
+        "url": "/api/workspaces/project-alpha",
+        "options": {
+            "method": "PUT",
+            "headers": {"Content-Type": "application/json"},
+            "body": '{"default_mount_name":"ops","mounts":[{"mount_name":"ops","provider":"ssh","provider_config":{"ssh_profile_id":"prod","remote_root":"/srv/app"}}]}',
+        },
+        "errorMessage": "Failed to update project workspace",
+        "body": {
+            "default_mount_name": "ops",
+            "mounts": [
+                {
+                    "mount_name": "ops",
+                    "provider": "ssh",
+                    "provider_config": {
+                        "ssh_profile_id": "prod",
+                        "remote_root": "/srv/app",
+                    },
+                }
+            ],
+        },
+    }
+
+
+def test_ssh_profile_api_helpers_call_expected_endpoints(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = repo_root / "frontend" / "dist" / "js" / "core" / "api" / "system.js"
+    module_under_test_path = tmp_path / "system.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJson(url, options, errorMessage) {
+    globalThis.__capturedRequests = globalThis.__capturedRequests || [];
+    globalThis.__capturedRequests.push({
+        url,
+        options: options ?? null,
+        errorMessage,
+        body: options?.body ? JSON.parse(options.body) : null,
+    });
+    return globalThis.__capturedRequests.at(-1);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "import { requestJson } from './request.js';",
+        "import { requestJson } from './mockRequest.mjs';",
+    )
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "await mod.fetchSshProfiles(); "
+                "await mod.saveSshProfile('prod', { host: 'prod-alias', username: 'deploy' }); "
+                "await mod.deleteSshProfile('prod'); "
+                "console.log(JSON.stringify(globalThis.__capturedRequests));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload == [
+        {
+            "url": "/api/system/configs/workspace/ssh-profiles",
+            "options": None,
+            "errorMessage": "Failed to fetch SSH profiles",
+            "body": None,
+        },
+        {
+            "url": "/api/system/configs/workspace/ssh-profiles/prod",
+            "options": {
+                "method": "PUT",
+                "headers": {"Content-Type": "application/json"},
+                "body": '{"config":{"host":"prod-alias","username":"deploy"}}',
+            },
+            "errorMessage": "Failed to save SSH profile",
+            "body": {"config": {"host": "prod-alias", "username": "deploy"}},
+        },
+        {
+            "url": "/api/system/configs/workspace/ssh-profiles/prod",
+            "options": {"method": "DELETE"},
+            "errorMessage": "Failed to delete SSH profile",
+            "body": None,
         },
     ]
 

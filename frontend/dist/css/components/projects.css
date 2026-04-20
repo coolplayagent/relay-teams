@@ -823,9 +823,29 @@
     background: color-mix(in srgb, var(--bg-surface) 98%, transparent);
 }
 
+.workspace-view-panel-header-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.65rem;
+    min-width: 0;
+}
+
 .workspace-view-panel-header h3 {
     margin: 0;
     font-size: 0.95rem;
+}
+
+.workspace-panel-header-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+}
+
+.workspace-panel-action-btn {
+    min-height: 2rem;
+    padding-inline: 0.7rem;
 }
 
 .workspace-view-panel-meta {
@@ -1389,6 +1409,16 @@
 
     .workspace-mount-list {
         grid-template-columns: 1fr;
+    }
+
+    .workspace-view-panel-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .workspace-panel-header-actions {
+        width: 100%;
+        justify-content: flex-start;
     }
 }
 

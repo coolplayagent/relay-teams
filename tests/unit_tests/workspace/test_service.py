@@ -14,6 +14,7 @@ from relay_teams.workspace import (
     WorkspaceProfile,
     WorkspaceRepository,
     WorkspaceService,
+    build_local_workspace_mount,
 )
 
 
@@ -101,6 +102,32 @@ def test_workspace_service_creates_and_lists_workspace(tmp_path: Path) -> None:
     listed = service.list_workspaces()
     assert len(listed) == 1
     assert listed[0].workspace_id == "project-alpha"
+
+
+def test_workspace_service_updates_mounts_and_default_mount(tmp_path: Path) -> None:
+    db_path = tmp_path / "workspace_service.db"
+    app_root = tmp_path / "app-root"
+    ops_root = tmp_path / "ops-root"
+    service = WorkspaceService(repository=WorkspaceRepository(db_path))
+    app_root.mkdir()
+    ops_root.mkdir()
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=app_root,
+    )
+
+    updated = service.update_workspace(
+        "project-alpha",
+        default_mount_name="ops",
+        mounts=(
+            build_local_workspace_mount(mount_name="app", root_path=app_root),
+            build_local_workspace_mount(mount_name="ops", root_path=ops_root),
+        ),
+    )
+
+    assert updated.default_mount_name == "ops"
+    assert [mount.mount_name for mount in updated.mounts] == ["app", "ops"]
+    assert updated.root_path == ops_root.resolve()
 
 
 def test_workspace_service_rejects_missing_root(tmp_path: Path) -> None:
