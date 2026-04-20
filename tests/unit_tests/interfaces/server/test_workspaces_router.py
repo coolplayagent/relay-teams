@@ -185,6 +185,49 @@ def test_create_workspace_with_mounts_and_mount_scoped_tree_query(
     assert [item["path"] for item in tree_payload["children"]] == ["deploy.sh"]
 
 
+def test_create_workspace_rejects_missing_ssh_profile_as_client_error(
+    tmp_path: Path,
+) -> None:
+    app_root = tmp_path / "app-root"
+    app_root.mkdir()
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspaces_router.db"),
+        ssh_profile_service=SshProfileService(
+            repository=SshProfileRepository(tmp_path / "ssh_profiles.db"),
+            config_dir=tmp_path,
+        ),
+    )
+    client, _ = _create_test_client(tmp_path, service=service)
+
+    response = client.post(
+        "/api/workspaces",
+        json={
+            "workspace_id": "project-alpha",
+            "default_mount_name": "app",
+            "mounts": [
+                {
+                    "mount_name": "app",
+                    "provider": "local",
+                    "provider_config": {"root_path": str(app_root)},
+                },
+                {
+                    "mount_name": "prod",
+                    "provider": "ssh",
+                    "provider_config": {
+                        "ssh_profile_id": "missing",
+                        "remote_root": "/srv/app",
+                    },
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Workspace ssh mount references unknown ssh profile: missing"
+    }
+
+
 def test_list_and_get_workspaces(tmp_path: Path) -> None:
     client, service = _create_test_client(tmp_path)
     root_path = tmp_path / "workspace-root"

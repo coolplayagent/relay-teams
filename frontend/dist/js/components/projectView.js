@@ -6191,7 +6191,13 @@ async function submitWorkspaceMountChange({
     const workspaceId = String(currentWorkspace.workspace_id || '').trim();
     const existingMounts = Array.isArray(currentWorkspace.mounts) ? currentWorkspace.mounts : [];
     const normalizedSourceMountName = String(sourceMountName || '').trim();
-    const nextMountRecord = buildWorkspaceMountRecordFromValues(values);
+    const existingMount = normalizedSourceMountName
+        ? existingMounts.find(mount => String(mount?.mount_name || '').trim() === normalizedSourceMountName) || null
+        : null;
+    const nextMountRecord = buildWorkspaceMountRecordFromValues(values, {
+        existingMount,
+        mode,
+    });
     validateWorkspaceMountSubmission({
         mount: nextMountRecord,
         mode,
@@ -6227,11 +6233,20 @@ async function submitWorkspaceMountChange({
     return updatedWorkspace;
 }
 
-function buildWorkspaceMountRecordFromValues(values) {
+function buildWorkspaceMountRecordFromValues(values, {
+    existingMount = null,
+    mode = 'create',
+} = {}) {
     const mountName = String(values?.mount_name || '').trim();
     const provider = String(values?.provider || 'local').trim() || 'local';
+    const baseRecord = buildWorkspaceMountBaseRecord({
+        existingMount,
+        nextProvider: provider,
+        mode,
+    });
     if (provider === 'ssh') {
         return {
+            ...baseRecord,
             mount_name: mountName,
             provider: 'ssh',
             provider_config: {
@@ -6241,12 +6256,46 @@ function buildWorkspaceMountRecordFromValues(values) {
         };
     }
     return {
+        ...baseRecord,
         mount_name: mountName,
         provider: 'local',
         provider_config: {
             root_path: String(values?.local_root_path || '').trim(),
         },
     };
+}
+
+function buildWorkspaceMountBaseRecord({
+    existingMount = null,
+    nextProvider = '',
+    mode = 'create',
+} = {}) {
+    if (mode !== 'edit' || !existingMount || typeof existingMount !== 'object') {
+        return {};
+    }
+    const existingProvider = String(existingMount.provider || '').trim();
+    const providerUnchanged = existingProvider === nextProvider;
+    const nextRecord = {};
+    if (typeof existingMount.working_directory === 'string') {
+        nextRecord.working_directory = existingMount.working_directory;
+    }
+    if (Array.isArray(existingMount.readable_paths)) {
+        nextRecord.readable_paths = [...existingMount.readable_paths];
+    }
+    if (Array.isArray(existingMount.writable_paths)) {
+        nextRecord.writable_paths = [...existingMount.writable_paths];
+    }
+    if (providerUnchanged && existingMount.capabilities && typeof existingMount.capabilities === 'object') {
+        nextRecord.capabilities = { ...existingMount.capabilities };
+    }
+    if (nextProvider === 'local') {
+        for (const key of ['branch_name', 'source_root_path', 'forked_from_workspace_id']) {
+            if (typeof existingMount[key] === 'string' && existingMount[key].trim()) {
+                nextRecord[key] = existingMount[key];
+            }
+        }
+    }
+    return nextRecord;
 }
 
 function validateWorkspaceMountSubmission({

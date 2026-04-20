@@ -607,6 +607,100 @@ console.log(JSON.stringify({
     }
 
 
+def test_project_view_edit_mount_action_preserves_worktree_metadata(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openWorkspaceProjectView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__showFormDialogResult = {
+    mount_name: "fork",
+    provider: "local",
+    local_root_path: "/work/fork-renamed",
+    ssh_profile_id: "",
+    remote_root: "",
+    set_default: true,
+};
+
+initializeProjectView();
+await openWorkspaceProjectView({
+    workspace_id: "alpha-project",
+    default_mount_name: "fork",
+    mounts: [
+        {
+            mount_name: "fork",
+            provider: "local",
+            provider_config: {
+                root_path: "/work/fork",
+            },
+            working_directory: "packages/app",
+            readable_paths: [".", "docs"],
+            writable_paths: [".", "packages/app"],
+            capabilities: {
+                can_read: true,
+                can_write: true,
+                can_search: true,
+                can_shell: true,
+                can_diff: true,
+                can_preview: true,
+            },
+            branch_name: "fork/alpha-project",
+            source_root_path: "/work/source",
+            forked_from_workspace_id: "project-alpha",
+        },
+    ],
+});
+await flushTasks();
+await flushTasks();
+
+const editButton = document.querySelector("[data-workspace-edit-mount]");
+await editButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    updatedWorkspacePayload: globalThis.__updatedWorkspacePayload,
+}));
+""".strip(),
+    )
+
+    assert payload["updatedWorkspacePayload"] == {
+        "workspaceId": "alpha-project",
+        "payload": {
+            "default_mount_name": "fork",
+            "mounts": [
+                {
+                    "mount_name": "fork",
+                    "provider": "local",
+                    "provider_config": {
+                        "root_path": "/work/fork-renamed",
+                    },
+                    "working_directory": "packages/app",
+                    "readable_paths": [".", "docs"],
+                    "writable_paths": [".", "packages/app"],
+                    "capabilities": {
+                        "can_read": True,
+                        "can_write": True,
+                        "can_search": True,
+                        "can_shell": True,
+                        "can_diff": True,
+                        "can_preview": True,
+                    },
+                    "branch_name": "fork/alpha-project",
+                    "source_root_path": "/work/source",
+                    "forked_from_workspace_id": "project-alpha",
+                }
+            ],
+        },
+    }
+
+
 def test_project_view_mount_profiles_button_opens_workspace_settings(
     tmp_path: Path,
 ) -> None:
