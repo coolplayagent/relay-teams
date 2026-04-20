@@ -164,13 +164,20 @@ def execute_prompt(
             request_json=request_json,
         )
 
+    effective_message = _resolve_command_if_needed(
+        base_url=base_url,
+        message=message,
+        session_mode=session_mode,
+        request_json=request_json,
+    )
+
     run_response = request_json(
         base_url,
         "POST",
         "/api/runs",
         {
             "session_id": resolved_session_id,
-            "input": [{"kind": "text", "text": message}],
+            "input": [{"kind": "text", "text": effective_message}],
             "execution_mode": execution_mode,
             "yolo": yolo,
         },
@@ -424,3 +431,33 @@ def _available_normal_role_ids_hint(
     if not role_ids:
         return "No normal mode roles are currently configured."
     return "Available normal mode roles: " + ", ".join(role_ids) + "."
+
+
+def _resolve_command_if_needed(
+    *,
+    base_url: str,
+    message: str,
+    session_mode: SessionMode,
+    request_json: RequestJsonCallable,
+) -> str:
+    if not message.startswith("/"):
+        return message
+
+    mode = session_mode.value
+    try:
+        response = request_json(
+            base_url,
+            "POST",
+            "/api/system/commands:resolve",
+            {"text": message, "mode": mode},
+        )
+    except RuntimeError:
+        return message
+
+    if not isinstance(response, dict):
+        return message
+
+    expanded = response.get("expanded_prompt")
+    if isinstance(expanded, str) and expanded:
+        return expanded
+    return message

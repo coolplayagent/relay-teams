@@ -4,8 +4,11 @@ from __future__ import annotations
 from typing import NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from relay_teams.commands.command_models import CommandSummary
+from relay_teams.commands.registry import CommandRegistry
+from relay_teams.commands.resolver import CommandResolver
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.clawhub_connectivity import (
@@ -921,3 +924,60 @@ def validate_hooks_config(
         return {"status": "ok"}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class CommandResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1)
+    mode: str = "normal"
+
+
+def _get_command_registry() -> CommandRegistry:
+    return CommandRegistry.from_default_scopes()
+
+
+@router.get(
+    "/commands",
+    response_model=list[CommandSummary],
+)
+def list_commands() -> list[CommandSummary]:
+    registry = _get_command_registry()
+    return list(registry.list_summaries())
+
+
+@router.get("/commands/{name}")
+def get_command(name: str) -> dict[str, JsonValue]:
+    registry = _get_command_registry()
+    command = registry.get_command(name)
+    if command is None:
+        raise HTTPException(status_code=404, detail=f"Command not found: {name}")
+    return {
+        "name": command.name,
+        "description": command.description,
+        "argument_hint": command.argument_hint,
+        "allowed_modes": command.allowed_modes,
+        "body": command.body,
+        "scope": command.scope.value,
+        "path": command.path.resolve().as_posix(),
+    }
+
+
+@router.post("/commands:resolve")
+def resolve_command(req: CommandResolveRequest) -> dict[str, JsonValue]:
+    registry = _get_command_registry()
+    resolver = CommandResolver(registry=registry)
+    try:
+        result = resolver.resolve(req.text, mode=req.mode)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "command_name": result.command_name,
+        "scope": result.scope.value,
+        "raw_text": result.raw_text,
+        "expanded_prompt": result.expanded_prompt,
+        "args": result.args,
+        "prompt_length": result.prompt_length,
+    }

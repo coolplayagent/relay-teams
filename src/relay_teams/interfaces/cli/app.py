@@ -35,6 +35,7 @@ from relay_teams.mcp.mcp_cli import mcp_app
 from relay_teams.paths import get_project_config_dir
 from relay_teams.roles.role_cli import build_roles_app
 from relay_teams.sessions.session_models import SessionMode
+from relay_teams.commands.command_cli import commands_app
 from relay_teams.skills.clawhub_cli import build_clawhub_app
 from relay_teams.skills.skill_cli import skills_app
 
@@ -356,6 +357,7 @@ def _execute_prompt(
     )
 
 
+app.add_typer(commands_app, name="commands")
 app.add_typer(server_app, name="server")
 app.add_typer(roles_app, name="roles")
 app.add_typer(agents_app, name="agents")
