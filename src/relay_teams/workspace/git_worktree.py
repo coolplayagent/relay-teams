@@ -29,6 +29,13 @@ class GitWorktreeClient:
         )
         return completed.stdout.strip()
 
+    def default_remote_ref(self, repository_root: Path) -> str:
+        completed = self._run_git(
+            ("symbolic-ref", "refs/remotes/origin/HEAD"),
+            cwd=repository_root,
+        )
+        return completed.stdout.strip()
+
     def fetch_ref(
         self,
         repository_root: Path,

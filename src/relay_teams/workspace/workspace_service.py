@@ -615,10 +615,22 @@ class WorkspaceService:
 
         repository_root = self._git_worktree_client.ensure_repository(source_root)
         if start_ref is None:
-            self._git_worktree_client.fetch_ref(
-                repository_root, remote="origin", ref="main"
-            )
-            resolved_start_ref = "origin/main"
+            try:
+                default_ref = self._git_worktree_client.default_remote_ref(
+                    repository_root
+                )
+                parts = default_ref.split("/")
+                branch = parts[-1]
+                remote = parts[-2] if len(parts) >= 3 else "origin"
+                self._git_worktree_client.fetch_ref(
+                    repository_root, remote=remote, ref=branch
+                )
+                resolved_start_ref = default_ref
+            except ValueError:
+                self._git_worktree_client.fetch_ref(
+                    repository_root, remote="origin", ref="main"
+                )
+                resolved_start_ref = "origin/main"
         else:
             resolved_start_ref = start_ref
         start_point = self._git_worktree_client.resolve_ref(
