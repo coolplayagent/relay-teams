@@ -38,6 +38,7 @@ export {
     fetchSshProfiles,
     fetchUiLanguageSettings,
     fetchEnvironmentVariables,
+    fetchHookRuntimeView,
     fetchExternalAgent,
     fetchExternalAgents,
     fetchMcpServerTools,

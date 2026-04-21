@@ -110,7 +110,7 @@ from relay_teams.skills.clawhub_models import (
 )
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.triggers import GitHubTriggerService
-from relay_teams.hooks import HookService, HooksConfig
+from relay_teams.hooks import HookRuntimeView, HookService, HooksConfig
 from relay_teams.validation import RequiredIdentifierStr
 from relay_teams.workspace import SshProfileConfig, SshProfileRecord, SshProfileService
 
@@ -898,6 +898,13 @@ def get_hooks_config(
     service: HookService = Depends(get_hook_service),
 ) -> HooksConfig:
     return service.get_user_config()
+
+
+@router.get("/configs/hooks/runtime")
+def get_hooks_runtime_view(
+    service: HookService = Depends(get_hook_service),
+) -> HookRuntimeView:
+    return service.get_runtime_view()
 
 
 @router.put("/configs/hooks")

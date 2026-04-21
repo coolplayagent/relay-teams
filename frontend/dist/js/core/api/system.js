@@ -62,6 +62,14 @@ export async function fetchEnvironmentVariables() {
     );
 }
 
+export async function fetchHookRuntimeView() {
+    return requestJson(
+        '/api/system/configs/hooks/runtime',
+        undefined,
+        'Failed to fetch loaded hooks',
+    );
+}
+
 export async function saveEnvironmentVariable(scope, key, payload) {
     return requestJson(
         `/api/system/configs/environment-variables/${encodeURIComponent(scope)}/${encodeURIComponent(key)}`,

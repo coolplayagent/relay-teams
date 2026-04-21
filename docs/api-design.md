@@ -234,6 +234,13 @@ The backend never returns the stored GitHub token value from this read endpoint.
 `webhook_base_url` must be a publicly reachable `http/https` URL. Localhost and private RFC1918 addresses are rejected because GitHub cannot deliver webhooks to them.
 Legacy `GH_TOKEN` / `GITHUB_TOKEN` values still found in `.env` are migrated into the secret store on read and removed from `.env`.
 
+### `GET /system/configs/hooks/runtime`
+
+Returns the runtime-loaded hook view for the current workspace.
+The response flattens effective hook handlers across user, project, and project-local config sources so the frontend can show which hooks are actually loaded.
+Each entry includes at least the handler name, hook event, matcher, source scope/path, and any scoped filters such as tool names or role IDs.
+When no hook files are active, the endpoint returns an empty `loaded_hooks` list.
+
 ### `PUT /system/configs/github`
 
 Saves the GitHub CLI configuration.

@@ -57,6 +57,7 @@ export {
     fetchExternalAgents,
     fetchUiLanguageSettings,
     fetchEnvironmentVariables,
+    fetchHookRuntimeView,
     fetchMcpServerTools,
     fetchModelConfig,
     fetchModelFallbackConfig,

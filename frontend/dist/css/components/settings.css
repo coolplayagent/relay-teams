@@ -880,6 +880,43 @@
     flex-wrap: wrap;
 }
 
+.hooks-runtime-list {
+    gap: 0.85rem;
+}
+
+.hooks-runtime-card .mcp-status-card-header {
+    padding: 1rem 1rem 0.85rem;
+}
+
+.hooks-runtime-card .hooks-runtime-detail-list {
+    border-top: 1px solid var(--settings-divider);
+    padding: 0 1rem;
+}
+
+.hooks-runtime-card .hooks-runtime-detail-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    justify-content: stretch;
+    gap: 1rem;
+    padding: 0.9rem 0;
+}
+
+.hooks-runtime-card .hooks-runtime-detail-item {
+    min-width: 0;
+}
+
+.hooks-runtime-card .hooks-runtime-detail-label,
+.hooks-runtime-card .hooks-runtime-detail-value {
+    text-align: left;
+}
+
+@media (max-width: 720px) {
+    .hooks-runtime-card .hooks-runtime-detail-row {
+        gap: 0.75rem;
+    }
+}
+
 .mcp-tools-list {
     border-top: 1px solid var(--settings-divider);
     padding: 0 1rem;
@@ -2381,6 +2418,18 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 }
 
 @media (max-width: 720px) {
+    .hooks-runtime-card .hooks-runtime-detail-row {
+        grid-template-columns: repeat(2, minmax(160px, 200px));
+        width: fit-content;
+        max-width: 100%;
+        gap: 0.6rem;
+    }
+
+    .hooks-runtime-card .hooks-runtime-detail-item {
+        width: min(200px, 100%);
+        max-width: 100%;
+    }
+
     .settings-tabs {
         grid-template-columns: 1fr;
     }
