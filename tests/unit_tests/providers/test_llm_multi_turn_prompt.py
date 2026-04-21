@@ -12,6 +12,7 @@ import pytest
 from openai import APIError, APIStatusError
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import (
+    ImageUrl,
     ModelRequest,
     ModelResponse,
     PartDeltaEvent,
@@ -48,7 +49,12 @@ from relay_teams.agents.execution.llm_session import _PreparedPromptContext
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.providers.openai_compatible import OpenAICompatibleProvider
 import relay_teams.providers.llm_retry as llm_retry_module
-from relay_teams.providers.model_config import ModelEndpointConfig, SamplingConfig
+from relay_teams.providers.model_config import (
+    ModelCapabilities,
+    ModelEndpointConfig,
+    ModelModalityMatrix,
+    SamplingConfig,
+)
 from relay_teams.roles import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
@@ -2044,6 +2050,74 @@ async def test_generate_does_not_persist_duplicate_response_after_dropping_leadi
     history = message_repo.get_history("inst-dedupe")
     responses = [message for message in history if isinstance(message, ModelResponse)]
     assert len(responses) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_unsupported_image_from_persisted_history(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "persisted_history_image_capability.db",
+        fake_hub,
+    )
+    provider._session._config = provider._session._config.model_copy(
+        update={
+            "capabilities": ModelCapabilities(
+                input=ModelModalityMatrix(text=True, image=False),
+                output=ModelModalityMatrix(text=True),
+            )
+        }
+    )
+    message_repo.append(
+        session_id="session-persisted-history-image",
+        workspace_id="default",
+        conversation_id=build_conversation_id(
+            "session-persisted-history-image", "Coordinator"
+        ),
+        agent_role_id="Coordinator",
+        instance_id="inst-persisted-history-image",
+        task_id="task-persisted-history-image",
+        trace_id="run-persisted-history-image",
+        messages=[
+            ModelRequest(
+                parts=[
+                    UserPromptPart(
+                        content=(
+                            "describe this image",
+                            ImageUrl(
+                                url="/api/sessions/session-1/media/asset-1/file",
+                                media_type="image/png",
+                            ),
+                        )
+                    )
+                ]
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("build_coordination_agent should not be called")
+        ),
+    )
+
+    request = LLMRequest(
+        run_id="run-persisted-history-image",
+        trace_id="run-persisted-history-image",
+        task_id="task-persisted-history-image",
+        session_id="session-persisted-history-image",
+        workspace_id="default",
+        instance_id="inst-persisted-history-image",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt=None,
+    )
+
+    with pytest.raises(ValueError, match="does not support image input"):
+        await provider.generate(request)
 
 
 @pytest.mark.asyncio

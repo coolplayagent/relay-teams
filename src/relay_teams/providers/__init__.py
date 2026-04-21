@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from relay_teams.providers.model_config import (
         LlmRetryConfig,
         MaaSAuthConfig,
+        ModelCapabilities,
         ModelConfigPayload,
         ModelEndpointConfig,
         ModelFallbackConfig,
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
         ModelFallbackStrategy,
         ModelFallbackTrigger,
         ModelProfileConfigPayload,
+        ModelModalityMatrix,
         ModelRequestHeader,
         ProviderModelInfo,
         ProviderType,
@@ -74,6 +76,7 @@ __all__ = [
     "LLMProvider",
     "LlmRetryConfig",
     "MaaSAuthConfig",
+    "ModelCapabilities",
     "ModelConfigPayload",
     "ModelFallbackConfig",
     "ModelFallbackConfigManager",
@@ -86,6 +89,7 @@ __all__ = [
     "LlmFallbackMiddleware",
     "ModelEndpointConfig",
     "ModelProfileConfigPayload",
+    "ModelModalityMatrix",
     "ModelRequestHeader",
     "ModelConfigManager",
     "ModelConfigService",
@@ -127,6 +131,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "LLMProvider": ("relay_teams.providers.provider_contracts", "LLMProvider"),
     "LlmRetryConfig": ("relay_teams.providers.model_config", "LlmRetryConfig"),
     "MaaSAuthConfig": ("relay_teams.providers.model_config", "MaaSAuthConfig"),
+    "ModelCapabilities": (
+        "relay_teams.providers.model_config",
+        "ModelCapabilities",
+    ),
     "ModelConfigPayload": ("relay_teams.providers.model_config", "ModelConfigPayload"),
     "ModelFallbackConfig": (
         "relay_teams.providers.model_config",
@@ -164,6 +172,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ModelProfileConfigPayload": (
         "relay_teams.providers.model_config",
         "ModelProfileConfigPayload",
+    ),
+    "ModelModalityMatrix": (
+        "relay_teams.providers.model_config",
+        "ModelModalityMatrix",
     ),
     "ModelRequestHeader": (
         "relay_teams.providers.model_config",

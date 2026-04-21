@@ -19,6 +19,13 @@ from relay_teams.media.models import (
     content_parts_to_text,
     text_part,
 )
+from relay_teams.media.prompt_content import (
+    UserPromptContent,
+    merge_user_prompt_content,
+    normalize_user_prompt_content,
+    user_prompt_content_key,
+    user_prompt_content_to_text,
+)
 
 __all__ = [
     "ContentPart",
@@ -32,8 +39,13 @@ __all__ = [
     "MediaModality",
     "MediaRefContentPart",
     "TextContentPart",
+    "UserPromptContent",
     "content_parts_from_text",
     "content_parts_to_text",
     "infer_media_modality",
+    "merge_user_prompt_content",
+    "normalize_user_prompt_content",
     "text_part",
+    "user_prompt_content_key",
+    "user_prompt_content_to_text",
 ]

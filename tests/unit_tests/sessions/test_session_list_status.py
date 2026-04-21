@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 
+from relay_teams.agents.instances import instance_repository as instance_repo_module
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
@@ -126,6 +127,122 @@ def test_list_sessions_uses_runtime_overlay_for_running_subagent(
     assert active.active_run_status == "paused"
     assert active.active_run_phase == "awaiting_subagent_followup"
     assert active.pending_tool_approval_count == 0
+
+
+def test_list_sessions_includes_normal_mode_subagent_count(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_list_subagent_count.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-main", workspace_id="default")
+    _ = service.create_session(session_id="session-empty", workspace_id="default")
+
+    from relay_teams.agents.instances.enums import InstanceStatus
+
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="subagent_run_one",
+        trace_id="subagent_run_one",
+        session_id="session-main",
+        instance_id="inst-sub-1",
+        role_id="Explorer",
+        workspace_id="default",
+        conversation_id="conv_session_main_explorer_inst_sub_1",
+        status=InstanceStatus.COMPLETED,
+    )
+    agent_repo.upsert_instance(
+        run_id="subagent_run_two",
+        trace_id="subagent_run_two",
+        session_id="session-main",
+        instance_id="inst-sub-2",
+        role_id="Crafter",
+        workspace_id="default",
+        conversation_id="conv_session_main_crafter_inst_sub_2",
+        status=InstanceStatus.COMPLETED,
+    )
+    agent_repo.upsert_instance(
+        run_id="run-root-main",
+        trace_id="run-root-main",
+        session_id="session-main",
+        instance_id="inst-main",
+        role_id="MainAgent",
+        workspace_id="default",
+        conversation_id="conv_session_main_mainagent",
+        status=InstanceStatus.COMPLETED,
+    )
+
+    sessions = {record.session_id: record for record in service.list_sessions()}
+
+    assert sessions["session-main"].subagent_session_count == 2
+    assert sessions["session-empty"].subagent_session_count == 0
+
+
+def test_list_sessions_ignores_legacy_hyphenated_subagent_run_ids_in_summary(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_list_subagent_count_legacy.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-main", workspace_id="default")
+
+    from relay_teams.agents.instances.enums import InstanceStatus
+
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="subagent-run-legacy",
+        trace_id="subagent-run-legacy",
+        session_id="session-main",
+        instance_id="inst-sub-legacy",
+        role_id="Explorer",
+        workspace_id="default",
+        conversation_id="conv_session_main_explorer_inst_sub_legacy",
+        status=InstanceStatus.COMPLETED,
+    )
+
+    sessions = {record.session_id: record for record in service.list_sessions()}
+
+    assert sessions["session-main"].subagent_session_count == 0
+
+
+def test_list_sessions_chunks_subagent_summary_queries(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "session_list_subagent_count_chunked.db"
+    monkeypatch.setattr(instance_repo_module, "_SQLITE_SAFE_VARIABLE_LIMIT", 2)
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-first", workspace_id="default")
+    _ = service.create_session(session_id="session-middle", workspace_id="default")
+    _ = service.create_session(session_id="session-last", workspace_id="default")
+
+    from relay_teams.agents.instances.enums import InstanceStatus
+
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="subagent_run_first",
+        trace_id="subagent_run_first",
+        session_id="session-first",
+        instance_id="inst-sub-first",
+        role_id="Explorer",
+        workspace_id="default",
+        conversation_id="conv_session_first_explorer_inst_sub_first",
+        status=InstanceStatus.COMPLETED,
+    )
+    agent_repo.upsert_instance(
+        run_id="subagent_run_last",
+        trace_id="subagent_run_last",
+        session_id="session-last",
+        instance_id="inst-sub-last",
+        role_id="Crafter",
+        workspace_id="default",
+        conversation_id="conv_session_last_crafter_inst_sub_last",
+        status=InstanceStatus.COMPLETED,
+    )
+
+    sessions = {record.session_id: record for record in service.list_sessions()}
+
+    assert sessions["session-first"].subagent_session_count == 1
+    assert sessions["session-middle"].subagent_session_count == 0
+    assert sessions["session-last"].subagent_session_count == 1
 
 
 def test_list_sessions_skips_invalid_persisted_run_runtime_rows(

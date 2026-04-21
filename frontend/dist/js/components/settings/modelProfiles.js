@@ -33,6 +33,12 @@ const PROVIDER_DEFAULT_BASE_URLS = {
     minimax: 'https://api.minimaxi.com/v1',
     maas: DEFAULT_MAAS_BASE_URL,
 };
+const IMAGE_CAPABILITY_MODES = {
+    FOLLOW_DETECTION: 'follow_detection',
+    SUPPORTED: 'supported',
+    UNSUPPORTED: 'unsupported',
+};
+let draftImageCapabilityMode = IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
 
 function formatMessage(key, values = {}) {
     return Object.entries(values).reduce(
@@ -133,6 +139,11 @@ export function bindModelProfileHandlers() {
         modelInput.oninput = syncDraftModelSelection;
         modelInput.onchange = syncDraftModelSelection;
     }
+
+    const imageCapabilityInput = document.getElementById('profile-image-capability');
+    if (imageCapabilityInput) {
+        imageCapabilityInput.onchange = syncDraftImageCapabilityMode;
+    }
 }
 
 export async function loadModelProfilesPanel() {
@@ -220,10 +231,12 @@ function handleAddProfile() {
     document.getElementById('profile-ssl-verify').value = '';
     document.getElementById('profile-fallback-policy').value = '';
     document.getElementById('profile-fallback-priority').value = '0';
+    draftImageCapabilityMode = IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
 
     showProfileEditor();
     renderDraftApiKeyField();
     renderDraftProviderFields();
+    renderDraftImageCapability();
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
@@ -274,10 +287,12 @@ function handleEditProfile(name) {
     document.getElementById('profile-ssl-verify').value = serializeTriStateValue(profile.ssl_verify);
     document.getElementById('profile-fallback-policy').value = profile.fallback_policy_id || '';
     document.getElementById('profile-fallback-priority').value = String(profile.fallback_priority || 0);
+    draftImageCapabilityMode = deriveImageCapabilityMode(profile.capabilities);
 
     showProfileEditor();
     renderDraftApiKeyField();
     renderDraftProviderFields();
+    renderDraftImageCapability();
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
@@ -288,6 +303,7 @@ function handleCancelProfile() {
     showProfilesList();
     editingProfile = null;
     resetDraftEditorState();
+    renderDraftImageCapability();
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
@@ -319,6 +335,7 @@ async function handleSaveProfile() {
         0,
         parseInt(document.getElementById('profile-fallback-priority').value || '0', 10) || 0,
     );
+    const discoveredModelEntry = findDiscoveredModelEntry(model);
 
     if (!name) {
         showToast({ title: t('settings.model.profile_required_title'), message: t('settings.model.profile_required_message'), tone: 'warning' });
@@ -367,6 +384,7 @@ async function handleSaveProfile() {
     if (sslVerify !== null) {
         profile.ssl_verify = sslVerify;
     }
+    profile.capabilities = buildDraftProfileCapabilities(discoveredModelEntry);
 
     if (isMaaSProvider(provider)) {
         profile.maas_auth = {
@@ -392,6 +410,7 @@ async function handleSaveProfile() {
         setModelMenuOpen(false);
         showToast({ title: t('settings.model.saved_title'), message: t('settings.model.saved_message_detail'), tone: 'success' });
         await loadModelProfilesPanel();
+        notifyModelProfilesUpdated();
     } catch (e) {
         showToast({ title: t('settings.model.save_failed_title'), message: formatMessage('settings.model.save_failed_detail', { error: e.message }), tone: 'danger' });
     }
@@ -467,6 +486,7 @@ async function handleDeleteProfile(name) {
         delete profileProbeStates[name];
         showToast({ title: t('settings.model.deleted_title'), message: t('settings.model.deleted_message_detail'), tone: 'success' });
         await loadModelProfilesPanel();
+        notifyModelProfilesUpdated();
     } catch (e) {
         showToast({ title: t('settings.model.delete_failed_title'), message: formatMessage('settings.model.delete_failed_detail', { error: e.message }), tone: 'danger' });
     }
@@ -755,8 +775,20 @@ function renderDiscoveredModels() {
         }
         seenValues.add(modelName);
         const activeClass = currentValue === modelName ? ' is-active' : '';
+        const summaryMarkup = renderDiscoveredModelSummary(modelEntry);
         menuOptions.push(
-            `<button class="profile-model-menu-item${activeClass}" data-model-name="${escapeHtml(modelName)}" type="button">${escapeHtml(modelName)}</button>`,
+            `
+                <button class="profile-model-menu-item${activeClass}" data-model-name="${escapeHtml(modelName)}" type="button">
+                    <span class="profile-model-menu-copy">
+                        <span class="profile-model-menu-name">${escapeHtml(modelName)}</span>
+                        ${summaryMarkup}
+                    </span>
+                    ${renderInputCapabilityChip(modelEntry.capabilities, {
+                        compact: true,
+                        inputModalities: modelEntry.input_modalities,
+                    })}
+                </button>
+            `,
         );
     });
     modelMenu.innerHTML = menuOptions.join('');
@@ -1001,6 +1033,11 @@ function normalizeDiscoveredModels(result) {
             .map(entry => ({
                 model: String(entry.model || '').trim(),
                 context_window: Number.isInteger(entry.context_window) ? entry.context_window : null,
+                capabilities: normalizeModelCapabilities(entry.capabilities, entry.input_modalities),
+                input_modalities: normalizeInputModalities(
+                    entry.input_modalities,
+                    entry.capabilities,
+                ),
             }))
             .filter(entry => entry.model);
     }
@@ -1010,7 +1047,12 @@ function normalizeDiscoveredModels(result) {
     return result.models
         .map(model => String(model || '').trim())
         .filter(Boolean)
-        .map(model => ({ model, context_window: null }));
+        .map(model => ({
+            model,
+            context_window: null,
+            capabilities: normalizeModelCapabilities(null, []),
+            input_modalities: [],
+        }));
 }
 
 function findDiscoveredModelEntry(modelName) {
@@ -1044,7 +1086,87 @@ function resetDraftEditorState() {
     draftModelDiscoveryState = null;
     draftApiKeyState = createDraftSecretState();
     draftMaasPasswordState = createDraftSecretState();
+    draftImageCapabilityMode = IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
     isModelMenuOpen = false;
+}
+
+function notifyModelProfilesUpdated() {
+    if (typeof document?.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+        return;
+    }
+    document.dispatchEvent(new CustomEvent('agent-teams-model-profiles-updated'));
+}
+
+function deriveImageCapabilityMode(capabilities, inputModalities = []) {
+    const imageCapability = resolveImageCapabilityState(capabilities, inputModalities);
+    if (imageCapability === true) {
+        return IMAGE_CAPABILITY_MODES.SUPPORTED;
+    }
+    if (imageCapability === false) {
+        return IMAGE_CAPABILITY_MODES.UNSUPPORTED;
+    }
+    return IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
+}
+
+function syncDraftImageCapabilityMode() {
+    const imageCapabilityInput = document.getElementById('profile-image-capability');
+    draftImageCapabilityMode = normalizeImageCapabilityMode(imageCapabilityInput?.value);
+    renderDraftImageCapability();
+}
+
+function renderDraftImageCapability() {
+    const imageCapabilityInput = document.getElementById('profile-image-capability');
+    if (!imageCapabilityInput) {
+        return;
+    }
+    imageCapabilityInput.value = normalizeImageCapabilityMode(draftImageCapabilityMode);
+}
+
+function normalizeImageCapabilityMode(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === IMAGE_CAPABILITY_MODES.SUPPORTED) {
+        return IMAGE_CAPABILITY_MODES.SUPPORTED;
+    }
+    if (normalized === IMAGE_CAPABILITY_MODES.UNSUPPORTED) {
+        return IMAGE_CAPABILITY_MODES.UNSUPPORTED;
+    }
+    return IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
+}
+
+function buildDraftProfileCapabilities(discoveredModelEntry) {
+    const baseCapabilities = resolveDraftCapabilityBase(discoveredModelEntry);
+    const imageCapabilityMode = normalizeImageCapabilityMode(draftImageCapabilityMode);
+    const imageCapability = imageCapabilityMode === IMAGE_CAPABILITY_MODES.SUPPORTED
+        ? true
+        : imageCapabilityMode === IMAGE_CAPABILITY_MODES.UNSUPPORTED
+            ? false
+            : null;
+    return {
+        input: {
+            ...baseCapabilities.input,
+            image: imageCapability,
+        },
+        output: {
+            ...baseCapabilities.output,
+        },
+    };
+}
+
+function resolveDraftCapabilityBase(discoveredModelEntry) {
+    if (discoveredModelEntry?.capabilities) {
+        return normalizeModelCapabilities(
+            discoveredModelEntry.capabilities,
+            discoveredModelEntry.input_modalities,
+        );
+    }
+    const editingProfileRecord = editingProfile ? profiles[editingProfile] : null;
+    if (editingProfileRecord?.capabilities) {
+        return normalizeModelCapabilities(
+            editingProfileRecord.capabilities,
+            editingProfileRecord.input_modalities,
+        );
+    }
+    return normalizeModelCapabilities(null, []);
 }
 
 function renderProfileEditorTitle() {
@@ -1391,6 +1513,12 @@ function renderProfileCard(name, profile, index) {
     const defaultChip = profile.is_default === true
         ? `<span class="profile-card-chip profile-card-chip-accent">${escapeHtml(t('settings.model.default_badge'))}</span>`
         : '';
+    const capabilityChip = renderInputCapabilityChip(
+        profile.resolved_capabilities || profile.capabilities,
+        {
+        inputModalities: profile.input_modalities,
+        },
+    );
     const modelLabel = profile.model || t('settings.model.no_model');
     const baseUrlLabel = profile.base_url || t('settings.model.no_endpoint');
     const fallbackLabel = profile.fallback_policy_id
@@ -1407,6 +1535,7 @@ function renderProfileCard(name, profile, index) {
                             <h4>${escapeHtml(name)}</h4>
                             <div class="profile-card-chips">
                                 <span class="profile-card-chip">${escapeHtml(providerLabel)}</span>
+                                ${capabilityChip}
                                 ${defaultChip}
                             </div>
                         </div>
@@ -1471,6 +1600,124 @@ function formatProviderLabel(provider) {
         return 'Echo';
     }
     return provider || t('settings.model.unknown');
+}
+
+function normalizeInputModalities(inputModalities, capabilities = null) {
+    const normalized = Array.isArray(inputModalities)
+        ? inputModalities
+        .map(modality => String(modality || '').trim().toLowerCase())
+        .filter(Boolean)
+        : [];
+    return deriveInputModalitiesFromCapabilities(capabilities, normalized);
+}
+
+function normalizeModelCapabilities(capabilities, inputModalities = []) {
+    const normalizedInput = normalizeCapabilityMatrix(capabilities?.input);
+    const normalizedOutput = normalizeCapabilityMatrix(capabilities?.output);
+    const normalizedInputModalities = Array.isArray(inputModalities)
+        ? inputModalities
+            .map(modality => String(modality || '').trim().toLowerCase())
+            .filter(Boolean)
+        : [];
+    if (normalizedInput.image === null && normalizedInputModalities.includes('image')) {
+        normalizedInput.image = true;
+    }
+    if (normalizedInput.audio === null && normalizedInputModalities.includes('audio')) {
+        normalizedInput.audio = true;
+    }
+    if (normalizedInput.video === null && normalizedInputModalities.includes('video')) {
+        normalizedInput.video = true;
+    }
+    if (normalizedInput.text === null) {
+        normalizedInput.text = true;
+    }
+    if (normalizedOutput.text === null) {
+        normalizedOutput.text = true;
+    }
+    return {
+        input: normalizedInput,
+        output: normalizedOutput,
+    };
+}
+
+function normalizeCapabilityMatrix(matrix) {
+    return {
+        text: normalizeOptionalCapabilityFlag(matrix?.text),
+        image: normalizeOptionalCapabilityFlag(matrix?.image),
+        audio: normalizeOptionalCapabilityFlag(matrix?.audio),
+        video: normalizeOptionalCapabilityFlag(matrix?.video),
+        pdf: normalizeOptionalCapabilityFlag(matrix?.pdf),
+    };
+}
+
+function normalizeOptionalCapabilityFlag(value) {
+    if (value === true) {
+        return true;
+    }
+    if (value === false) {
+        return false;
+    }
+    return null;
+}
+
+function deriveInputModalitiesFromCapabilities(capabilities, fallback = []) {
+    const derived = Array.isArray(fallback) ? [...fallback] : [];
+    const normalizedCapabilities = normalizeModelCapabilities(capabilities, derived);
+    if (normalizedCapabilities.input.image === true && !derived.includes('image')) {
+        derived.push('image');
+    }
+    if (normalizedCapabilities.input.audio === true && !derived.includes('audio')) {
+        derived.push('audio');
+    }
+    if (normalizedCapabilities.input.video === true && !derived.includes('video')) {
+        derived.push('video');
+    }
+    return derived;
+}
+
+function resolveImageCapabilityState(capabilities, inputModalities = []) {
+    const normalizedCapabilities = normalizeModelCapabilities(capabilities, inputModalities);
+    return normalizedCapabilities.input.image;
+}
+
+function renderInputCapabilityChip(capabilities, { compact = false, inputModalities = [] } = {}) {
+    const imageInput = resolveImageCapabilityState(capabilities, inputModalities);
+    const label = imageInput === true
+        ? t('settings.model.capability_image_input')
+        : imageInput === false
+            ? t('settings.model.capability_text_only')
+            : t('settings.model.capability_unknown');
+    const classes = [
+        'profile-card-chip',
+        'profile-card-chip-capability',
+        imageInput === true
+            ? 'profile-card-chip-capability-image'
+            : imageInput === false
+                ? 'profile-card-chip-capability-text'
+                : 'profile-card-chip-capability-unknown',
+        compact ? 'profile-card-chip-compact' : '',
+    ]
+        .filter(Boolean)
+        .join(' ');
+    return `<span class="${classes}">${escapeHtml(label)}</span>`;
+}
+
+function renderDiscoveredModelSummary(modelEntry) {
+    const contextWindow = Number(modelEntry?.context_window);
+    if (!Number.isInteger(contextWindow) || contextWindow <= 0) {
+        return '';
+    }
+    return `<span class="profile-model-menu-meta">${escapeHtml(formatContextWindowLabel(contextWindow))}</span>`;
+}
+
+function formatContextWindowLabel(contextWindow) {
+    const value = Number(contextWindow);
+    if (!Number.isFinite(value) || value <= 0) {
+        return '';
+    }
+    return formatMessage('settings.model.context_window_compact', {
+        count: new Intl.NumberFormat().format(value),
+    });
 }
 
 function renderFallbackPolicyOptions() {

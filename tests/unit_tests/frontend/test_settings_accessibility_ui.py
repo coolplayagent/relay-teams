@@ -15,6 +15,7 @@ def test_settings_markup_links_labels_to_controls_and_wraps_api_key_in_form() ->
     assert 'for="profile-model"' in settings_source
     assert 'for="profile-base-url"' in settings_source
     assert 'for="profile-api-key"' in settings_source
+    assert 'for="profile-image-capability"' in settings_source
     assert 'for="profile-temperature"' in settings_source
     assert 'for="profile-top-p"' in settings_source
     assert 'for="profile-max-tokens"' in settings_source

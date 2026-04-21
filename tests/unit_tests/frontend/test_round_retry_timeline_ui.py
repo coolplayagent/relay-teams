@@ -48,6 +48,7 @@ def _run_round_timeline_script(tmp_path: Path, runner_source: str) -> dict[str, 
         "../../core/api.js": "./mockApi.mjs",
         "../agentPanel.js": "./mockAgentPanel.mjs",
         "../messageRenderer.js": "./mockMessageRenderer.mjs",
+        "../messageRenderer/helpers/prompt.js": "./mockPromptHelpers.mjs",
         "./navigator.js": "./mockNavigator.mjs",
         "./paging.js": "./mockPaging.mjs",
         "./state.js": "./mockRoundsState.mjs",
@@ -134,6 +135,22 @@ export function getOrCreateStreamBlock() {
 
 export function appendStreamChunk() {
     return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockPromptHelpers.mjs").write_text(
+        """
+export function normalizePromptContentParts(parts) {
+    return Array.isArray(parts) ? parts : [];
+}
+
+export function renderPromptContentParts() {
+    return undefined;
+}
+
+export function summarizePromptContentParts() {
+    return '';
 }
 """.strip(),
         encoding="utf-8",

@@ -8,6 +8,7 @@ import contextlib
 from typing import TYPE_CHECKING, cast
 
 from relay_teams.agents.instances.models import AgentRuntimeRecord
+from relay_teams.media import ContentPart
 from relay_teams.metrics import SqliteMetricAggregateStore
 from relay_teams.monitors.repository import MonitorRepository
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType
@@ -90,6 +91,7 @@ if TYPE_CHECKING:
     from relay_teams.mcp.mcp_registry import McpRegistry
     from relay_teams.roles.memory_service import RoleMemoryService
     from relay_teams.roles.role_registry import RoleRegistry
+    from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
     from relay_teams.skills.skill_registry import SkillRegistry
 
 
@@ -151,6 +153,7 @@ class SessionService:
         mcp_registry: McpRegistry | None = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
         media_asset_service: MediaAssetService | None = None,
+        run_intent_repo: RunIntentRepository | None = None,
         get_runtime: Callable[[], RuntimeConfig] | None = None,
     ) -> None:
         self._session_repo = session_repo
@@ -181,6 +184,7 @@ class SessionService:
         self._mcp_registry = mcp_registry
         self._orchestration_settings_service = orchestration_settings_service
         self._media_asset_service = media_asset_service
+        self._run_intent_repo = run_intent_repo
         self._get_runtime = get_runtime
 
     def replace_role_registry(self, role_registry: RoleRegistry | None) -> None:
@@ -697,11 +701,26 @@ class SessionService:
 
     def list_sessions(self) -> tuple[SessionRecord, ...]:
         sessions = self._session_repo.list_all()
+        normal_session_ids = tuple(
+            record.session_id
+            for record in sessions
+            if record.session_mode == SessionMode.NORMAL
+        )
+        subagent_counts = self._agent_repo.count_normal_mode_subagents_by_session_ids(
+            normal_session_ids
+        )
         enriched: list[SessionRecord] = []
         for record in sessions:
             selected = self._select_active_run(record.session_id)
+            subagent_session_count = subagent_counts.get(record.session_id, 0)
             if selected is None:
-                enriched.append(record)
+                enriched.append(
+                    record.model_copy(
+                        update={
+                            "subagent_session_count": subagent_session_count,
+                        }
+                    )
+                )
                 continue
             run_id, runtime = selected
             approval_count = len(self._approval_ticket_repo.list_open_by_run(run_id))
@@ -718,6 +737,7 @@ class SessionService:
                             question_count,
                         ),
                         "pending_tool_approval_count": approval_count,
+                        "subagent_session_count": subagent_session_count,
                     }
                 )
             )
@@ -930,6 +950,7 @@ class SessionService:
                     include_hidden_from_context=True,
                 ),
             ),
+            get_run_intent_input=self._get_run_intent_input_parts,
             get_session_history_markers=self._get_session_history_markers,
             get_session_events=self.get_global_events,
             excluded_run_ids=excluded_run_ids,
@@ -954,6 +975,17 @@ class SessionService:
             if todo is not None:
                 round_item["todo"] = todo
         return rounds
+
+    def _get_run_intent_input_parts(
+        self, run_id: str
+    ) -> tuple[ContentPart, ...] | None:
+        if self._run_intent_repo is None:
+            return None
+        try:
+            intent = self._run_intent_repo.get(run_id)
+        except KeyError:
+            return None
+        return intent.input
 
     def get_session_rounds(
         self,

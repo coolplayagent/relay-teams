@@ -300,11 +300,24 @@ function createModal() {
                                                 </div>
                                                 <div class="form-group-span-2" id="profile-maas-model-slot"></div>
                                             </div>
-                                        </div>
-                                        <div class="profile-model-discovery-status" id="profile-model-discovery-status" style="display:none;"></div>
-                                        <div class="profile-editor-subsection">
-                                            <h5 data-i18n="settings.model.request_controls">Request Controls</h5>
-                                            <div class="form-row">
+                                         </div>
+                                         <div class="profile-model-discovery-status" id="profile-model-discovery-status" style="display:none;"></div>
+                                         <div class="profile-editor-subsection">
+                                             <h5 data-i18n="settings.model.capability_section">Capabilities</h5>
+                                             <div class="form-row">
+                                                 <div class="form-group">
+                                                     <label for="profile-image-capability" data-i18n="settings.model.image_capability">Image Input</label>
+                                                     <select id="profile-image-capability">
+                                                         <option value="follow_detection" data-i18n="settings.model.image_capability_follow">Follow detection</option>
+                                                         <option value="supported" data-i18n="settings.model.image_capability_supported">Supports image input</option>
+                                                         <option value="unsupported" data-i18n="settings.model.image_capability_unsupported">Text only</option>
+                                                     </select>
+                                                 </div>
+                                             </div>
+                                         </div>
+                                         <div class="profile-editor-subsection">
+                                             <h5 data-i18n="settings.model.request_controls">Request Controls</h5>
+                                             <div class="form-row">
                                                 <div class="form-group">
                                                     <label for="profile-temperature" data-i18n="settings.model.temperature">Temperature</label>
                                                     <input type="number" id="profile-temperature" value="0.7" step="0.1" min="0" max="2" autocomplete="off">
@@ -523,8 +536,8 @@ function createModal() {
                                                 </div>
                                             </section>
                                             <section class="role-editor-section">
-                                                <h5 data-i18n="settings.roles.allowed_tools">Allowed Tools</h5>
-                                                <div class="role-option-picker role-option-picker-tools" id="role-tools-picker"></div>
+                                                <h5 data-i18n="settings.roles.tool_groups">Tool Groups</h5>
+                                                <div class="role-option-picker role-option-picker-single" id="role-tool-groups-picker"></div>
                                             </section>
                                             <section class="role-editor-section">
                                                 <h5 data-i18n="settings.roles.mcp_servers">MCP Servers</h5>

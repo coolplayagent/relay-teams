@@ -7,6 +7,7 @@ from typing import cast
 import httpx
 import pytest
 
+from relay_teams.media import MediaModality
 from relay_teams.providers.maas_auth import MaaSAuthContext, MaaSLoginError
 from relay_teams.providers.model_config import (
     MaaSAuthConfig,
@@ -911,6 +912,39 @@ def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> N
         "fake-chat-model",
         "reasoning-model",
     )
+
+
+def test_discover_models_projects_input_modalities_from_catalog(monkeypatch) -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {"id": "gpt-4o-mini"},
+                        {
+                            "id": "text-plus-image",
+                            "input_modalities": ["image"],
+                        },
+                    ],
+                },
+            )
+        ),
+    )
+
+    result = service.discover_models(ModelDiscoveryRequest(profile_name="default"))
+
+    assert result.ok is True
+    assert result.model_entries[0].model == "gpt-4o-mini"
+    assert result.model_entries[0].input_modalities == (MediaModality.IMAGE,)
+    assert result.model_entries[0].capabilities.input.image is True
+    assert result.model_entries[1].model == "text-plus-image"
+    assert result.model_entries[1].input_modalities == (MediaModality.IMAGE,)
+    assert result.model_entries[1].capabilities.input.image is True
 
 
 def test_discover_models_extracts_context_window_when_provider_returns_it(

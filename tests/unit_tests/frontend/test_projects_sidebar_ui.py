@@ -348,7 +348,7 @@ export async function runAutomationProject() {
     }
 
 
-def test_projects_sidebar_prefetches_visible_normal_session_subagent_counts_and_hides_zero_toggle(
+def test_projects_sidebar_uses_session_summary_for_subagent_toggle_without_prefetch(
     tmp_path: Path,
 ) -> None:
     payload = _run_sidebar_script(
@@ -372,8 +372,6 @@ globalThis.__sessionSubagentFetchResults = {
     "session-2": [],
 };
 
-await loadProjects();
-await flushTasks();
 await loadProjects();
 
 const projectsList = document.getElementById("projects-list");
@@ -407,6 +405,7 @@ const sessions = [
         session_mode: "normal",
         updated_at: "2026-03-14T10:11:00Z",
         pending_tool_approval_count: 0,
+        subagent_session_count: 1,
         metadata: { title: "Root session 1" },
     },
     {
@@ -415,6 +414,7 @@ const sessions = [
         session_mode: "normal",
         updated_at: "2026-03-14T10:10:00Z",
         pending_tool_approval_count: 0,
+        subagent_session_count: 0,
         metadata: { title: "Root session 2" },
     },
     {
@@ -495,13 +495,129 @@ export async function runAutomationProject() {
     ).read_text(encoding="utf-8")
 
     ensure_calls = cast(list[str], payload["ensureCalls"])
-    assert sorted(set(ensure_calls)) == ["session-1", "session-2"]
+    assert ensure_calls == []
     assert payload["toggleCount"] == 1
     assert payload["firstToggleSessionId"] == "session-1"
     assert (
         "${renderSubagentToggle(session)}\n"
         '                                            <span class="session-id">'
     ) in sidebar_script
+
+
+def test_projects_sidebar_hides_stale_summary_toggle_after_empty_subagent_list_load(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+globalThis.__sessionSubagentSessionsMap = {
+    "session-1": [],
+};
+globalThis.__expandedSubagentSessionIds.add("session-1");
+
+await loadProjects();
+
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const toggles = firstProject.querySelectorAll(".session-subagents-toggle");
+
+console.log(JSON.stringify({
+    toggleCount: toggles.length,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        session_mode: "normal",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        subagent_session_count: 1,
+        metadata: { title: "Root session 1" },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    assert payload["toggleCount"] == 0
 
 
 def test_projects_sidebar_deletes_subagent_child_session_and_returns_to_parent(
@@ -1734,6 +1850,134 @@ console.log(JSON.stringify({
     assert payload["activeSessionCount"] == 1
 
 
+def test_projects_sidebar_defers_passive_refresh_while_hovering(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:01:00Z",
+        pending_tool_approval_count: 0,
+    },
+];
+
+globalThis.__fetchCounts = {
+    workspaces: 0,
+    sessions: 0,
+    automationProjects: 0,
+};
+
+export async function fetchWorkspaces() {
+    globalThis.__fetchCounts.workspaces += 1;
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    globalThis.__fetchCounts.sessions += 1;
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    globalThis.__fetchCounts.automationProjects += 1;
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    throw new Error("not used");
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    throw new Error("not used");
+}
+
+export async function deleteWorkspace() {
+    throw new Error("not used");
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function disableAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function enableAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+        runner_source="""
+import {
+    loadProjects,
+    scheduleSessionsRefresh,
+} from "./sidebar.mjs";
+
+await loadProjects();
+const initialCounts = { ...globalThis.__fetchCounts };
+
+globalThis.__projectsListHover = true;
+scheduleSessionsRefresh(0);
+await new Promise(resolve => setTimeout(resolve, 80));
+const hoveredCounts = { ...globalThis.__fetchCounts };
+
+globalThis.__projectsListHover = false;
+await new Promise(resolve => setTimeout(resolve, 320));
+const settledCounts = { ...globalThis.__fetchCounts };
+
+console.log(JSON.stringify({
+    initialCounts,
+    hoveredCounts,
+    settledCounts,
+}));
+""".strip(),
+    )
+
+    assert payload["initialCounts"] == {
+        "workspaces": 1,
+        "sessions": 1,
+        "automationProjects": 1,
+    }
+    assert payload["hoveredCounts"] == payload["initialCounts"]
+    assert payload["settledCounts"] == {
+        "workspaces": 2,
+        "sessions": 2,
+        "automationProjects": 2,
+    }
+
+
 def test_projects_sidebar_hover_hint_preserves_project_action_space() -> None:
     components_css = load_components_css()
 
@@ -2102,6 +2346,9 @@ function createContainerElement() {
         className: "",
         style: {},
         children: [],
+        matches(selector) {
+            return selector === ":hover" ? !!globalThis.__projectsListHover : false;
+        },
         get innerHTML() {
             return html;
         },
@@ -2115,7 +2362,13 @@ function createContainerElement() {
             this.children.push(child);
             return child;
         },
+        contains(target) {
+            return target === this || this.children.includes(target);
+        },
         querySelector(selector) {
+            if (selector === ":hover") {
+                return globalThis.__projectsListHover ? this : null;
+            }
             return this.querySelectorAll(selector)[0] || null;
         },
         querySelectorAll(selector) {
@@ -2159,6 +2412,9 @@ export function createDomEnvironment() {
         },
         createElement() {
             return createCardElement();
+        },
+        get activeElement() {
+            return globalThis.__documentActiveElement || null;
         },
         addEventListener(name, handler) {
             if (!listeners.has(name)) {
@@ -2597,6 +2853,14 @@ export function getActiveSubagentSession() {
 
 export function getSessionSubagentSessions(sessionId) {
     return readRows(String(sessionId || "").trim());
+}
+
+export function hasLoadedSessionSubagents(sessionId) {
+    const safeSessionId = String(sessionId || "").trim();
+    return Object.prototype.hasOwnProperty.call(
+        globalThis.__sessionSubagentSessionsMap || {},
+        safeSessionId,
+    );
 }
 
 export async function ensureSessionSubagents(sessionId) {

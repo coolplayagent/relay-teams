@@ -41,10 +41,10 @@ import {
 } from './projectView.js';
 import {
     buildSubagentSessionLabel,
-    ensureSessionSubagents,
     getActiveSubagentSession,
     removeSessionSubagent,
     getSessionSubagentSessions,
+    hasLoadedSessionSubagents,
     isSubagentSessionListExpanded,
     isSubagentSessionListLoading,
     toggleSubagentSessionList,
@@ -71,6 +71,8 @@ let projectMenuDismissBound = false;
 let languageRefreshBound = false;
 let pendingSessionAnimation = null;
 let loadProjectsRequestId = 0;
+let lastProjectsRenderSignature = '';
+const SIDEBAR_INTERACTION_REFRESH_DELAY_MS = 240;
 
 const SESSION_ANIMATION_ENTER_MS = 220;
 const SESSION_ANIMATION_REMOVE_MS = 180;
@@ -78,6 +80,28 @@ const SESSION_ANIMATION_ACTIVATE_MS = 240;
 
 export function setSelectSessionHandler(handler) {
     selectSessionHandler = handler;
+}
+
+function isProjectsListInteracting() {
+    const projectsList = els.projectsList;
+    if (!projectsList) {
+        return false;
+    }
+    if (typeof projectsList.matches === 'function' && projectsList.matches(':hover')) {
+        return true;
+    }
+    if (typeof projectsList.querySelector === 'function' && projectsList.querySelector(':hover')) {
+        return true;
+    }
+    const activeElement = document?.activeElement;
+    if (
+        activeElement
+        && typeof projectsList.contains === 'function'
+        && projectsList.contains(activeElement)
+    ) {
+        return true;
+    }
+    return false;
 }
 
 function clearActiveSessionView() {
@@ -211,7 +235,13 @@ function renderSubagentToggle(session) {
         return '';
     }
     const children = getSessionSubagentSessions(sessionId);
-    if (children.length === 0) {
+    const loading = isSubagentSessionListLoading(sessionId);
+    const loaded = hasLoadedSessionSubagents(sessionId);
+    const summaryCount = normalizeSubagentSessionCount(
+        session?.subagent_session_count,
+    );
+    const childCount = loaded ? children.length : summaryCount;
+    if (!loading && childCount === 0) {
         return '';
     }
     const expanded = isSubagentSessionListExpanded(sessionId);
@@ -226,7 +256,7 @@ function renderSubagentToggle(session) {
             aria-label="${escapeHtml(t('sidebar.subagent_sessions_toggle'))}"
         >
             <span class="session-subagents-toggle-icon" aria-hidden="true">${icon}</span>
-            <span class="session-subagents-toggle-count">${escapeHtml(String(children.length))}</span>
+            <span class="session-subagents-toggle-count">${escapeHtml(String(childCount))}</span>
         </button>
     `;
 }
@@ -323,6 +353,14 @@ function formatRelativeTime(value) {
     const diffMonths = Math.round(diffDays / 30);
     if (diffMonths < 12) return `${diffMonths}${t('time.month_short')}`;
     return `${Math.round(diffDays / 365)}${t('time.year_short')}`;
+}
+
+function normalizeSubagentSessionCount(value) {
+    const parsed = Number(value || 0);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return 0;
+    }
+    return Math.floor(parsed);
 }
 
 function formatWorkspaceLabel(workspace) {
@@ -503,6 +541,16 @@ function renderProjectsToolbar() {
     toolbar.querySelector('.projects-toolbar-new-btn')?.addEventListener('click', () => void handleNewProjectClick());
     toolbar.querySelector('.projects-toolbar-sort-btn')?.addEventListener('click', () => toggleProjectSortMode());
     return toolbar;
+}
+
+function renderNodeSignature(node) {
+    if (!node) {
+        return '';
+    }
+    const className = String(node.className || '').trim();
+    const innerHtml = typeof node.innerHTML === 'string' ? node.innerHTML : '';
+    const textContent = typeof node.textContent === 'string' ? node.textContent : '';
+    return `${className}::${innerHtml}::${textContent}`;
 }
 
 function getActiveFeatureId() {
@@ -1007,39 +1055,6 @@ function renderProjectCard(group) {
     return card;
 }
 
-function prefetchVisibleSubagentSessions(groups) {
-    const sessionIds = new Set();
-    const currentSessionId = String(state.currentSessionId || '').trim();
-    groups.forEach(group => {
-        const sessionsExpanded = expandedProjectSessionIds.has(group.key);
-        const visibleSessions = visibleSessionsForGroup(group, {
-            sessionsExpanded,
-        });
-        visibleSessions.forEach(session => {
-            const sessionId = String(session?.session_id || '').trim();
-            if (sessionId && shouldRenderSubagentChildren(session)) {
-                sessionIds.add(sessionId);
-            }
-        });
-        if (!currentSessionId) {
-            return;
-        }
-        const currentSession = group.sessions.find(session => String(session?.session_id || '').trim() === currentSessionId);
-        if (currentSession && shouldRenderSubagentChildren(currentSession)) {
-            sessionIds.add(currentSessionId);
-        }
-    });
-    sessionIds.forEach(sessionId => {
-        if (isSubagentSessionListLoading(sessionId)) {
-            return;
-        }
-        void ensureSessionSubagents(sessionId, {
-            force: false,
-            emitLoadingEvents: false,
-        });
-    });
-}
-
 function visibleSessionsForGroup(group, { sessionsExpanded = false } = {}) {
     if (sessionsExpanded) {
         return group.sessions;
@@ -1092,24 +1107,35 @@ export async function loadProjects() {
             }
         });
         void maybeSyncBackgroundStreams(sessions);
-        els.projectsList.innerHTML = '';
-        els.projectsList.appendChild(renderFeatureNav());
-        els.projectsList.appendChild(renderProjectsToolbar());
-        syncProjectSortButton();
         const groups = buildProjectGroups(
             Array.isArray(workspaces) ? workspaces : [],
             Array.isArray(sessions) ? sessions : [],
         );
+        const nextNodes = [renderFeatureNav(), renderProjectsToolbar()];
         if (groups.length === 0) {
             openProjectMenuId = null;
-            els.projectsList.appendChild(renderEmptyProjectsState());
+            nextNodes.push(renderEmptyProjectsState());
+            const nextSignature = nextNodes.map(renderNodeSignature).join('\n');
+            if (nextSignature === lastProjectsRenderSignature) {
+                return;
+            }
+            lastProjectsRenderSignature = nextSignature;
+            els.projectsList.innerHTML = '';
+            nextNodes.forEach(node => els.projectsList.appendChild(node));
             return;
         }
         if (!groups.some(group => group.key === openProjectMenuId)) {
             openProjectMenuId = null;
         }
-        groups.forEach(group => els.projectsList.appendChild(renderProjectCard(group)));
-        prefetchVisibleSubagentSessions(groups);
+        groups.forEach(group => nextNodes.push(renderProjectCard(group)));
+        const nextSignature = nextNodes.map(renderNodeSignature).join('\n');
+        if (nextSignature === lastProjectsRenderSignature) {
+            return;
+        }
+        lastProjectsRenderSignature = nextSignature;
+        els.projectsList.innerHTML = '';
+        nextNodes.forEach(node => els.projectsList.appendChild(node));
+        syncProjectSortButton();
         playPendingSessionAnimation();
     } catch (error) {
         if (requestId !== loadProjectsRequestId) {
@@ -1121,10 +1147,15 @@ export async function loadProjects() {
 
 export function scheduleSessionsRefresh(delayMs = 120) {
     if (refreshTimer) clearTimeout(refreshTimer);
+    const safeDelayMs = Math.max(0, Number(delayMs) || 0);
     refreshTimer = setTimeout(() => {
         refreshTimer = null;
+        if (isProjectsListInteracting()) {
+            scheduleSessionsRefresh(Math.max(safeDelayMs, SIDEBAR_INTERACTION_REFRESH_DELAY_MS));
+            return;
+        }
         void loadProjects();
-    }, delayMs);
+    }, safeDelayMs);
 }
 
 export function toggleProjectSortMode() {

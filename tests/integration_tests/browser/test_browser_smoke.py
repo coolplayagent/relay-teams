@@ -1845,6 +1845,64 @@ def test_browser_workspace_and_automation_project_views(
     )
 
 
+def test_browser_sidebar_lazy_loads_subagent_sessions_on_initial_open(
+    browser_page: Page,
+    integration_env: IntegrationEnvironment,
+    api_client: httpx.Client,
+    tmp_path: Path,
+) -> None:
+    workspace_count = 4
+    sessions_per_workspace = 12
+    for index in range(workspace_count):
+        workspace_id = f"perf-workspace-{index}-{uuid4().hex[:6]}"
+        workspace_root = tmp_path / workspace_id
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        (workspace_root / "README.md").write_text(
+            f"Workspace {index}.\n",
+            encoding="utf-8",
+        )
+        workspace_response = api_client.post(
+            "/api/workspaces",
+            json={
+                "workspace_id": workspace_id,
+                "root_path": str(workspace_root),
+            },
+        )
+        workspace_response.raise_for_status()
+        for _ in range(sessions_per_workspace):
+            session_response = api_client.post(
+                "/api/sessions",
+                json={"workspace_id": workspace_id},
+            )
+            session_response.raise_for_status()
+
+    page = browser_page
+    subagent_request_urls: list[str] = []
+    page.on(
+        "request",
+        lambda request: (
+            subagent_request_urls.append(request.url)
+            if (
+                request.method == "GET"
+                and request.url.startswith(
+                    f"{integration_env.api_base_url}/api/sessions/"
+                )
+                and request.url.endswith("/subagents")
+            )
+            else None
+        ),
+    )
+
+    _open_app(page, integration_env)
+    expect(page.locator(".session-item.active")).to_have_count(
+        1,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    page.wait_for_timeout(2500)
+
+    assert len(subagent_request_urls) == 1
+
+
 def _open_app(page: Page, integration_env: IntegrationEnvironment) -> None:
     page.goto(integration_env.api_base_url, wait_until="domcontentloaded")
     expect(page.locator("#backend-status-label")).to_contain_text(

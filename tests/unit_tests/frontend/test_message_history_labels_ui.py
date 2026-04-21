@@ -40,39 +40,7 @@ export function appendMessageText() {
     return undefined;
 }
 
-export function appendThinkingText() {
-    return undefined;
-}
-
-export function buildToolBlock() {
-    return {};
-}
-
-export function decoratePendingApprovalBlock() {
-    return undefined;
-}
-
-export function findToolBlockInContainer() {
-    return null;
-}
-
-export function forceScrollBottom() {
-    return undefined;
-}
-
-export function indexPendingToolBlock() {
-    return undefined;
-}
-""".strip(),
-        encoding="utf-8",
-    )
-    (tmp_path / "mockHelpers.mjs").write_text(
-        """
-export function applyToolReturn() {
-    return undefined;
-}
-
-export function appendMessageText() {
+export function appendStructuredContentPart() {
     return undefined;
 }
 
@@ -111,6 +79,9 @@ export function parseApprovalArgsPreview() {
 export function renderMessageBlock(container, role, label) {
     globalThis.__renderCalls.push({ role, label });
     return {
+        wrapper: {
+            dataset: {},
+        },
         contentEl: {
             appendChild() {
                 return undefined;

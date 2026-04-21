@@ -7,6 +7,7 @@ import { formatMessage } from '../../utils/i18n.js';
 import {
     applyToolReturn,
     appendMessageText,
+    appendStructuredContentPart,
     appendThinkingText,
     buildToolBlock,
     decoratePendingApprovalBlock,
@@ -223,6 +224,11 @@ function renderStreamOverlayEntry(
         if (!part || typeof part !== 'object') return;
         if (part.kind === 'text') {
             combinedText += String(part.content || '');
+            return;
+        }
+        if (part.kind === 'media_ref') {
+            flushText(false);
+            appendStructuredContentPart(contentEl, part);
             return;
         }
         if (part.kind === 'thinking') {

@@ -7,6 +7,7 @@ from relay_teams.computer import ExecutionSurface
 from relay_teams.interfaces.server.deps import (
     get_external_agent_config_service,
     get_mcp_service,
+    get_model_config_service,
     get_role_registry,
     get_role_settings_service,
     get_skills_config_reload_service,
@@ -14,6 +15,9 @@ from relay_teams.interfaces.server.deps import (
     get_tool_registry,
 )
 from relay_teams.mcp.mcp_service import McpService
+from relay_teams.providers.model_config import ModelCapabilities
+from relay_teams.providers.model_config_service import ModelConfigService
+from relay_teams.providers.provider_factory import resolve_model_profile_config
 from relay_teams.roles import (
     NormalModeRoleOption,
     RoleAgentOption,
@@ -23,6 +27,7 @@ from relay_teams.roles import (
     RoleDocumentSummary,
     RoleRegistry,
     RoleSkillOption,
+    RoleToolGroupOption,
     SystemRolesUnavailableError,
     RoleValidationResult,
     ensure_required_system_roles,
@@ -32,7 +37,7 @@ from relay_teams.interfaces.server.router_error_mapping import http_exception_fo
 from relay_teams.roles.settings_service import RoleSettingsService
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
 from relay_teams.skills.skill_registry import SkillRegistry
-from relay_teams.tools.registry import ToolRegistry
+from relay_teams.tools.registry import ToolRegistry, list_default_tool_groups
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/roles", tags=["Roles"])
@@ -48,6 +53,7 @@ def list_roles(
 @router.get(":options", response_model=RoleConfigOptions)
 def get_role_config_options(
     role_registry: RoleRegistry = Depends(get_role_registry),
+    model_config_service: ModelConfigService = Depends(get_model_config_service),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
     mcp_service: McpService = Depends(get_mcp_service),
     skill_registry: SkillRegistry = Depends(get_skill_registry),
@@ -65,24 +71,39 @@ def get_role_config_options(
             skill_registry=skill_registry,
             skills_reload_service=skills_reload_service,
         )
+        normal_mode_roles = tuple(
+            _build_role_option(role=role, model_config_service=model_config_service)
+            for role in role_registry.list_normal_mode_roles()
+        )
+        subagent_roles = tuple(
+            _build_role_option(role=role, model_config_service=model_config_service)
+            for role in role_registry.list_subagent_roles()
+        )
+        coordinator_role = _build_role_option(
+            role=role_registry.get_coordinator(),
+            model_config_service=model_config_service,
+        )
+        main_agent_role = _build_role_option(
+            role=role_registry.get_main_agent(),
+            model_config_service=model_config_service,
+        )
+        coordinator_role_id = coordinator_role.role_id
+        main_agent_role_id = main_agent_role.role_id
         return RoleConfigOptions(
-            coordinator_role_id=role_registry.get_coordinator_role_id(),
-            main_agent_role_id=role_registry.get_main_agent_role_id(),
-            normal_mode_roles=tuple(
-                NormalModeRoleOption(
-                    role_id=role.role_id,
-                    name=role.name,
-                    description=role.description,
+            coordinator_role_id=coordinator_role_id,
+            main_agent_role_id=main_agent_role_id,
+            coordinator_role=coordinator_role,
+            main_agent_role=main_agent_role,
+            normal_mode_roles=normal_mode_roles,
+            subagent_roles=subagent_roles,
+            tool_groups=tuple(
+                RoleToolGroupOption(
+                    id=group.group_id,
+                    name=group.name,
+                    description=group.description,
+                    tools=group.tools,
                 )
-                for role in role_registry.list_normal_mode_roles()
-            ),
-            subagent_roles=tuple(
-                NormalModeRoleOption(
-                    role_id=role.role_id,
-                    name=role.name,
-                    description=role.description,
-                )
-                for role in role_registry.list_subagent_roles()
+                for group in list_default_tool_groups(tool_registry)
             ),
             tools=tool_registry.list_configurable_names(),
             mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
@@ -221,4 +242,31 @@ def _collect_required_builtin_skill_refs(role_registry: RoleRegistry) -> frozens
         for role in role_registry.list_roles()
         for skill_name in role.skills
         if skill_name.startswith("builtin:")
+    )
+
+
+def _build_role_option(
+    *,
+    role: RoleDocumentDraft | RoleDocumentRecord | RoleDocumentSummary | object,
+    model_config_service: ModelConfigService,
+) -> NormalModeRoleOption:
+    runtime = model_config_service.runtime
+    role_model_profile = str(getattr(role, "model_profile", "default") or "default")
+    resolved_profile = resolve_model_profile_config(
+        runtime=runtime,
+        profile_name=role_model_profile,
+    )
+    capabilities = ModelCapabilities()
+    input_modalities = ()
+    if resolved_profile is not None:
+        capabilities = resolved_profile.capabilities
+        input_modalities = capabilities.supported_input_modalities()
+    return NormalModeRoleOption(
+        role_id=str(getattr(role, "role_id")),
+        name=str(getattr(role, "name")),
+        description=str(getattr(role, "description")),
+        model_profile=role_model_profile,
+        model_name=resolved_profile.model if resolved_profile is not None else "",
+        capabilities=capabilities,
+        input_modalities=input_modalities,
     )

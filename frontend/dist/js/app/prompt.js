@@ -3,7 +3,6 @@
  * Prompt send flow: live round bootstrap and SSE stream start.
  */
 import {
-  appendRoundUserMessage,
   createLiveRound,
 } from "../components/rounds.js";
 import { refreshVisibleContextIndicators } from "../components/contextIndicators.js";
@@ -17,9 +16,14 @@ import { hydrateSessionView, startSessionContinuity } from "./recovery.js";
 import {
   applyCurrentSessionRecord,
   getCoordinatorRoleId,
+  getRoleInputModalitySupport,
+  getRoleOption,
   getMainAgentRoleId,
   getNormalModeRoles,
+  getPrimaryRoleId,
   getRoleDisplayName,
+  setCoordinatorRoleOption,
+  setMainAgentRoleOption,
   setCoordinatorRoleId,
   setMainAgentRoleId,
   setNormalModeRoles,
@@ -49,6 +53,9 @@ let promptMentionRange = {
   start: 0,
   end: 0,
 };
+let promptAttachments = [];
+let promptAttachmentSequence = 0;
+let promptComposerStatus = null;
 
 export function initializeYoloToggle() {
   const savedYolo = readSavedYolo();
@@ -175,15 +182,19 @@ export async function refreshOrchestrationConfig({
   }
 }
 
-async function refreshRoleConfigOptions({ refreshControls = true } = {}) {
+export async function refreshRoleConfigOptions({ refreshControls = true } = {}) {
   try {
     const options = await fetchRoleConfigOptions();
     setCoordinatorRoleId(options?.coordinator_role_id || "");
     setMainAgentRoleId(options?.main_agent_role_id || "");
+    setCoordinatorRoleOption(options?.coordinator_role || null);
+    setMainAgentRoleOption(options?.main_agent_role || null);
     setNormalModeRoles(options?.normal_mode_roles || []);
   } catch (error) {
     setCoordinatorRoleId("");
     setMainAgentRoleId("");
+    setCoordinatorRoleOption(null);
+    setMainAgentRoleOption(null);
     setNormalModeRoles([]);
     sysLog(error.message || t("composer.error.role_options_load_failed"), "log-error");
   }
@@ -195,7 +206,8 @@ async function refreshRoleConfigOptions({ refreshControls = true } = {}) {
 
 export async function handleSend() {
   const rawText = els.promptInput.value.trim();
-  if (!rawText) return;
+  const hasAttachments = promptAttachments.length > 0;
+  if (!rawText && !hasAttachments) return;
   if (state.isGenerating) {
     sysLog(
       t("composer.warning.run_in_progress"),
@@ -226,16 +238,33 @@ export async function handleSend() {
     sysLog(mention.error, "log-error");
     return;
   }
-  const text = mention.promptText || rawText;
-  if (!text) {
+  const text = mention.roleId ? mention.promptText : rawText;
+  if (!text && !hasAttachments) {
     sysLog(t("composer.error.empty_after_mention"), "log-error");
     return;
   }
   const targetRoleId = mention.roleId || null;
+  const effectiveTargetRoleId = targetRoleId || getPrimaryRoleId();
+  const imageInputBlockedMessage = resolveImageInputBlockedMessage({
+    rawText,
+    targetRoleId: effectiveTargetRoleId,
+  });
+  if (imageInputBlockedMessage) {
+    setPromptComposerStatus(imageInputBlockedMessage, { tone: "danger" });
+    showToast({
+      title: t("composer.toast.send_blocked_title"),
+      message: imageInputBlockedMessage,
+      tone: "warning",
+    });
+    sysLog(imageInputBlockedMessage, "log-error");
+    return;
+  }
+  clearPromptComposerStatus();
+  const inputParts = buildPromptInputParts(text);
+  const promptPreviewText = text || summarizePromptAttachments(promptAttachments);
 
   dismissPromptMentionAutocomplete();
-  els.promptInput.value = "";
-  els.promptInput.style.height = "auto";
+  resetPromptComposer();
   state.instanceRoleMap = {};
   state.roleInstanceMap = {};
   state.taskInstanceMap = {};
@@ -257,19 +286,19 @@ export async function handleSend() {
   sysLog(t("composer.log.sending_prompt"));
   startSessionContinuity(state.currentSessionId);
   await startIntentStream(
-    text,
+    promptPreviewText,
     state.currentSessionId,
     async (sid) =>
       hydrateSessionView(sid, { includeRounds: true, quiet: true }),
     {
+      inputParts,
       yolo: state.yolo,
       thinking: state.thinking,
       targetRoleId,
       onRunCreated: (run) => {
         state.currentSessionCanSwitchMode = false;
         refreshSessionTopologyControls();
-        createLiveRound(run.run_id, text);
-        appendRoundUserMessage(run.run_id, text);
+        createLiveRound(run.run_id, promptPreviewText, inputParts);
       },
     },
   );
@@ -308,7 +337,29 @@ export function initializePromptMentionAutocomplete() {
 }
 
 export function handlePromptComposerInput() {
+  renderPromptAttachments();
   refreshPromptMentionAutocomplete();
+  refreshPromptComposerValidation();
+}
+
+export async function handlePromptComposerPaste(event) {
+  const clipboardItems = Array.from(event?.clipboardData?.items || []);
+  const imageItems = clipboardItems.filter(
+    (item) => String(item?.type || "").startsWith("image/"),
+  );
+  if (imageItems.length === 0) {
+    return;
+  }
+  event.preventDefault?.();
+  const nextAttachments = await Promise.all(
+    imageItems
+      .map((item, index) => item?.getAsFile?.() || null)
+      .filter(Boolean)
+      .map((file, index) => normalizePastedImageAttachment(file, index)),
+  );
+  promptAttachments = [...promptAttachments, ...nextAttachments.filter(Boolean)];
+  handlePromptComposerInput();
+  els.promptInput?.focus?.();
 }
 
 export function handlePromptComposerKeydown(event) {
@@ -335,6 +386,292 @@ export function handlePromptComposerKeydown(event) {
     return true;
   }
   return false;
+}
+
+function buildPromptInputParts(text) {
+  const trimmedText = String(text || "").trim();
+  const parts = [];
+  if (trimmedText) {
+    parts.push({
+      kind: "text",
+      text: trimmedText,
+    });
+  }
+  promptAttachments.forEach((attachment) => {
+    parts.push({
+      kind: "inline_media",
+      modality: "image",
+      mime_type: attachment.mimeType,
+      base64_data: attachment.base64Data,
+      name: attachment.name,
+      size_bytes: attachment.sizeBytes,
+      width: attachment.width,
+      height: attachment.height,
+    });
+  });
+  return parts;
+}
+
+function summarizePromptAttachments(attachments) {
+  const count = Array.isArray(attachments) ? attachments.length : 0;
+  if (count <= 0) {
+    return "";
+  }
+  return count === 1 ? "[image]" : `[${count} images]`;
+}
+
+function resetPromptComposer() {
+  if (els.promptInput) {
+    els.promptInput.value = "";
+    els.promptInput.style.height = "auto";
+  }
+  promptAttachments = [];
+  clearPromptComposerStatus();
+  renderPromptAttachments();
+}
+
+function renderPromptAttachments() {
+  const container = els.promptAttachments;
+  if (!container) {
+    return;
+  }
+  container.classList.toggle(
+    "is-error",
+    promptComposerStatus?.tone === "danger" && promptAttachments.length > 0,
+  );
+  if (promptAttachments.length === 0) {
+    container.innerHTML = "";
+    container.hidden = true;
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML = promptAttachments
+    .map((attachment) => {
+      const label = formatAttachmentSize(attachment.sizeBytes);
+      return `
+        <div class="prompt-attachment" data-attachment-id="${escapeHtml(
+          attachment.id,
+        )}">
+          <img
+            class="prompt-attachment-thumb"
+            src="${escapeHtml(attachment.previewUrl)}"
+            alt="${escapeHtml(attachment.name)}"
+            role="button"
+            tabindex="0"
+            title="${escapeHtml(t("media.preview_open"))}"
+            data-image-preview-trigger="true"
+            data-image-preview-src="${escapeHtml(attachment.previewUrl)}"
+            data-image-preview-name="${escapeHtml(attachment.name)}"
+          />
+          <div class="prompt-attachment-copy">
+            <span class="prompt-attachment-name">${escapeHtml(
+              attachment.name,
+            )}</span>
+            <span class="prompt-attachment-meta">${escapeHtml(label)}</span>
+          </div>
+          <button
+            type="button"
+            class="prompt-attachment-remove"
+            data-attachment-remove="${escapeHtml(attachment.id)}"
+            aria-label="Remove image"
+            title="Remove image"
+          >
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M6 6l12 12M18 6L6 18"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </div>
+      `;
+    })
+    .join("");
+  if (typeof container.querySelectorAll !== "function") {
+    return;
+  }
+  container
+    .querySelectorAll("[data-attachment-remove]")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        const attachmentId = String(
+          button.getAttribute("data-attachment-remove") || "",
+        ).trim();
+        if (!attachmentId) {
+          return;
+        }
+        promptAttachments = promptAttachments.filter(
+          (attachment) => attachment.id !== attachmentId,
+        );
+        handlePromptComposerInput();
+        els.promptInput?.focus?.();
+      });
+    });
+}
+
+function refreshPromptComposerValidation() {
+  const blockedMessage = resolveImageInputBlockedMessage({
+    rawText: String(els.promptInput?.value || "").trim(),
+  });
+  if (!blockedMessage) {
+    clearPromptComposerStatus();
+    return;
+  }
+  setPromptComposerStatus(blockedMessage, { tone: "danger" });
+}
+
+function resolveImageInputBlockedMessage({
+  rawText = "",
+  targetRoleId = null,
+} = {}) {
+  if (promptAttachments.length === 0) {
+    return "";
+  }
+  const resolvedTargetRoleId =
+    String(targetRoleId || "").trim() || resolvePromptTargetRoleId(rawText);
+  if (!resolvedTargetRoleId) {
+    return "";
+  }
+  const imageSupport = getRoleInputModalitySupport(
+    resolvedTargetRoleId,
+    "image",
+  );
+  if (imageSupport === true) {
+    return "";
+  }
+  const targetLabel = resolveImageInputTargetLabel(resolvedTargetRoleId);
+  if (imageSupport === null) {
+    return formatMessage("composer.error.image_input_unknown", {
+      agent: targetLabel,
+    });
+  }
+  return formatMessage("composer.error.image_input_unsupported", {
+    agent: targetLabel,
+  });
+}
+
+function resolveImageInputTargetLabel(roleId) {
+  const roleOption = getRoleOption(roleId);
+  const modelName = String(roleOption?.model_name || "").trim();
+  if (modelName) {
+    return modelName;
+  }
+  const modelProfile = String(roleOption?.model_profile || "").trim();
+  if (modelProfile) {
+    return modelProfile;
+  }
+  return getRoleDisplayName(roleId, { fallback: "Agent" });
+}
+
+function resolvePromptTargetRoleId(rawText) {
+  const promptText = String(rawText || "").trim();
+  const mention = parseLeadingRoleMention(promptText);
+  if (startsWithPromptMention(promptText) && mention.error) {
+    return "";
+  }
+  return mention.roleId || getPrimaryRoleId();
+}
+
+function setPromptComposerStatus(message, { tone = "danger" } = {}) {
+  promptComposerStatus = message
+    ? {
+        message: String(message || ""),
+        tone,
+      }
+    : null;
+  const statusEl = els.promptInputStatus;
+  if (statusEl) {
+    statusEl.hidden = !promptComposerStatus;
+    statusEl.textContent = promptComposerStatus?.message || "";
+    statusEl.className = promptComposerStatus
+      ? `prompt-input-status is-${promptComposerStatus.tone}`
+      : "prompt-input-status";
+  }
+  els.promptAttachments?.classList?.toggle(
+    "is-error",
+    promptComposerStatus?.tone === "danger" && promptAttachments.length > 0,
+  );
+}
+
+function clearPromptComposerStatus() {
+  if (!promptComposerStatus && !els.promptInputStatus) {
+    return;
+  }
+  promptComposerStatus = null;
+  const statusEl = els.promptInputStatus;
+  if (statusEl) {
+    statusEl.hidden = true;
+    statusEl.textContent = "";
+    statusEl.className = "prompt-input-status";
+  }
+  els.promptAttachments?.classList?.toggle("is-error", false);
+}
+
+async function normalizePastedImageAttachment(file, index) {
+  if (!file) {
+    return null;
+  }
+  const previewUrl = await readFileAsDataUrl(file);
+  const { base64Data, mimeType } = parseDataUrl(previewUrl);
+  return {
+    id: `attachment-${Date.now()}-${promptAttachmentSequence++}`,
+    name: resolveAttachmentName(file, index, mimeType),
+    mimeType,
+    sizeBytes: Number.isFinite(file.size) ? Number(file.size) : null,
+    base64Data,
+    previewUrl,
+    width: null,
+    height: null,
+  };
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () =>
+      reject(reader.error || new Error("Failed to read pasted image"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function parseDataUrl(dataUrl) {
+  const match = String(dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) {
+    return {
+      mimeType: "image/png",
+      base64Data: "",
+    };
+  }
+  return {
+    mimeType: match[1],
+    base64Data: match[2],
+  };
+}
+
+function resolveAttachmentName(file, index, mimeType) {
+  const explicitName = String(file?.name || "").trim();
+  if (explicitName) {
+    return explicitName;
+  }
+  const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.split("/")[1] || "png";
+  return `pasted-image-${index + 1}.${extension}`;
+}
+
+function formatAttachmentSize(sizeBytes) {
+  const size = Number(sizeBytes);
+  if (!Number.isFinite(size) || size <= 0) {
+    return "Image";
+  }
+  if (size >= 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (size >= 1024) {
+    return `${Math.round(size / 1024)} KB`;
+  }
+  return `${size} B`;
 }
 
 function bindSessionTopologyControls() {
@@ -382,6 +719,9 @@ function bindSessionTopologyControls() {
       void refreshOrchestrationConfig({ refreshControls: true });
     });
     document.addEventListener("agent-teams-session-selected", () => {
+      void refreshRoleConfigOptions({ refreshControls: true });
+    });
+    document.addEventListener("agent-teams-model-profiles-updated", () => {
       void refreshRoleConfigOptions({ refreshControls: true });
     });
     document.addEventListener("agent-teams-language-changed", () => {

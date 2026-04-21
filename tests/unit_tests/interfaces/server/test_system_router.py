@@ -42,6 +42,7 @@ from relay_teams.env.web_config_models import (
     WebProvider,
 )
 from relay_teams.env.web_connectivity import WebConnectivityProbeResult
+from relay_teams.media import MediaModality
 from relay_teams.interfaces.server.deps import (
     get_clawhub_config_service,
     get_clawhub_skill_service,
@@ -209,6 +210,23 @@ class _FakeSystemService:
                 "context_window": 128000,
                 "fallback_policy_id": "same_provider_then_other_provider",
                 "fallback_priority": 3,
+                "capabilities": {
+                    "input": {
+                        "text": True,
+                        "image": True,
+                        "audio": False,
+                        "video": False,
+                        "pdf": False,
+                    },
+                    "output": {
+                        "text": True,
+                        "image": False,
+                        "audio": False,
+                        "video": False,
+                        "pdf": False,
+                    },
+                },
+                "input_modalities": ["image"],
             }
         }
 
@@ -499,12 +517,14 @@ class _FakeSystemService:
                 provider=ProviderType.OPENAI_COMPATIBLE,
                 model="gpt-4o-mini",
                 base_url="https://example.com/v1",
+                input_modalities=(MediaModality.IMAGE,),
             ),
             ProviderModelInfo(
                 profile="glm",
                 provider=ProviderType.BIGMODEL,
                 model="glm-4.5",
                 base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+                input_modalities=(MediaModality.IMAGE,),
             ),
             ProviderModelInfo(
                 profile="echo",
@@ -1391,6 +1411,8 @@ def test_get_provider_models() -> None:
     payload = response.json()
     assert len(payload) == 3
     assert payload[0]["profile"] == "default"
+    assert payload[0]["input_modalities"] == ["image"]
+    assert payload[0]["capabilities"]["input"]["image"] is True
 
 
 def test_get_model_config() -> None:
@@ -1522,6 +1544,8 @@ def test_get_model_profiles_returns_api_key() -> None:
         "same_provider_then_other_provider"
     )
     assert payload["default"]["fallback_priority"] == 3
+    assert payload["default"]["input_modalities"] == ["image"]
+    assert payload["default"]["capabilities"]["input"]["image"] is True
 
 
 def test_get_model_profiles_returns_maas_password() -> None:
@@ -1541,6 +1565,23 @@ def test_get_model_profiles_returns_maas_password() -> None:
                         "has_password": True,
                     },
                     "is_default": True,
+                    "capabilities": {
+                        "input": {
+                            "text": True,
+                            "image": None,
+                            "audio": None,
+                            "video": None,
+                            "pdf": None,
+                        },
+                        "output": {
+                            "text": True,
+                            "image": None,
+                            "audio": None,
+                            "video": None,
+                            "pdf": None,
+                        },
+                    },
+                    "input_modalities": [],
                 }
             }
 
@@ -1553,6 +1594,7 @@ def test_get_model_profiles_returns_maas_password() -> None:
     assert payload["maas"]["maas_auth"]["username"] == "relay-user"
     assert payload["maas"]["maas_auth"]["password"] == "relay-password"
     assert payload["maas"]["maas_auth"]["has_password"] is True
+    assert payload["maas"]["capabilities"]["input"]["image"] is None
 
 
 def test_get_provider_models_with_filter() -> None:

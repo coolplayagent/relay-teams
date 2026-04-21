@@ -34,6 +34,8 @@ export const state = {
         effort: 'medium',
     },
     normalModeRoles: [],
+    coordinatorRole: null,
+    mainAgentRole: null,
     selectedRoleId: null,
     coordinatorRoleId: null,
     mainAgentRoleId: null,
@@ -48,6 +50,14 @@ export function getCoordinatorRoleId() {
     return normalizeRoleId(state.coordinatorRoleId);
 }
 
+export function setCoordinatorRoleOption(roleOption) {
+    state.coordinatorRole = normalizeRoleOption(roleOption);
+}
+
+export function getCoordinatorRoleOption() {
+    return normalizeRoleOption(state.coordinatorRole);
+}
+
 export function setMainAgentRoleId(roleId) {
     state.mainAgentRoleId = normalizeRoleId(roleId) || null;
 }
@@ -56,19 +66,61 @@ export function getMainAgentRoleId() {
     return normalizeRoleId(state.mainAgentRoleId);
 }
 
+export function setMainAgentRoleOption(roleOption) {
+    state.mainAgentRole = normalizeRoleOption(roleOption);
+}
+
+export function getMainAgentRoleOption() {
+    return normalizeRoleOption(state.mainAgentRole);
+}
+
 export function setNormalModeRoles(roleOptions) {
     const rows = Array.isArray(roleOptions) ? roleOptions : [];
     state.normalModeRoles = rows
-        .map(item => ({
-            role_id: normalizeRoleId(item?.role_id),
-            name: String(item?.name || '').trim(),
-            description: String(item?.description || '').trim(),
-        }))
+        .map(item => normalizeRoleOption(item))
         .filter(item => item.role_id);
 }
 
 export function getNormalModeRoles() {
     return Array.isArray(state.normalModeRoles) ? state.normalModeRoles : [];
+}
+
+export function getRoleOption(roleId) {
+    const safeRoleId = normalizeRoleId(roleId);
+    if (!safeRoleId) {
+        return null;
+    }
+    const coordinatorRole = getCoordinatorRoleOption();
+    if (coordinatorRole?.role_id === safeRoleId) {
+        return coordinatorRole;
+    }
+    const mainAgentRole = getMainAgentRoleOption();
+    if (mainAgentRole?.role_id === safeRoleId) {
+        return mainAgentRole;
+    }
+    return getNormalModeRoles().find(role => role.role_id === safeRoleId) || null;
+}
+
+export function roleSupportsInputModality(roleId, modality) {
+    return getRoleInputModalitySupport(roleId, modality) === true;
+}
+
+export function getRoleInputModalitySupport(roleId, modality) {
+    const safeModality = String(modality || '').trim().toLowerCase();
+    if (!safeModality) {
+        return null;
+    }
+    const role = getRoleOption(roleId);
+    if (!role) {
+        return null;
+    }
+    const capabilitySupport = resolveCapabilitySupport(role.capabilities?.input, safeModality);
+    if (capabilitySupport !== null) {
+        return capabilitySupport;
+    }
+    return Array.isArray(role.input_modalities)
+        ? role.input_modalities.includes(safeModality)
+        : null;
 }
 
 export function isCoordinatorRoleId(roleId) {
@@ -198,7 +250,7 @@ export function getRoleDisplayName(roleId, { fallback = 'Agent' } = {}) {
     if (isMainAgentRoleId(safeRoleId)) {
         return 'Main Agent';
     }
-    const matchingRole = getNormalModeRoles().find(role => role.role_id === safeRoleId);
+    const matchingRole = getRoleOption(safeRoleId);
     if (matchingRole && matchingRole.name) {
         return matchingRole.name;
     }
@@ -227,10 +279,95 @@ function normalizeRoleId(roleId) {
     return String(roleId || '').trim();
 }
 
+function normalizeRoleOption(roleOption) {
+    if (!roleOption || typeof roleOption !== 'object') {
+        return null;
+    }
+    const role_id = normalizeRoleId(roleOption?.role_id);
+    if (!role_id) {
+        return null;
+    }
+    return {
+        role_id,
+        name: String(roleOption?.name || '').trim(),
+        description: String(roleOption?.description || '').trim(),
+        model_profile: String(roleOption?.model_profile || '').trim(),
+        model_name: String(roleOption?.model_name || '').trim(),
+        capabilities: normalizeModelCapabilities(
+            roleOption?.capabilities,
+            roleOption?.input_modalities,
+        ),
+        input_modalities: Array.isArray(roleOption?.input_modalities)
+            ? roleOption.input_modalities
+                .map(item => String(item || '').trim().toLowerCase())
+                .filter(Boolean)
+            : [],
+    };
+}
+
 function normalizeSessionMode(value) {
     return String(value || '').trim().toLowerCase() === 'orchestration'
         ? 'orchestration'
         : 'normal';
+}
+
+function normalizeModelCapabilities(capabilities, inputModalities) {
+    const normalizedInput = normalizeCapabilityMatrix(capabilities?.input);
+    const normalizedOutput = normalizeCapabilityMatrix(capabilities?.output);
+    const normalizedInputModalities = Array.isArray(inputModalities)
+        ? inputModalities
+            .map(item => String(item || '').trim().toLowerCase())
+            .filter(Boolean)
+        : [];
+    if (normalizedInput.image === null && normalizedInputModalities.includes('image')) {
+        normalizedInput.image = true;
+    }
+    if (normalizedInput.audio === null && normalizedInputModalities.includes('audio')) {
+        normalizedInput.audio = true;
+    }
+    if (normalizedInput.video === null && normalizedInputModalities.includes('video')) {
+        normalizedInput.video = true;
+    }
+    if (normalizedInput.text === null) {
+        normalizedInput.text = true;
+    }
+    if (normalizedOutput.text === null) {
+        normalizedOutput.text = true;
+    }
+    return {
+        input: normalizedInput,
+        output: normalizedOutput,
+    };
+}
+
+function normalizeCapabilityMatrix(matrix) {
+    return {
+        text: normalizeOptionalCapabilityFlag(matrix?.text),
+        image: normalizeOptionalCapabilityFlag(matrix?.image),
+        audio: normalizeOptionalCapabilityFlag(matrix?.audio),
+        video: normalizeOptionalCapabilityFlag(matrix?.video),
+        pdf: normalizeOptionalCapabilityFlag(matrix?.pdf),
+    };
+}
+
+function normalizeOptionalCapabilityFlag(value) {
+    if (value === true) {
+        return true;
+    }
+    if (value === false) {
+        return false;
+    }
+    return null;
+}
+
+function resolveCapabilitySupport(capabilityMatrix, modality) {
+    if (!capabilityMatrix || typeof capabilityMatrix !== 'object') {
+        return null;
+    }
+    if (!(modality in capabilityMatrix)) {
+        return null;
+    }
+    return normalizeOptionalCapabilityFlag(capabilityMatrix[modality]);
 }
 
 export const els = {
