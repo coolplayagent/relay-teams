@@ -20,11 +20,15 @@ import {
   getMainAgentRoleId,
   getNormalModeRoles,
   getRoleDisplayName,
+  getRoleInputModalitySupport,
+  getRoleModelName,
+  getPrimaryRoleId,
   setCoordinatorRoleId,
   setMainAgentRoleId,
   setNormalModeRoles,
   state,
 } from "../core/state.js";
+import * as stateApi from "../core/state.js";
 import { startIntentStream } from "../core/stream.js";
 import { els } from "../utils/dom.js";
 import { showToast } from "../utils/feedback.js";
@@ -35,6 +39,7 @@ const YOLO_STORAGE_KEY = "agent_teams_yolo";
 const THINKING_MODE_STORAGE_KEY = "agent_teams_thinking_enabled";
 const THINKING_EFFORT_STORAGE_KEY = "agent_teams_thinking_effort";
 const DEFAULT_PROMPT_MENTION_TRIGGER = "@";
+const MODEL_PROFILES_UPDATED_EVENT = "agent-teams-model-profiles-updated";
 let orchestrationConfig = {
   default_orchestration_preset_id: "",
   presets: [],
@@ -49,6 +54,382 @@ let promptMentionRange = {
   start: 0,
   end: 0,
 };
+let composerMediaSequence = 0;
+let composerInlineMediaParts = [];
+let composerImagePreviewOverlayEl = null;
+let composerImagePreviewPanelEl = null;
+let composerImagePreviewImageEl = null;
+let composerImagePreviewTitleEl = null;
+let composerImagePreviewCloseEl = null;
+let composerImagePreviewKeydownBound = false;
+
+function resetComposerMedia() {
+  closeComposerImagePreview();
+  composerInlineMediaParts = [];
+  renderComposerMediaPreviews();
+}
+
+function renderComposerMediaPreviews() {
+  const container = els.composerMediaPreviews;
+  if (!container) {
+    return;
+  }
+  if (!Array.isArray(composerInlineMediaParts) || composerInlineMediaParts.length === 0) {
+    if (typeof container.replaceChildren === "function") {
+      container.replaceChildren();
+    } else {
+      container.innerHTML = "";
+    }
+    container.style.display = "none";
+    return;
+  }
+  if (!canRenderComposerMediaPreviewsWithDom(container)) {
+    renderComposerMediaPreviewsFallback(container);
+    return;
+  }
+  container.style.display = "flex";
+  container.replaceChildren();
+  composerInlineMediaParts.forEach((entry) => {
+    const chipEl = buildComposerMediaChip(entry);
+    if (chipEl) {
+      container.appendChild(chipEl);
+    }
+  });
+}
+
+function canRenderComposerMediaPreviewsWithDom(container) {
+  return !!(
+    container &&
+    typeof container.appendChild === "function" &&
+    typeof container.replaceChildren === "function" &&
+    typeof document !== "undefined" &&
+    typeof document.createElement === "function"
+  );
+}
+
+function renderComposerMediaPreviewsFallback(container) {
+  container.style.display = "flex";
+  container.innerHTML = composerInlineMediaParts
+    .map((entry) => {
+      const safeName = escapeHtml(entry?.part?.name || t("composer.image_attachment"));
+      return `
+        <div class="composer-media-chip" data-composer-media-id="${escapeHtml(entry.id)}">
+          <button
+            type="button"
+            class="composer-media-preview"
+            data-composer-media-preview="${escapeHtml(entry.id)}"
+            title="${safeName}"
+          >
+            <img class="composer-media-thumb" src="${escapeHtml(entry.previewUrl)}" alt="${safeName}">
+            <div class="composer-media-meta">
+              <span class="composer-media-name">${safeName}</span>
+              <span class="composer-media-kind">${escapeHtml(t("composer.image_attachment_kind"))}</span>
+            </div>
+          </button>
+          <button
+            type="button"
+            class="composer-media-remove"
+            data-composer-media-remove="${escapeHtml(entry.id)}"
+            title="${escapeHtml(t("composer.remove_image_attachment"))}"
+            aria-label="${escapeHtml(t("composer.remove_image_attachment"))}"
+          >
+            ×
+          </button>
+        </div>
+      `;
+    })
+    .join("");
+  const removeButtons = container.querySelectorAll
+    ? container.querySelectorAll("[data-composer-media-remove]")
+    : [];
+  removeButtons.forEach((button) => {
+    button.onclick = (event) => {
+      event?.stopPropagation?.();
+      removeComposerMediaEntry(button.dataset.composerMediaRemove);
+    };
+  });
+  const previewButtons = container.querySelectorAll
+    ? container.querySelectorAll("[data-composer-media-preview]")
+    : [];
+  previewButtons.forEach((button) => {
+    button.onclick = () => {
+      const entry = composerInlineMediaParts.find(
+        (item) => item.id === button.dataset.composerMediaPreview,
+      );
+      if (entry) {
+        openComposerImagePreview(entry);
+      }
+    };
+  });
+}
+
+function buildComposerMediaChip(entry) {
+  const safeDocument = typeof document !== "undefined" ? document : null;
+  if (!safeDocument || typeof safeDocument.createElement !== "function") {
+    return null;
+  }
+  const safeName = String(entry?.part?.name || "").trim() || t("composer.image_attachment");
+  const chipEl = safeDocument.createElement("div");
+  chipEl.className = "composer-media-chip";
+  chipEl.dataset.composerMediaId = String(entry.id || "");
+
+  const previewButton = safeDocument.createElement("button");
+  previewButton.type = "button";
+  previewButton.className = "composer-media-preview";
+  previewButton.dataset.composerMediaPreview = String(entry.id || "");
+  previewButton.title = safeName;
+  previewButton.setAttribute?.("aria-label", safeName);
+  previewButton.onclick = () => openComposerImagePreview(entry);
+
+  const imageEl = safeDocument.createElement("img");
+  imageEl.className = "composer-media-thumb";
+  imageEl.src = String(entry.previewUrl || "");
+  imageEl.alt = safeName;
+  previewButton.appendChild(imageEl);
+
+  const metaEl = safeDocument.createElement("div");
+  metaEl.className = "composer-media-meta";
+  const nameEl = safeDocument.createElement("span");
+  nameEl.className = "composer-media-name";
+  nameEl.textContent = safeName;
+  metaEl.appendChild(nameEl);
+  const kindEl = safeDocument.createElement("span");
+  kindEl.className = "composer-media-kind";
+  kindEl.textContent = t("composer.image_attachment_kind");
+  metaEl.appendChild(kindEl);
+  previewButton.appendChild(metaEl);
+  chipEl.appendChild(previewButton);
+
+  const removeButton = safeDocument.createElement("button");
+  removeButton.type = "button";
+  removeButton.className = "composer-media-remove";
+  removeButton.dataset.composerMediaRemove = String(entry.id || "");
+  removeButton.title = t("composer.remove_image_attachment");
+  removeButton.setAttribute?.("aria-label", t("composer.remove_image_attachment"));
+  removeButton.textContent = "×";
+  removeButton.onclick = (event) => {
+    event?.stopPropagation?.();
+    removeComposerMediaEntry(entry.id);
+  };
+  chipEl.appendChild(removeButton);
+
+  return chipEl;
+}
+
+function removeComposerMediaEntry(entryId) {
+  composerInlineMediaParts = composerInlineMediaParts.filter(
+    (entry) => entry.id !== entryId,
+  );
+  renderComposerMediaPreviews();
+}
+
+function ensureComposerImagePreviewElements() {
+  if (
+    composerImagePreviewOverlayEl &&
+    composerImagePreviewImageEl &&
+    composerImagePreviewTitleEl &&
+    composerImagePreviewCloseEl
+  ) {
+    return {
+      overlayEl: composerImagePreviewOverlayEl,
+      imageEl: composerImagePreviewImageEl,
+      titleEl: composerImagePreviewTitleEl,
+      closeEl: composerImagePreviewCloseEl,
+    };
+  }
+  const safeDocument = typeof document !== "undefined" ? document : null;
+  const safeBody = safeDocument?.body;
+  if (
+    !safeDocument ||
+    typeof safeDocument.createElement !== "function" ||
+    !safeBody ||
+    typeof safeBody.appendChild !== "function"
+  ) {
+    return null;
+  }
+
+  const overlayEl = safeDocument.createElement("div");
+  overlayEl.className = "composer-image-preview-overlay";
+  overlayEl.hidden = true;
+  overlayEl.onclick = (event) => {
+    if (event?.target === overlayEl) {
+      closeComposerImagePreview();
+    }
+  };
+
+  const panelEl = safeDocument.createElement("div");
+  panelEl.className = "composer-image-preview-panel";
+  overlayEl.appendChild(panelEl);
+
+  const headerEl = safeDocument.createElement("div");
+  headerEl.className = "composer-image-preview-header";
+  panelEl.appendChild(headerEl);
+
+  const titleEl = safeDocument.createElement("div");
+  titleEl.className = "composer-image-preview-title";
+  headerEl.appendChild(titleEl);
+
+  const closeEl = safeDocument.createElement("button");
+  closeEl.type = "button";
+  closeEl.className = "composer-image-preview-close";
+  closeEl.textContent = "×";
+  closeEl.title = t("composer.close_image_preview");
+  closeEl.setAttribute?.("aria-label", t("composer.close_image_preview"));
+  closeEl.onclick = () => closeComposerImagePreview();
+  headerEl.appendChild(closeEl);
+
+  const imageEl = safeDocument.createElement("img");
+  imageEl.className = "composer-image-preview-image";
+  panelEl.appendChild(imageEl);
+
+  safeBody.appendChild(overlayEl);
+
+  composerImagePreviewOverlayEl = overlayEl;
+  composerImagePreviewPanelEl = panelEl;
+  composerImagePreviewImageEl = imageEl;
+  composerImagePreviewTitleEl = titleEl;
+  composerImagePreviewCloseEl = closeEl;
+
+  if (
+    !composerImagePreviewKeydownBound &&
+    typeof safeDocument.addEventListener === "function"
+  ) {
+    safeDocument.addEventListener("keydown", handleComposerImagePreviewKeydown);
+    composerImagePreviewKeydownBound = true;
+  }
+
+  return {
+    overlayEl,
+    imageEl,
+    titleEl,
+    closeEl,
+  };
+}
+
+function openComposerImagePreview(entry) {
+  const nodes = ensureComposerImagePreviewElements();
+  if (!nodes) {
+    return;
+  }
+  const safeName = String(entry?.part?.name || "").trim() || t("composer.image_attachment");
+  nodes.imageEl.src = String(entry?.previewUrl || "");
+  nodes.imageEl.alt = safeName;
+  nodes.titleEl.textContent = safeName;
+  nodes.overlayEl.hidden = false;
+}
+
+function closeComposerImagePreview() {
+  if (!composerImagePreviewOverlayEl) {
+    return;
+  }
+  composerImagePreviewOverlayEl.hidden = true;
+  if (composerImagePreviewImageEl) {
+    composerImagePreviewImageEl.src = "";
+    composerImagePreviewImageEl.alt = "";
+  }
+  if (composerImagePreviewTitleEl) {
+    composerImagePreviewTitleEl.textContent = "";
+  }
+}
+
+function handleComposerImagePreviewKeydown(event) {
+  if (event?.key === "Escape" && composerImagePreviewOverlayEl?.hidden === false) {
+    closeComposerImagePreview();
+  }
+}
+
+function buildComposerInputParts(text) {
+  const parts = [];
+  const safeText = String(text || "").trim();
+  if (safeText) {
+    parts.push({ kind: "text", text: safeText });
+  }
+  composerInlineMediaParts.forEach((entry) => {
+    if (entry?.part) {
+      parts.push(entry.part);
+    }
+  });
+  return parts;
+}
+
+function buildComposerPreviewText(text) {
+  const fragments = [];
+  const safeText = String(text || "").trim();
+  if (safeText) {
+    fragments.push(safeText);
+  }
+  composerInlineMediaParts.forEach((entry) => {
+    const name = String(entry?.part?.name || "").trim() || t("composer.image_attachment");
+    fragments.push(`[image: ${name}]`);
+  });
+  return fragments.join("\n\n").trim();
+}
+
+function resolveCurrentTargetRoleId(rawText) {
+  const mention = parseLeadingRoleMention(rawText);
+  const primaryRoleId = getPrimaryRoleId(state.currentSessionMode) || null;
+  return {
+    mention,
+    targetRoleId: mention.roleId || primaryRoleId,
+  };
+}
+
+function resolveImageInputBlockedMessage(roleId) {
+  const support = getRoleInputModalitySupport(roleId, "image");
+  if (support === true) {
+    return "";
+  }
+  const modelName =
+    getRoleModelName(roleId, { fallback: t("composer.selected_model") }) ||
+    t("composer.selected_model");
+  if (support === false) {
+    return formatMessage("composer.error.image_input_unsupported", {
+      model: modelName,
+    });
+  }
+  return formatMessage("composer.error.image_input_unknown", {
+    model: modelName,
+  });
+}
+
+function ensureImageInputAllowed(roleId) {
+  if (!Array.isArray(composerInlineMediaParts) || composerInlineMediaParts.length === 0) {
+    return true;
+  }
+  const blockedMessage = resolveImageInputBlockedMessage(roleId);
+  if (!blockedMessage) {
+    return true;
+  }
+  sysLog(blockedMessage, "log-error");
+  return false;
+}
+
+async function readFileAsDataUrl(file) {
+  await Promise.resolve();
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Failed to read pasted image"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function buildInlineImageAttachment(file, dataUrl) {
+  const [, encoded = ""] = String(dataUrl || "").split(",", 2);
+  const mimeType = String(file?.type || "").trim() || "image/png";
+  return {
+    id: `composer-image-${++composerMediaSequence}`,
+    previewUrl: dataUrl,
+    part: {
+      kind: "inline_media",
+      modality: "image",
+      mime_type: mimeType,
+      base64_data: encoded,
+      name: String(file?.name || "").trim(),
+      size_bytes: Number.isFinite(file?.size) ? Number(file.size) : null,
+    },
+  };
+}
 
 export function initializeYoloToggle() {
   const savedYolo = readSavedYolo();
@@ -179,10 +560,12 @@ async function refreshRoleConfigOptions({ refreshControls = true } = {}) {
   try {
     const options = await fetchRoleConfigOptions();
     setCoordinatorRoleId(options?.coordinator_role_id || "");
+    stateApi.setCoordinatorRoleOption?.(options?.coordinator_role || null);
     setMainAgentRoleId(options?.main_agent_role_id || "");
     setNormalModeRoles(options?.normal_mode_roles || []);
   } catch (error) {
     setCoordinatorRoleId("");
+    stateApi.setCoordinatorRoleOption?.(null);
     setMainAgentRoleId("");
     setNormalModeRoles([]);
     sysLog(error.message || t("composer.error.role_options_load_failed"), "log-error");
@@ -194,8 +577,8 @@ async function refreshRoleConfigOptions({ refreshControls = true } = {}) {
 }
 
 export async function handleSend() {
-  const rawText = els.promptInput.value.trim();
-  if (!rawText) return;
+  const rawText = String(els.promptInput.value || "").trim();
+  if (!rawText && composerInlineMediaParts.length === 0) return;
   if (state.isGenerating) {
     sysLog(
       t("composer.warning.run_in_progress"),
@@ -221,21 +604,26 @@ export async function handleSend() {
     return;
   }
 
-  const mention = parseLeadingRoleMention(rawText);
+  const { mention, targetRoleId } = resolveCurrentTargetRoleId(rawText);
   if (startsWithPromptMention(rawText) && mention.error) {
     sysLog(mention.error, "log-error");
     return;
   }
-  const text = mention.promptText || rawText;
-  if (!text) {
+  const text = mention.roleId ? mention.promptText : rawText;
+  if (!text && composerInlineMediaParts.length === 0) {
     sysLog(t("composer.error.empty_after_mention"), "log-error");
     return;
   }
-  const targetRoleId = mention.roleId || null;
+  if (!ensureImageInputAllowed(targetRoleId)) {
+    return;
+  }
+  const inputParts = buildComposerInputParts(text);
+  const previewText = buildComposerPreviewText(text);
 
   dismissPromptMentionAutocomplete();
   els.promptInput.value = "";
   els.promptInput.style.height = "auto";
+  resetComposerMedia();
   state.instanceRoleMap = {};
   state.roleInstanceMap = {};
   state.taskInstanceMap = {};
@@ -265,14 +653,67 @@ export async function handleSend() {
       yolo: state.yolo,
       thinking: state.thinking,
       targetRoleId,
+      inputParts,
       onRunCreated: (run) => {
         state.currentSessionCanSwitchMode = false;
         refreshSessionTopologyControls();
-        createLiveRound(run.run_id, text);
-        appendRoundUserMessage(run.run_id, text);
+        createLiveRound(run.run_id, previewText, inputParts);
+        appendRoundUserMessage(run.run_id, inputParts);
       },
     },
   );
+}
+
+export async function handlePromptComposerPaste(event) {
+  const clipboardItems = Array.from(event?.clipboardData?.items || []);
+  const imageItems = clipboardItems.filter((item) =>
+    String(item?.type || "").toLowerCase().startsWith("image/"),
+  );
+  if (imageItems.length === 0) {
+    return;
+  }
+
+  const rawText = String(els.promptInput?.value || "").trim();
+  const { mention, targetRoleId } = resolveCurrentTargetRoleId(rawText);
+  if (startsWithPromptMention(rawText) && mention.error) {
+    event?.preventDefault?.();
+    sysLog(mention.error, "log-error");
+    return;
+  }
+  const blockedMessage = resolveImageInputBlockedMessage(targetRoleId);
+  if (blockedMessage) {
+    event?.preventDefault?.();
+    sysLog(blockedMessage, "log-error");
+    return;
+  }
+
+  event?.preventDefault?.();
+  try {
+    const nextEntries = await Promise.all(
+      imageItems.map(async (item) => {
+        const file = item.getAsFile?.();
+        if (!file) {
+          return null;
+        }
+        const dataUrl = await readFileAsDataUrl(file);
+        if (!dataUrl) {
+          return null;
+        }
+        return buildInlineImageAttachment(file, dataUrl);
+      }),
+    );
+    const addedEntries = nextEntries.filter(Boolean);
+    if (addedEntries.length === 0) {
+      return;
+    }
+    composerInlineMediaParts = composerInlineMediaParts.concat(addedEntries);
+    renderComposerMediaPreviews();
+  } catch (error) {
+    sysLog(
+      error?.message || t("composer.error.image_paste_failed"),
+      "log-error",
+    );
+  }
 }
 
 export function initializePromptMentionAutocomplete() {
@@ -380,6 +821,9 @@ function bindSessionTopologyControls() {
   if (typeof document.addEventListener === "function") {
     document.addEventListener("orchestration-settings-updated", () => {
       void refreshOrchestrationConfig({ refreshControls: true });
+    });
+    document.addEventListener(MODEL_PROFILES_UPDATED_EVENT, () => {
+      void refreshRoleConfigOptions({ refreshControls: true });
     });
     document.addEventListener("agent-teams-session-selected", () => {
       void refreshRoleConfigOptions({ refreshControls: true });

@@ -144,11 +144,10 @@ export function getPanelScrollContainer(instanceId, roleId) {
 }
 
 export function showGateCard(instanceId, roleId, gatePayload) {
-    openAgentPanel(instanceId, roleId, { reveal: true, forceRefresh: false });
-    const panel = getPanel(instanceId);
-    if (!panel) return;
+    const container = resolveGateContainer(instanceId, roleId);
+    if (!container) return;
 
-    panel.scrollEl.querySelectorAll('.gate-card').forEach(card => card.remove());
+    container.querySelectorAll('.gate-card').forEach(card => card.remove());
     const { run_id, task_id, summary, role_id } = gatePayload;
 
     const card = document.createElement('div');
@@ -199,14 +198,14 @@ export function showGateCard(instanceId, roleId, gatePayload) {
         };
     }
 
-    panel.scrollEl.appendChild(card);
-    panel.scrollEl.scrollTop = panel.scrollEl.scrollHeight;
+    container.appendChild(card);
+    container.scrollTop = container.scrollHeight;
 }
 
 export function removeGateCard(instanceId, taskId) {
-    const panel = getPanel(instanceId);
-    if (!panel) return;
-    const el = panel.scrollEl.querySelector(`.gate-card[data-task-id="${taskId}"]`);
+    const container = resolveGateContainer(instanceId, '');
+    if (!container) return;
+    const el = container.querySelector(`.gate-card[data-task-id="${taskId}"]`);
     if (el) el.remove();
 }
 
@@ -216,3 +215,21 @@ export function setRoundPendingApprovals(runId, pendingApprovals) {
 
 export { getActiveInstanceId, getActiveRoundRunId, getPanels } from './state.js';
 export { loadAgentHistory } from './history.js';
+
+function resolveGateContainer(instanceId, roleId) {
+    const panel = getPanel(instanceId);
+    if (panel?.scrollEl) {
+        return panel.scrollEl;
+    }
+    const safeInstanceId = String(instanceId || '').trim();
+    const subagentBody = document.querySelector('.subagent-session-body');
+    if (
+        safeInstanceId
+        && subagentBody
+        && String(subagentBody.dataset?.instanceId || '').trim() === safeInstanceId
+    ) {
+        return subagentBody;
+    }
+    void roleId;
+    return null;
+}

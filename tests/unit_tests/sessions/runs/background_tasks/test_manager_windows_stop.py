@@ -133,14 +133,70 @@ async def test_background_task_manager_stop_unblocks_windows_pipe_runtime(
 @pytest.mark.asyncio
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only background process coverage")
 async def test_background_task_manager_auto_detects_powershell_commands(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    from relay_teams.sessions.runs.background_tasks import (
+        command_runtime as runtime_module,
+    )
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+
     repo = BackgroundTaskRepository(
         tmp_path / "background-terminal-win-powershell-auto.db"
     )
     hub = RunEventHub()
     manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     workspace = _build_workspace_handle(tmp_path)
+    observed_runtime_kinds: list[CommandRuntimeKind] = []
+
+    class _FakePipeProcess:
+        def __init__(self) -> None:
+            self.pid = 43210
+            self.returncode: int | None = None
+            self.stdin = None
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+            self._wait_event = asyncio.Event()
+
+        async def wait(self) -> int:
+            await self._wait_event.wait()
+            assert self.returncode is not None
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+            self.stdout.feed_eof()
+            self.stderr.feed_eof()
+            self._wait_event.set()
+
+    async def _create_command_subprocess(
+        *,
+        command: str,
+        cwd: Path,
+        env: dict[str, str] | None = None,
+        login: bool = False,
+        stdin: int | None = None,
+        stdout: int | None = None,
+        stderr: int | None = None,
+    ) -> _FakePipeProcess:
+        _ = (cwd, env, login, stdin, stdout, stderr)
+        observed_runtime_kinds.append(
+            runtime_module.resolve_command_runtime(command=command).kind
+        )
+        proc = _FakePipeProcess()
+
+        async def _feed_output() -> None:
+            await asyncio.sleep(0)
+            proc.stdout.feed_data(b"PS_AUTO_READY\n")
+
+        asyncio.create_task(_feed_output())
+        return proc
+
+    monkeypatch.setattr(
+        manager_module,
+        "create_command_subprocess",
+        _create_command_subprocess,
+    )
 
     try:
         started = await manager.start_session(
@@ -173,6 +229,7 @@ async def test_background_task_manager_auto_detects_powershell_commands(
         await manager.close()
 
     assert updated.status == BackgroundTaskStatus.RUNNING
+    assert observed_runtime_kinds == [CommandRuntimeKind.POWERSHELL]
     assert any("PS_AUTO_READY" in line for line in stopped.recent_output)
     assert stopped.status == BackgroundTaskStatus.STOPPED
 
@@ -218,15 +275,34 @@ async def test_background_task_manager_windows_supports_multiple_shell_runtimes(
     command: str,
     expected_output: str,
 ) -> None:
-    from relay_teams.sessions.runs.background_tasks import (
-        command_runtime as runtime_module,
-    )
     from relay_teams.sessions.runs.background_tasks import manager as manager_module
 
     repo = BackgroundTaskRepository(tmp_path / "background-terminal-win-runtimes.db")
     hub = RunEventHub()
     manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     workspace = _build_workspace_handle(tmp_path)
+    expected_command = command
+    observed_runtimes: list[ResolvedCommandRuntime] = []
+
+    class _FakePipeProcess:
+        def __init__(self) -> None:
+            self.pid = 50001
+            self.returncode: int | None = None
+            self.stdin = None
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+            self._wait_event = asyncio.Event()
+
+        async def wait(self) -> int:
+            await self._wait_event.wait()
+            assert self.returncode is not None
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+            self.stdout.feed_eof()
+            self.stderr.feed_eof()
+            self._wait_event.set()
 
     async def _create_command_subprocess(
         *,
@@ -238,16 +314,17 @@ async def test_background_task_manager_windows_supports_multiple_shell_runtimes(
         stdout: int | None = None,
         stderr: int | None = None,
     ):
-        return await runtime_module.create_command_subprocess(
-            command=command,
-            cwd=cwd,
-            env=env,
-            runtime=runtime,
-            login=login,
-            stdin=stdin,
-            stdout=stdout,
-            stderr=stderr,
-        )
+        _ = (cwd, env, login, stdin, stdout, stderr)
+        assert command == expected_command
+        observed_runtimes.append(runtime)
+        proc = _FakePipeProcess()
+
+        async def _feed_output() -> None:
+            await asyncio.sleep(0)
+            proc.stdout.feed_data(f"{expected_output}\n".encode("utf-8"))
+
+        asyncio.create_task(_feed_output())
+        return proc
 
     monkeypatch.setattr(
         manager_module,
@@ -288,6 +365,7 @@ async def test_background_task_manager_windows_supports_multiple_shell_runtimes(
     finally:
         await manager.close()
 
+    assert observed_runtimes == [runtime]
     assert any(expected_output in line for line in stopped.recent_output)
     assert stopped.status in {
         BackgroundTaskStatus.RUNNING,

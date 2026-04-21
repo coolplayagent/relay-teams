@@ -25,6 +25,7 @@ let draftModelDiscoveryState = null;
 let draftApiKeyState = createDraftSecretState();
 let draftMaasPasswordState = createDraftSecretState();
 let isModelMenuOpen = false;
+const MODEL_PROFILES_UPDATED_EVENT = 'agent-teams-model-profiles-updated';
 
 const DEFAULT_MAAS_BASE_URL = 'http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/';
 
@@ -39,6 +40,95 @@ function formatMessage(key, values = {}) {
         (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
         t(key),
     );
+}
+
+function dispatchModelProfilesUpdated() {
+    if (typeof document !== 'object' || document === null) {
+        return;
+    }
+    if (typeof document.dispatchEvent !== 'function') {
+        return;
+    }
+    const event = typeof CustomEvent === 'function'
+        ? new CustomEvent(MODEL_PROFILES_UPDATED_EVENT)
+        : { type: MODEL_PROFILES_UPDATED_EVENT };
+    document.dispatchEvent(event);
+}
+
+function normalizeModelCapabilities(capabilities) {
+    if (!capabilities || typeof capabilities !== 'object') {
+        return null;
+    }
+    const input = normalizeCapabilityGroup(capabilities.input, ['text', 'image']);
+    const output = normalizeCapabilityGroup(capabilities.output, ['text']);
+    if (Object.keys(input).length === 0 && Object.keys(output).length === 0) {
+        return null;
+    }
+    return { input, output };
+}
+
+function normalizeCapabilityGroup(group, fields) {
+    const source = group && typeof group === 'object' ? group : {};
+    return fields.reduce((result, field) => {
+        if (source[field] === true) {
+            result[field] = true;
+        } else if (source[field] === false) {
+            result[field] = false;
+        }
+        return result;
+    }, {});
+}
+
+function resolveImageCapabilityState(capabilities) {
+    const normalized = normalizeModelCapabilities(capabilities);
+    if (normalized?.input?.image === true) {
+        return 'supported';
+    }
+    if (normalized?.input?.image === false) {
+        return 'unsupported';
+    }
+    return 'unknown';
+}
+
+function resolveImageCapabilityOverrideValue(capabilities) {
+    const normalized = normalizeModelCapabilities(capabilities);
+    if (normalized?.input?.image === true) {
+        return 'true';
+    }
+    if (normalized?.input?.image === false) {
+        return 'false';
+    }
+    return '';
+}
+
+function buildImageCapabilityChip(capabilities) {
+    const state = resolveImageCapabilityState(capabilities);
+    const labelKey = {
+        supported: 'settings.model.capability_supports_image',
+        unsupported: 'settings.model.capability_text_only',
+        unknown: 'settings.model.capability_unknown',
+    }[state];
+    return `<span class="profile-card-chip profile-card-chip-${state}">${escapeHtml(t(labelKey))}</span>`;
+}
+
+function readDraftCapabilitiesForSave() {
+    const overrideValue = String(
+        document.getElementById('profile-image-input-support')?.value || '',
+    ).trim();
+    if (overrideValue === 'true' || overrideValue === 'false') {
+        return {
+            input: {
+                image: overrideValue === 'true',
+            },
+        };
+    }
+    const discoveredEntry = findDiscoveredModelEntry(
+        document.getElementById('profile-model')?.value || '',
+    );
+    const discoveredCapabilities = normalizeModelCapabilities(
+        discoveredEntry?.capabilities,
+    );
+    return discoveredCapabilities || null;
 }
 
 export function bindModelProfileHandlers() {
@@ -216,6 +306,7 @@ function handleAddProfile() {
     document.getElementById('profile-max-tokens').value = '';
     document.getElementById('profile-context-window').value = '';
     delete document.getElementById('profile-context-window').dataset.autofilledModel;
+    document.getElementById('profile-image-input-support').value = '';
     document.getElementById('profile-connect-timeout').value = '15';
     document.getElementById('profile-ssl-verify').value = '';
     document.getElementById('profile-fallback-policy').value = '';
@@ -270,6 +361,7 @@ function handleEditProfile(name) {
     document.getElementById('profile-max-tokens').value = profile.max_tokens || '';
     document.getElementById('profile-context-window').value = profile.context_window || '';
     delete document.getElementById('profile-context-window').dataset.autofilledModel;
+    document.getElementById('profile-image-input-support').value = resolveImageCapabilityOverrideValue(profile.capabilities);
     document.getElementById('profile-connect-timeout').value = profile.connect_timeout_seconds || 15;
     document.getElementById('profile-ssl-verify').value = serializeTriStateValue(profile.ssl_verify);
     document.getElementById('profile-fallback-policy').value = profile.fallback_policy_id || '';
@@ -310,6 +402,7 @@ async function handleSaveProfile() {
         document.getElementById('profile-context-window').value || '',
     ).trim();
     const contextWindow = contextWindowValue ? parseInt(contextWindowValue) || null : null;
+    const capabilities = readDraftCapabilitiesForSave();
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
     const fallbackPolicyId = String(
@@ -367,6 +460,9 @@ async function handleSaveProfile() {
     if (sslVerify !== null) {
         profile.ssl_verify = sslVerify;
     }
+    if (capabilities) {
+        profile.capabilities = capabilities;
+    }
 
     if (isMaaSProvider(provider)) {
         profile.maas_auth = {
@@ -385,6 +481,7 @@ async function handleSaveProfile() {
     try {
         await saveModelProfile(name, profile);
         await reloadModelConfig();
+        dispatchModelProfilesUpdated();
         resetDraftEditorState();
         renderDraftProbeState();
         renderDraftModelDiscoveryState();
@@ -464,6 +561,7 @@ async function handleDeleteProfile(name) {
     try {
         await deleteModelProfile(name);
         await reloadModelConfig();
+        dispatchModelProfilesUpdated();
         delete profileProbeStates[name];
         showToast({ title: t('settings.model.deleted_title'), message: t('settings.model.deleted_message_detail'), tone: 'success' });
         await loadModelProfilesPanel();
@@ -755,8 +853,14 @@ function renderDiscoveredModels() {
         }
         seenValues.add(modelName);
         const activeClass = currentValue === modelName ? ' is-active' : '';
+        const capabilityChip = buildImageCapabilityChip(modelEntry.capabilities);
         menuOptions.push(
-            `<button class="profile-model-menu-item${activeClass}" data-model-name="${escapeHtml(modelName)}" type="button">${escapeHtml(modelName)}</button>`,
+            `
+                <button class="profile-model-menu-item${activeClass}" data-model-name="${escapeHtml(modelName)}" type="button">
+                    <span class="profile-model-menu-item-main">${escapeHtml(modelName)}</span>
+                    <span class="profile-model-menu-item-meta">${capabilityChip}</span>
+                </button>
+            `,
         );
     });
     modelMenu.innerHTML = menuOptions.join('');
@@ -1001,6 +1105,7 @@ function normalizeDiscoveredModels(result) {
             .map(entry => ({
                 model: String(entry.model || '').trim(),
                 context_window: Number.isInteger(entry.context_window) ? entry.context_window : null,
+                capabilities: normalizeModelCapabilities(entry.capabilities),
             }))
             .filter(entry => entry.model);
     }
@@ -1010,7 +1115,7 @@ function normalizeDiscoveredModels(result) {
     return result.models
         .map(model => String(model || '').trim())
         .filter(Boolean)
-        .map(model => ({ model, context_window: null }));
+        .map(model => ({ model, context_window: null, capabilities: null }));
 }
 
 function findDiscoveredModelEntry(modelName) {
@@ -1391,6 +1496,7 @@ function renderProfileCard(name, profile, index) {
     const defaultChip = profile.is_default === true
         ? `<span class="profile-card-chip profile-card-chip-accent">${escapeHtml(t('settings.model.default_badge'))}</span>`
         : '';
+    const capabilityChip = buildImageCapabilityChip(profile.capabilities);
     const modelLabel = profile.model || t('settings.model.no_model');
     const baseUrlLabel = profile.base_url || t('settings.model.no_endpoint');
     const fallbackLabel = profile.fallback_policy_id
@@ -1407,6 +1513,7 @@ function renderProfileCard(name, profile, index) {
                             <h4>${escapeHtml(name)}</h4>
                             <div class="profile-card-chips">
                                 <span class="profile-card-chip">${escapeHtml(providerLabel)}</span>
+                                ${capabilityChip}
                                 ${defaultChip}
                             </div>
                         </div>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import signal
 import os
 
@@ -373,6 +374,30 @@ def test_kill_process_tree_by_pid_requires_posix_exit_after_sigkill(
     assert wait_calls == [runtime_module._SIGKILL_GRACE_SECONDS, 2]
 
 
+def test_kill_process_tree_by_pid_uses_short_windows_taskkill_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_timeout: float | None = None
+
+    class _CompletedProcess:
+        def __init__(self) -> None:
+            self.returncode = 0
+
+    def _fake_run(*args: object, **kwargs: object) -> _CompletedProcess:
+        nonlocal observed_timeout
+        _ = args
+        timeout = kwargs.get("timeout")
+        assert isinstance(timeout, int | float)
+        observed_timeout = float(timeout)
+        return _CompletedProcess()
+
+    monkeypatch.setattr(runtime_module, "_is_windows", lambda: True)
+    monkeypatch.setattr(runtime_module.subprocess, "run", _fake_run)
+
+    assert kill_process_tree_by_pid(3210) is True
+    assert observed_timeout == runtime_module._SIGKILL_GRACE_SECONDS
+
+
 @pytest.mark.asyncio
 async def test_threaded_process_writer_defers_blocking_write_to_drain() -> None:
     writes: list[bytes] = []
@@ -400,3 +425,47 @@ async def test_threaded_process_writer_defers_blocking_write_to_drain() -> None:
 
     assert writes == [b"hello world"]
     assert flush_count == 1
+
+
+@pytest.mark.asyncio
+async def test_kill_process_tree_returns_after_direct_windows_kill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.pid = 3210
+            self.returncode: int | None = None
+            self.stdin = None
+            self.stdout = None
+            self.stderr = None
+            self._wait_event = asyncio.Event()
+
+        async def wait(self) -> int:
+            await self._wait_event.wait()
+            assert self.returncode is not None
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -9
+            self._wait_event.set()
+
+    proc = _FakeProcess()
+    tree_kill_called = False
+
+    async def _fake_kill_process_tree_by_pid(pid: int) -> bool:
+        nonlocal tree_kill_called
+        assert pid == proc.pid
+        tree_kill_called = True
+        return False
+
+    monkeypatch.setattr(runtime_module, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        runtime_module,
+        "_kill_process_tree_by_pid",
+        _fake_kill_process_tree_by_pid,
+    )
+
+    await asyncio.wait_for(runtime_module._kill_process_tree(proc), timeout=0.5)
+
+    assert tree_kill_called is False
+    assert proc.returncode == -9

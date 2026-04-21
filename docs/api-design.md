@@ -901,7 +901,7 @@ Notes:
 Lists one session-level agent instance per delegated role in the session. Each entry also includes a compact reflection preview for the subagent role in the current workspace, plus the latest runtime system prompt snapshot and runtime tools JSON captured before the most recent subagent execution step.
 
 Notes:
-- This endpoint continues to back the orchestration/legacy right-rail agent list.
+- This endpoint is now a session agent snapshot endpoint for runtime inspection and reflection data.
 - Normal-mode `spawn_subagent` child sessions are excluded from this projection.
 
 Response fields include:
@@ -917,12 +917,13 @@ Response fields include:
 
 ### `GET /sessions/{session_id}/subagents`
 
-Lists normal-mode `spawn_subagent` runs as instance-level child-session projections.
+Lists session subagent instances as instance-level child-session projections for the unified left-sidebar navigation.
 
 Notes:
-- Returns only subagent instances whose `run_id` is a normal-mode synthetic `subagent_run_*`.
-- Results are instance-scoped and are not collapsed by `role_id`, so multiple subagent runs under the same role are all returned.
-- Intended for the left sidebar child-session navigation, not the orchestration right rail.
+- In normal mode, returns `spawn_subagent` child-session instances whose `run_id` is a synthetic `subagent_run_*`.
+- In orchestration mode, returns all non-system delegated agent instances in the session, one row per `instance_id`.
+- Results are instance-scoped and are not collapsed by `role_id`, so multiple instances under the same role are all returned.
+- Intended for the left sidebar child-session navigation across both session modes.
 
 Response fields include:
 - `instance_id`

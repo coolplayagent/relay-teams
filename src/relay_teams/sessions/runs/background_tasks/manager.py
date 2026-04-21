@@ -1392,7 +1392,7 @@ def _normalize_poll_timeout(
         return min(MAX_WRITE_WAIT_MS, yield_time_ms)
     if yield_time_ms is None:
         return MIN_EMPTY_POLL_YIELD_MS
-    return min(MAX_BACKGROUND_POLL_MS, max(MIN_EMPTY_POLL_YIELD_MS, yield_time_ms))
+    return min(MAX_BACKGROUND_POLL_MS, yield_time_ms)
 
 
 def _background_task_state_event_name(status: BackgroundTaskStatus) -> str:

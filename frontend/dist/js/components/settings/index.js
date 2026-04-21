@@ -314,6 +314,14 @@ function createModal() {
                                                     <input type="number" id="profile-context-window" value="" min="1" autocomplete="off" placeholder="Optional" data-i18n-placeholder="settings.model.optional">
                                                 </div>
                                                 <div class="form-group">
+                                                    <label for="profile-image-input-support" data-i18n="settings.model.image_input_support">Image Input</label>
+                                                    <select id="profile-image-input-support">
+                                                        <option value="" data-i18n="settings.model.image_input_support_auto">Follow discovery / unknown</option>
+                                                        <option value="true" data-i18n="settings.model.image_input_support_true">Supports image input</option>
+                                                        <option value="false" data-i18n="settings.model.image_input_support_false">Text only</option>
+                                                    </select>
+                                                </div>
+                                                <div class="form-group">
                                                     <label for="profile-connect-timeout" data-i18n="settings.model.connect_timeout">Connect Timeout (s)</label>
                                                     <input type="number" id="profile-connect-timeout" value="15" step="1" min="1" max="300" autocomplete="off">
                                                 </div>

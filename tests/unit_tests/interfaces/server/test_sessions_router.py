@@ -34,6 +34,21 @@ class _FakeSessionService:
         self.raise_missing_list_agents = False
         self.raise_missing_list_subagents = False
         self.delete_subagent_error: Exception | None = None
+        self.subagent_rows: tuple[dict[str, object], ...] = (
+            {
+                "instance_id": "inst-subagent-1",
+                "role_id": "Explorer",
+                "run_id": "subagent_run_123",
+                "title": "Explore issue",
+                "status": "completed",
+                "run_status": "running",
+                "run_phase": "running",
+                "last_event_id": 12,
+                "checkpoint_event_id": 8,
+                "stream_connected": True,
+                "conversation_id": "conv_session_1_explorer_inst_subagent_1",
+            },
+        )
 
     def create_session(
         self,
@@ -59,26 +74,15 @@ class _FakeSessionService:
     def list_sessions(self) -> tuple[SessionRecord, ...]:  # pragma: no cover
         raise AssertionError("not used")
 
+    def list_session_subagents(self, session_id: str) -> tuple[dict[str, object], ...]:
+        if self.raise_missing_list_subagents:
+            raise KeyError(session_id)
+        return self.subagent_rows
+
     def list_normal_mode_subagents(
         self, session_id: str
     ) -> tuple[dict[str, object], ...]:
-        if self.raise_missing_list_subagents:
-            raise KeyError(session_id)
-        return (
-            {
-                "instance_id": "inst-subagent-1",
-                "role_id": "Explorer",
-                "run_id": "subagent_run_123",
-                "title": "Explore issue",
-                "status": "completed",
-                "run_status": "running",
-                "run_phase": "running",
-                "last_event_id": 12,
-                "checkpoint_event_id": 8,
-                "stream_connected": True,
-                "conversation_id": "conv_session_1_explorer_inst_subagent_1",
-            },
-        )
+        return self.list_session_subagents(session_id)
 
     def list_agents_in_session(self, session_id: str) -> tuple[dict[str, object], ...]:
         if self.raise_missing_list_agents:
@@ -577,6 +581,45 @@ def test_list_session_subagents_route_returns_projected_subagents() -> None:
             "checkpoint_event_id": 8,
             "stream_connected": True,
             "conversation_id": "conv_session_1_explorer_inst_subagent_1",
+        }
+    ]
+
+
+def test_list_session_subagents_route_returns_orchestration_instances() -> None:
+    fake_service = _FakeSessionService()
+    fake_service.subagent_rows = (
+        {
+            "instance_id": "inst-writer-2",
+            "role_id": "Writer",
+            "run_id": "run-main-123",
+            "title": "Draft response",
+            "status": "running",
+            "run_status": "running",
+            "run_phase": "running",
+            "last_event_id": 18,
+            "checkpoint_event_id": 15,
+            "stream_connected": False,
+            "conversation_id": "conv_session_1_writer_inst_writer_2",
+        },
+    )
+    client = _create_client(fake_service)
+
+    response = client.get("/api/sessions/session-1/subagents")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "instance_id": "inst-writer-2",
+            "role_id": "Writer",
+            "run_id": "run-main-123",
+            "title": "Draft response",
+            "status": "running",
+            "run_status": "running",
+            "run_phase": "running",
+            "last_event_id": 18,
+            "checkpoint_event_id": 15,
+            "stream_connected": False,
+            "conversation_id": "conv_session_1_writer_inst_writer_2",
         }
     ]
 

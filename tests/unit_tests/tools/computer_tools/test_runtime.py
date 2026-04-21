@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from pydantic import JsonValue
 
@@ -14,8 +14,14 @@ from relay_teams.computer import (
 )
 from relay_teams.media import MediaAssetRecord, MediaModality, MediaRefContentPart
 from relay_teams.media.models import MediaAssetStorageKind
+from relay_teams.tools.computer_tools import register_computer_tools
 from relay_teams.tools.runtime import ToolContext
 from relay_teams.tools.computer_tools.runtime import _approval_request, _project_result
+
+if TYPE_CHECKING:
+    from pydantic_ai import Agent
+
+    from relay_teams.tools.runtime import ToolDeps
 
 
 class _FakeMediaAssetService:
@@ -98,6 +104,22 @@ class _FakeContext:
         self.deps = _FakeDeps()
 
 
+class _FakeAgent:
+    def __init__(self) -> None:
+        self.tools: dict[str, object] = {}
+
+    def tool(self, *, description: str | None = None):
+        _ = description
+
+        def _decorator(func: object) -> object:
+            name = getattr(func, "__name__", "")
+            if isinstance(name, str) and name:
+                self.tools[name] = func
+            return func
+
+        return _decorator
+
+
 def test_approval_request_uses_builtin_computer_descriptor() -> None:
     request = _approval_request(
         "drag_between",
@@ -144,3 +166,19 @@ def test_project_result_attaches_media_ref_when_screenshot_is_present() -> None:
     internal_data = cast(dict[str, JsonValue], projection.internal_data)
     assert internal_data["media_asset_id"] == "asset-computer-1"
     assert ctx.deps.media_asset_service.calls[0]["source"] == "computer_tool"
+
+
+def test_register_computer_tools_registers_each_agent_instance_once() -> None:
+    first_agent = _FakeAgent()
+
+    register_computer_tools(cast("Agent[ToolDeps, str]", first_agent))
+    first_tool_names = set(first_agent.tools.keys())
+    register_computer_tools(cast("Agent[ToolDeps, str]", first_agent))
+
+    second_agent = _FakeAgent()
+    register_computer_tools(cast("Agent[ToolDeps, str]", second_agent))
+
+    assert "focus_window" in first_tool_names
+    assert "type_text" in first_tool_names
+    assert set(first_agent.tools.keys()) == first_tool_names
+    assert set(second_agent.tools.keys()) == first_tool_names

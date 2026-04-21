@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 
 import httpx
@@ -246,32 +247,19 @@ def test_manual_task_dispatch_endpoint_is_not_exposed(api_client: httpx.Client) 
 
 def test_ai_run_executes_builtin_computer_tools_with_fake_runtime(
     api_client: httpx.Client,
+    integration_env: IntegrationEnvironment,
 ) -> None:
-    original_response = api_client.get("/api/roles/configs/MainAgent")
-    original_response.raise_for_status()
-    original_record = original_response.json()
-    assert isinstance(original_record, dict)
-
-    updated_record = dict(original_record)
-    updated_tools = {
-        str(tool)
-        for tool in updated_record.get("tools", [])
-        if isinstance(tool, str) and tool
-    }
-    updated_tools.update({"capture_screen", "launch_app"})
-    updated_record["tools"] = sorted(updated_tools)
-    updated_record["execution_surface"] = "desktop"
-
-    save_response = api_client.put(
-        "/api/roles/configs/MainAgent",
-        json=_role_draft_payload(updated_record),
+    role_id = new_session_id("computer-role-basic")
+    _create_runtime_test_role(
+        api_client,
+        role_id=role_id,
+        name="Computer Validation Role",
+        tools={"capture_screen", "launch_app"},
     )
-    save_response.raise_for_status()
-    _wait_for_role_tools(api_client, "MainAgent", {"capture_screen", "launch_app"})
-
     try:
-        session_id = create_session(
+        session_id = _create_session_for_role(
             api_client,
+            role_id=role_id,
             session_id=new_session_id("session-computer"),
         )
         run_id = create_run(
@@ -281,18 +269,15 @@ def test_ai_run_executes_builtin_computer_tools_with_fake_runtime(
             execution_mode="ai",
             yolo=True,
         )
-        events = stream_run_until_terminal(api_client, run_id=run_id)
+        _ = stream_run_until_terminal(api_client, run_id=run_id)
     finally:
-        restore_response = api_client.put(
-            "/api/roles/configs/MainAgent",
-            json=_role_draft_payload(original_record),
-        )
-        restore_response.raise_for_status()
+        _delete_role_config(api_client, role_id)
 
-    events = _session_run_events(
-        api_client,
+    events = _persisted_run_events(
+        integration_env,
         session_id=session_id,
         run_id=run_id,
+        expected_event_types={"tool_call", "tool_result", "run_completed"},
     )
     tool_calls = [
         json.loads(str(event["payload_json"]))
@@ -329,36 +314,19 @@ def test_ai_run_executes_builtin_computer_tools_with_fake_runtime(
 
 def test_ai_run_executes_builtin_mouse_computer_tools_with_fake_runtime(
     api_client: httpx.Client,
+    integration_env: IntegrationEnvironment,
 ) -> None:
-    original_response = api_client.get("/api/roles/configs/MainAgent")
-    original_response.raise_for_status()
-    original_record = original_response.json()
-    assert isinstance(original_record, dict)
-
-    updated_record = dict(original_record)
-    updated_tools = {
-        str(tool)
-        for tool in updated_record.get("tools", [])
-        if isinstance(tool, str) and tool
-    }
-    updated_tools.update({"click_at", "double_click_at", "drag_between", "scroll_view"})
-    updated_record["tools"] = sorted(updated_tools)
-    updated_record["execution_surface"] = "desktop"
-
-    save_response = api_client.put(
-        "/api/roles/configs/MainAgent",
-        json=_role_draft_payload(updated_record),
-    )
-    save_response.raise_for_status()
-    _wait_for_role_tools(
+    role_id = new_session_id("computer-role-mouse")
+    _create_runtime_test_role(
         api_client,
-        "MainAgent",
-        {"click_at", "double_click_at", "drag_between", "scroll_view"},
+        role_id=role_id,
+        name="Computer Mouse Validation Role",
+        tools={"click_at", "double_click_at", "drag_between", "scroll_view"},
     )
-
     try:
-        session_id = create_session(
+        session_id = _create_session_for_role(
             api_client,
+            role_id=role_id,
             session_id=new_session_id("session-computer-mouse"),
         )
         run_id = create_run(
@@ -370,16 +338,13 @@ def test_ai_run_executes_builtin_mouse_computer_tools_with_fake_runtime(
         )
         _ = stream_run_until_terminal(api_client, run_id=run_id)
     finally:
-        restore_response = api_client.put(
-            "/api/roles/configs/MainAgent",
-            json=_role_draft_payload(original_record),
-        )
-        restore_response.raise_for_status()
+        _delete_role_config(api_client, role_id)
 
-    events = _session_run_events(
-        api_client,
+    events = _persisted_run_events(
+        integration_env,
         session_id=session_id,
         run_id=run_id,
+        expected_event_types={"tool_call", "tool_result", "run_completed"},
     )
     tool_calls = [
         json.loads(str(event["payload_json"]))
@@ -436,36 +401,19 @@ def test_ai_run_executes_builtin_mouse_computer_tools_with_fake_runtime(
 
 def test_ai_run_executes_builtin_input_computer_tools_with_fake_runtime(
     api_client: httpx.Client,
+    integration_env: IntegrationEnvironment,
 ) -> None:
-    original_response = api_client.get("/api/roles/configs/MainAgent")
-    original_response.raise_for_status()
-    original_record = original_response.json()
-    assert isinstance(original_record, dict)
-
-    updated_record = dict(original_record)
-    updated_tools = {
-        str(tool)
-        for tool in updated_record.get("tools", [])
-        if isinstance(tool, str) and tool
-    }
-    updated_tools.update({"list_windows", "focus_window", "type_text", "hotkey"})
-    updated_record["tools"] = sorted(updated_tools)
-    updated_record["execution_surface"] = "desktop"
-
-    save_response = api_client.put(
-        "/api/roles/configs/MainAgent",
-        json=_role_draft_payload(updated_record),
-    )
-    save_response.raise_for_status()
-    _wait_for_role_tools(
+    role_id = new_session_id("computer-role-input")
+    _create_runtime_test_role(
         api_client,
-        "MainAgent",
-        {"list_windows", "focus_window", "type_text", "hotkey"},
+        role_id=role_id,
+        name="Computer Input Validation Role",
+        tools={"list_windows", "focus_window", "type_text", "hotkey"},
     )
-
     try:
-        session_id = create_session(
+        session_id = _create_session_for_role(
             api_client,
+            role_id=role_id,
             session_id=new_session_id("session-computer-input"),
         )
         run_id = create_run(
@@ -477,16 +425,13 @@ def test_ai_run_executes_builtin_input_computer_tools_with_fake_runtime(
         )
         _ = stream_run_until_terminal(api_client, run_id=run_id)
     finally:
-        restore_response = api_client.put(
-            "/api/roles/configs/MainAgent",
-            json=_role_draft_payload(original_record),
-        )
-        restore_response.raise_for_status()
+        _delete_role_config(api_client, role_id)
 
-    events = _session_run_events(
-        api_client,
+    events = _persisted_run_events(
+        integration_env,
         session_id=session_id,
         run_id=run_id,
+        expected_event_types={"tool_call", "tool_result", "run_completed"},
     )
     tool_calls = [
         json.loads(str(event["payload_json"]))
@@ -546,36 +491,19 @@ def test_ai_run_executes_builtin_input_computer_tools_with_fake_runtime(
 
 def test_ai_run_executes_builtin_wait_for_window_computer_tools_with_fake_runtime(
     api_client: httpx.Client,
+    integration_env: IntegrationEnvironment,
 ) -> None:
-    original_response = api_client.get("/api/roles/configs/MainAgent")
-    original_response.raise_for_status()
-    original_record = original_response.json()
-    assert isinstance(original_record, dict)
-
-    updated_record = dict(original_record)
-    updated_tools = {
-        str(tool)
-        for tool in updated_record.get("tools", [])
-        if isinstance(tool, str) and tool
-    }
-    updated_tools.update({"capture_screen", "launch_app", "wait_for_window"})
-    updated_record["tools"] = sorted(updated_tools)
-    updated_record["execution_surface"] = "desktop"
-
-    save_response = api_client.put(
-        "/api/roles/configs/MainAgent",
-        json=_role_draft_payload(updated_record),
-    )
-    save_response.raise_for_status()
-    _wait_for_role_tools(
+    role_id = new_session_id("computer-role-real")
+    _create_runtime_test_role(
         api_client,
-        "MainAgent",
-        {"capture_screen", "launch_app", "wait_for_window"},
+        role_id=role_id,
+        name="Computer Wait Validation Role",
+        tools={"capture_screen", "launch_app", "wait_for_window"},
     )
-
     try:
-        session_id = create_session(
+        session_id = _create_session_for_role(
             api_client,
+            role_id=role_id,
             session_id=new_session_id("session-real-computer"),
         )
         run_id = create_run(
@@ -585,18 +513,15 @@ def test_ai_run_executes_builtin_wait_for_window_computer_tools_with_fake_runtim
             execution_mode="ai",
             yolo=True,
         )
-        events = stream_run_until_terminal(api_client, run_id=run_id)
+        _ = stream_run_until_terminal(api_client, run_id=run_id)
     finally:
-        restore_response = api_client.put(
-            "/api/roles/configs/MainAgent",
-            json=_role_draft_payload(original_record),
-        )
-        restore_response.raise_for_status()
+        _delete_role_config(api_client, role_id)
 
-    events = _session_run_events(
-        api_client,
+    events = _persisted_run_events(
+        integration_env,
         session_id=session_id,
         run_id=run_id,
+        expected_event_types={"tool_call", "tool_result", "run_completed"},
     )
     tool_calls = [
         json.loads(str(event["payload_json"]))
@@ -649,29 +574,72 @@ def _role_draft_payload(record: dict[str, object]) -> dict[str, object]:
         "model_profile": record["model_profile"],
         "bound_agent_id": record.get("bound_agent_id"),
         "execution_surface": record.get("execution_surface", "api"),
+        "mode": record.get("mode", "primary"),
         "memory_profile": record["memory_profile"],
         "system_prompt": record["system_prompt"],
     }
 
 
-def _session_run_events(
-    api_client: httpx.Client,
+def _create_runtime_test_role(
+    client: httpx.Client,
     *,
+    role_id: str,
+    name: str,
+    tools: set[str],
+) -> None:
+    template_response = client.get("/api/roles/configs/MainAgent")
+    template_response.raise_for_status()
+    template_record = template_response.json()
+    assert isinstance(template_record, dict)
+
+    updated_record = dict(template_record)
+    updated_record["source_role_id"] = None
+    updated_record["role_id"] = role_id
+    updated_record["name"] = name
+    updated_record["description"] = f"{name} for integration coverage."
+    updated_record["tools"] = sorted(
+        {
+            str(tool)
+            for tool in updated_record.get("tools", [])
+            if isinstance(tool, str) and tool
+        }
+        | tools
+    )
+    updated_record["execution_surface"] = "desktop"
+    updated_record["mode"] = "primary"
+
+    save_response = client.put(
+        f"/api/roles/configs/{role_id}",
+        json=_role_draft_payload(updated_record),
+    )
+    save_response.raise_for_status()
+    _wait_for_runtime_role_tools(client, role_id, tools)
+
+
+def _create_session_for_role(
+    client: httpx.Client,
+    *,
+    role_id: str,
     session_id: str,
-    run_id: str,
-) -> list[dict[str, object]]:
-    response = api_client.get(f"/api/sessions/{session_id}/events")
-    response.raise_for_status()
-    payload = response.json()
-    assert isinstance(payload, list)
-    return [
-        event
-        for event in payload
-        if isinstance(event, dict) and str(event.get("trace_id") or "") == run_id
-    ]
+) -> str:
+    created_session_id = create_session(client, session_id=session_id)
+    topology_response = client.patch(
+        f"/api/sessions/{created_session_id}/topology",
+        json={
+            "session_mode": "normal",
+            "normal_root_role_id": role_id,
+        },
+    )
+    topology_response.raise_for_status()
+    return created_session_id
 
 
-def _wait_for_role_tools(
+def _delete_role_config(client: httpx.Client, role_id: str) -> None:
+    delete_response = client.delete(f"/api/roles/configs/{role_id}")
+    delete_response.raise_for_status()
+
+
+def _wait_for_runtime_role_tools(
     client: httpx.Client,
     role_id: str,
     expected_tools: set[str],
@@ -680,20 +648,81 @@ def _wait_for_role_tools(
 ) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        response = client.get(f"/api/roles/configs/{role_id}")
-        response.raise_for_status()
-        payload = response.json()
+        options_response = client.get("/api/roles:options")
+        options_response.raise_for_status()
+        options_payload = options_response.json()
+        role_visible = False
+        normal_mode_roles = options_payload.get("normal_mode_roles", [])
+        if isinstance(normal_mode_roles, list):
+            role_visible = any(
+                isinstance(role, dict) and str(role.get("role_id") or "") == role_id
+                for role in normal_mode_roles
+            )
+        if not role_visible:
+            time.sleep(0.1)
+            continue
+
+        config_response = client.get(f"/api/roles/configs/{role_id}")
+        config_response.raise_for_status()
+        config_payload = config_response.json()
         tools = {
             str(tool)
-            for tool in payload.get("tools", [])
+            for tool in config_payload.get("tools", [])
             if isinstance(tool, str) and tool
         }
         if expected_tools.issubset(tools):
             return
         time.sleep(0.1)
     raise AssertionError(
-        f"Role {role_id} did not expose expected tools within {timeout_seconds}s: {sorted(expected_tools)}"
+        f"Runtime role {role_id} did not expose expected tools within {timeout_seconds}s: {sorted(expected_tools)}"
     )
+
+
+def _persisted_run_events(
+    integration_env: IntegrationEnvironment,
+    *,
+    session_id: str,
+    run_id: str,
+    expected_event_types: set[str] | None = None,
+    timeout_seconds: float = 15.0,
+) -> list[dict[str, object]]:
+    deadline = time.monotonic() + timeout_seconds
+    database_path = integration_env.config_dir / "relay_teams.db"
+    required_event_types = expected_event_types or set()
+    last_events: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        with sqlite3.connect(database_path) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                """
+                SELECT event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at
+                FROM events
+                WHERE session_id=? AND trace_id=?
+                ORDER BY id ASC
+                """,
+                (session_id, run_id),
+            ).fetchall()
+        last_events = [
+            {
+                "event_type": str(row["event_type"]),
+                "trace_id": str(row["trace_id"]),
+                "session_id": str(row["session_id"]),
+                "task_id": str(row["task_id"]) if row["task_id"] is not None else None,
+                "instance_id": (
+                    str(row["instance_id"]) if row["instance_id"] is not None else None
+                ),
+                "payload_json": str(row["payload_json"]),
+                "occurred_at": str(row["occurred_at"]),
+            }
+            for row in rows
+        ]
+        observed_event_types = {
+            str(event.get("event_type") or "") for event in last_events
+        }
+        if required_event_types.issubset(observed_event_types):
+            return last_events
+        time.sleep(0.1)
+    return last_events
 
 
 def _get_fake_llm_call_count(integration_env: IntegrationEnvironment) -> int:

@@ -123,7 +123,12 @@ from relay_teams.computer import (
     describe_builtin_tool,
     describe_mcp_tool,
 )
-from relay_teams.media import MediaAssetService
+from relay_teams.media import (
+    InlineMediaContentPart,
+    MediaAssetService,
+    MediaModality,
+    MediaRefContentPart,
+)
 from relay_teams.monitors import MonitorService
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime import (
@@ -397,6 +402,16 @@ def _content_payload(value: JsonValue | None) -> tuple[dict[str, JsonValue], ...
     return tuple(items)
 
 
+def _request_contains_image_input(request: LLMRequest) -> bool:
+    for part in request.input:
+        if (
+            isinstance(part, (InlineMediaContentPart, MediaRefContentPart))
+            and part.modality == MediaModality.IMAGE
+        ):
+            return True
+    return False
+
+
 def _model_step_payload(
     *,
     role_id: str,
@@ -578,6 +593,7 @@ class AgentLlmSession:
                     request=request,
                     contexts=hook_system_contexts,
                 )
+        self._validate_request_input_capabilities(request)
         if self._metric_recorder is not None:
             record_session_step(
                 self._metric_recorder,
@@ -4429,3 +4445,22 @@ class AgentLlmSession:
         except KeyError:
             yolo = False
         return self._tool_approval_policy.with_yolo(yolo)
+
+    def _validate_request_input_capabilities(self, request: LLMRequest) -> None:
+        if not _request_contains_image_input(request):
+            return
+        image_capability = (
+            self._config.capabilities.input.image
+            if self._config.capabilities is not None
+            else None
+        )
+        if image_capability is True:
+            return
+        model_name = self._config.model
+        if image_capability is False:
+            raise RuntimeError(
+                f"Model {model_name} does not support image input. Remove the image or switch to a model that accepts image input."
+            )
+        raise RuntimeError(
+            f"Cannot confirm whether model {model_name} supports image input. Remove the image, switch to a model with explicit image support, or mark the model as supporting image input in model settings."
+        )

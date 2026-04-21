@@ -6,7 +6,6 @@ import { initSettings, openSettings, initAppearanceOnStartup } from "../componen
 import { initializeProjectView } from "../components/projectView.js";
 import { initializeContextIndicators } from "../components/contextIndicators.js";
 import { initializeSessionTokenUsage } from "../components/sessionTokenUsage.js";
-import { initializeSubagentRail } from "../components/subagentRail.js";
 import { initializeObservability } from "../components/observability.js";
 import {
   handleNewProjectClick,
@@ -22,6 +21,7 @@ import { resumeRecoverableRun } from "./recovery.js";
 import {
   handlePromptComposerInput,
   handlePromptComposerKeydown,
+  handlePromptComposerPaste,
   initializeSessionTopologyControls,
   initializePromptMentionAutocomplete,
   initializeThinkingControls,
@@ -51,6 +51,9 @@ export function setupEventBindings(handleSend) {
       e.preventDefault();
       void handleSend();
     }
+  });
+  els.promptInput.addEventListener("paste", (e) => {
+    void handlePromptComposerPaste(e);
   });
   if (els.chatForm) {
     els.chatForm.addEventListener("submit", (e) => {
@@ -108,7 +111,6 @@ export async function initApp(selectSession, selectSubagentSession, handleSend) 
   initializePromptMentionAutocomplete();
   initializeContextIndicators();
   initializeSessionTokenUsage();
-  initializeSubagentRail();
   initializeObservability();
   initializeProjectView();
   setupEventBindings(handleSend);

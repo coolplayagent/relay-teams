@@ -18,6 +18,11 @@ import {
     getOrCreateStreamBlock,
     appendStreamChunk,
 } from '../messageRenderer.js';
+import {
+    buildStructuredUserPromptSummary,
+    userPromptItemToStructuredPart,
+} from '../messageRenderer/helpers/block.js';
+import { appendStructuredContentPart } from '../messageRenderer/helpers/content.js';
 import { renderRoundNavigator, setActiveRoundNav } from './navigator.js';
 import { applyRoundPage, fetchInitialRoundsPage, fetchOlderRoundsPage } from './paging.js';
 import { roundsState } from './state.js';
@@ -47,9 +52,11 @@ export async function loadSessionRounds(sessionId, options = {}) {
     }
 }
 
-export function createLiveRound(runId, intentText) {
+export function createLiveRound(runId, intentText, intentParts = null) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
+    const normalizedIntent = normalizeRoundIntentText(intentText);
+    const normalizedIntentParts = normalizeRoundIntentParts(intentParts);
 
     const existingIndex = roundsState.currentRounds.findIndex(round => round.run_id === safeRunId);
     if (existingIndex === -1) {
@@ -58,7 +65,8 @@ export function createLiveRound(runId, intentText) {
             {
                 run_id: safeRunId,
                 created_at: new Date().toISOString(),
-                intent: intentText,
+                intent: normalizedIntent,
+                intent_parts: normalizedIntentParts,
                 primary_role_id: getRunPrimaryRoleId(safeRunId) || null,
                 coordinator_messages: [],
                 instance_role_map: {},
@@ -67,6 +75,7 @@ export function createLiveRound(runId, intentText) {
                 run_phase: 'running',
                 is_recoverable: true,
                 pending_tool_approval_count: 0,
+                has_user_messages: true,
             },
         ];
     } else {
@@ -74,10 +83,13 @@ export function createLiveRound(runId, intentText) {
             round.run_id === safeRunId
                 ? {
                     ...round,
+                    intent: normalizedIntent || round.intent,
+                    intent_parts: normalizedIntentParts || round.intent_parts || null,
                     primary_role_id: round.primary_role_id || getRunPrimaryRoleId(safeRunId) || null,
                     run_status: round.run_status || 'running',
                     run_phase: round.run_phase || 'running',
                     is_recoverable: round.is_recoverable !== false,
+                    has_user_messages: true,
                 }
                 : round,
         );
@@ -106,29 +118,143 @@ function shouldPreserveSubagentView(sessionId) {
 export function appendRoundUserMessage(runId, text) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
+    const normalizedIntentParts = normalizeRoundIntentParts(text);
+    const normalizedIntentText = buildRoundIntentPreviewText(text);
     const roundIndex = roundsState.currentRounds.findIndex(round => round.run_id === safeRunId);
     if (roundIndex >= 0) {
         roundsState.currentRounds = roundsState.currentRounds.map(round =>
             round.run_id === safeRunId
-                ? { ...round, has_user_messages: true }
+                ? {
+                    ...round,
+                    has_user_messages: true,
+                    intent: normalizedIntentText || round.intent,
+                    intent_parts: normalizedIntentParts || round.intent_parts || null,
+                }
                 : round,
         );
         if (roundsState.currentRound?.run_id === safeRunId) {
             roundsState.currentRound = roundsState.currentRounds[roundIndex];
         }
         syncExportedState();
+        patchRoundHeader(roundsState.currentRounds[roundIndex], roundIndex);
     }
     const section = document.querySelector(`.session-round-section[data-run-id="${safeRunId}"]`);
-    if (!section) return;
-    const empty = section.querySelector('.panel-empty');
-    if (empty) empty.remove();
+    if (section) {
+        const empty = section.querySelector('.panel-empty');
+        if (empty) empty.remove();
+    }
+}
 
-    const primaryRoleId = getRunPrimaryRoleId(safeRunId);
-    const primaryRoleLabel = getRunPrimaryRoleLabel(safeRunId);
-    getOrCreateStreamBlock(section, 'primary', primaryRoleId, primaryRoleLabel, safeRunId);
-    appendStreamChunk('primary', '', safeRunId, primaryRoleId, primaryRoleLabel);
+function buildRoundUserPromptParts(promptPayload) {
+    const normalizedContent = normalizeRoundUserPromptContent(promptPayload);
+    if (Array.isArray(normalizedContent)) {
+        if (normalizedContent.length === 0) {
+            return [];
+        }
+        return [{ part_kind: 'user-prompt', content: normalizedContent }];
+    }
+    const promptText = String(normalizedContent || '').trim();
+    if (!promptText) {
+        return [];
+    }
+    return [{ part_kind: 'user-prompt', content: promptText }];
+}
 
-    els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+function normalizeRoundUserPromptContent(promptPayload) {
+    if (!Array.isArray(promptPayload)) {
+        return String(promptPayload || '').trim();
+    }
+    const normalizedItems = promptPayload
+        .map(part => {
+            if (typeof part === 'string') {
+                const text = String(part || '').trim();
+                return text || null;
+            }
+            return normalizeRoundUserPromptItem(part);
+        })
+        .filter(item => item !== null);
+    if (normalizedItems.length === 0) {
+        return '';
+    }
+    if (normalizedItems.every(item => typeof item === 'string')) {
+        return normalizedItems.join('\n\n').trim();
+    }
+    return normalizedItems;
+}
+
+function normalizeRoundIntentParts(promptPayload) {
+    const normalizedContent = normalizeRoundUserPromptContent(promptPayload);
+    if (Array.isArray(normalizedContent)) {
+        return normalizedContent.length > 0 ? normalizedContent : null;
+    }
+    const promptText = String(normalizedContent || '').trim();
+    if (!promptText) {
+        return null;
+    }
+    return [{ kind: 'text', text: promptText }];
+}
+
+function buildRoundIntentPreviewText(promptPayload) {
+    const normalizedIntentParts = normalizeRoundIntentParts(promptPayload);
+    if (normalizedIntentParts && normalizedIntentParts.length > 0) {
+        const summary = buildStructuredUserPromptSummary(normalizedIntentParts);
+        const preview = String(summary.preview || '').trim();
+        if (preview) {
+            return preview;
+        }
+    }
+    return normalizeRoundIntentText(promptPayload);
+}
+
+function normalizeRoundUserPromptItem(part) {
+    if (!part || typeof part !== 'object') {
+        return null;
+    }
+    const kind = String(part.kind || '').trim();
+    if (kind === 'text') {
+        const text = String(part.text || '').trim();
+        return text || null;
+    }
+    if (kind === 'binary') {
+        const mediaType = String(part.media_type || '').trim();
+        const data = String(part.data || '').trim();
+        if (!mediaType || !data) {
+            return null;
+        }
+        return {
+            kind: 'binary',
+            media_type: mediaType,
+            data,
+            name: String(part.name || '').trim(),
+        };
+    }
+    if (kind === 'inline_media') {
+        const mediaType = String(part.mime_type || '').trim();
+        const data = String(part.base64_data || '').trim();
+        if (!mediaType || !data) {
+            return null;
+        }
+        return {
+            kind: 'binary',
+            media_type: mediaType,
+            data,
+            name: String(part.name || '').trim(),
+        };
+    }
+    if (kind === 'media_ref') {
+        const modality = String(part.modality || '').trim().toLowerCase();
+        const url = String(part.url || '').trim();
+        if (!modality || !url) {
+            return null;
+        }
+        return {
+            kind: `${modality}-url`,
+            url,
+            media_type: String(part.mime_type || '').trim(),
+            name: String(part.name || '').trim(),
+        };
+    }
+    return null;
 }
 
 export function appendRoundRetryEvent(runId, retryEvent) {
@@ -435,7 +561,7 @@ function renderRoundSection(round, index) {
             </div>
             <div class="round-detail-badges">${renderRoundBadges(round, stateLabel, stateTone, approvalCount)}</div>
         </div>`;
-    header.appendChild(buildRoundIntentBlock(round.intent || t('rounds.no_intent')));
+    header.appendChild(buildRoundIntentBlock(round.intent, round.intent_parts));
     section.appendChild(header);
     renderRoundRetryEvents(section, round.retry_events || []);
     if (round.compaction_marker_before) {
@@ -508,8 +634,9 @@ function renderRoundSection(round, index) {
     return section;
 }
 
-function buildRoundIntentBlock(intentText) {
+function buildRoundIntentBlock(intentText, intentParts) {
     const normalized = normalizeRoundIntentText(intentText);
+    const normalizedIntentParts = normalizeRoundIntentParts(intentParts);
 
     const block = document.createElement('details');
     block.className = 'round-detail-intent';
@@ -531,13 +658,13 @@ function buildRoundIntentBlock(intentText) {
     const bodyEl = block.querySelector('.round-detail-intent-content');
     const collapseBtn = block.querySelector('.round-detail-intent-collapse');
     if (previewEl) {
-        previewEl.textContent = normalized;
+        previewEl.textContent = resolveRoundIntentPreview(normalized, normalizedIntentParts);
     }
     if (toggleEl) {
         toggleEl.textContent = t('rounds.expand');
     }
     if (bodyEl) {
-        bodyEl.textContent = normalized;
+        renderRoundIntentBody(bodyEl, normalized, normalizedIntentParts);
     }
     if (collapseBtn) {
         collapseBtn.textContent = t('rounds.collapse');
@@ -557,6 +684,43 @@ function buildRoundIntentBlock(intentText) {
 function normalizeRoundIntentText(intentText) {
     const normalized = String(intentText || '').replace(/\r\n?/g, '\n').trim();
     return normalized || t('rounds.no_intent');
+}
+
+function resolveRoundIntentPreview(intentText, intentParts) {
+    if (!Array.isArray(intentParts) || intentParts.length === 0) {
+        return intentText;
+    }
+    const summary = buildStructuredUserPromptSummary(intentParts);
+    const preview = String(summary.preview || '').trim();
+    return preview || intentText;
+}
+
+function renderRoundIntentBody(targetEl, fallbackText, intentParts) {
+    if (!targetEl) {
+        return;
+    }
+    if (targetEl.replaceChildren) {
+        targetEl.replaceChildren();
+    } else {
+        targetEl.innerHTML = '';
+    }
+    if (!Array.isArray(intentParts) || intentParts.length === 0) {
+        targetEl.textContent = fallbackText;
+        return;
+    }
+    let rendered = 0;
+    intentParts
+        .map(userPromptItemToStructuredPart)
+        .filter(Boolean)
+        .forEach(structuredPart => {
+            const renderedNode = appendStructuredContentPart(targetEl, structuredPart);
+            if (renderedNode) {
+                rendered += 1;
+            }
+        });
+    if (rendered === 0) {
+        targetEl.textContent = fallbackText;
+    }
 }
 
 function splitRoundsByHistoryMarkers(rounds) {
@@ -811,6 +975,11 @@ function patchRoundHeader(round, roundIndex) {
         const stateTone = roundStateTone(round);
         const approvalCount = Number(round.pending_tool_approval_count || 0);
         badgesEl.innerHTML = renderRoundBadges(round, stateLabel, stateTone, approvalCount);
+    }
+
+    const intentEl = section.querySelector('.round-detail-intent');
+    if (intentEl) {
+        intentEl.replaceWith(buildRoundIntentBlock(round.intent, round.intent_parts));
     }
 }
 

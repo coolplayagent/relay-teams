@@ -201,7 +201,12 @@ function getSessionSourceClassName(session) {
 }
 
 function shouldRenderSubagentChildren(session) {
-    return String(session?.session_mode || '').trim() === 'normal';
+    const sessionMode = String(session?.session_mode || '').trim().toLowerCase();
+    return sessionMode === 'normal' || sessionMode === 'orchestration';
+}
+
+function isDeletableSubagentRecord(record) {
+    return String(record?.runId || record?.run_id || '').trim().startsWith('subagent_run_');
 }
 
 function renderSubagentToggle(session) {
@@ -279,20 +284,22 @@ function renderSubagentChildren(session) {
                         <span class="session-meta">
                             <span class="session-time">${escapeHtml(formatRelativeTime(child.updatedAt || child.createdAt || ''))}</span>
                             <span class="session-actions">
-                                <button
-                                    class="session-delete-btn session-subagent-delete-btn"
-                                    type="button"
-                                    data-session-id="${escapeHtml(sessionId)}"
-                                    data-subagent-instance-id="${escapeHtml(child.instanceId)}"
-                                    data-subagent-run-id="${escapeHtml(child.runId)}"
-                                    data-subagent-label="${escapeHtml(buildSubagentSessionLabel(child))}"
-                                    title="${escapeHtml(t('sidebar.delete_subagent'))}"
-                                    aria-label="${escapeHtml(t('sidebar.delete_subagent'))}"
-                                >
-                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                        <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7M10 10.2v5.6M14 10.2v5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-                                    </svg>
-                                </button>
+                                ${isDeletableSubagentRecord(child) ? `
+                                    <button
+                                        class="session-delete-btn session-subagent-delete-btn"
+                                        type="button"
+                                        data-session-id="${escapeHtml(sessionId)}"
+                                        data-subagent-instance-id="${escapeHtml(child.instanceId)}"
+                                        data-subagent-run-id="${escapeHtml(child.runId)}"
+                                        data-subagent-label="${escapeHtml(buildSubagentSessionLabel(child))}"
+                                        title="${escapeHtml(t('sidebar.delete_subagent'))}"
+                                        aria-label="${escapeHtml(t('sidebar.delete_subagent'))}"
+                                    >
+                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                            <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7M10 10.2v5.6M14 10.2v5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                                        </svg>
+                                    </button>
+                                ` : ''}
                             </span>
                         </span>
                     </div>

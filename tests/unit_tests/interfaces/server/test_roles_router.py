@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -9,6 +11,7 @@ from relay_teams.external_agents import ExternalAgentOption, ExternalAgentTransp
 from relay_teams.interfaces.server.deps import (
     get_external_agent_config_service,
     get_mcp_service,
+    get_model_config_service,
     get_role_registry,
     get_role_settings_service,
     get_skills_config_reload_service,
@@ -33,6 +36,12 @@ from relay_teams.roles import (
 )
 from relay_teams.skills.skill_models import SkillOptionEntry, SkillScope
 from relay_teams.roles import default_memory_profile
+from relay_teams.providers.model_config import (
+    ModelCapabilities,
+    ModelEndpointConfig,
+    ModelInputCapabilities,
+)
+from relay_teams.sessions.runs.runtime_config import RuntimeConfig, RuntimePaths
 
 
 class _FakeRoleSettingsService:
@@ -164,6 +173,29 @@ class _FakeExternalAgentService:
         )
 
 
+class _FakeModelConfigService:
+    def __init__(self) -> None:
+        self.runtime = RuntimeConfig(
+            paths=RuntimePaths(
+                config_dir=Path("D:/tmp/.agent_teams"),
+                env_file=Path("D:/tmp/.agent_teams/.env"),
+                db_path=Path("D:/tmp/.agent_teams/relay_teams.db"),
+                roles_dir=Path("D:/tmp/.agent_teams/roles"),
+            ),
+            llm_profiles={
+                "default": ModelEndpointConfig(
+                    model="gpt-4.1",
+                    base_url="https://example.test/v1",
+                    api_key="secret",
+                    capabilities=ModelCapabilities(
+                        input=ModelInputCapabilities(text=True, image=True)
+                    ),
+                ),
+            },
+            default_model_profile="default",
+        )
+
+
 def _create_test_client(
     *,
     registry: RoleRegistry | None = None,
@@ -226,6 +258,9 @@ def _create_test_client(
     )
     app.dependency_overrides[get_external_agent_config_service] = lambda: (
         _FakeExternalAgentService()
+    )
+    app.dependency_overrides[get_model_config_service] = lambda: (
+        _FakeModelConfigService()
     )
     return TestClient(app)
 
@@ -359,12 +394,27 @@ def test_get_role_config_options() -> None:
     assert response.status_code == 200
     assert response.json() == RoleConfigOptions(
         coordinator_role_id="Coordinator",
+        coordinator_role=NormalModeRoleOption(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates the run.",
+            model_profile="default",
+            model_name="gpt-4.1",
+            capabilities=ModelCapabilities(
+                input=ModelInputCapabilities(text=True, image=True)
+            ),
+        ),
         main_agent_role_id="MainAgent",
         normal_mode_roles=(
             NormalModeRoleOption(
                 role_id="MainAgent",
                 name="Main Agent",
                 description="Executes normal-mode runs.",
+                model_profile="default",
+                model_name="gpt-4.1",
+                capabilities=ModelCapabilities(
+                    input=ModelInputCapabilities(text=True, image=True)
+                ),
             ),
         ),
         subagent_roles=(
@@ -372,6 +422,11 @@ def test_get_role_config_options() -> None:
                 role_id="writer",
                 name="Writer",
                 description="Drafts user-facing content.",
+                model_profile="default",
+                model_name="gpt-4.1",
+                capabilities=ModelCapabilities(
+                    input=ModelInputCapabilities(text=True, image=True)
+                ),
             ),
         ),
         tools=("create_tasks", "dispatch_task"),

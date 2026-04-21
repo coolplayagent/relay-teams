@@ -24,12 +24,16 @@ from relay_teams.providers.model_config import (
     DEFAULT_MAAS_BASE_URL,
     LlmRetryConfig,
     MaaSAuthConfig,
+    ModelCapabilities,
     ModelEndpointConfig,
     ModelFallbackConfig,
     ModelRequestHeader,
     ProviderType,
     SamplingConfig,
     default_model_fallback_config,
+)
+from relay_teams.providers.model_capabilities import (
+    extract_model_capabilities_from_payload,
 )
 from relay_teams.providers.model_fallback_config_manager import (
     ModelFallbackConfigManager,
@@ -256,6 +260,11 @@ def load_llm_profile_state(
             "connect_timeout_seconds",
             DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
         )
+        capabilities = _resolve_profile_capabilities(
+            profile_name=name,
+            raw_value=cfg.get("capabilities"),
+            full_payload=cfg,
+        )
         fallback_policy_id = _resolve_profile_fallback_policy_id(
             raw_value=cfg.get("fallback_policy_id"),
             fallback_config=fallback_config,
@@ -284,6 +293,7 @@ def load_llm_profile_state(
             fallback_policy_id=fallback_policy_id,
             fallback_priority=fallback_priority,
             connect_timeout_seconds=connect_timeout_seconds,
+            capabilities=capabilities,
             sampling=SamplingConfig(
                 temperature=temperature,
                 top_p=top_p,
@@ -528,6 +538,21 @@ def _coerce_optional_ssl_verify(value: object, *, profile_name: str) -> bool | N
     raise ValueError(
         f"Invalid profile '{profile_name}': ssl_verify must be true, false, or null."
     )
+
+
+def _resolve_profile_capabilities(
+    *,
+    profile_name: str,
+    raw_value: object,
+    full_payload: Mapping[str, object],
+) -> ModelCapabilities | None:
+    if raw_value is not None:
+        if not isinstance(raw_value, Mapping):
+            raise ValueError(
+                f"Invalid profile '{profile_name}': capabilities must be an object."
+            )
+        return ModelCapabilities.model_validate(dict(raw_value))
+    return extract_model_capabilities_from_payload(full_payload)
 
 
 def _resolve_path(config_dir: Path, raw_path: str) -> Path:

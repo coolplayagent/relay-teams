@@ -30,10 +30,14 @@ from relay_teams.providers.model_config import (
     DEFAULT_MAAS_DISCOVERY_PLUGIN_VERSION,
     DEFAULT_MAAS_DISCOVERY_URL,
     MaaSAuthConfig,
+    ModelCapabilities,
     ModelEndpointConfig,
     ModelRequestHeader,
     ProviderType,
     SamplingConfig,
+)
+from relay_teams.providers.model_capabilities import (
+    extract_model_capabilities_from_payload,
 )
 from relay_teams.providers.openai_support import build_model_request_headers
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig
@@ -120,6 +124,7 @@ class ModelDiscoveryEntry(BaseModel):
 
     model: str = Field(min_length=1)
     context_window: int | None = Field(default=None, ge=1)
+    capabilities: ModelCapabilities | None = None
 
 
 class ModelDiscoveryResult(BaseModel):
@@ -1452,6 +1457,7 @@ class ModelConnectivityProbeService:
                             model=normalized,
                         )
                     ),
+                    capabilities=extract_model_capabilities_from_payload(entry),
                 )
             )
         model_entries.sort(key=lambda item: item.model)

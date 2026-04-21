@@ -148,10 +148,15 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "showConfirmDialog" in feedback_script
     assert "requestAnimationFrame" in navbar_script
     assert "persistSidebarWidth(currentWidth);" in navbar_script
-    assert "persistRightRailWidth(currentWidth);" in navbar_script
     assert "function persistSidebarWidth(width) {" in navbar_script
-    assert "function persistRightRailWidth(width) {" in navbar_script
-    assert navbar_script.count("flushWidth();") >= 2
+    assert "persistRightRailWidth" not in navbar_script
+    assert "agent_teams_right_rail_width" not in navbar_script
+    assert 'id="right-rail"' not in index_html
+    assert 'id="right-rail-resizer"' not in index_html
+    assert 'id="rail-inspector"' not in index_html
+    assert 'id="toggle-inspector"' not in index_html
+    assert 'id="system-logs"' not in index_html
+    assert navbar_script.count("flushWidth();") >= 1
     assert "initBackendStatusMonitor" in bootstrap_script
     assert "initializeSessionTokenUsage" in bootstrap_script
     assert "initializeSessionTopologyControls" in bootstrap_script
@@ -290,7 +295,7 @@ def test_light_theme_workspace_uses_shared_surface_hierarchy() -> None:
     assert "background: var(--bg-surface-muted);" in components_css
 
 
-def test_side_rails_use_transition_based_collapse_rules() -> None:
+def test_sidebar_resize_rules_do_not_depend_on_right_rail() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     layout_css = (repo_root / "frontend" / "dist" / "css" / "layout.css").read_text(
         encoding="utf-8"
@@ -298,15 +303,6 @@ def test_side_rails_use_transition_based_collapse_rules() -> None:
 
     assert ".sidebar > * {" in layout_css
     assert ".sidebar.collapsed > * {" in layout_css
-    assert ".right-rail > * {" in layout_css
-    assert ".right-rail.collapsed > * {" in layout_css
-    assert ".right-rail-resizer.hidden {" in layout_css
     assert "body.is-resizing-rails .sidebar," in layout_css
-    assert (
-        "display: none;"
-        not in layout_css[
-            layout_css.index(".right-rail-resizer.hidden {") : layout_css.index(
-                "}", layout_css.index(".right-rail-resizer.hidden {")
-            )
-        ]
-    )
+    assert ".right-rail" not in layout_css
+    assert ".right-rail-resizer" not in layout_css

@@ -155,7 +155,8 @@ def build_clawhub_subprocess_env(
     )
     proxy_config = load_proxy_env_config(
         extra_env_files=_clawhub_proxy_env_files(resolved_config_dir),
-        include_process_env=True,
+        include_process_env=base_env is None,
+        process_env=None if base_env is None else resolved_base_env,
         user_home_dir=(
             None if resolved_config_dir is None else resolved_config_dir.parent
         ),

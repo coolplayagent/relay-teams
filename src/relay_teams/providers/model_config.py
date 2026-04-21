@@ -110,6 +110,26 @@ class ModelRequestHeader(BaseModel):
         return self
 
 
+class ModelInputCapabilities(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: bool | None = None
+    image: bool | None = None
+
+
+class ModelOutputCapabilities(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: bool | None = None
+
+
+class ModelCapabilities(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input: ModelInputCapabilities = Field(default_factory=ModelInputCapabilities)
+    output: ModelOutputCapabilities = Field(default_factory=ModelOutputCapabilities)
+
+
 class ModelEndpointConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -128,6 +148,7 @@ class ModelEndpointConfig(BaseModel):
         gt=0.0,
         le=300.0,
     )
+    capabilities: ModelCapabilities | None = None
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
 
     @field_validator("model", "base_url", "api_key", mode="before")
@@ -198,6 +219,7 @@ class ModelProfileConfigPayload(BaseModel):
         gt=0.0,
         le=300.0,
     )
+    capabilities: ModelCapabilities | None = None
 
     @field_validator("model", "base_url", "api_key", mode="before")
     @classmethod
@@ -221,6 +243,7 @@ class ProviderModelInfo(BaseModel):
     provider: ProviderType
     model: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
+    capabilities: ModelCapabilities | None = None
 
 
 class LlmRetryConfig(BaseModel):

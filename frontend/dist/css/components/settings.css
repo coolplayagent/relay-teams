@@ -1075,6 +1075,24 @@
     color: var(--primary-hover);
 }
 
+.profile-card-chip-supported {
+    border-color: color-mix(in srgb, var(--success) 28%, transparent);
+    background: color-mix(in srgb, var(--success) 10%, transparent);
+    color: color-mix(in srgb, var(--success) 72%, var(--text-primary));
+}
+
+.profile-card-chip-unsupported {
+    border-color: color-mix(in srgb, var(--warning) 26%, transparent);
+    background: color-mix(in srgb, var(--warning) 10%, transparent);
+    color: color-mix(in srgb, var(--warning) 72%, var(--text-primary));
+}
+
+.profile-card-chip-unknown {
+    border-color: var(--settings-chip-border);
+    background: color-mix(in srgb, var(--settings-chip-bg) 76%, transparent);
+    color: var(--text-secondary);
+}
+
 .profile-card-inline-status {
     margin-top: 0.65rem;
     min-height: 0;
@@ -1300,6 +1318,10 @@
 }
 
 .profile-model-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
     width: 100%;
     padding: 0.55rem 0.65rem;
     border: none;
@@ -1308,6 +1330,17 @@
     color: var(--text-primary);
     text-align: left;
     cursor: pointer;
+}
+
+.profile-model-menu-item-main {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.profile-model-menu-item-meta {
+    flex: 0 0 auto;
 }
 
 .profile-model-menu-item:hover,

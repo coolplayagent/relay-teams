@@ -335,6 +335,8 @@ def save_model_profile(
             ]
         if req.maas_auth is not None:
             profile["maas_auth"] = req.maas_auth.model_dump(mode="json")
+        if req.capabilities is not None:
+            profile["capabilities"] = req.capabilities.model_dump(mode="json")
         service.save_model_profile(name, profile, source_name=req.source_name)
         return {"status": "ok"}
     except Exception as exc:

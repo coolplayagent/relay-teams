@@ -7,6 +7,7 @@ import {
     getPrimaryRoleId,
     getRunPrimaryRoleId,
     getRunPrimaryRoleLabel,
+    isReservedSystemRoleId,
     isRunPrimaryRoleId,
     state,
 } from '../state.js';
@@ -21,11 +22,6 @@ import {
     markLlmRetrySucceeded,
     showLlmRetryStatus,
 } from '../../app/retryStatus.js';
-import {
-    markSubagentStatus,
-    refreshSubagentRail,
-    rememberLiveSubagent,
-} from '../../components/subagentRail.js';
 import {
     getActiveSubagentSession,
     getActiveSubagentSessionStreamContainer,
@@ -47,9 +43,6 @@ import {
     startThinkingBlock,
 } from '../../components/messageRenderer.js';
 import {
-    getActiveInstanceId,
-    getPanelScrollContainer,
-    openAgentPanel,
 } from '../../components/agentPanel.js';
 import {
     coordinatorContainerFor,
@@ -87,25 +80,12 @@ export function handleLlmFallbackExhausted(payload) {
 export function handleModelStepStarted(eventMeta, instanceId, roleId) {
     beginLlmRetryAttempt();
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
-    const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
     if (instanceId && roleId) {
         if (!state.instanceRoleMap) state.instanceRoleMap = {};
         if (!state.roleInstanceMap) state.roleInstanceMap = {};
-        if (!state.autoSwitchedSubagentInstances) state.autoSwitchedSubagentInstances = {};
         state.instanceRoleMap[instanceId] = roleId;
         state.roleInstanceMap[roleId] = instanceId;
-        if (!isRunPrimaryRoleId(roleId, runId) && !normalModeSubagent) {
-            rememberLiveSubagent(instanceId, roleId);
-            void refreshSubagentRail(state.currentSessionId, {
-                preserveSelection: true,
-            });
-            getPanelScrollContainer(instanceId, roleId);
-            if (!state.autoSwitchedSubagentInstances[instanceId]) {
-                state.autoSwitchedSubagentInstances[instanceId] = true;
-                openAgentPanel(instanceId, roleId);
-            }
-        }
-        if (normalModeSubagent) {
+        if (!isRunPrimaryRoleId(roleId, runId) && !isReservedSystemRoleId(roleId)) {
             rememberNormalModeSubagentSession(state.currentSessionId, {
                 instance_id: instanceId,
                 role_id: roleId,
@@ -126,7 +106,6 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const label = isPrimary ? primaryLabel : (roleId || 'Agent');
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
-    const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
 
     if (isPrimary) {
         if (state.activeSubagentSession) {
@@ -142,10 +121,8 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
         getOrCreateStreamBlock(container, streamKey, primaryRoleId, label, runId);
         appendStreamChunk(streamKey, payload.text || '', runId, primaryRoleId, label);
     } else {
-        const container = normalModeSubagent
-            ? getActiveSubagentSessionStreamContainer(instanceId)
-            : getPanelScrollContainer(instanceId, roleId);
-        if (normalModeSubagent && !container) {
+        const container = getActiveSubagentSessionStreamContainer(instanceId);
+        if (!container) {
             applyStreamOverlayEvent('text_delta', payload, {
                 runId,
                 instanceId,
@@ -153,9 +130,6 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
                 label,
             });
             return;
-        }
-        if (!normalModeSubagent && !getActiveInstanceId()) {
-            openAgentPanel(instanceId, roleId);
         }
         getOrCreateStreamBlock(container, streamKey, roleId, label, runId);
         appendStreamChunk(streamKey, payload.text || '', runId, roleId, label);
@@ -170,7 +144,6 @@ export function handleOutputDelta(payload, eventMeta, instanceId, roleId) {
     const label = isPrimary ? primaryLabel : (roleId || 'Agent');
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
     const output = Array.isArray(payload?.output) ? payload.output : [];
-    const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
 
     if (isPrimary) {
         if (state.activeSubagentSession) {
@@ -197,10 +170,8 @@ export function handleOutputDelta(payload, eventMeta, instanceId, roleId) {
         return;
     }
 
-    const container = normalModeSubagent
-        ? getActiveSubagentSessionStreamContainer(instanceId)
-        : getPanelScrollContainer(instanceId, roleId);
-    if (normalModeSubagent && !container) {
+    const container = getActiveSubagentSessionStreamContainer(instanceId);
+    if (!container) {
         for (const part of output) {
             if (part?.kind === 'text') {
                 applyStreamOverlayEvent('text_delta', { text: String(part.text || '') }, {
@@ -212,9 +183,6 @@ export function handleOutputDelta(payload, eventMeta, instanceId, roleId) {
             }
         }
         return;
-    }
-    if (!normalModeSubagent && !getActiveInstanceId()) {
-        openAgentPanel(instanceId, roleId);
     }
     getOrCreateStreamBlock(container, streamKey, roleId, label, runId);
     appendStreamOutputParts(streamKey, output, {
@@ -248,7 +216,6 @@ export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const label = isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent');
     const partIndex = payload?.part_index ?? 0;
-    const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
 
     if (isPrimary) {
         if (state.activeSubagentSession) {
@@ -272,10 +239,8 @@ export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
         return;
     }
 
-    const container = normalModeSubagent
-        ? getActiveSubagentSessionStreamContainer(instanceId)
-        : getPanelScrollContainer(instanceId, roleId);
-    if (normalModeSubagent && !container) {
+    const container = getActiveSubagentSessionStreamContainer(instanceId);
+    if (!container) {
         applyStreamOverlayEvent('thinking_started', payload, {
             runId,
             instanceId,
@@ -283,9 +248,6 @@ export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
             label,
         });
         return;
-    }
-    if (!normalModeSubagent && !getActiveInstanceId()) {
-        openAgentPanel(instanceId, roleId);
     }
     getOrCreateStreamBlock(container, instanceId, roleId, label, runId);
     startThinkingBlock(instanceId, partIndex, {
@@ -303,7 +265,6 @@ export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
     const label = isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent');
     const partIndex = payload?.part_index ?? 0;
     const text = payload?.text || '';
-    const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
 
     if (isPrimary) {
         if (state.activeSubagentSession) {
@@ -327,10 +288,8 @@ export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
         return;
     }
 
-    const container = normalModeSubagent
-        ? getActiveSubagentSessionStreamContainer(instanceId)
-        : getPanelScrollContainer(instanceId, roleId);
-    if (normalModeSubagent && !container) {
+    const container = getActiveSubagentSessionStreamContainer(instanceId);
+    if (!container) {
         applyStreamOverlayEvent('thinking_delta', payload, {
             runId,
             instanceId,
@@ -338,9 +297,6 @@ export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
             label,
         });
         return;
-    }
-    if (!normalModeSubagent && !getActiveInstanceId()) {
-        openAgentPanel(instanceId, roleId);
     }
     getOrCreateStreamBlock(container, instanceId, roleId, label, runId);
     appendThinkingChunk(instanceId, partIndex, text, {
@@ -356,7 +312,6 @@ export function handleThinkingFinished(payload, eventMeta, instanceId, roleId) {
     const primaryRoleId = getRunPrimaryRoleId(runId);
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const partIndex = payload?.part_index ?? 0;
-    const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
 
     if (isPrimary && state.activeSubagentSession) {
         applyStreamOverlayEvent('thinking_finished', payload, {
@@ -366,7 +321,7 @@ export function handleThinkingFinished(payload, eventMeta, instanceId, roleId) {
         });
         return;
     }
-    if (!isPrimary && normalModeSubagent && !getActiveSubagentSessionStreamContainer(instanceId)) {
+    if (!isPrimary && !getActiveSubagentSessionStreamContainer(instanceId)) {
         applyStreamOverlayEvent('thinking_finished', payload, {
             runId,
             instanceId,
@@ -386,7 +341,6 @@ export function handleModelStepFinished(eventMeta, instanceId) {
     const roleId = state.instanceRoleMap?.[instanceId] || '';
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     const isPrimary = !instanceId || (!roleId && instanceId === 'primary') || isRunPrimaryRoleId(roleId, runId);
-    const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
     if (isPrimary && state.activeSubagentSession) {
         applyStreamOverlayEvent('model_step_finished', {}, {
             runId,
@@ -397,7 +351,7 @@ export function handleModelStepFinished(eventMeta, instanceId) {
         return;
     }
     const key = isPrimary ? 'primary' : instanceId;
-    if (!isPrimary && normalModeSubagent) {
+    if (!isPrimary) {
         updateNormalModeSubagentSessionStatus(state.currentSessionId, instanceId, 'completed');
         if (!getActiveSubagentSessionStreamContainer(instanceId)) {
             applyStreamOverlayEvent('model_step_finished', {}, {
@@ -410,9 +364,6 @@ export function handleModelStepFinished(eventMeta, instanceId) {
         }
     }
     finalizeStream(key, isPrimary ? getRunPrimaryRoleId(runId) : roleId, { runId });
-    if (instanceId && !isPrimary) {
-        markSubagentStatus(instanceId, 'completed');
-    }
     if (!instanceId || state.activeAgentInstanceId === instanceId) {
         state.activeAgentInstanceId = null;
         state.activeAgentRoleId = null;
@@ -428,7 +379,6 @@ export function handleSubagentRunTerminal(instanceId, status, eventMeta = null, 
     const runId = String(eventMeta?.run_id || eventMeta?.trace_id || '').trim();
     finalizeStream(safeInstanceId, roleId, { runId });
     updateNormalModeSubagentSessionStatus(state.currentSessionId, safeInstanceId, status);
-    markSubagentStatus(safeInstanceId, status);
     if (getActiveSubagentSession()?.instanceId === safeInstanceId) {
         settleActiveSubagentSessionAfterTerminal(safeInstanceId);
     }
@@ -472,7 +422,11 @@ export function handleRunStopped(eventMeta, payload) {
     clearLlmRetryStatus();
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     if (state.activeAgentInstanceId) {
-        markSubagentStatus(state.activeAgentInstanceId, 'stopped');
+        updateNormalModeSubagentSessionStatus(
+            state.currentSessionId,
+            state.activeAgentInstanceId,
+            'stopped',
+        );
     }
     if (runId) {
         markRunTerminalState(runId, {
@@ -505,7 +459,11 @@ export function handleRunFailed(eventMeta, payload) {
     markLlmRetryFailed(payload?.error || '');
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     if (state.activeAgentInstanceId) {
-        markSubagentStatus(state.activeAgentInstanceId, 'failed');
+        updateNormalModeSubagentSessionStatus(
+            state.currentSessionId,
+            state.activeAgentInstanceId,
+            'failed',
+        );
     }
     if (runId) {
         markRunTerminalState(runId, {
@@ -545,17 +503,6 @@ export function handleLlmRetryExhausted(payload, eventMeta) {
         retry_in_ms: 0,
     }, eventMeta);
     markLlmRetryFailed(payload?.error_message || '');
-}
-
-function isNormalModeSubagentRun(runId, roleId) {
-    const safeRunId = String(runId || '').trim();
-    const safeRoleId = String(roleId || '').trim();
-    return !!(
-        state.currentSessionMode === 'normal'
-        && safeRunId.startsWith('subagent_run_')
-        && safeRoleId
-        && !isRunPrimaryRoleId(safeRoleId, safeRunId)
-    );
 }
 
 function escapeLogLabel(value) {

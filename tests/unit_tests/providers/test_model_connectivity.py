@@ -952,6 +952,78 @@ def test_discover_models_extracts_context_window_when_provider_returns_it(
     assert result.model_entries[1].context_window == 128000
 
 
+def test_discover_models_extracts_image_capabilities_from_modalities(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "vision-model",
+                            "modalities": {
+                                "input": ["text", "image"],
+                                "output": ["text"],
+                            },
+                        },
+                        {
+                            "id": "text-model",
+                            "modalities": {
+                                "input": ["text"],
+                                "output": ["text"],
+                            },
+                        },
+                    ],
+                },
+            )
+        ),
+    )
+
+    result = service.discover_models(ModelDiscoveryRequest(profile_name="default"))
+
+    assert result.ok is True
+    assert result.model_entries[0].model == "text-model"
+    assert result.model_entries[0].capabilities is not None
+    assert result.model_entries[0].capabilities.input.image is False
+    assert result.model_entries[1].model == "vision-model"
+    assert result.model_entries[1].capabilities is not None
+    assert result.model_entries[1].capabilities.input.image is True
+
+
+def test_discover_models_leaves_capabilities_unknown_without_explicit_metadata(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "unknown-model",
+                        }
+                    ],
+                },
+            )
+        ),
+    )
+
+    result = service.discover_models(ModelDiscoveryRequest(profile_name="default"))
+
+    assert result.ok is True
+    assert result.model_entries[0].capabilities is None
+
+
 def test_discover_models_falls_back_to_known_context_window_rules(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
 

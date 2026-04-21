@@ -17,6 +17,7 @@ from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agents.tasks import TaskStatus
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
@@ -44,6 +45,7 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
+from relay_teams.sessions.session_models import SessionMode
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
@@ -951,6 +953,85 @@ def test_list_normal_mode_subagents_returns_instance_level_projection(
     assert subagents[0]["checkpoint_event_id"] == 7
     assert subagents[0]["stream_connected"] is False
     assert subagents[0]["title"] == "Inspect bug"
+
+
+def test_list_session_subagents_returns_orchestration_instances_by_instance(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_subagent_orchestration_projection.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(
+        session_id="session-1",
+        workspace_id="default",
+        session_mode=SessionMode.ORCHESTRATION,
+        normal_root_role_id="MainAgent",
+    )
+    _seed_root_task(db_path, run_id="run-main", session_id="session-1")
+    task_repo = TaskRepository(db_path)
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-writer-1",
+            session_id="session-1",
+            parent_task_id="task-root-1",
+            trace_id="run-main",
+            role_id="Writer",
+            title="Draft response",
+            objective="draft response",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    task_repo.update_status(
+        "task-writer-1",
+        TaskStatus.RUNNING,
+        assigned_instance_id="inst-writer-1",
+    )
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="run-main",
+        trace_id="run-main",
+        session_id="session-1",
+        instance_id="inst-coordinator-1",
+        role_id="Coordinator",
+        workspace_id="default",
+        conversation_id="conv_session_1_coordinator_inst_coordinator_1",
+        status=InstanceStatus.RUNNING,
+    )
+    agent_repo.upsert_instance(
+        run_id="run-main",
+        trace_id="run-main",
+        session_id="session-1",
+        instance_id="inst-main-1",
+        role_id="MainAgent",
+        workspace_id="default",
+        conversation_id="conv_session_1_main_agent_inst_main_1",
+        status=InstanceStatus.RUNNING,
+    )
+    agent_repo.upsert_instance(
+        run_id="run-main",
+        trace_id="run-main",
+        session_id="session-1",
+        instance_id="inst-writer-1",
+        role_id="Writer",
+        workspace_id="default",
+        conversation_id="conv_session_1_writer_inst_writer_1",
+        status=InstanceStatus.RUNNING,
+    )
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-main",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+
+    subagents = service.list_session_subagents("session-1")
+
+    assert [item["instance_id"] for item in subagents] == ["inst-writer-1"]
+    assert subagents[0]["role_id"] == "Writer"
+    assert subagents[0]["run_id"] == "run-main"
+    assert subagents[0]["title"] == "Draft response"
 
 
 def test_build_session_rounds_excludes_synchronous_subagent_runs(

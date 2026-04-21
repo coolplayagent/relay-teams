@@ -12,7 +12,17 @@ import {
     removeGateCard,
     showGateCard,
 } from '../../components/agentPanel.js';
-import { markSubagentStatus } from '../../components/subagentRail.js';
+import { updateNormalModeSubagentSessionStatus } from '../../components/subagentSessions.js';
+import { renderHumanDispatchPanel } from './utils.js';
+
+export function handleAwaitingHumanDispatch(payload) {
+    renderHumanDispatchPanel(payload);
+}
+
+export function handleHumanTaskDispatched(payload) {
+    document.querySelectorAll('.human-dispatch-panel').forEach(el => el.remove());
+    sysLog(`Task dispatched: ${payload.task_id}`, 'log-info');
+}
 
 export function handleSubagentGate(payload) {
     showGateCard(payload.instance_id, payload.role_id, {
@@ -30,7 +40,11 @@ export function handleGateResolved(payload, instanceId) {
 }
 
 export function handleSubagentStopped(payload) {
-    markSubagentStatus(payload.instance_id, 'stopped');
+    updateNormalModeSubagentSessionStatus(
+        state.currentSessionId,
+        payload.instance_id,
+        'stopped',
+    );
     state.pausedSubagent = {
         runId: state.activeRunId,
         instanceId: payload.instance_id,
@@ -39,13 +53,17 @@ export function handleSubagentStopped(payload) {
     };
     markPausedSubagent(payload);
     sysLog(
-        `Subagent paused: ${payload.role_id || payload.instance_id}. Send follow-up in subagent panel.`,
+        `Subagent paused: ${payload.role_id || payload.instance_id}. Open the subagent view for details.`,
         'log-info',
     );
 }
 
 export function handleSubagentResumed(payload) {
-    markSubagentStatus(payload.instance_id, 'running');
+    updateNormalModeSubagentSessionStatus(
+        state.currentSessionId,
+        payload.instance_id,
+        'running',
+    );
     if (state.pausedSubagent && state.pausedSubagent.instanceId === payload.instance_id) {
         state.pausedSubagent = null;
     }

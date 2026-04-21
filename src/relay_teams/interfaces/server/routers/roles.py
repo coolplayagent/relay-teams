@@ -7,6 +7,7 @@ from relay_teams.computer import ExecutionSurface
 from relay_teams.interfaces.server.deps import (
     get_external_agent_config_service,
     get_mcp_service,
+    get_model_config_service,
     get_role_registry,
     get_role_settings_service,
     get_skills_config_reload_service,
@@ -14,10 +15,12 @@ from relay_teams.interfaces.server.deps import (
     get_tool_registry,
 )
 from relay_teams.mcp.mcp_service import McpService
+from relay_teams.providers.model_config_service import ModelConfigService
 from relay_teams.roles import (
     NormalModeRoleOption,
     RoleAgentOption,
     RoleConfigOptions,
+    RoleDefinition,
     RoleDocumentDraft,
     RoleDocumentRecord,
     RoleDocumentSummary,
@@ -50,6 +53,7 @@ def get_role_config_options(
     role_registry: RoleRegistry = Depends(get_role_registry),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
     mcp_service: McpService = Depends(get_mcp_service),
+    model_config_service: ModelConfigService = Depends(get_model_config_service),
     skill_registry: SkillRegistry = Depends(get_skill_registry),
     skills_reload_service: SkillsConfigReloadService = Depends(
         get_skills_config_reload_service
@@ -67,20 +71,22 @@ def get_role_config_options(
         )
         return RoleConfigOptions(
             coordinator_role_id=role_registry.get_coordinator_role_id(),
+            coordinator_role=_build_role_option(
+                role=role_registry.get_coordinator(),
+                model_config_service=model_config_service,
+            ),
             main_agent_role_id=role_registry.get_main_agent_role_id(),
             normal_mode_roles=tuple(
-                NormalModeRoleOption(
-                    role_id=role.role_id,
-                    name=role.name,
-                    description=role.description,
+                _build_role_option(
+                    role=role,
+                    model_config_service=model_config_service,
                 )
                 for role in role_registry.list_normal_mode_roles()
             ),
             subagent_roles=tuple(
-                NormalModeRoleOption(
-                    role_id=role.role_id,
-                    name=role.name,
-                    description=role.description,
+                _build_role_option(
+                    role=role,
+                    model_config_service=model_config_service,
                 )
                 for role in role_registry.list_subagent_roles()
             ),
@@ -213,6 +219,46 @@ def _load_role_skill_options(
         )
         for skill in skill_options
     )
+
+
+def _build_role_option(
+    *,
+    role: RoleDefinition,
+    model_config_service: ModelConfigService,
+) -> NormalModeRoleOption:
+    runtime = model_config_service.runtime
+    resolved_profile_name = _resolve_role_profile_name(
+        role.model_profile,
+        default_profile_name=runtime.default_model_profile,
+    )
+    model_config = (
+        runtime.llm_profiles.get(resolved_profile_name)
+        if resolved_profile_name is not None
+        else None
+    )
+    return NormalModeRoleOption(
+        role_id=role.role_id,
+        name=role.name,
+        description=role.description,
+        model_profile=resolved_profile_name,
+        model_name=model_config.model if model_config is not None else None,
+        capabilities=model_config.capabilities if model_config is not None else None,
+    )
+
+
+def _resolve_role_profile_name(
+    profile_name: str,
+    *,
+    default_profile_name: str | None,
+) -> str | None:
+    normalized_profile_name = profile_name.strip()
+    if normalized_profile_name == "default":
+        return (
+            default_profile_name.strip()
+            if default_profile_name is not None and default_profile_name.strip()
+            else None
+        )
+    return normalized_profile_name or None
 
 
 def _collect_required_builtin_skill_refs(role_registry: RoleRegistry) -> frozenset[str]:

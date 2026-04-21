@@ -41,6 +41,7 @@ def list_provider_models(
                 provider=config.provider,
                 model=config.model,
                 base_url=config.base_url,
+                capabilities=config.capabilities,
             )
         )
     entries.sort(key=lambda item: (item.provider.value, item.profile, item.model))

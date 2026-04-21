@@ -79,12 +79,7 @@ export function renderParts(contentEl, parts, pendingToolBlocks, options = {}) {
         } else if (kind === 'user-prompt') {
             if (Array.isArray(part.content)) {
                 flushText();
-                part.content
-                    .map(userPromptItemToStructuredPart)
-                    .filter(Boolean)
-                    .forEach(structuredPart => {
-                        appendStructuredContentPart(contentEl, structuredPart);
-                    });
+                appendStructuredUserPrompt(contentEl, part.content);
                 return;
             }
             combinedText += (part.content || '') + '\n\n';
@@ -135,7 +130,7 @@ export function renderParts(contentEl, parts, pendingToolBlocks, options = {}) {
     flushText();
 }
 
-function userPromptItemToStructuredPart(item) {
+export function userPromptItemToStructuredPart(item) {
     if (typeof item === 'string') {
         return { kind: 'text', text: item };
     }
@@ -149,7 +144,7 @@ function userPromptItemToStructuredPart(item) {
             modality: 'image',
             mime_type: String(item.media_type || 'image/*'),
             url: String(item.url || ''),
-            name: '',
+            name: String(item.name || ''),
         };
     }
     if (kind === 'audio-url') {
@@ -158,7 +153,7 @@ function userPromptItemToStructuredPart(item) {
             modality: 'audio',
             mime_type: String(item.media_type || 'audio/*'),
             url: String(item.url || ''),
-            name: '',
+            name: String(item.name || ''),
         };
     }
     if (kind === 'video-url') {
@@ -167,7 +162,7 @@ function userPromptItemToStructuredPart(item) {
             modality: 'video',
             mime_type: String(item.media_type || 'video/*'),
             url: String(item.url || ''),
-            name: '',
+            name: String(item.name || ''),
         };
     }
     if (kind === 'binary') {
@@ -200,7 +195,7 @@ function binaryPayloadToStructuredPart(content) {
         modality,
         mime_type: mediaType,
         url: `data:${mediaType};base64,${base64Data}`,
-        name: '',
+        name: String(content.name || '').trim(),
     };
 }
 
@@ -239,6 +234,18 @@ export function appendMessageText(contentEl, text, options = {}) {
 }
 
 export function appendUserPromptText(contentEl, text) {
+    const { promptEl } = appendUserPromptBlock(contentEl);
+    updateUserPromptText(promptEl, text);
+    return promptEl;
+}
+
+function appendStructuredUserPrompt(contentEl, items) {
+    const { promptEl, bodyEl } = appendUserPromptBlock(contentEl);
+    updateStructuredUserPrompt(promptEl, bodyEl, items);
+    return promptEl;
+}
+
+function appendUserPromptBlock(contentEl) {
     const promptEl = document.createElement('details');
     promptEl.className = 'user-prompt-block';
     promptEl.innerHTML = `
@@ -250,9 +257,11 @@ export function appendUserPromptText(contentEl, text) {
             <div class="user-prompt-text"></div>
         </div>
     `;
-    updateUserPromptText(promptEl, text);
     contentEl.appendChild(promptEl);
-    return promptEl;
+    return {
+        promptEl,
+        bodyEl: promptEl.querySelector('.user-prompt-body'),
+    };
 }
 
 export function appendThinkingText(contentEl, text, options = {}) {
@@ -285,6 +294,73 @@ export function updateUserPromptText(promptEl, text) {
         bodyEl.textContent = normalized;
     }
     return promptEl;
+}
+
+function updateStructuredUserPrompt(promptEl, bodyEl, items) {
+    const normalizedItems = Array.isArray(items) ? items : [];
+    const titleEl = promptEl?.querySelector('.user-prompt-title');
+    const previewEl = promptEl?.querySelector('.user-prompt-preview');
+    const summary = buildStructuredUserPromptSummary(normalizedItems);
+    if (titleEl) {
+        titleEl.textContent = summary.title;
+    }
+    if (previewEl) {
+        previewEl.textContent = summary.preview;
+    }
+    if (bodyEl?.replaceChildren) {
+        bodyEl.replaceChildren();
+    } else if (bodyEl) {
+        bodyEl.innerHTML = '';
+    }
+    normalizedItems
+        .map(userPromptItemToStructuredPart)
+        .filter(Boolean)
+        .forEach(structuredPart => {
+            appendStructuredContentPart(bodyEl, structuredPart);
+        });
+    return promptEl;
+}
+
+export function buildStructuredUserPromptSummary(items) {
+    const fragments = items
+        .map(describeStructuredUserPromptItem)
+        .filter(Boolean);
+    const title = fragments[0] || t('subagent.task_prompt');
+    return {
+        title,
+        preview: fragments.join(' · ') || title,
+    };
+}
+
+function describeStructuredUserPromptItem(item) {
+    if (typeof item === 'string') {
+        return String(item || '').replace(/\s+/g, ' ').trim();
+    }
+    if (!item || typeof item !== 'object') {
+        return '';
+    }
+    const kind = String(item.kind || '').trim().toLowerCase();
+    if (kind === 'text') {
+        return String(item.text || '').replace(/\s+/g, ' ').trim();
+    }
+    const safeName = String(item.name || '').replace(/\s+/g, ' ').trim();
+    if (safeName) {
+        return safeName;
+    }
+    if (kind === 'binary') {
+        return formatStructuredMediaLabel(String(item.media_type || '').trim());
+    }
+    if (kind.endsWith('-url')) {
+        return formatStructuredMediaLabel(String(item.media_type || kind).trim());
+    }
+    return '';
+}
+
+function formatStructuredMediaLabel(mediaType) {
+    const safeType = String(mediaType || '').trim().toLowerCase();
+    const prefix = safeType.includes('/') ? safeType.split('/')[0] : safeType.replace(/-url$/, '');
+    const normalized = prefix || 'media';
+    return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
 export function updateThinkingText(textEl, text, options = {}) {

@@ -73,10 +73,12 @@ from relay_teams.providers.model_connectivity import (
 )
 from relay_teams.providers.model_config import (
     DEFAULT_MAAS_BASE_URL,
+    ModelCapabilities,
     ModelConfigPayload,
     ModelFallbackConfig,
     ModelFallbackPolicy,
     ModelFallbackStrategy,
+    ModelInputCapabilities,
     ProviderModelInfo,
     ProviderType,
 )
@@ -490,6 +492,9 @@ class _FakeSystemService:
                 provider=ProviderType.OPENAI_COMPATIBLE,
                 model="gpt-4o-mini",
                 base_url="https://example.com/v1",
+                capabilities=ModelCapabilities(
+                    input=ModelInputCapabilities(text=True, image=True)
+                ),
             ),
             ProviderModelInfo(
                 profile="glm",
@@ -2110,6 +2115,40 @@ def test_save_model_profile_includes_default_flag_when_present() -> None:
     assert service.saved_model_profile is not None
     _, saved_profile, _ = service.saved_model_profile
     assert saved_profile["is_default"] is True
+
+
+def test_save_model_profile_persists_capabilities_when_present() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/default",
+        json={
+            "provider": ProviderType.OPENAI_COMPATIBLE.value,
+            "model": "gpt-4.1",
+            "base_url": "https://api.example.test/v1",
+            "temperature": 0.2,
+            "top_p": 1.0,
+            "capabilities": {
+                "input": {
+                    "image": True,
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    assert saved_profile["capabilities"] == {
+        "input": {
+            "image": True,
+            "text": None,
+        },
+        "output": {
+            "text": None,
+        },
+    }
 
 
 def test_save_model_profile_forwards_headers() -> None:

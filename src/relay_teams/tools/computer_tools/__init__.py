@@ -8,14 +8,13 @@ from pydantic_ai import Agent
 if TYPE_CHECKING:
     from relay_teams.tools.runtime import ToolDeps
 
-_REGISTERED_AGENT_IDS: set[int] = set()
+_REGISTERED_MARKER_ATTR = "_relay_teams_computer_tools_registered"
 
 
 def register_computer_tools(agent: Agent[ToolDeps, str]) -> None:
-    agent_id = id(agent)
-    if agent_id in _REGISTERED_AGENT_IDS:
+    if bool(getattr(agent, _REGISTERED_MARKER_ATTR, False)):
         return
-    _REGISTERED_AGENT_IDS.add(agent_id)
+    setattr(agent, _REGISTERED_MARKER_ATTR, True)
     from relay_teams.tools.computer_tools.runtime import register as register_impl
 
     register_impl(agent)

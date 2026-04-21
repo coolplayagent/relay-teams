@@ -24,27 +24,28 @@ handleModelStepStarted({}, 'writer-1', 'writer');
 await Promise.resolve();
 
 console.log(JSON.stringify({
-    rememberCalls: globalThis.__rememberLiveSubagentCalls,
-    refreshCalls: globalThis.__refreshSubagentRailCalls,
-    openCalls: globalThis.__openAgentPanelCalls,
     instanceRoleMap: state.instanceRoleMap,
     roleInstanceMap: state.roleInstanceMap,
+    rememberSessionCalls: globalThis.__rememberNormalModeSubagentSessionCalls,
     activeAgentRoleId: state.activeAgentRoleId,
     activeAgentInstanceId: state.activeAgentInstanceId,
 }));
 """.strip(),
     )
 
-    assert payload["rememberCalls"] == [{"instanceId": "writer-1", "roleId": "writer"}]
-    assert payload["refreshCalls"] == [
-        {
-            "sessionId": "session-1",
-            "options": {"preserveSelection": True},
-        }
-    ]
-    assert payload["openCalls"] == [{"instanceId": "writer-1", "roleId": "writer"}]
     assert payload["instanceRoleMap"] == {"writer-1": "writer"}
     assert payload["roleInstanceMap"] == {"writer": "writer-1"}
+    assert payload["rememberSessionCalls"] == [
+        {
+            "sessionId": "session-1",
+            "record": {
+                "instance_id": "writer-1",
+                "role_id": "writer",
+                "run_id": "",
+                "status": "running",
+            },
+        }
+    ]
     assert payload["activeAgentRoleId"] == "writer"
     assert payload["activeAgentInstanceId"] == "writer-1"
 
@@ -67,9 +68,6 @@ handleModelStepStarted({ run_id: 'subagent_run_deadbeef' }, 'writer-1', 'writer'
 await Promise.resolve();
 
 console.log(JSON.stringify({
-    rememberCalls: globalThis.__rememberLiveSubagentCalls,
-    refreshCalls: globalThis.__refreshSubagentRailCalls,
-    openCalls: globalThis.__openAgentPanelCalls,
     rememberSessionCalls: globalThis.__rememberNormalModeSubagentSessionCalls,
     activeAgentRoleId: state.activeAgentRoleId,
     activeAgentInstanceId: state.activeAgentInstanceId,
@@ -77,9 +75,6 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    assert payload["rememberCalls"] == []
-    assert payload["refreshCalls"] == []
-    assert payload["openCalls"] == []
     assert payload["rememberSessionCalls"] == [
         {
             "sessionId": "session-1",
@@ -93,6 +88,37 @@ console.log(JSON.stringify({
     ]
     assert payload["activeAgentRoleId"] == "writer"
     assert payload["activeAgentInstanceId"] == "writer-1"
+
+
+def test_model_step_started_skips_reserved_system_roles_for_child_sessions(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleModelStepStarted } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.currentSessionMode = 'orchestration';
+state.coordinatorRoleId = 'Coordinator';
+state.mainAgentRoleId = 'MainAgent';
+
+handleModelStepStarted({ run_id: 'run-1' }, 'main-agent-1', 'MainAgent');
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    rememberSessionCalls: globalThis.__rememberNormalModeSubagentSessionCalls,
+    activeAgentRoleId: state.activeAgentRoleId,
+    activeAgentInstanceId: state.activeAgentInstanceId,
+}));
+""".strip(),
+    )
+
+    assert payload["rememberSessionCalls"] == []
+    assert payload["activeAgentRoleId"] == "MainAgent"
+    assert payload["activeAgentInstanceId"] == "main-agent-1"
 
 
 def test_route_event_routes_subagent_stream_events_without_overwriting_parent_run(
@@ -459,6 +485,12 @@ export function getRunPrimaryRoleLabel() {
 
 export function isRunPrimaryRoleId(roleId) {
     return isPrimaryRoleId(roleId);
+}
+
+export function isReservedSystemRoleId(roleId) {
+    const safeRoleId = String(roleId || '').trim();
+    return safeRoleId === String(state.coordinatorRoleId || '').trim()
+        || safeRoleId === String(state.mainAgentRoleId || '').trim();
 }
 
 export function clearRunPrimaryRole() {

@@ -495,7 +495,7 @@ export async function runAutomationProject() {
     ).read_text(encoding="utf-8")
 
     ensure_calls = cast(list[str], payload["ensureCalls"])
-    assert sorted(set(ensure_calls)) == ["session-1", "session-2"]
+    assert sorted(set(ensure_calls)) == ["session-1", "session-2", "session-3"]
     assert payload["toggleCount"] == 1
     assert payload["firstToggleSessionId"] == "session-1"
     assert (
@@ -661,6 +661,129 @@ export async function runAutomationProject() {
     assert payload["activeSubagentSession"] is None
     confirm_calls = cast(list[dict[str, object]], payload["confirmCalls"])
     assert confirm_calls[0]["tone"] == "warning"
+
+
+def test_projects_sidebar_hides_delete_for_orchestration_subagent_rows(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+globalThis.__sessionSubagentSessionsMap = {
+    "session-1": [
+        {
+            sessionId: "session-1",
+            instanceId: "inst-writer-1",
+            roleId: "Writer",
+            runId: "run-main-1",
+            title: "Draft response",
+            updatedAt: "2026-03-14T10:12:00Z",
+        },
+    ],
+};
+globalThis.__expandedSubagentSessionIds.add("session-1");
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+
+console.log(JSON.stringify({
+    deleteButtonCount: firstProject.querySelectorAll(".session-subagent-delete-btn").length,
+    subagentHtml: firstProject.innerHTML,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        session_mode: "orchestration",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    assert payload["deleteButtonCount"] == 0
+    assert "Draft response" in cast(str, payload["subagentHtml"])
 
 
 def test_projects_sidebar_renames_session_from_sidebar_action(tmp_path: Path) -> None:

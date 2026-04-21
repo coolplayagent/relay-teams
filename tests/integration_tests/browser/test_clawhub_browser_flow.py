@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 import json
 import os
@@ -20,10 +21,19 @@ _VIEWPORT_HEIGHT = 1200
 _WAIT_TIMEOUT_MS = 30_000
 
 
+def _set_windows_proactor_event_loop_policy() -> asyncio.AbstractEventLoopPolicy | None:
+    if os.name != "nt" or not hasattr(asyncio, "WindowsProactorEventLoopPolicy"):
+        return None
+    previous_policy = asyncio.get_event_loop_policy()
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    return previous_policy
+
+
 @pytest.fixture()
 def browser_page() -> Iterator[Page]:
     browser_root = _resolve_playwright_browser_root()
     previous_browser_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    previous_event_loop_policy = _set_windows_proactor_event_loop_policy()
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_root)
     try:
         with sync_playwright() as playwright:
@@ -43,6 +53,8 @@ def browser_page() -> Iterator[Page]:
             os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
         else:
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = previous_browser_root
+        if previous_event_loop_policy is not None:
+            asyncio.set_event_loop_policy(previous_event_loop_policy)
 
 
 def test_browser_clawhub_saved_token_wins_over_autofilled_dom_value(

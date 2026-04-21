@@ -6,6 +6,7 @@ from enum import Enum
 from relay_teams.computer import ExecutionSurface
 from pydantic import BaseModel, ConfigDict, Field
 
+from relay_teams.providers.model_config import ModelCapabilities
 from relay_teams.roles.memory_models import MemoryProfile, default_memory_profile
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
@@ -92,6 +93,9 @@ class NormalModeRoleOption(BaseModel):
     role_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
+    model_profile: str | None = Field(default=None, min_length=1)
+    model_name: str | None = Field(default=None, min_length=1)
+    capabilities: ModelCapabilities | None = None
 
 
 class RoleAgentOption(BaseModel):
@@ -115,6 +119,7 @@ class RoleConfigOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     coordinator_role_id: RequiredIdentifierStr
+    coordinator_role: NormalModeRoleOption | None = None
     main_agent_role_id: RequiredIdentifierStr
     normal_mode_roles: tuple[NormalModeRoleOption, ...] = ()
     subagent_roles: tuple[NormalModeRoleOption, ...] = ()

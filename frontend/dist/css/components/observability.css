@@ -620,25 +620,6 @@
 }
 
 
-body.observability-mode .right-rail {
-    width: 0 !important;
-    min-width: 0 !important;
-    flex-basis: 0 !important;
-    border-left: none !important;
-}
-
-body.observability-mode .right-rail > * {
-    opacity: 0;
-    transform: translateX(6px);
-    pointer-events: none;
-}
-
-body.observability-mode .right-rail-resizer {
-    opacity: 0;
-    pointer-events: none;
-    width: 0;
-}
-
 body.observability-mode #rounds-list,
 body.observability-mode #back-btn {
     display: none !important;

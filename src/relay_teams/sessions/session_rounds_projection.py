@@ -8,6 +8,11 @@ from typing import cast
 
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRecord
+from relay_teams.media import ContentPart
+from relay_teams.media import ContentPartAdapter
+from relay_teams.media import content_parts_from_text
+from relay_teams.media import content_parts_to_text
+from relay_teams.media import text_part
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.runs.terminal_payload import extract_terminal_output
@@ -26,6 +31,7 @@ def build_session_rounds(
     approval_tickets_by_run: dict[str, list[dict[str, object]]],
     run_runtime_repo: RunRuntimeRepository,
     get_session_messages: Callable[[str], list[dict[str, object]]],
+    get_run_intent_input: Callable[[str], tuple[ContentPart, ...] | None] | None = None,
     get_session_history_markers: Callable[[str], list[dict[str, object]]] | None = None,
     get_session_events: Callable[[str], list[dict[str, object]]] | None = None,
     excluded_run_ids: set[str] | None = None,
@@ -243,9 +249,12 @@ def build_session_rounds(
     for run_id in run_ids:
         root_task = root_task_by_run.get(run_id)
         run_messages = messages_by_run.get(run_id, [])
+        intent_input_parts = (
+            get_run_intent_input(run_id) if get_run_intent_input is not None else None
+        )
         has_user_messages = any(
             str(message.get("role") or "") == "user" for message in run_messages
-        )
+        ) or bool(intent_input_parts)
         coordinator_role_id = None
         if root_task is not None:
             envelope = getattr(root_task, "envelope", None)
@@ -270,10 +279,16 @@ def build_session_rounds(
         created_at = _round_created_at(root_task, run_messages)
         runtime = run_runtime.get(run_id)
         pending_approvals = list(approval_tickets_by_run.get(run_id, []))
+        intent_parts = _round_intent_parts(
+            root_task,
+            run_messages,
+            intent_input_parts=intent_input_parts,
+        )
         round_item: dict[str, object] = {
             "run_id": run_id,
             "created_at": created_at,
-            "intent": _round_intent(root_task, run_messages),
+            "intent": _round_intent(root_task, run_messages, intent_parts=intent_parts),
+            "intent_parts": intent_parts,
             "primary_role_id": coordinator_role_id,
             "coordinator_messages": coordinator_messages,
             "retry_events": retry_events_by_run.get(run_id, []),
@@ -371,40 +386,128 @@ def _round_created_at(root_task: object, run_messages: list[dict[str, object]]) 
 
 
 def _round_intent(
-    root_task: object, run_messages: list[dict[str, object]]
+    root_task: object,
+    run_messages: list[dict[str, object]],
+    *,
+    intent_parts: list[dict[str, object]] | None = None,
 ) -> str | None:
+    if intent_parts:
+        prompt = _intent_parts_to_text(intent_parts)
+        if prompt:
+            return prompt
+    prompt_parts = _extract_round_user_prompt_parts(run_messages)
+    if prompt_parts:
+        prompt = _content_parts_to_projection_text(prompt_parts)
+        if prompt:
+            return prompt
     if root_task is not None:
         envelope = getattr(root_task, "envelope", None)
         objective = getattr(envelope, "objective", None)
         if isinstance(objective, str) and objective.strip():
             return objective
-    for message in run_messages:
-        if str(message.get("role") or "") != "user":
-            continue
-        prompt = _extract_user_prompt(cast(object, message.get("message")))
-        if prompt:
-            return prompt
     return None
 
 
-def _extract_user_prompt(message: object) -> str | None:
+def _round_intent_parts(
+    root_task: object,
+    run_messages: list[dict[str, object]],
+    *,
+    intent_input_parts: tuple[ContentPart, ...] | None = None,
+) -> list[dict[str, object]] | None:
+    if intent_input_parts:
+        return _content_parts_to_projection(intent_input_parts)
+    prompt_parts = _extract_round_user_prompt_parts(run_messages)
+    if prompt_parts:
+        return _content_parts_to_projection(prompt_parts)
+    if root_task is not None:
+        envelope = getattr(root_task, "envelope", None)
+        objective = getattr(envelope, "objective", None)
+        if isinstance(objective, str) and objective.strip():
+            objective_parts = content_parts_from_text(objective)
+            if objective_parts:
+                return _content_parts_to_projection(objective_parts)
+    return None
+
+
+def _extract_round_user_prompt_parts(
+    run_messages: list[dict[str, object]],
+) -> tuple[ContentPart, ...] | None:
+    for message in run_messages:
+        if str(message.get("role") or "") != "user":
+            continue
+        prompt_parts = _extract_user_prompt_parts(cast(object, message.get("message")))
+        if prompt_parts:
+            return prompt_parts
+    return None
+
+
+def _extract_user_prompt_parts(message: object) -> tuple[ContentPart, ...] | None:
     if not isinstance(message, dict):
         return None
     parts = message.get("parts")
     if not isinstance(parts, list):
         return None
-    chunks: list[str] = []
     for part in parts:
         if not isinstance(part, dict):
             continue
         if str(part.get("part_kind") or "") != "user-prompt":
             continue
-        content = str(part.get("content") or "")
-        if content:
-            chunks.append(content)
-    if not chunks:
+        content = part.get("content")
+        prompt_parts = _coerce_user_prompt_content_parts(content)
+        if prompt_parts:
+            return prompt_parts
+    return None
+
+
+def _coerce_user_prompt_content_parts(
+    content: object,
+) -> tuple[ContentPart, ...] | None:
+    if isinstance(content, str):
+        text_parts = content_parts_from_text(content)
+        return text_parts or None
+    if not isinstance(content, list):
         return None
-    return "\n".join(chunks).strip() or None
+    prompt_parts: list[ContentPart] = []
+    for item in content:
+        if isinstance(item, str):
+            part = text_part(item)
+            if part is not None:
+                prompt_parts.append(part)
+            continue
+        try:
+            validated = ContentPartAdapter.validate_python(item)
+        except Exception:
+            continue
+        prompt_parts.append(validated)
+    if not prompt_parts:
+        return None
+    return tuple(prompt_parts)
+
+
+def _content_parts_to_projection(
+    parts: tuple[ContentPart, ...],
+) -> list[dict[str, object]] | None:
+    payload = [cast(dict[str, object], part.model_dump(mode="json")) for part in parts]
+    if not payload:
+        return None
+    return payload
+
+
+def _content_parts_to_projection_text(parts: tuple[ContentPart, ...]) -> str | None:
+    text = content_parts_to_text(parts)
+    return text.strip() or None
+
+
+def _intent_parts_to_text(intent_parts: list[dict[str, object]]) -> str | None:
+    prompt_parts: list[ContentPart] = []
+    for item in intent_parts:
+        try:
+            prompt_parts.append(ContentPartAdapter.validate_python(item))
+        except Exception:
+            continue
+    if not prompt_parts:
+        return None
+    return _content_parts_to_projection_text(tuple(prompt_parts))
 
 
 def _is_round_coordinator_message(

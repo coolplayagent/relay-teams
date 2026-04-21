@@ -2,7 +2,6 @@
  * app/recovery.js
  * Session recovery snapshot loading, banner rendering, and explicit resume actions.
  */
-import { refreshSubagentRail } from '../components/subagentRail.js';
 import { refreshVisibleContextIndicators } from '../components/contextIndicators.js';
 import { clearRunStreamState } from '../components/messageRenderer.js';
 import {
@@ -10,6 +9,7 @@ import {
     overlayRoundRecoveryState,
 } from '../components/rounds.js';
 import { scheduleSessionsRefresh } from '../components/sidebar.js';
+import { ensureSessionSubagents } from '../components/subagentSessions.js';
 import {
     answerUserQuestion,
     fetchSessionRecovery,
@@ -114,7 +114,10 @@ export async function hydrateSessionView(
         sessionId: safeSessionId,
         reason: 'hydrate-session',
     });
-    await refreshSubagentRail(safeSessionId, { preserveSelection: true });
+    await ensureSessionSubagents(safeSessionId, {
+        force: true,
+        emitLoadingEvents: false,
+    });
     syncSessionContinuity();
     return snapshot;
 }

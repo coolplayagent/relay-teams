@@ -19,6 +19,7 @@ from relay_teams.env.web_config_models import (
 from relay_teams.gateway.acp_stdio import AcpGatewayServer, _AcpRequestContext
 from relay_teams.gateway.gateway_cli import _build_acp_stdio_runtime
 from pydantic import JsonValue
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page
 from playwright.sync_api import expect
 from playwright.sync_api import sync_playwright
@@ -41,10 +42,19 @@ _VIEWPORT_HEIGHT = 1200
 _WAIT_TIMEOUT_MS = 30_000
 
 
+def _set_windows_proactor_event_loop_policy() -> asyncio.AbstractEventLoopPolicy | None:
+    if os.name != "nt" or not hasattr(asyncio, "WindowsProactorEventLoopPolicy"):
+        return None
+    previous_policy = asyncio.get_event_loop_policy()
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    return previous_policy
+
+
 @pytest.fixture()
 def browser_page() -> Iterator[Page]:
     browser_root = _resolve_playwright_browser_root()
     previous_browser_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    previous_event_loop_policy = _set_windows_proactor_event_loop_policy()
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_root)
     try:
         with sync_playwright() as playwright:
@@ -64,6 +74,8 @@ def browser_page() -> Iterator[Page]:
             os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
         else:
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = previous_browser_root
+        if previous_event_loop_policy is not None:
+            asyncio.set_event_loop_policy(previous_event_loop_policy)
 
 
 @pytest.mark.skip(reason="Flaky on CI - timing issues with browser automation")
@@ -354,6 +366,7 @@ def test_browser_shell_settings_and_session_management(
     session_id = _create_session_via_sidebar(page)
     renamed_title = "Browser Smoke Session"
 
+    _open_session_rename_dialog(page, session_id)
     with page.expect_request(
         lambda request: (
             request.method == "PATCH"
@@ -361,12 +374,6 @@ def test_browser_shell_settings_and_session_management(
             == f"{integration_env.api_base_url}/api/sessions/{session_id}"
         )
     ):
-        page.locator(f'.session-rename-btn[data-session-id="{session_id}"]').click(
-            force=True
-        )
-        expect(page.locator(".feedback-dialog-input")).to_be_visible(
-            timeout=_WAIT_TIMEOUT_MS
-        )
         page.locator(".feedback-dialog-input").fill(renamed_title)
         page.locator("[data-feedback-confirm]").click()
 
@@ -1848,6 +1855,25 @@ def _wait_for_new_session_id(page: Page, existing_session_ids: set[str]) -> str:
     raise AssertionError("Timed out waiting for a new session to appear in the UI.")
 
 
+def _open_session_rename_dialog(page: Page, session_id: str) -> None:
+    button = page.locator(f'.session-rename-btn[data-session-id="{session_id}"]')
+    dialog_input = page.locator(".feedback-dialog-input")
+    deadline = time.monotonic() + 10.0
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            page.locator(f'.session-item[data-session-id="{session_id}"]').hover()
+            button.evaluate("(element) => element.click()")
+            expect(dialog_input).to_be_visible(timeout=1000)
+            return
+        except PlaywrightError as exc:
+            last_error = exc
+            page.wait_for_timeout(200)
+    raise AssertionError(
+        f"Timed out opening the rename dialog for session {session_id}."
+    ) from last_error
+
+
 def _wait_for_session_ids_snapshot(
     page: Page, *, timeout_seconds: float = 15.0
 ) -> set[str]:
@@ -2001,30 +2027,37 @@ def _emit_gateway_observability_probe() -> None:
     previous_computer_runtime = os.environ.get("AGENT_TEAMS_COMPUTER_RUNTIME")
     os.environ["AGENT_TEAMS_COMPUTER_RUNTIME"] = "fake"
     try:
-        runtime = _build_acp_stdio_runtime()
-        server = cast(AcpGatewayServer, getattr(runtime, "_server"))
+        last_error: BaseException | None = None
+        for _attempt in range(3):
+            runtime = _build_acp_stdio_runtime()
+            server = cast(AcpGatewayServer, getattr(runtime, "_server"))
 
-        async def discard_notify(_message: dict[str, JsonValue]) -> None:
-            return None
+            async def discard_notify(_message: dict[str, JsonValue]) -> None:
+                return None
 
-        server.set_notify(discard_notify)
-        failure: list[BaseException] = []
+            server.set_notify(discard_notify)
+            failure: list[BaseException] = []
 
-        def runner() -> None:
-            try:
-                asyncio.run(_run_gateway_observability_probe(server))
-            except BaseException as exc:  # pragma: no cover - re-raised below
-                failure.append(exc)
+            def runner() -> None:
+                try:
+                    asyncio.run(_run_gateway_observability_probe(server))
+                except BaseException as exc:  # pragma: no cover - re-raised below
+                    failure.append(exc)
 
-        thread = threading.Thread(target=runner, daemon=True)
-        thread.start()
-        thread.join(timeout=30.0)
-        if thread.is_alive():
-            raise AssertionError(
-                "Timed out while emitting gateway observability probe."
-            )
-        if failure:
-            raise failure[0]
+            thread = threading.Thread(target=runner, daemon=True)
+            thread.start()
+            thread.join(timeout=30.0)
+            if thread.is_alive():
+                last_error = AssertionError(
+                    "Timed out while emitting gateway observability probe."
+                )
+            elif not failure:
+                return
+            else:
+                last_error = failure[0]
+            time.sleep(0.2)
+        if last_error is not None:
+            raise last_error
     finally:
         if previous_computer_runtime is None:
             os.environ.pop("AGENT_TEAMS_COMPUTER_RUNTIME", None)

@@ -9,12 +9,15 @@ if TYPE_CHECKING:
     from relay_teams.providers.model_config import (
         LlmRetryConfig,
         MaaSAuthConfig,
+        ModelCapabilities,
         ModelConfigPayload,
         ModelEndpointConfig,
         ModelFallbackConfig,
         ModelFallbackPolicy,
         ModelFallbackStrategy,
         ModelFallbackTrigger,
+        ModelInputCapabilities,
+        ModelOutputCapabilities,
         ModelProfileConfigPayload,
         ModelRequestHeader,
         ProviderModelInfo,
@@ -74,6 +77,7 @@ __all__ = [
     "LLMProvider",
     "LlmRetryConfig",
     "MaaSAuthConfig",
+    "ModelCapabilities",
     "ModelConfigPayload",
     "ModelFallbackConfig",
     "ModelFallbackConfigManager",
@@ -85,6 +89,8 @@ __all__ = [
     "LlmFallbackDecision",
     "LlmFallbackMiddleware",
     "ModelEndpointConfig",
+    "ModelInputCapabilities",
+    "ModelOutputCapabilities",
     "ModelProfileConfigPayload",
     "ModelRequestHeader",
     "ModelConfigManager",
@@ -127,6 +133,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "LLMProvider": ("relay_teams.providers.provider_contracts", "LLMProvider"),
     "LlmRetryConfig": ("relay_teams.providers.model_config", "LlmRetryConfig"),
     "MaaSAuthConfig": ("relay_teams.providers.model_config", "MaaSAuthConfig"),
+    "ModelCapabilities": (
+        "relay_teams.providers.model_config",
+        "ModelCapabilities",
+    ),
     "ModelConfigPayload": ("relay_teams.providers.model_config", "ModelConfigPayload"),
     "ModelFallbackConfig": (
         "relay_teams.providers.model_config",
@@ -160,6 +170,14 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ModelEndpointConfig": (
         "relay_teams.providers.model_config",
         "ModelEndpointConfig",
+    ),
+    "ModelInputCapabilities": (
+        "relay_teams.providers.model_config",
+        "ModelInputCapabilities",
+    ),
+    "ModelOutputCapabilities": (
+        "relay_teams.providers.model_config",
+        "ModelOutputCapabilities",
     ),
     "ModelProfileConfigPayload": (
         "relay_teams.providers.model_config",

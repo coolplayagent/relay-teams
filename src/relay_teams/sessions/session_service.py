@@ -8,6 +8,7 @@ import contextlib
 from typing import TYPE_CHECKING, cast
 
 from relay_teams.agents.instances.models import AgentRuntimeRecord
+from relay_teams.media import ContentPart
 from relay_teams.metrics import SqliteMetricAggregateStore
 from relay_teams.monitors.repository import MonitorRepository
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType
@@ -90,6 +91,7 @@ if TYPE_CHECKING:
     from relay_teams.roles.memory_service import RoleMemoryService
     from relay_teams.roles.role_registry import RoleRegistry
     from relay_teams.skills.skill_registry import SkillRegistry
+    from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 
 
 AUTOMATION_INTERNAL_WORKSPACE_ID = "automation-system"
@@ -149,6 +151,7 @@ class SessionService:
         mcp_registry: McpRegistry | None = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
         media_asset_service: MediaAssetService | None = None,
+        run_intent_repo: RunIntentRepository | None = None,
         get_runtime: Callable[[], RuntimeConfig] | None = None,
     ) -> None:
         self._session_repo = session_repo
@@ -178,6 +181,7 @@ class SessionService:
         self._mcp_registry = mcp_registry
         self._orchestration_settings_service = orchestration_settings_service
         self._media_asset_service = media_asset_service
+        self._run_intent_repo = run_intent_repo
         self._get_runtime = get_runtime
 
     def replace_role_registry(self, role_registry: RoleRegistry | None) -> None:
@@ -728,32 +732,49 @@ class SessionService:
             if record.project_kind == project_kind and record.project_id == project_id
         )
 
-    def list_normal_mode_subagents(
-        self, session_id: str
-    ) -> tuple[dict[str, object], ...]:
+    def list_session_subagents(self, session_id: str) -> tuple[dict[str, object], ...]:
         session = self._session_repo.get(session_id)
-        if session.session_mode != SessionMode.NORMAL:
-            return ()
         root_tasks_by_run: dict[str, object] = {}
+        latest_task_by_instance_id: dict[str, object] = {}
         for task in self._task_repo.list_by_session(session_id):
             if task.envelope.parent_task_id is None:
                 root_tasks_by_run[task.envelope.trace_id] = task
-        records = [
-            record
-            for record in self._agent_repo.list_by_session(session_id)
-            if self._is_normal_mode_subagent_record(record, session=session)
-        ]
+            assigned_instance_id = str(task.assigned_instance_id or "").strip()
+            if not assigned_instance_id:
+                continue
+            existing = latest_task_by_instance_id.get(assigned_instance_id)
+            if existing is None or getattr(task, "updated_at") >= getattr(
+                existing, "updated_at"
+            ):
+                latest_task_by_instance_id[assigned_instance_id] = task
+        records = []
+        for record in self._agent_repo.list_by_session(session_id):
+            if self._is_normal_mode_subagent_record(record, session=session):
+                records.append(record)
+                continue
+            if session.session_mode != SessionMode.ORCHESTRATION:
+                continue
+            if self._is_reserved_system_role(record.role_id):
+                continue
+            records.append(record)
         records.sort(key=lambda item: (item.updated_at, item.created_at), reverse=True)
         return tuple(
             {
                 **self._normal_mode_subagent_projection(record),
-                "title": self._subagent_title_for_run(
-                    run_id=record.run_id,
+                "title": self._subagent_title_for_agent(
+                    record=record,
+                    session=session,
                     root_tasks_by_run=root_tasks_by_run,
+                    latest_task_by_instance_id=latest_task_by_instance_id,
                 ),
             }
             for record in records
         )
+
+    def list_normal_mode_subagents(
+        self, session_id: str
+    ) -> tuple[dict[str, object], ...]:
+        return self.list_session_subagents(session_id)
 
     def list_agents_in_session(self, session_id: str) -> tuple[dict[str, object], ...]:
         session = self._session_repo.get(session_id)
@@ -915,6 +936,7 @@ class SessionService:
                     include_hidden_from_context=True,
                 ),
             ),
+            get_run_intent_input=self._get_run_intent_input_parts,
             get_session_history_markers=self._get_session_history_markers,
             get_session_events=self.get_global_events,
             excluded_run_ids=excluded_run_ids,
@@ -946,6 +968,18 @@ class SessionService:
     ) -> dict[str, object]:
         rounds = self.build_session_rounds(session_id)
         return paginate_rounds(rounds, limit=limit, cursor_run_id=cursor_run_id)
+
+    def _get_run_intent_input_parts(
+        self,
+        run_id: str,
+    ) -> tuple[ContentPart, ...] | None:
+        if self._run_intent_repo is None:
+            return None
+        try:
+            intent = self._run_intent_repo.get(run_id)
+        except KeyError:
+            return None
+        return tuple(intent.input) if intent.input else None
 
     def get_round(self, session_id: str, run_id: str) -> dict[str, object]:
         rounds = self.build_session_rounds(session_id)
@@ -1444,6 +1478,32 @@ class SessionService:
         if root_task is None:
             return ""
         envelope = getattr(root_task, "envelope", None)
+        title = str(getattr(envelope, "title", "") or "").strip()
+        if title:
+            return title
+        objective = str(getattr(envelope, "objective", "") or "").strip()
+        if not objective:
+            return ""
+        return objective[:80]
+
+    @classmethod
+    def _subagent_title_for_agent(
+        cls,
+        *,
+        record: AgentRuntimeRecord,
+        session: SessionRecord,
+        root_tasks_by_run: dict[str, object],
+        latest_task_by_instance_id: dict[str, object],
+    ) -> str:
+        if session.session_mode == SessionMode.NORMAL:
+            return cls._subagent_title_for_run(
+                run_id=record.run_id,
+                root_tasks_by_run=root_tasks_by_run,
+            )
+        task = latest_task_by_instance_id.get(record.instance_id)
+        if task is None:
+            return ""
+        envelope = getattr(task, "envelope", None)
         title = str(getattr(envelope, "title", "") or "").strip()
         if title:
             return title

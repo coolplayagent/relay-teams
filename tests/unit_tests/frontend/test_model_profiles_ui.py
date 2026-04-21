@@ -345,6 +345,126 @@ export async function deleteModelProfile(name) {
     assert payload["contextWindowValue"] == "256000"
 
 
+def test_saving_model_profile_includes_image_input_capability_override(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-name").value = "vision-profile";
+document.getElementById("profile-provider").value = "openai_compatible";
+document.getElementById("profile-model").value = "vision-model";
+document.getElementById("profile-base-url").value = "https://draft.test/v1";
+document.getElementById("profile-api-key").value = "draft-api-key";
+document.getElementById("profile-image-input-support").value = "true";
+
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    savedProfile: globalThis.__savedProfile,
+    dispatchedEvents: globalThis.__dispatchedEvents,
+}));
+""".strip(),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    assert saved_profile_body["capabilities"] == {
+        "input": {
+            "image": True,
+        }
+    }
+    assert "agent-teams-model-profiles-updated" in cast(
+        list[str], payload["dispatchedEvents"]
+    )
+
+
+def test_discovered_models_render_capability_chip_when_available(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-base-url").value = "https://draft.test/v1";
+document.getElementById("profile-api-key").value = "draft-api-key";
+
+await document.getElementById("fetch-profile-models-btn").onclick();
+
+console.log(JSON.stringify({
+    modelMenuHtml: document.getElementById("profile-model-menu").innerHTML,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {};
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42 };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return {
+        ok: true,
+        latency_ms: 37,
+        model_entries: [
+            {
+                model: "vision-model",
+                context_window: 256000,
+                capabilities: { input: { image: true } },
+            },
+            {
+                model: "text-model",
+                context_window: 64000,
+                capabilities: { input: { image: false } },
+            },
+        ],
+    };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+    )
+
+    model_menu_html = cast(str, payload["modelMenuHtml"])
+    assert "Supports Image" in model_menu_html
+    assert "Text Only" in model_menu_html
+
+
 def test_saving_model_profile_preserves_bigmodel_provider_value(tmp_path: Path) -> None:
     payload = _run_model_profiles_script(
         tmp_path=tmp_path,
@@ -1932,6 +2052,9 @@ const translations = {
     "settings.model.hide_api_key": "Hide API key",
     "settings.model.show_password": "Show password",
     "settings.model.hide_password": "Hide password",
+    "settings.model.capability_supports_image": "Supports Image",
+    "settings.model.capability_text_only": "Text Only",
+    "settings.model.capability_unknown": "Capability Unknown",
     "settings.model.default_badge": "Default",
     "settings.model.no_model": "No model",
     "settings.model.no_endpoint": "No endpoint",
@@ -2069,6 +2192,7 @@ function createElements() {{
             ["profile-top-p", createElement("block", "profile-top-p")],
             ["profile-max-tokens", createElement("block", "profile-max-tokens")],
             ["profile-context-window", createElement("block", "profile-context-window")],
+            ["profile-image-input-support", createElement("block", "profile-image-input-support")],
             ["profile-connect-timeout", createElement("block", "profile-connect-timeout")],
             ["profile-ssl-verify", createElement("block", "profile-ssl-verify")],
             ["profile-fallback-policy", createElement("block", "profile-fallback-policy")],
@@ -2125,9 +2249,19 @@ function installGlobals(elements, notifications) {{
         querySelectorAll(selector) {{
             return collectDocumentMatches(selector);
         }},
+        dispatchEvent(event) {{
+            globalThis.__dispatchedEvents.push(String(event?.type || ""));
+            return true;
+        }},
+    }};
+    globalThis.CustomEvent = class {{
+        constructor(type) {{
+            this.type = type;
+        }}
     }};
     globalThis.__feedbackNotifications = notifications;
     globalThis.__feedbackConfirms = [];
+    globalThis.__dispatchedEvents = [];
 }}
 
 {runner_source}

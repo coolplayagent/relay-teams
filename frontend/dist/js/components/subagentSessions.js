@@ -1,6 +1,6 @@
 /**
  * components/subagentSessions.js
- * Normal-mode subagent child-session cache, navigation, and read-only view.
+ * Session subagent cache, navigation, and read-only view.
  */
 import { fetchSessionSubagents } from '../core/api.js';
 import { syncNormalModeSubagentStreams } from '../core/stream.js';
@@ -270,6 +270,14 @@ export function getActiveSubagentSessionStreamContainer(instanceId) {
 }
 
 export function buildSubagentSessionLabel(record) {
+    const title = String(record?.title || '').trim();
+    if (title) {
+        return title;
+    }
+    return buildSubagentSessionMetaLabel(record);
+}
+
+function buildSubagentSessionMetaLabel(record) {
     const roleId = String(record?.roleId || record?.role_id || '').trim();
     const instanceId = String(record?.instanceId || record?.instance_id || '').trim();
     const roleLabel = getRoleDisplayName(roleId, { fallback: roleId || 'Agent' });
@@ -319,7 +327,7 @@ function normalizeSubagentSession(record, sessionId) {
     const roleId = String(record.role_id || record.roleId || '').trim();
     const runId = String(record.run_id || record.runId || '').trim();
     const safeSessionId = String(sessionId || record.session_id || record.sessionId || '').trim();
-    if (!safeSessionId || !instanceId || !roleId || !runId || !runId.startsWith('subagent_run_')) {
+    if (!safeSessionId || !instanceId || !roleId || !runId) {
         return null;
     }
     return {
@@ -471,7 +479,7 @@ function syncSubagentSessionViewChrome(active, wrapper = null) {
         badgeEl.textContent = status;
     }
     if (metaEl) {
-        metaEl.textContent = buildSubagentSessionLabel(active);
+        metaEl.textContent = buildSubagentSessionMetaLabel(active);
     }
 }
 

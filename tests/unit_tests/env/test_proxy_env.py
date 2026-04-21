@@ -428,6 +428,30 @@ def test_load_proxy_env_config_keeps_password_from_env_when_user_forces_it(
     assert proxy_config.https_proxy == "http://alice:from-env@proxy.example:8443"
 
 
+def test_load_proxy_env_config_uses_explicit_process_env_over_process_state(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".relay-teams"
+    config_dir.mkdir()
+    env_file = config_dir / ".env"
+    env_file.write_text(
+        "HTTP_PROXY=http://from-file.example:8080\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HTTPS_PROXY", "http://from-process.example:8443")
+
+    proxy_config = load_proxy_env_config(
+        extra_env_files=(env_file,),
+        include_process_env=False,
+        process_env={"HTTPS_PROXY": "http://from-explicit.example:8443"},
+        user_home_dir=tmp_path,
+    )
+
+    assert proxy_config.http_proxy == "http://from-file.example:8080"
+    assert proxy_config.https_proxy == "http://from-explicit.example:8443"
+
+
 def test_mask_proxy_url_hides_embedded_credentials() -> None:
     masked = mask_proxy_url("http://user:pass@proxy.example:8080")
 

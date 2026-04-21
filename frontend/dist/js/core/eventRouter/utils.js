@@ -15,3 +15,20 @@ export function coordinatorContainerFor(eventMeta) {
     if (latest) return latest;
     return els.chatMessages;
 }
+
+export function renderHumanDispatchPanel(payload) {
+    document.querySelectorAll('.human-dispatch-panel').forEach(element => element.remove());
+
+    const container = coordinatorContainerFor(payload);
+    if (!container) {
+        return;
+    }
+
+    const panel = document.createElement('div');
+    panel.className = 'human-dispatch-panel';
+
+    const summary = String(payload?.summary || payload?.prompt || '').trim();
+    panel.textContent = summary || 'Awaiting human dispatch.';
+
+    container.appendChild(panel);
+}

@@ -9,6 +9,7 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+  workflow_dispatch:
 
 concurrency:
   group: pr-checks-${{ github.event.pull_request.number || github.ref }}
@@ -21,7 +22,7 @@ permissions:
 
 jobs:
   agents-self-check:
-    if: github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -33,6 +34,7 @@ jobs:
           python-version: "3.12"
 
       - name: Require linked issue for PRs into main
+        if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}

@@ -4,108 +4,55 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
-from typing import cast
 
 
-def test_subagent_rail_filters_dynamic_coordinator_role(tmp_path: Path) -> None:
+def test_subagent_rail_refresh_delegates_to_unified_subagent_cache(
+    tmp_path: Path,
+) -> None:
     payload = _run_subagent_rail_script(
         tmp_path=tmp_path,
         runner_source="""
-const { refreshSubagentRail, rememberLiveSubagent } = await import("./subagentRail.mjs");
-const { state } = await import("./mockState.mjs");
+const { refreshSubagentRail } = await import("./subagentRail.mjs");
 
-state.currentSessionId = "session-1";
-state.coordinatorRoleId = "Coordinator";
-state.mainAgentRoleId = "MainAgent";
-
-await refreshSubagentRail("session-1");
-rememberLiveSubagent("coord-2", "Coordinator");
-rememberLiveSubagent("main-2", "MainAgent");
-rememberLiveSubagent("writer-2", "writer");
+const result = await refreshSubagentRail("session-1");
 
 console.log(JSON.stringify({
-    sessionAgents: state.sessionAgents,
-    sessionTasks: state.sessionTasks,
-    selectedRoleId: state.selectedRoleId,
-    summaryText: globalThis.__elements.subagentStatusSummary.textContent,
-    selectorHtml: globalThis.__elements.subagentRoleSelect.innerHTML,
-    metaHtml: globalThis.__elements.subagentRoleMeta.innerHTML,
-    metaHidden: globalThis.__elements.subagentRoleMeta.hidden,
-    openAgentPanelCalls: globalThis.__openAgentPanelCalls,
+    ensureCalls: globalThis.__ensureSessionSubagentsCalls,
+    result,
 }));
 """.strip(),
     )
 
-    assert payload["sessionAgents"] == [
+    assert payload["ensureCalls"] == [
         {
-            "instance_id": "writer-2",
-            "role_id": "writer",
-            "status": "running",
-            "created_at": "2026-03-13T00:01:00Z",
-            "updated_at": "2026-03-13T00:02:00.000Z",
-            "reflection_summary_preview": "Use concise drafts.",
-            "reflection_updated_at": "2026-03-13T00:01:30Z",
-            "runtime_system_prompt": "You are the runtime writer.",
-            "runtime_tools_json": '{"local_tools":[],"skill_tools":[],"mcp_tools":[]}',
+            "sessionId": "session-1",
+            "options": {"force": True, "emitLoadingEvents": False},
         }
     ]
-    assert payload["sessionTasks"] == [
-        {
-            "task_id": "task-writer",
-            "title": "Write result",
-            "assigned_role_id": "writer",
-            "role_id": "writer",
-            "status": "running",
-            "assigned_instance_id": "writer-1",
-            "instance_id": "writer-1",
-            "run_id": "run-1",
-            "created_at": "2026-03-13T00:01:10Z",
-            "updated_at": "2026-03-13T00:01:40Z",
-        }
-    ]
-    assert payload["selectedRoleId"] == "writer"
-    assert payload["summaryText"] == "1 running / 1 roles"
-    selector_html = cast(str, payload["selectorHtml"])
-    meta_html = cast(str, payload["metaHtml"])
-    open_agent_panel_calls = cast(list[object], payload["openAgentPanelCalls"])
-
-    assert "Coordinator" not in selector_html
-    assert "MainAgent" not in selector_html
-    assert "writer" in selector_html
-    assert meta_html == ""
-    assert payload["metaHidden"] is True
-    assert open_agent_panel_calls[-1] == {
-        "instanceId": "writer-2",
-        "roleId": "writer",
-        "options": {
-            "reveal": False,
-            "forceRefresh": False,
-        },
-    }
+    assert payload["result"] == [{"instanceId": "inst-1", "runId": "run-1"}]
 
 
-def test_subagent_rail_rebuilds_labels_when_language_changes(tmp_path: Path) -> None:
+def test_subagent_rail_exports_safe_noops_for_removed_right_rail(
+    tmp_path: Path,
+) -> None:
     payload = _run_subagent_rail_script(
         tmp_path=tmp_path,
         runner_source="""
-const { initializeSubagentRail, rememberLiveSubagent } = await import("./subagentRail.mjs");
+const rail = await import("./subagentRail.mjs");
 
-initializeSubagentRail();
-rememberLiveSubagent("writer-2", "writer");
-globalThis.__language = "zh-CN";
-document.dispatchEvent(new CustomEvent("agent-teams-language-changed"));
+rail.initializeSubagentRail();
+rail.rememberLiveSubagent("inst-1", "Writer");
+rail.markSubagentStatus("inst-1", "running");
+rail.selectSubagentRole("Writer", { reveal: true });
+rail.focusSubagent("inst-1", "Writer");
+rail.syncSelectedRoleByInstance("inst-1", "Writer");
+rail.setSubagentRailExpanded(false);
 
-console.log(JSON.stringify({
-    summaryText: globalThis.__elements.subagentStatusSummary.textContent,
-    toggleHtml: globalThis.__elements.toggleSubagentsBtn.innerHTML,
-    clearPanelCalls: globalThis.__clearAllPanelsCalls,
-}));
+console.log(JSON.stringify({ ok: true }));
 """.strip(),
     )
 
-    assert payload["summaryText"] == "1 个运行中 / 1 个角色"
-    assert "子代理" in cast(str, payload["toggleHtml"])
-    assert payload["clearPanelCalls"] == 1
+    assert payload == {"ok": True}
 
 
 def _run_subagent_rail_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
@@ -114,252 +61,29 @@ def _run_subagent_rail_script(tmp_path: Path, runner_source: str) -> dict[str, o
         repo_root / "frontend" / "dist" / "js" / "components" / "subagentRail.js"
     )
 
-    mock_api_path = tmp_path / "mockApi.mjs"
-    mock_state_path = tmp_path / "mockState.mjs"
-    mock_agent_panel_path = tmp_path / "mockAgentPanel.mjs"
-    mock_dom_path = tmp_path / "mockDom.mjs"
-    mock_i18n_path = tmp_path / "mockI18n.mjs"
-    mock_logger_path = tmp_path / "mockLogger.mjs"
     module_under_test_path = tmp_path / "subagentRail.mjs"
     runner_path = tmp_path / "runner.mjs"
+    mock_subagent_sessions_path = tmp_path / "mockSubagentSessions.mjs"
 
-    mock_api_path.write_text(
-        """
-export async function fetchSessionAgents() {
-    return [
-        {
-            instance_id: "coord-1",
-            role_id: "Coordinator",
-            status: "running",
-            created_at: "2026-03-13T00:00:00Z",
-            updated_at: "2026-03-13T00:00:00Z",
-        },
-        {
-            instance_id: "main-1",
-            role_id: "MainAgent",
-            status: "running",
-            created_at: "2026-03-13T00:00:30Z",
-            updated_at: "2026-03-13T00:00:30Z",
-        },
-        {
-            instance_id: "writer-1",
-            role_id: "writer",
-            status: "running",
-            created_at: "2026-03-13T00:01:00Z",
-            updated_at: "2026-03-13T00:01:00Z",
-            reflection_summary_preview: "Use concise drafts.",
-            reflection_updated_at: "2026-03-13T00:01:30Z",
-            runtime_system_prompt: "You are the runtime writer.",
-            runtime_tools_json: '{"local_tools":[],"skill_tools":[],"mcp_tools":[]}',
-        },
-    ];
-}
-
-export async function fetchSessionTasks() {
-    return [
-        {
-            task_id: "task-coordinator",
-            title: "Coordinate run",
-            role_id: "Coordinator",
-            status: "completed",
-            instance_id: "coord-1",
-            run_id: "run-1",
-        },
-        {
-            task_id: "task-main",
-            title: "Handle task",
-            role_id: "MainAgent",
-            status: "completed",
-            instance_id: "main-1",
-            run_id: "run-1",
-        },
-        {
-            task_id: "task-writer",
-            title: "Write result",
-            role_id: "writer",
-            status: "running",
-            instance_id: "writer-1",
-            run_id: "run-1",
-            created_at: "2026-03-13T00:01:10Z",
-            updated_at: "2026-03-13T00:01:40Z",
-        },
-    ];
-}
-""".strip(),
-        encoding="utf-8",
-    )
-    mock_state_path.write_text(
-        """
-export const state = {
-    currentSessionId: null,
-    sessionAgents: [],
-    sessionTasks: [],
-    selectedRoleId: null,
-    pausedSubagent: null,
-    currentRecoverySnapshot: null,
-    activeAgentRoleId: null,
-    coordinatorRoleId: null,
-    mainAgentRoleId: null,
-    rightRailExpanded: true,
-};
-
-export function isReservedSystemRoleId(roleId) {
-    const safeRoleId = String(roleId || "").trim();
-    const coordinatorRoleId = String(state.coordinatorRoleId || "").trim();
-    const mainAgentRoleId = String(state.mainAgentRoleId || "").trim();
-    return !!safeRoleId && (
-        (!!coordinatorRoleId && safeRoleId === coordinatorRoleId)
-        || (!!mainAgentRoleId && safeRoleId === mainAgentRoleId)
-    );
-}
-
-export function isPrimaryRoleId(roleId) {
-    return false;
-}
-
-export function isPrimaryOrReservedRoleId(roleId) {
-    return isPrimaryRoleId(roleId) || isReservedSystemRoleId(roleId);
-}
-""".strip(),
-        encoding="utf-8",
-    )
-    mock_agent_panel_path.write_text(
-        """
-export function clearAllPanels() {
-    globalThis.__clearAllPanelsCalls += 1;
-}
-
-export function openAgentPanel(instanceId, roleId, options = {}) {
-    globalThis.__openAgentPanelCalls.push({ instanceId, roleId, options });
-}
-""".strip(),
-        encoding="utf-8",
-    )
-    mock_dom_path.write_text(
-        """
-export const els = globalThis.__elements;
-""".strip(),
-        encoding="utf-8",
-    )
-    mock_i18n_path.write_text(
-        """
-const translations = {
-    "en-US": {
-        "topbar.subagents": "Subagents",
-        "subagent.none": "No subagents",
-        "subagent.summary_idle": "idle / {roles} roles",
-        "subagent.summary_running": "{running} running / {roles} roles",
-    },
-    "zh-CN": {
-        "topbar.subagents": "子代理",
-        "subagent.none": "暂无子代理",
-        "subagent.summary_idle": "空闲 / {roles} 个角色",
-        "subagent.summary_running": "{running} 个运行中 / {roles} 个角色",
-    },
-};
-
-export function t(key) {
-    const language = globalThis.__language || "en-US";
-    return translations[language]?.[key] || translations["en-US"]?.[key] || key;
-}
-""".strip(),
-        encoding="utf-8",
-    )
-    mock_logger_path.write_text(
-        """
-export function sysLog() {
-    return undefined;
-}
-""".strip(),
-        encoding="utf-8",
-    )
-
-    source_text = (
-        source_path.read_text(encoding="utf-8")
-        .replace("../core/api.js", "./mockApi.mjs")
-        .replace("../core/state.js", "./mockState.mjs")
-        .replace("./agentPanel.js", "./mockAgentPanel.mjs")
-        .replace("../utils/dom.js", "./mockDom.mjs")
-        .replace("../utils/i18n.js", "./mockI18n.mjs")
-        .replace("../utils/logger.js", "./mockLogger.mjs")
+    source_text = source_path.read_text(encoding="utf-8").replace(
+        "./subagentSessions.js", "./mockSubagentSessions.mjs"
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 
+    mock_subagent_sessions_path.write_text(
+        """
+export async function ensureSessionSubagents(sessionId, options = {}) {
+    globalThis.__ensureSessionSubagentsCalls.push({ sessionId, options });
+    return [{ instanceId: "inst-1", runId: "run-1" }];
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
     runner_path.write_text(
         f"""
-const RealDate = Date;
+globalThis.__ensureSessionSubagentsCalls = [];
 
-class FixedDate extends RealDate {{
-    constructor(...args) {{
-        super(...(args.length > 0 ? args : ["2026-03-13T00:02:00.000Z"]));
-    }}
-
-    static now() {{
-        return new RealDate("2026-03-13T00:02:00.000Z").getTime();
-    }}
-}}
-
-function createClassList() {{
-    return {{
-        toggle() {{
-            return undefined;
-        }},
-    }};
-}}
-
-function createElement() {{
-    return {{
-        innerHTML: "",
-        textContent: "",
-        disabled: false,
-        hidden: false,
-        value: "",
-        classList: createClassList(),
-    }};
-}}
-
-globalThis.Date = FixedDate;
-globalThis.__elements = {{
-    toggleSubagentsBtn: createElement(),
-    subagentRoleSelect: createElement(),
-    subagentStatusSummary: createElement(),
-    subagentRoleMeta: createElement(),
-    rightRail: createElement(),
-    rightRailResizer: createElement(),
-}};
-globalThis.__openAgentPanelCalls = [];
-globalThis.__clearAllPanelsCalls = 0;
-globalThis.__language = "en-US";
-globalThis.CustomEvent = class CustomEvent {{
-    constructor(type, init = {{}}) {{
-        this.type = type;
-        this.detail = init.detail || null;
-    }}
-}};
-const __listeners = new Map();
-globalThis.document = {{
-    addEventListener(type, listener) {{
-        if (!__listeners.has(type)) {{
-            __listeners.set(type, []);
-        }}
-        __listeners.get(type).push(listener);
-    }},
-    dispatchEvent(event) {{
-        const listeners = __listeners.get(event.type) || [];
-        listeners.forEach(listener => listener(event));
-        return true;
-    }},
-}};
-
-globalThis.localStorage = {{
-    _values: new Map(),
-    getItem(key) {{
-        return this._values.has(key) ? this._values.get(key) : null;
-    }},
-    setItem(key, value) {{
-        this._values.set(key, String(value));
-    }},
-}};
 {runner_source}
 """.strip(),
         encoding="utf-8",
@@ -371,15 +95,13 @@ globalThis.localStorage = {{
         check=False,
         cwd=str(repo_root),
         text=True,
-        encoding="utf-8",
-        timeout=30,
+        timeout=3,
     )
-
     if completed.returncode != 0:
         raise AssertionError(
-            "Node runner failed:\n"
-            f"STDOUT:\n{completed.stdout}\n"
-            f"STDERR:\n{completed.stderr}"
+            "Node runner failed:\\n"
+            f"STDOUT:\\n{completed.stdout}\\n"
+            f"STDERR:\\n{completed.stderr}"
         )
 
     return json.loads(completed.stdout)

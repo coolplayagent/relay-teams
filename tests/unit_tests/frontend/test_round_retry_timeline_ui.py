@@ -48,6 +48,8 @@ def _run_round_timeline_script(tmp_path: Path, runner_source: str) -> dict[str, 
         "../../core/api.js": "./mockApi.mjs",
         "../agentPanel.js": "./mockAgentPanel.mjs",
         "../messageRenderer.js": "./mockMessageRenderer.mjs",
+        "../messageRenderer/helpers/block.js": "./mockMessageRendererBlock.mjs",
+        "../messageRenderer/helpers/content.js": "./mockMessageRendererContent.mjs",
         "./navigator.js": "./mockNavigator.mjs",
         "./paging.js": "./mockPaging.mjs",
         "./state.js": "./mockRoundsState.mjs",
@@ -131,7 +133,27 @@ export function getOrCreateStreamBlock() {
     return undefined;
 }
 
-export function appendStreamChunk() {
+    export function appendStreamChunk() {
+        return undefined;
+    }
+    """.strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockMessageRendererBlock.mjs").write_text(
+        """
+export function buildStructuredUserPromptSummary() {
+    return '';
+}
+
+export function userPromptItemToStructuredPart() {
+    return null;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockMessageRendererContent.mjs").write_text(
+        """
+export function appendStructuredContentPart() {
     return undefined;
 }
 """.strip(),

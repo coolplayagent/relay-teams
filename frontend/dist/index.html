@@ -136,17 +136,6 @@
               />
             </svg>
           </button>
-          <button
-            id="toggle-subagents"
-            class="subagent-toggle-btn"
-            title="Toggle Subagents"
-            data-i18n-title="topbar.subagents_title"
-          >
-            <span class="subagent-toggle-label" data-i18n="topbar.subagents"
-              >Subagents</span
-            >
-            <span class="subagent-toggle-summary">idle / 0 roles</span>
-          </button>
         </div>
       </header>
 
@@ -328,6 +317,11 @@
               ></div>
               <form id="chat-form">
                 <div class="input-wrapper">
+                  <div
+                    id="composer-media-previews"
+                    class="composer-media-previews"
+                    style="display: none"
+                  ></div>
                   <textarea
                     id="prompt-input"
                     placeholder="What would you like the agents to do?"
@@ -545,97 +539,6 @@
             </div>
           </div>
         </main>
-        <div
-          class="right-rail-resizer"
-          id="right-rail-resizer"
-          title="拖动调整侧边栏宽度"
-          data-i18n-title="sidebar.resize"
-        ></div>
-
-        <aside class="right-rail" id="right-rail">
-          <section class="rail-subagent-card">
-            <div class="subagent-rail-header">
-              <span
-                class="subagent-rail-agent-name"
-                id="subagent-rail-agent-name"
-                data-i18n="subagent.header"
-                >Subagents</span
-              >
-              <span
-                class="subagent-rail-agent-id"
-                id="subagent-rail-agent-id"
-              ></span>
-              <select
-                id="subagent-role-select"
-                class="subagent-role-select"
-                disabled
-              >
-                <option value="" data-i18n="subagent.none">No subagents</option>
-              </select>
-              <div
-                id="subagent-rail-token-badge"
-                class="subagent-rail-token-badge"
-              ></div>
-              <button
-                id="subagent-rail-reflect"
-                class="agent-panel-refresh-reflection"
-                type="button"
-                title="Refresh reflection memory"
-                data-i18n-title="subagent.reflect_title"
-                data-i18n="subagent.reflect"
-                hidden
-              >
-                Reflect
-              </button>
-              <button
-                id="subagent-rail-stop"
-                class="agent-panel-stop"
-                type="button"
-                title="Stop this subagent"
-                data-i18n-title="subagent.stop_title"
-                data-i18n="subagent.stop"
-                hidden
-              >
-                Stop
-              </button>
-              <span id="subagent-status-summary" class="subagent-status-summary"
-                >--</span
-              >
-            </div>
-            <div id="subagent-role-meta" class="subagent-role-meta">
-              <div class="subagent-meta-empty" data-i18n="subagent.empty">
-                No delegated subagent instances in this session.
-              </div>
-            </div>
-            <aside class="agent-drawer open" id="agent-drawer"></aside>
-          </section>
-
-          <section class="rail-inspector-card" id="rail-inspector">
-            <div id="inspector-panel" class="inspector-panel">
-              <div class="inspector-header">
-                <h4 data-i18n="inspector.system_logs">System Logs</h4>
-                <button
-                  id="toggle-inspector"
-                  class="icon-btn"
-                  title="Toggle Logs"
-                  data-i18n-title="inspector.toggle_logs_title"
-                  data-i18n-aria-label="inspector.toggle_logs_title"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" class="icon">
-                    <path
-                      d="M19 9l-7 7-7-7"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </button>
-              </div>
-              <div class="inspector-canvas" id="system-logs"></div>
-            </div>
-          </section>
-        </aside>
       </div>
     </div>
 

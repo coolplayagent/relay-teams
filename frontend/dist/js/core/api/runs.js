@@ -10,7 +10,11 @@ export async function sendUserPrompt(
     yolo = false,
     thinking = null,
     targetRoleId = null,
+    inputParts = null,
 ) {
+    const resolvedInput = Array.isArray(inputParts) && inputParts.length > 0
+        ? inputParts
+        : [{ kind: 'text', text: prompt }];
     return requestJson(
         '/api/runs',
         {
@@ -18,7 +22,7 @@ export async function sendUserPrompt(
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 session_id: sessionId,
-                input: [{ kind: 'text', text: prompt }],
+                input: resolvedInput,
                 run_kind: 'conversation',
                 execution_mode: 'ai',
                 yolo: yolo === true,

@@ -25,10 +25,16 @@ from relay_teams.agents.execution.conversation_microcompact import (
     ConversationMicrocompactResult,
 )
 from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.media import InlineMediaContentPart, MediaModality
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.llm_retry import LlmRetryErrorInfo, LlmRetrySchedule
-from relay_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
+from relay_teams.providers.model_config import (
+    LlmRetryConfig,
+    ModelCapabilities,
+    ModelEndpointConfig,
+    ModelInputCapabilities,
+)
 from relay_teams.providers.model_fallback import LlmFallbackDecision
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.tools.runtime.persisted_state import (
@@ -146,6 +152,103 @@ def test_normalize_committable_messages_keeps_request_fields() -> None:
     assert normalized_request.timestamp == datetime(2026, 4, 2, 22, 44, 3, tzinfo=UTC)
     assert normalized_request.run_id == "run-123"
     assert normalized_request.metadata == {"source": "test"}
+
+
+def test_validate_request_input_capabilities_rejects_known_unsupported_image() -> None:
+    session = object.__new__(AgentLlmSession)
+    session._config = ModelEndpointConfig(
+        model="gpt-4o-mini",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        capabilities=ModelCapabilities(input=ModelInputCapabilities(image=False)),
+    )
+    request = LLMRequest(
+        run_id="run-1",
+        trace_id="trace-1",
+        task_id="task-1",
+        session_id="session-1",
+        workspace_id="workspace-1",
+        instance_id="instance-1",
+        role_id="writer",
+        system_prompt="You are helpful.",
+        user_prompt=None,
+        input=(
+            InlineMediaContentPart(
+                modality=MediaModality.IMAGE,
+                mime_type="image/png",
+                base64_data="QUJD",
+                name="diagram.png",
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="does not support image input"):
+        AgentLlmSession._validate_request_input_capabilities(session, request)
+
+
+def test_validate_request_input_capabilities_rejects_unknown_image_support() -> None:
+    session = object.__new__(AgentLlmSession)
+    session._config = ModelEndpointConfig(
+        model="custom-model",
+        base_url="https://example.test/v1",
+        api_key="secret",
+    )
+    request = LLMRequest(
+        run_id="run-1",
+        trace_id="trace-1",
+        task_id="task-1",
+        session_id="session-1",
+        workspace_id="workspace-1",
+        instance_id="instance-1",
+        role_id="writer",
+        system_prompt="You are helpful.",
+        user_prompt=None,
+        input=(
+            InlineMediaContentPart(
+                modality=MediaModality.IMAGE,
+                mime_type="image/png",
+                base64_data="QUJD",
+                name="diagram.png",
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Cannot confirm whether model custom-model supports image input",
+    ):
+        AgentLlmSession._validate_request_input_capabilities(session, request)
+
+
+def test_validate_request_input_capabilities_allows_supported_image() -> None:
+    session = object.__new__(AgentLlmSession)
+    session._config = ModelEndpointConfig(
+        model="gpt-4.1",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        capabilities=ModelCapabilities(input=ModelInputCapabilities(image=True)),
+    )
+    request = LLMRequest(
+        run_id="run-1",
+        trace_id="trace-1",
+        task_id="task-1",
+        session_id="session-1",
+        workspace_id="workspace-1",
+        instance_id="instance-1",
+        role_id="writer",
+        system_prompt="You are helpful.",
+        user_prompt=None,
+        input=(
+            InlineMediaContentPart(
+                modality=MediaModality.IMAGE,
+                mime_type="image/png",
+                base64_data="QUJD",
+                name="diagram.png",
+            ),
+        ),
+    )
+
+    AgentLlmSession._validate_request_input_capabilities(session, request)
 
 
 class _FakeMessageRepo:

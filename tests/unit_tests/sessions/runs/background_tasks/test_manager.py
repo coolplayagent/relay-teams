@@ -22,6 +22,7 @@ from relay_teams.sessions.runs.background_tasks.manager import (
     BackgroundTaskManager,
     MAX_BACKGROUND_TASKS,
     PROTECTED_RECENT_BACKGROUND_TASKS,
+    _normalize_poll_timeout,
 )
 from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
@@ -180,6 +181,17 @@ class _FakeMonitorSink:
     ) -> None:
         _ = (subscription, message)
         self.body_texts.append(envelope.body_text)
+
+
+def test_normalize_poll_timeout_honors_explicit_empty_poll_yield_time() -> None:
+    assert (
+        _normalize_poll_timeout(
+            chars="",
+            yield_time_ms=1_000,
+            is_initial_poll=False,
+        )
+        == 1_000
+    )
 
 
 @pytest.mark.asyncio
