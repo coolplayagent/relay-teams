@@ -569,6 +569,69 @@ Returns the stored SSH password for one profile:
 
 The response returns `null` when no password is stored. Private key bodies remain non-readable through the settings API.
 
+### `POST /system/configs/workspace/ssh-profiles:probe`
+
+Tests whether an SSH profile can open a remote SSH session. The probe is used by both the saved profile list and the profile editor.
+
+Request body for a saved profile:
+
+```json
+{
+  "ssh_profile_id": "prod",
+  "timeout_ms": 15000
+}
+```
+
+Request body for unsaved editor values or a saved profile with draft overrides:
+
+```json
+{
+  "ssh_profile_id": "prod",
+  "override": {
+    "host": "prod-alias",
+    "username": "deploy",
+    "password": "optional-password",
+    "port": 22,
+    "remote_shell": "/bin/bash",
+    "connect_timeout_seconds": 15,
+    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+    "private_key_name": "id_ed25519"
+  },
+  "timeout_ms": 15000
+}
+```
+
+Rules:
+- Either `ssh_profile_id` or `override` is required.
+- When `ssh_profile_id` is supplied and `override.password` or `override.private_key` is omitted, the probe reuses the stored secret for that field.
+- When no password or private key is available, the probe falls back to the host system SSH configuration.
+- The server shells out to `ssh`, writes any draft private key to a temporary 0600 identity file, and removes temporary files after the probe.
+
+Response body:
+
+```json
+{
+  "ok": true,
+  "ssh_profile_id": "prod",
+  "host": "prod-alias",
+  "port": 22,
+  "username": "deploy",
+  "latency_ms": 44,
+  "checked_at": "2026-04-21T00:00:00Z",
+  "diagnostics": {
+    "binary_available": true,
+    "host_reachable": true,
+    "used_password": false,
+    "used_private_key": false,
+    "used_system_config": true,
+    "exit_code": 0
+  },
+  "error_code": null,
+  "error_message": null,
+  "retryable": false
+}
+```
+
 ### `PUT /system/configs/workspace/ssh-profiles/{ssh_profile_id}`
 
 Upserts one SSH profile.

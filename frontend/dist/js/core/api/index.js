@@ -77,6 +77,7 @@ export {
     probeGitHubConnectivity,
     probeGitHubWebhookConnectivity,
     probeModelConnection,
+    probeSshProfileConnection,
     probeWebConnectivity,
     fetchClawHubConfig,
     fetchClawHubSkill,

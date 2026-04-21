@@ -848,6 +848,7 @@ function createModal() {
                                                 </div>
                                             </div>
                                             <p class="workspace-auth-state" id="workspace-ssh-profile-auth-state"></p>
+                                            <div class="profile-probe-status" id="workspace-ssh-profile-probe-status" style="display:none;"></div>
                                         </div>
                                     </form>
                                 </div>
@@ -930,6 +931,7 @@ function createModal() {
                     <div class="settings-panel-actions" id="settings-panel-actions">
                         <div class="settings-panel-actions-group settings-panel-actions-group-start">
                             <button class="secondary-btn section-action-btn settings-action" id="test-profile-btn" type="button" style="display:none;">Test</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="test-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.test">Test</button>
                             <button class="secondary-btn section-action-btn settings-action" id="test-agent-btn" type="button" style="display:none;" data-i18n="settings.action.test">Test</button>
                             <button class="secondary-btn section-action-btn settings-action" id="validate-role-btn" type="button" style="display:none;" data-i18n="settings.action.validate">Validate</button>
                         </div>

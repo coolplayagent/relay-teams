@@ -90,6 +90,8 @@ from relay_teams.notifications.models import NotificationConfig
 from relay_teams.agents.orchestration.settings_models import OrchestrationSettings
 from relay_teams.workspace import (
     SshProfileConfig,
+    SshProfileConnectivityProbeRequest,
+    SshProfileConnectivityProbeResult,
     SshProfilePasswordRevealView,
     SshProfileRecord,
 )
@@ -522,7 +524,49 @@ class _FakeSystemService:
         ModelConnectivityProbeResult
         | GitHubConnectivityProbeResult
         | ClawHubConnectivityProbeResult
+        | SshProfileConnectivityProbeResult
     ):
+        if isinstance(request, SshProfileConnectivityProbeRequest):
+            ssh_profile_id = request.ssh_profile_id or "draft"
+            record = self.ssh_profiles.get(ssh_profile_id)
+            return SshProfileConnectivityProbeResult.model_validate(
+                {
+                    "ok": True,
+                    "ssh_profile_id": request.ssh_profile_id,
+                    "host": (
+                        request.override.host
+                        if request.override is not None
+                        else record.host
+                        if record is not None
+                        else "draft-host"
+                    ),
+                    "port": (
+                        request.override.port
+                        if request.override is not None
+                        else record.port
+                        if record is not None
+                        else None
+                    ),
+                    "username": (
+                        request.override.username
+                        if request.override is not None
+                        else record.username
+                        if record is not None
+                        else None
+                    ),
+                    "latency_ms": 44,
+                    "checked_at": "2026-04-21T00:00:00Z",
+                    "diagnostics": {
+                        "binary_available": True,
+                        "host_reachable": True,
+                        "used_password": False,
+                        "used_private_key": False,
+                        "used_system_config": True,
+                        "exit_code": 0,
+                    },
+                    "retryable": False,
+                }
+            )
         if isinstance(request, ClawHubConnectivityProbeRequest):
             return ClawHubConnectivityProbeResult.model_validate(
                 {
@@ -807,6 +851,22 @@ def test_reveal_ssh_profile_password() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"password": "relay-secret"}
+
+
+def test_probe_ssh_profile_connectivity() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/workspace/ssh-profiles:probe",
+        json={"ssh_profile_id": "prod"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["ssh_profile_id"] == "prod"
+    assert payload["host"] == "prod-alias"
+    assert payload["latency_ms"] == 44
 
 
 def test_save_and_delete_ssh_profile() -> None:

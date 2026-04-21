@@ -307,6 +307,7 @@ def test_ssh_profile_sdk_calls_expected_endpoints(monkeypatch) -> None:
     assert client.get_ssh_profile("prod") == {"status": "ok"}
     assert client.save_ssh_profile("prod", {"host": "prod-alias"}) == {"status": "ok"}
     assert client.reveal_ssh_profile_password("prod") == {"status": "ok"}
+    assert client.probe_ssh_profile({"ssh_profile_id": "prod"}) == {"status": "ok"}
     assert client.delete_ssh_profile("prod") == {"status": "ok"}
     assert calls == [
         ("GET", "/api/system/configs/workspace/ssh-profiles", None),
@@ -320,6 +321,11 @@ def test_ssh_profile_sdk_calls_expected_endpoints(monkeypatch) -> None:
             "POST",
             "/api/system/configs/workspace/ssh-profiles/prod:reveal-password",
             None,
+        ),
+        (
+            "POST",
+            "/api/system/configs/workspace/ssh-profiles:probe",
+            {"ssh_profile_id": "prod"},
         ),
         ("DELETE", "/api/system/configs/workspace/ssh-profiles/prod", None),
     ]

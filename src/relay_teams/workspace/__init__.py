@@ -16,6 +16,9 @@ from relay_teams.workspace.ids import (
 )
 from relay_teams.workspace.ssh_profile_models import (
     SshProfileConfig,
+    SshProfileConnectivityDiagnostics,
+    SshProfileConnectivityProbeRequest,
+    SshProfileConnectivityProbeResult,
     SshProfilePasswordRevealView,
     SshProfileRecord,
     SshProfileStoredConfig,
@@ -79,6 +82,9 @@ __all__ = [
     "WorkspaceTreeNode",
     "WorkspaceTreeNodeKind",
     "SshProfileConfig",
+    "SshProfileConnectivityDiagnostics",
+    "SshProfileConnectivityProbeRequest",
+    "SshProfileConnectivityProbeResult",
     "SshProfilePasswordRevealView",
     "SshProfileRecord",
     "SshProfileStoredConfig",
