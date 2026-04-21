@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
+import subprocess
 import sys
 
 from relay_teams.hooks.hook_event_models import HookEventInput
@@ -22,19 +23,35 @@ class CommandHookExecutor:
         args = shlex.split(command, posix=(not sys.platform.startswith("win")))
         if sys.platform.startswith("win"):
             args = [_strip_wrapping_quotes(arg) for arg in args]
-        process = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(event_input.model_dump_json().encode("utf-8")),
-            timeout=handler.timeout_seconds,
-        )
-        if process.returncode != 0:
+        payload = event_input.model_dump_json().encode("utf-8")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(payload),
+                timeout=handler.timeout_seconds,
+            )
+            return_code = process.returncode
+        except NotImplementedError:
+            completed = await asyncio.to_thread(
+                subprocess.run,
+                args,
+                input=payload,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=handler.timeout_seconds,
+            )
+            stdout = completed.stdout
+            stderr = completed.stderr
+            return_code = completed.returncode
+        if return_code != 0:
             message = stderr.decode("utf-8", errors="ignore").strip() or (
-                f"Command hook exited with status {process.returncode}"
+                f"Command hook exited with status {return_code}"
             )
             raise RuntimeError(message)
         raw_stdout = stdout.decode("utf-8", errors="ignore").strip()

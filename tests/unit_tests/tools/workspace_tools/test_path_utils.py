@@ -13,8 +13,9 @@ from relay_teams.tools.workspace_tools.path_utils import (
 from relay_teams.workspace import WorkspaceHandle
 from relay_teams.workspace.workspace_models import (
     WorkspaceLocations,
+    WorkspaceMountProvider,
     WorkspaceRef,
-    default_workspace_profile,
+    build_local_workspace_mount,
 )
 
 
@@ -56,18 +57,30 @@ def _build_workspace_handle(
     resolved_execution_root = execution_root or scope_root
     resolved_execution_root.mkdir(parents=True, exist_ok=True)
     tmp_root = workspace_dir / "tmp"
-    profile = default_workspace_profile()
     return WorkspaceHandle(
         ref=WorkspaceRef(
             workspace_id="workspace",
             session_id="session",
             role_id="role",
             conversation_id="conversation",
-            profile=profile,
+            default_mount_name="default",
+            mount_names=("default",),
         ),
-        profile=profile,
+        mounts=(
+            build_local_workspace_mount(
+                mount_name="default",
+                root_path=scope_root,
+                working_directory=(
+                    resolved_execution_root.relative_to(scope_root).as_posix()
+                    if resolved_execution_root != scope_root
+                    else "."
+                ),
+            ),
+        ),
         locations=WorkspaceLocations(
             workspace_dir=workspace_dir,
+            mount_name="default",
+            provider=WorkspaceMountProvider.LOCAL,
             scope_root=scope_root,
             execution_root=resolved_execution_root,
             tmp_root=tmp_root,

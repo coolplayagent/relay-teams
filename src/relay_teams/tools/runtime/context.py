@@ -32,6 +32,8 @@ from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
+from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
@@ -123,6 +125,7 @@ class ToolDeps(BaseModel):
     event_bus: SkipValidation[EventLog]
     message_repo: SkipValidation[MessageRepository]
     approval_ticket_repo: SkipValidation[ApprovalTicketRepository]
+    user_question_repo: SkipValidation[UserQuestionRepository | None] = None
     run_runtime_repo: SkipValidation[RunRuntimeRepository]
     injection_manager: SkipValidation[RunInjectionManager]
     run_event_hub: SkipValidation[RunEventHub]
@@ -148,6 +151,7 @@ class ToolDeps(BaseModel):
     task_execution_service: SkipValidation[TaskExecutionServiceLike]
     run_control_manager: SkipValidation[RunControlManager]
     tool_approval_manager: SkipValidation[ToolApprovalManager]
+    user_question_manager: SkipValidation[UserQuestionManager | None] = None
     tool_approval_policy: SkipValidation[ToolApprovalPolicy]
     shell_approval_repo: SkipValidation[ShellApprovalRepository | None] = None
     metric_recorder: SkipValidation[MetricRecorder | None] = None

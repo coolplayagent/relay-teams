@@ -43,7 +43,10 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from relay_teams.workspace import WorkspaceService
-from relay_teams.workspace.workspace_models import WorkspaceRecord
+from relay_teams.workspace.workspace_models import (
+    WorkspaceRecord,
+    build_local_workspace_mount,
+)
 
 
 class FakeSessionService:
@@ -205,7 +208,13 @@ class FakeWorkspaceService:
         workspace_id = f"workspace-{len(self.workspaces_by_root) + 1}"
         record = WorkspaceRecord(
             workspace_id=workspace_id,
-            root_path=resolved_root,
+            default_mount_name="default",
+            mounts=(
+                build_local_workspace_mount(
+                    mount_name="default",
+                    root_path=resolved_root,
+                ),
+            ),
         )
         self.workspaces_by_root[resolved_root] = record
         return record

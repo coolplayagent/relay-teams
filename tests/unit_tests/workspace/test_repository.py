@@ -58,6 +58,58 @@ def test_workspace_repository_skips_invalid_persisted_rows(tmp_path: Path) -> No
         repository.get("None")
 
 
+def test_workspace_repository_skips_invalid_legacy_profile_rows_on_init(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "workspace_legacy_invalid.db"
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    now = datetime.now(tz=timezone.utc).isoformat()
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        CREATE TABLE workspaces (
+            workspace_id TEXT PRIMARY KEY,
+            root_path TEXT NOT NULL,
+            backend TEXT NOT NULL,
+            profile_json TEXT NOT NULL DEFAULT '{}',
+            default_mount_name TEXT NOT NULL DEFAULT 'default',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO workspaces(
+            workspace_id,
+            root_path,
+            backend,
+            profile_json,
+            default_mount_name,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "project-alpha",
+            str(root_path),
+            "filesystem",
+            '{"backend": "filesystem", "file_scope": "broken"}',
+            "default",
+            now,
+            now,
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    repository = WorkspaceRepository(db_path)
+
+    assert repository.list_all() == ()
+
+
 def _insert_workspace_row(
     db_path: Path,
     *,

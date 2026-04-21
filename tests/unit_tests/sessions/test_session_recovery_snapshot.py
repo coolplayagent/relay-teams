@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from pydantic_ai.messages import (
@@ -27,6 +28,11 @@ from relay_teams.sessions.runs.background_tasks.models import (
 from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
+from relay_teams.sessions.runs.user_question_models import (
+    UserQuestionOption,
+    UserQuestionPrompt,
+)
+from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 from relay_teams.sessions.runs.run_state_models import (
     RunStatePhase,
@@ -56,6 +62,7 @@ def _build_service(
         agent_repo=AgentInstanceRepository(db_path),
         message_repo=MessageRepository(db_path),
         approval_ticket_repo=ApprovalTicketRepository(db_path),
+        user_question_repo=UserQuestionRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
         run_state_repo=RunStateRepository(db_path),
@@ -462,6 +469,7 @@ def test_get_recovery_snapshot_keeps_approval_phase_for_stopped_recoverable_run(
 def test_get_recovery_snapshot_includes_background_tasks(tmp_path: Path) -> None:
     db_path = tmp_path / "recovery_background_tasks.db"
     service = _build_service(db_path)
+    base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
     _ = service.create_session(session_id="session-1", workspace_id="default")
     _seed_root_task(db_path, run_id="run-active", session_id="session-1")
@@ -491,6 +499,8 @@ def test_get_recovery_snapshot_includes_background_tasks(tmp_path: Path) -> None
             recent_output=("booting",),
             output_excerpt="booting",
             log_path="tmp/background_tasks/exec-1.log",
+            created_at=base_time,
+            updated_at=base_time,
         )
     )
     terminal_repo.upsert(
@@ -514,6 +524,8 @@ def test_get_recovery_snapshot_includes_background_tasks(tmp_path: Path) -> None
             subagent_run_id="subagent-run-1",
             subagent_task_id="task-2",
             subagent_instance_id="inst-sub-2",
+            created_at=base_time + timedelta(seconds=1),
+            updated_at=base_time + timedelta(seconds=1),
         )
     )
     terminal_repo.upsert(
@@ -531,6 +543,8 @@ def test_get_recovery_snapshot_includes_background_tasks(tmp_path: Path) -> None
             recent_output=("busy",),
             output_excerpt="busy",
             log_path="tmp/background_tasks/exec-3.log",
+            created_at=base_time + timedelta(seconds=2),
+            updated_at=base_time + timedelta(seconds=2),
         )
     )
 
@@ -660,6 +674,115 @@ def test_get_recovery_snapshot_prefers_parent_run_over_background_subagent_runti
     round_snapshot = snapshot.get("round_snapshot")
     assert isinstance(round_snapshot, dict)
     assert round_snapshot.get("run_id") == "run-parent"
+
+
+def test_get_recovery_snapshot_includes_pending_subagent_user_questions(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "recovery_subagent_user_questions.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(
+        db_path,
+        run_id="run-parent",
+        session_id="session-1",
+        role_id="MainAgent",
+    )
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-parent",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.SUBAGENT_RUNNING,
+    )
+    runtime_repo.ensure(
+        run_id="subagent_run_sync123",
+        session_id="session-1",
+        root_task_id="task-subagent-root",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    UserQuestionRepository(db_path).upsert_requested(
+        question_id="question-subagent-1",
+        run_id="subagent_run_sync123",
+        session_id="session-1",
+        task_id="task-subagent-root",
+        instance_id="inst-subagent",
+        role_id="Explorer",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick next step",
+                options=(UserQuestionOption(label="Option A", description="A"),),
+                multiple=False,
+            ),
+        ),
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    active_run = snapshot.get("active_run")
+    assert isinstance(active_run, dict)
+    assert active_run.get("run_id") == "run-parent"
+    assert active_run.get("phase") == "awaiting_manual_action"
+    assert active_run.get("pending_user_question_count") == 1
+
+    pending = snapshot.get("pending_user_questions")
+    assert isinstance(pending, list)
+    assert len(pending) == 1
+    assert pending[0]["question_id"] == "question-subagent-1"
+    assert pending[0]["run_id"] == "subagent_run_sync123"
+    assert pending[0]["role_id"] == "Explorer"
+
+
+def test_get_recovery_snapshot_ignores_orphaned_pending_user_questions(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "recovery_orphaned_user_questions.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(
+        db_path,
+        run_id="run-parent",
+        session_id="session-1",
+        role_id="MainAgent",
+    )
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-parent",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.SUBAGENT_RUNNING,
+    )
+    UserQuestionRepository(db_path).upsert_requested(
+        question_id="question-orphaned-subagent-1",
+        run_id="subagent_run_deleted",
+        session_id="session-1",
+        task_id="task-subagent-root",
+        instance_id="inst-subagent",
+        role_id="Explorer",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick next step",
+                options=(UserQuestionOption(label="Option A", description="A"),),
+                multiple=False,
+            ),
+        ),
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    active_run = snapshot.get("active_run")
+    assert isinstance(active_run, dict)
+    assert active_run.get("run_id") == "run-parent"
+    assert active_run.get("phase") == "awaiting_recovery"
+    assert active_run.get("pending_user_question_count") == 0
+    assert snapshot.get("pending_user_questions") == []
 
 
 def test_get_recovery_snapshot_ignores_finished_background_tasks_for_completed_runs(

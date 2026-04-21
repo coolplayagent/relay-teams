@@ -1178,10 +1178,12 @@ async function applyLocalStoppedSnapshot(runId, sessionId) {
                     checkpoint_event_id: 0,
                     last_event_id: 0,
                     pending_tool_approval_count: 0,
+                    pending_user_question_count: 0,
                     stream_connected: false,
                     should_show_recover: false,
                 },
                 pending_tool_approvals: [],
+                pending_user_questions: [],
                 paused_subagent: null,
                 round_snapshot: null,
             });

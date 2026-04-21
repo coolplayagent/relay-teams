@@ -53,6 +53,8 @@ from relay_teams.sessions.session_history_marker_repository import (
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
+from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
@@ -78,6 +80,7 @@ def create_provider_factory(
     run_event_hub: RunEventHub,
     agent_repo: AgentInstanceRepository,
     approval_ticket_repo: ApprovalTicketRepository,
+    user_question_repo: UserQuestionRepository | None,
     run_runtime_repo: RunRuntimeRepository,
     run_intent_repo: RunIntentRepository,
     background_task_service: BackgroundTaskService | None,
@@ -95,6 +98,7 @@ def create_provider_factory(
     get_task_service: Callable[[], TaskOrchestrationService],
     run_control_manager: RunControlManager,
     tool_approval_manager: ToolApprovalManager,
+    user_question_manager: UserQuestionManager | None,
     tool_approval_policy: ToolApprovalPolicy,
     notification_service: NotificationService | None,
     get_task_execution_service: Callable[[], TaskExecutionService],
@@ -188,6 +192,7 @@ def create_provider_factory(
                 run_event_hub=run_event_hub,
                 agent_repo=agent_repo,
                 approval_ticket_repo=approval_ticket_repo,
+                user_question_repo=user_question_repo,
                 run_runtime_repo=run_runtime_repo,
                 run_intent_repo=run_intent_repo,
                 background_task_service=background_task_service,
@@ -223,6 +228,7 @@ def create_provider_factory(
                 task_service=get_task_service(),
                 run_control_manager=run_control_manager,
                 tool_approval_manager=tool_approval_manager,
+                user_question_manager=user_question_manager,
                 tool_approval_policy=tool_approval_policy,
                 shell_approval_repo=shell_approval_repo,
                 notification_service=notification_service,

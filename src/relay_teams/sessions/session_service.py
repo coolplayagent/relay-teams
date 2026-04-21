@@ -44,6 +44,8 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
+from relay_teams.sessions.runs.user_question_models import UserQuestionRequestRecord
+from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
 from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
@@ -125,6 +127,7 @@ class SessionService:
         agent_repo: AgentInstanceRepository,
         message_repo: MessageRepository,
         approval_ticket_repo: ApprovalTicketRepository,
+        user_question_repo: UserQuestionRepository | None = None,
         run_runtime_repo: RunRuntimeRepository,
         token_usage_repo: TokenUsageRepository,
         monitor_repository: MonitorRepository | None = None,
@@ -153,6 +156,7 @@ class SessionService:
         self._agent_repo = agent_repo
         self._message_repo = message_repo
         self._approval_ticket_repo = approval_ticket_repo
+        self._user_question_repo = user_question_repo
         self._run_runtime_repo = run_runtime_repo
         self._token_usage_repo = token_usage_repo
         self._monitor_repository = monitor_repository
@@ -694,13 +698,18 @@ class SessionService:
                 continue
             run_id, runtime = selected
             approval_count = len(self._approval_ticket_repo.list_open_by_run(run_id))
+            question_count = self._pending_user_question_count(run_id)
             enriched.append(
                 record.model_copy(
                     update={
                         "has_active_run": True,
                         "active_run_id": run_id,
                         "active_run_status": runtime.status.value,
-                        "active_run_phase": self._public_phase(runtime, approval_count),
+                        "active_run_phase": self._public_phase(
+                            runtime,
+                            approval_count,
+                            question_count,
+                        ),
                         "pending_tool_approval_count": approval_count,
                     }
                 )
@@ -916,8 +925,13 @@ class SessionService:
             approval_count = len(pending) if isinstance(pending, list) else 0
             if runtime is None:
                 continue
+            question_count = self._pending_user_question_count(runtime.run_id)
             round_item["run_status"] = runtime.status.value
-            round_item["run_phase"] = self._public_phase(runtime, approval_count)
+            round_item["run_phase"] = self._public_phase(
+                runtime,
+                approval_count,
+                question_count,
+            )
             round_item["is_recoverable"] = self._is_runtime_publicly_recoverable(
                 runtime
             )
@@ -945,6 +959,7 @@ class SessionService:
                 "active_run": None,
                 "background_tasks": [],
                 "pending_tool_approvals": [],
+                "pending_user_questions": [],
                 "paused_subagent": None,
                 "round_snapshot": None,
             }
@@ -968,6 +983,16 @@ class SessionService:
             }
             for record in self._approval_ticket_repo.list_open_by_run(run_id)
         ]
+        user_questions = (
+            [
+                record.model_dump(mode="json")
+                for record in self._list_resolvable_user_questions_for_session(
+                    session_id
+                )
+            ]
+            if self._user_question_repo is not None
+            else []
+        )
         run_state = (
             self._run_state_repo.get_run_state(run_id)
             if self._run_state_repo is not None
@@ -988,7 +1013,7 @@ class SessionService:
         active_run = {
             "run_id": run_id,
             "status": runtime.status.value,
-            "phase": self._public_phase(runtime, len(approvals)),
+            "phase": self._public_phase(runtime, len(approvals), len(user_questions)),
             "is_recoverable": self._is_runtime_publicly_recoverable(runtime),
             "last_event_id": (
                 int(run_state.last_event_id) if run_state is not None else 0
@@ -997,6 +1022,7 @@ class SessionService:
                 int(run_state.checkpoint_event_id) if run_state is not None else 0
             ),
             "pending_tool_approval_count": len(approvals),
+            "pending_user_question_count": len(user_questions),
             "background_task_count": len(background_tasks),
             "stream_connected": stream_connected,
             "should_show_recover": self._is_runtime_publicly_recoverable(runtime)
@@ -1014,6 +1040,7 @@ class SessionService:
             "active_run": active_run,
             "background_tasks": background_tasks,
             "pending_tool_approvals": approvals,
+            "pending_user_questions": user_questions,
             "paused_subagent": paused_subagent,
             "round_snapshot": round_snapshot,
         }
@@ -1290,8 +1317,11 @@ class SessionService:
             approval_count = len(
                 self._approval_ticket_repo.list_open_by_run(runtime.run_id)
             )
+        question_count = self._pending_user_question_count(record.run_id)
         projected["run_phase"] = (
-            self._public_phase(runtime, approval_count) if runtime is not None else ""
+            self._public_phase(runtime, approval_count, question_count)
+            if runtime is not None
+            else ""
         )
         projected["last_event_id"] = (
             int(run_state.last_event_id) if run_state is not None else 0
@@ -1341,11 +1371,21 @@ class SessionService:
             "source": source,
         }
 
-    def _public_phase(self, runtime: RunRuntimeRecord, approval_count: int) -> str:
+    def _public_phase(
+        self,
+        runtime: RunRuntimeRecord,
+        approval_count: int,
+        question_count: int = 0,
+    ) -> str:
         if runtime.status == RunRuntimeStatus.STOPPING:
             return "stopping"
         if approval_count > 0:
             return "awaiting_tool_approval"
+        if (
+            question_count > 0
+            or runtime.phase == RunRuntimePhase.AWAITING_MANUAL_ACTION
+        ):
+            return "awaiting_manual_action"
         if runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP:
             return "awaiting_subagent_followup"
         if runtime.phase == RunRuntimePhase.AWAITING_RECOVERY:
@@ -1354,9 +1394,13 @@ class SessionService:
             return "running"
         if runtime.status == RunRuntimeStatus.PAUSED:
             return (
-                "awaiting_subagent_followup"
-                if runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
-                else "awaiting_recovery"
+                "awaiting_manual_action"
+                if runtime.phase == RunRuntimePhase.AWAITING_MANUAL_ACTION
+                else (
+                    "awaiting_subagent_followup"
+                    if runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
+                    else "awaiting_recovery"
+                )
             )
         if runtime.status == RunRuntimeStatus.STOPPED:
             return "stopped"
@@ -1367,6 +1411,25 @@ class SessionService:
         if runtime.status == RunRuntimeStatus.FAILED:
             return "failed"
         return runtime.phase.value
+
+    def _pending_user_question_count(self, run_id: str) -> int:
+        if self._user_question_repo is None:
+            return 0
+        return len(self._user_question_repo.list_by_run(run_id))
+
+    def _list_resolvable_user_questions_for_session(
+        self, session_id: str
+    ) -> tuple[UserQuestionRequestRecord, ...]:
+        if self._user_question_repo is None:
+            return ()
+        records = self._user_question_repo.list_by_session(session_id)
+        if self._run_runtime_repo is None:
+            return records
+        return tuple(
+            record
+            for record in records
+            if self._run_runtime_repo.get(record.run_id) is not None
+        )
 
     def _is_runtime_publicly_recoverable(self, runtime: RunRuntimeRecord) -> bool:
         return runtime.is_recoverable and runtime.status != RunRuntimeStatus.STOPPING

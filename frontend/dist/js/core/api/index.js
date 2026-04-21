@@ -23,10 +23,13 @@ export {
 } from './sessions.js';
 
 export {
+    answerUserQuestion,
+    dispatchHumanTask,
     fetchRunBackgroundTask,
     fetchRunBackgroundTasks,
     injectMessage,
     injectSubagentMessage,
+    listUserQuestions,
     resolveGate,
     resolveToolApproval,
     resumeRun,
@@ -49,6 +52,7 @@ export {
     deleteExternalAgent,
     deleteModelProfile,
     fetchConfigStatus,
+    fetchSshProfiles,
     fetchExternalAgent,
     fetchExternalAgents,
     fetchUiLanguageSettings,
@@ -89,12 +93,14 @@ export {
     saveNotificationConfig,
     saveOrchestrationConfig,
     saveProxyConfig,
+    saveSshProfile,
     saveGitHubConfig,
     saveWebConfig,
     saveUiLanguageSettings,
     startGitHubWebhookTunnel,
     stopGitHubWebhookTunnel,
     testExternalAgent,
+    deleteSshProfile,
 } from './system.js';
 
 export {
@@ -153,6 +159,7 @@ export {
     openWorkspace,
     openWorkspaceRoot,
     pickWorkspace,
+    updateWorkspace,
 } from './workspaces.js';
 
 export {

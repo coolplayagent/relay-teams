@@ -596,6 +596,13 @@ async def _kill_process_tree(proc: _PipeProcess) -> None:
         return
 
     if _is_windows():
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=1)
+            return
+        except asyncio.TimeoutError:
+            pass
         try:
             killed = await _kill_process_tree_by_pid(pid)
         except Exception:

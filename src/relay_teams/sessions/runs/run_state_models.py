@@ -9,6 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.sessions.runs.user_question_models import (
+    PendingUserQuestionState,
+    UserQuestionPrompt,
+    UserQuestionRequestStatus,
+)
 from relay_teams.validation import RequiredIdentifierStr
 
 
@@ -25,6 +30,7 @@ class RunStatePhase(str, Enum):
     IDLE = "idle"
     STREAMING = "streaming"
     AWAITING_TOOL_APPROVAL = "awaiting_tool_approval"
+    AWAITING_MANUAL_ACTION = "awaiting_manual_action"
     AWAITING_SUBAGENT_FOLLOWUP = "awaiting_subagent_followup"
     AWAITING_RECOVERY = "awaiting_recovery"
     TERMINAL = "terminal"
@@ -68,6 +74,7 @@ class RunStateRecord(BaseModel):
     last_event_id: int = Field(default=0, ge=0)
     checkpoint_event_id: int = Field(default=0, ge=0)
     pending_tool_approvals: tuple[PendingToolApprovalState, ...] = ()
+    pending_user_questions: tuple[PendingUserQuestionState, ...] = ()
     paused_subagent: PausedSubagentState | None = None
     updated_at: datetime
 
@@ -94,6 +101,8 @@ _CHECKPOINT_EVENT_TYPES = {
     RunEventType.MODEL_STEP_STARTED,
     RunEventType.TOOL_APPROVAL_REQUESTED,
     RunEventType.TOOL_APPROVAL_RESOLVED,
+    RunEventType.USER_QUESTION_REQUESTED,
+    RunEventType.USER_QUESTION_ANSWERED,
     RunEventType.TOOL_RESULT,
     RunEventType.SUBAGENT_STOPPED,
     RunEventType.SUBAGENT_RESUMED,
@@ -105,6 +114,7 @@ _STOPPED_FOLLOWUP_EVENT_TYPES = {
     RunEventType.RUN_PAUSED,
     RunEventType.RUN_RESUMED,
     RunEventType.TOOL_APPROVAL_RESOLVED,
+    RunEventType.USER_QUESTION_ANSWERED,
     RunEventType.SUBAGENT_RESUMED,
     RunEventType.RUN_STOPPED,
     RunEventType.RUN_COMPLETED,
@@ -122,6 +132,7 @@ def initialize_run_state(event: RunEvent, event_id: int) -> RunStateRecord:
         last_event_id=max(0, event_id),
         checkpoint_event_id=max(0, event_id),
         pending_tool_approvals=(),
+        pending_user_questions=(),
         paused_subagent=None,
         updated_at=event.occurred_at,
     )
@@ -162,6 +173,7 @@ def apply_run_event_to_state(
     )
 
     approval_map = _approval_map(state.pending_tool_approvals)
+    user_question_map = _user_question_map(state.pending_user_questions)
     paused_subagent = state.paused_subagent
     status = state.status
     phase = state.phase
@@ -215,6 +227,36 @@ def apply_run_event_to_state(
         tool_call_id = _payload_str(payload, "tool_call_id")
         if tool_call_id:
             _ = approval_map.pop(tool_call_id, None)
+    elif event_type == RunEventType.USER_QUESTION_REQUESTED:
+        question_id = _payload_str(payload, "question_id")
+        questions = _payload_questions(payload)
+        if question_id and questions:
+            user_question_map[question_id] = PendingUserQuestionState(
+                question_id=question_id,
+                role_id=_payload_str(payload, "role_id") or (event.role_id or ""),
+                instance_id=(
+                    _payload_str(payload, "instance_id") or (event.instance_id or "")
+                ),
+                requested_at=event.occurred_at.isoformat(),
+                status="requested",
+                questions=questions,
+            )
+        status = RunStateStatus.PAUSED
+        phase = RunStatePhase.AWAITING_MANUAL_ACTION
+    elif event_type == RunEventType.USER_QUESTION_ANSWERED:
+        question_id = _payload_str(payload, "question_id")
+        if question_id:
+            _ = user_question_map.pop(question_id, None)
+        resolution_status = (
+            _payload_str(payload, "status") or UserQuestionRequestStatus.ANSWERED.value
+        ).lower()
+        if (
+            resolution_status != UserQuestionRequestStatus.COMPLETED.value
+            and status not in _TERMINAL_STATES
+            and status != _STOPPED_STATE
+        ):
+            status = RunStateStatus.RUNNING
+            phase = RunStatePhase.STREAMING
     elif event_type == RunEventType.SUBAGENT_STOPPED:
         paused_subagent = PausedSubagentState(
             instance_id=_payload_str(payload, "instance_id")
@@ -231,6 +273,7 @@ def apply_run_event_to_state(
         status = RunStateStatus.STOPPED
         phase = RunStatePhase.TERMINAL
         recoverable = True
+        user_question_map = {}
     elif event_type == RunEventType.RUN_COMPLETED:
         payload_status = _payload_str(payload, "status").lower()
         status = (
@@ -241,12 +284,14 @@ def apply_run_event_to_state(
         phase = RunStatePhase.TERMINAL
         recoverable = False
         approval_map = {}
+        user_question_map = {}
         paused_subagent = None
     elif event_type == RunEventType.RUN_FAILED:
         status = RunStateStatus.FAILED
         phase = RunStatePhase.TERMINAL
         recoverable = False
         approval_map = {}
+        user_question_map = {}
         paused_subagent = None
 
     if status not in {
@@ -257,6 +302,9 @@ def apply_run_event_to_state(
         if approval_map:
             status = RunStateStatus.PAUSED
             phase = RunStatePhase.AWAITING_TOOL_APPROVAL
+        elif user_question_map:
+            status = RunStateStatus.PAUSED
+            phase = RunStatePhase.AWAITING_MANUAL_ACTION
         elif paused_subagent is not None:
             status = RunStateStatus.PAUSED
             phase = RunStatePhase.AWAITING_SUBAGENT_FOLLOWUP
@@ -274,6 +322,7 @@ def apply_run_event_to_state(
             "phase": phase,
             "recoverable": recoverable,
             "pending_tool_approvals": tuple(approval_map.values()),
+            "pending_user_questions": tuple(user_question_map.values()),
             "paused_subagent": paused_subagent,
         }
     )
@@ -289,6 +338,15 @@ def _approval_map(
     result: dict[str, PendingToolApprovalState] = {}
     for item in approvals:
         result[item.tool_call_id] = item
+    return result
+
+
+def _user_question_map(
+    questions: tuple[PendingUserQuestionState, ...],
+) -> dict[str, PendingUserQuestionState]:
+    result: dict[str, PendingUserQuestionState] = {}
+    for item in questions:
+        result[item.question_id] = item
     return result
 
 
@@ -311,3 +369,20 @@ def _parse_payload(payload_json: str) -> dict[str, object]:
 def _payload_str(payload: dict[str, object], key: str) -> str:
     value = payload.get(key)
     return value if isinstance(value, str) else ""
+
+
+def _payload_questions(
+    payload: dict[str, object],
+) -> tuple[UserQuestionPrompt, ...]:
+    raw_questions = payload.get("questions")
+    if not isinstance(raw_questions, list):
+        return ()
+    prompts: list[UserQuestionPrompt] = []
+    for item in raw_questions:
+        if not isinstance(item, dict):
+            continue
+        try:
+            prompts.append(UserQuestionPrompt.model_validate(item))
+        except Exception:
+            continue
+    return tuple(prompts)

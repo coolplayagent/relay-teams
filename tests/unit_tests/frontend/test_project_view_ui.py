@@ -1,11 +1,40 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import cast
 
 from .css_helpers import load_components_css
+
+
+def _merge_mock_api_source(base_source: str, override_source: str) -> str:
+    merged_source = base_source
+    for block in re.split(
+        r"(?=^export async function )", override_source, flags=re.MULTILINE
+    ):
+        stripped_block = block.strip()
+        if not stripped_block:
+            continue
+        export_match = re.match(r"export async function (\w+)\s*\(", stripped_block)
+        if export_match is None:
+            merged_source = f"{merged_source}\n\n{stripped_block}"
+            continue
+        export_name = export_match.group(1)
+        export_pattern = re.compile(
+            rf"export async function {export_name}\s*\([^)]*\)\s*\{{[\s\S]*?\n\}}",
+            flags=re.MULTILINE,
+        )
+        if export_pattern.search(merged_source):
+            merged_source = export_pattern.sub(
+                lambda _match: stripped_block,
+                merged_source,
+                count=1,
+            )
+        else:
+            merged_source = f"{merged_source}\n\n{stripped_block}"
+    return merged_source
 
 
 def test_project_view_opens_progressively_and_reuses_cached_tree_and_diff(
@@ -99,9 +128,16 @@ console.log(JSON.stringify({
     assert payload["reopenedHasDetail"] is True
     assert payload["reopenedSummary"] == "1 changed files"
     assert payload["snapshotRequests"] == ["alpha-project", "alpha-project"]
-    assert payload["diffRequests"] == ["alpha-project", "alpha-project"]
-    assert payload["diffFileRequests"] == ["src/main.py"]
-    assert payload["treeRequests"] == ["src"]
+    assert payload["diffRequests"] == [
+        {"workspaceId": "alpha-project", "mount": None},
+        {"workspaceId": "alpha-project", "mount": "default"},
+    ]
+    assert payload["diffFileRequests"] == [
+        {"workspaceId": "alpha-project", "path": "src/main.py", "mount": "default"},
+    ]
+    assert payload["treeRequests"] == [
+        {"workspaceId": "alpha-project", "path": "src", "mount": "default"},
+    ]
 
 
 def test_project_view_opens_workspace_root_from_header(
@@ -134,7 +170,682 @@ console.log(JSON.stringify({
 
     assert "data-open-workspace-root" in str(payload["contentHtml"])
     assert "/work/alpha-project" in str(payload["contentHtml"])
-    assert payload["openWorkspaceRootCalls"] == ["alpha-project"]
+    assert payload["openWorkspaceRootCalls"] == [
+        {"workspaceId": "alpha-project", "mount": "default"},
+    ]
+    assert payload["toastCalls"] == []
+
+
+def test_project_view_renders_multi_mount_workspace_and_switches_active_mount(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+export async function fetchWorkspaceSnapshot(workspaceId) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    globalThis.__snapshotRequests.push(workspaceId);
+    return {
+        workspace_id: workspaceId,
+        default_mount_name: "app",
+        default_mount_root: "/work/app",
+        tree: {
+            name: workspaceId,
+            path: ".",
+            kind: "directory",
+            has_children: true,
+            children: [
+                {
+                    name: "app",
+                    path: "app",
+                    kind: "directory",
+                    has_children: true,
+                    children: [],
+                },
+                {
+                    name: "ops",
+                    path: "ops",
+                    kind: "directory",
+                    has_children: true,
+                    children: [],
+                },
+            ],
+        },
+    };
+}
+
+export async function openWorkspaceRoot(workspaceId, mount = null) {
+    globalThis.__openWorkspaceRootCalls.push({ workspaceId, mount });
+    return { status: "ok" };
+}
+
+export async function fetchWorkspaceTree(workspaceId, path, mount = null) {
+    globalThis.__treeRequests.push({ workspaceId, path, mount });
+    if (mount === "ops") {
+        return {
+            workspace_id: workspaceId,
+            mount_name: "ops",
+            directory_path: path,
+            children: [
+                {
+                    name: "deploy.yaml",
+                    path: "deploy.yaml",
+                    kind: "file",
+                    has_children: false,
+                    children: [],
+                },
+            ],
+        };
+    }
+    return {
+        workspace_id: workspaceId,
+        mount_name: "app",
+        directory_path: path,
+        children: [
+            {
+                name: "src",
+                path: "src",
+                kind: "directory",
+                has_children: true,
+                children: [],
+            },
+        ],
+    };
+}
+
+export async function fetchWorkspaceDiffs(workspaceId, mount = null) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    globalThis.__diffRequests.push({ workspaceId, mount });
+    if (mount === "ops") {
+        return {
+            workspace_id: workspaceId,
+            mount_name: "ops",
+            root_path: "/srv/ops",
+            is_git_repository: false,
+            git_root_path: null,
+            diff_message: "Workspace mount does not support diff: ops",
+            diff_files: [],
+        };
+    }
+    return {
+        workspace_id: workspaceId,
+        mount_name: "app",
+        root_path: "/work/app",
+        is_git_repository: true,
+        git_root_path: "/work/app",
+        diff_message: null,
+        diff_files: [
+            {
+                path: "src/main.py",
+                change_type: "modified",
+            },
+        ],
+    };
+}
+
+export async function fetchWorkspaceDiffFile(workspaceId, path, mount = null) {
+    globalThis.__diffFileRequests.push({ workspaceId, path, mount });
+    return {
+        workspace_id: workspaceId,
+        mount_name: mount || "app",
+        path,
+        change_type: "modified",
+        diff: `diff for ${mount || "app"}:${path}`,
+        is_binary: false,
+    };
+}
+""".strip(),
+        runner_source="""
+import {
+    initializeProjectView,
+    openWorkspaceProjectView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openWorkspaceProjectView({
+    workspace_id: "alpha-project",
+    default_mount_name: "app",
+    mounts: [
+        {
+            mount_name: "app",
+            provider: "local",
+            provider_config: { root_path: "/work/app" },
+        },
+        {
+            mount_name: "ops",
+            provider: "ssh",
+            provider_config: { ssh_profile_id: "prod", remote_root: "/srv/ops" },
+        },
+    ],
+});
+await flushTasks();
+await flushTasks();
+await flushTasks();
+await flushTasks();
+
+const initialHtml = els.projectViewContent.innerHTML;
+els.projectViewContent.querySelector("[data-open-workspace-root]")?.onclick?.();
+
+const opsMountButton = Array.from(
+    els.projectViewContent.querySelectorAll("[data-workspace-mount]"),
+).find(node => node?.getAttribute?.("data-workspace-mount") === "ops");
+opsMountButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+await flushTasks();
+await flushTasks();
+
+const switchedHtml = els.projectViewContent.innerHTML;
+console.log(JSON.stringify({
+    initialHtml,
+    switchedHtml,
+    opsMountActive: /data-workspace-mount="ops"[\\s\\S]*?aria-pressed="true"/.test(switchedHtml),
+    snapshotRequests: globalThis.__snapshotRequests,
+    diffRequests: globalThis.__diffRequests,
+    diffFileRequests: globalThis.__diffFileRequests,
+    treeRequests: globalThis.__treeRequests,
+    openWorkspaceRootCalls: globalThis.__openWorkspaceRootCalls,
+}));
+""".strip(),
+    )
+
+    assert 'data-workspace-mount="app"' in str(payload["initialHtml"])
+    assert 'data-workspace-mount="ops"' in str(payload["initialHtml"])
+    assert "SSH profile: prod" in str(payload["initialHtml"])
+    assert "/work/app" in str(payload["initialHtml"])
+    assert payload["openWorkspaceRootCalls"] == [
+        {"workspaceId": "alpha-project", "mount": "app"},
+    ]
+    assert payload["opsMountActive"] is True
+    assert "/srv/ops" in str(payload["switchedHtml"])
+    assert "deploy.yaml" in str(payload["switchedHtml"])
+    assert "Workspace mount does not support diff: ops" in str(payload["switchedHtml"])
+    assert (
+        str(payload["switchedHtml"]).count("Workspace mount does not support diff: ops")
+        == 1
+    )
+    assert "data-open-workspace-root" not in str(payload["switchedHtml"])
+    assert payload["snapshotRequests"] == ["alpha-project"]
+    assert payload["diffRequests"] == [
+        {"workspaceId": "alpha-project", "mount": "app"},
+        {"workspaceId": "alpha-project", "mount": "ops"},
+    ]
+    assert payload["treeRequests"] == [
+        {"workspaceId": "alpha-project", "path": ".", "mount": "app"},
+        {"workspaceId": "alpha-project", "path": ".", "mount": "ops"},
+    ]
+    assert payload["diffFileRequests"] == [
+        {"workspaceId": "alpha-project", "path": "src/main.py", "mount": "app"},
+    ]
+
+
+def test_project_view_add_mount_action_updates_workspace_with_ssh_profile(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openWorkspaceProjectView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockSshProfiles = [
+    {
+        ssh_profile_id: "prod",
+    },
+];
+globalThis.__showFormDialogResult = {
+    mount_name: "prod",
+    provider: "ssh",
+    local_root_path: "",
+    ssh_profile_id: "prod",
+    remote_root: "/srv/app",
+    set_default: true,
+};
+
+initializeProjectView();
+await openWorkspaceProjectView({
+    workspace_id: "alpha-project",
+    default_mount_name: "default",
+    mounts: [
+        {
+            mount_name: "default",
+            provider: "local",
+            provider_config: {
+                root_path: "/work/alpha-project",
+            },
+        },
+    ],
+});
+await flushTasks();
+await flushTasks();
+
+const button = document.querySelector("[data-workspace-add-mount]");
+await button?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+const sshProfileField = fields.find(field => field.id === "ssh_profile_id") || {};
+const fieldVisibilityRules = fields.map(field => ({
+    id: field.id,
+    visibleWhen: field.visibleWhen || null,
+}));
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(button),
+    updatedWorkspacePayload: globalThis.__updatedWorkspacePayload,
+    fieldIds: fields.map(field => field.id),
+    fieldVisibilityRules,
+    sshProfileOptions: sshProfileField.options || [],
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["fieldIds"] == [
+        "mount_name",
+        "provider",
+        "local_root_path",
+        "ssh_profile_id",
+        "remote_root",
+        "set_default",
+    ]
+    assert payload["fieldVisibilityRules"] == [
+        {"id": "mount_name", "visibleWhen": None},
+        {"id": "provider", "visibleWhen": None},
+        {
+            "id": "local_root_path",
+            "visibleWhen": {"field": "provider", "equals": "local"},
+        },
+        {"id": "ssh_profile_id", "visibleWhen": {"field": "provider", "equals": "ssh"}},
+        {"id": "remote_root", "visibleWhen": {"field": "provider", "equals": "ssh"}},
+        {"id": "set_default", "visibleWhen": {"field": "provider", "equals": "local"}},
+    ]
+    assert payload["sshProfileOptions"] == [
+        {"value": "", "label": "Select an SSH profile"},
+        {"value": "prod", "label": "prod"},
+    ]
+    assert payload["updatedWorkspacePayload"] == {
+        "workspaceId": "alpha-project",
+        "payload": {
+            "default_mount_name": "default",
+            "mounts": [
+                {
+                    "mount_name": "default",
+                    "provider": "local",
+                    "provider_config": {
+                        "root_path": "/work/alpha-project",
+                    },
+                },
+                {
+                    "mount_name": "prod",
+                    "provider": "ssh",
+                    "provider_config": {
+                        "ssh_profile_id": "prod",
+                        "remote_root": "/srv/app",
+                    },
+                },
+            ],
+        },
+    }
+    assert payload["toastCalls"] == [
+        {
+            "title": "Mount Added",
+            "message": "Added mount prod.",
+            "tone": "success",
+        }
+    ]
+
+
+def test_project_view_edit_mount_dialog_prefills_selected_provider_fields(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openWorkspaceProjectView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__mockSshProfiles = [
+    {
+        ssh_profile_id: "prod",
+    },
+];
+
+initializeProjectView();
+await openWorkspaceProjectView({
+    workspace_id: "alpha-project",
+    default_mount_name: "prod",
+    mounts: [
+        {
+            mount_name: "app",
+            provider: "local",
+            provider_config: {
+                root_path: "/work/app",
+            },
+        },
+        {
+            mount_name: "prod",
+            provider: "ssh",
+            provider_config: {
+                ssh_profile_id: "prod",
+                remote_root: "/srv/app",
+            },
+        },
+    ],
+});
+await flushTasks();
+await flushTasks();
+
+const editButton = document.querySelector("[data-workspace-edit-mount]");
+await editButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+const pickField = fieldId => fields.find(field => field.id === fieldId) || null;
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(editButton),
+    providerField: pickField("provider"),
+    localRootField: pickField("local_root_path"),
+    sshProfileField: pickField("ssh_profile_id"),
+    remoteRootField: pickField("remote_root"),
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["providerField"] == {
+        "id": "provider",
+        "label": "Provider",
+        "type": "select",
+        "value": "ssh",
+        "options": [
+            {"value": "local", "label": "Local"},
+            {"value": "ssh", "label": "SSH"},
+        ],
+    }
+    local_root_field = cast(dict[str, object], payload["localRootField"])
+    ssh_profile_field = cast(dict[str, object], payload["sshProfileField"])
+    remote_root_field = cast(dict[str, object], payload["remoteRootField"])
+
+    assert local_root_field["id"] == "local_root_path"
+    assert local_root_field["type"] == "text"
+    assert local_root_field["value"] == ""
+    assert local_root_field["visibleWhen"] == {
+        "field": "provider",
+        "equals": "local",
+    }
+    assert ssh_profile_field["id"] == "ssh_profile_id"
+    assert ssh_profile_field["type"] == "select"
+    assert ssh_profile_field["value"] == "prod"
+    assert ssh_profile_field["options"] == [
+        {"value": "", "label": "Select an SSH profile"},
+        {"value": "prod", "label": "prod"},
+    ]
+    assert ssh_profile_field["visibleWhen"] == {
+        "field": "provider",
+        "equals": "ssh",
+    }
+    assert remote_root_field["id"] == "remote_root"
+    assert remote_root_field["type"] == "text"
+    assert remote_root_field["value"] == "/srv/app"
+    assert remote_root_field["visibleWhen"] == {
+        "field": "provider",
+        "equals": "ssh",
+    }
+    assert cast(dict[str, object], payload["providerField"])["value"] == "ssh"
+
+
+def test_project_view_edit_mount_action_preserves_worktree_metadata(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openWorkspaceProjectView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__showFormDialogResult = {
+    mount_name: "fork",
+    provider: "local",
+    local_root_path: "/work/fork-renamed",
+    ssh_profile_id: "",
+    remote_root: "",
+    set_default: true,
+};
+
+initializeProjectView();
+await openWorkspaceProjectView({
+    workspace_id: "alpha-project",
+    default_mount_name: "fork",
+    mounts: [
+        {
+            mount_name: "fork",
+            provider: "local",
+            provider_config: {
+                root_path: "/work/fork",
+            },
+            working_directory: "packages/app",
+            readable_paths: [".", "docs"],
+            writable_paths: [".", "packages/app"],
+            capabilities: {
+                can_read: true,
+                can_write: true,
+                can_search: true,
+                can_shell: true,
+                can_diff: true,
+                can_preview: true,
+            },
+            branch_name: "fork/alpha-project",
+            source_root_path: "/work/source",
+            forked_from_workspace_id: "project-alpha",
+        },
+    ],
+});
+await flushTasks();
+await flushTasks();
+
+const editButton = document.querySelector("[data-workspace-edit-mount]");
+await editButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    updatedWorkspacePayload: globalThis.__updatedWorkspacePayload,
+}));
+""".strip(),
+    )
+
+    assert payload["updatedWorkspacePayload"] == {
+        "workspaceId": "alpha-project",
+        "payload": {
+            "default_mount_name": "fork",
+            "mounts": [
+                {
+                    "mount_name": "fork",
+                    "provider": "local",
+                    "provider_config": {
+                        "root_path": "/work/fork-renamed",
+                    },
+                    "working_directory": "packages/app",
+                    "readable_paths": [".", "docs"],
+                    "writable_paths": [".", "packages/app"],
+                    "capabilities": {
+                        "can_read": True,
+                        "can_write": True,
+                        "can_search": True,
+                        "can_shell": True,
+                        "can_diff": True,
+                        "can_preview": True,
+                    },
+                    "branch_name": "fork/alpha-project",
+                    "source_root_path": "/work/source",
+                    "forked_from_workspace_id": "project-alpha",
+                }
+            ],
+        },
+    }
+
+
+def test_project_view_remove_default_mount_falls_back_to_first_local_mount(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openWorkspaceProjectView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__showConfirmDialogResult = true;
+
+initializeProjectView();
+await openWorkspaceProjectView({
+    workspace_id: "alpha-project",
+    default_mount_name: "default",
+    mounts: [
+        {
+            mount_name: "default",
+            provider: "local",
+            provider_config: {
+                root_path: "/work/default",
+            },
+        },
+        {
+            mount_name: "prod",
+            provider: "ssh",
+            provider_config: {
+                ssh_profile_id: "prod",
+                remote_root: "/srv/app",
+            },
+        },
+        {
+            mount_name: "ops",
+            provider: "local",
+            provider_config: {
+                root_path: "/work/ops",
+            },
+        },
+    ],
+});
+await flushTasks();
+await flushTasks();
+
+const mountButtons = Array.from(els.projectViewContent.querySelectorAll("[data-workspace-mount]"));
+const defaultMountButton = mountButtons.find(button => button.getAttribute("data-mount-name") === "default") || null;
+defaultMountButton?.click();
+await flushTasks();
+await flushTasks();
+
+const removeButton = els.projectViewContent.querySelector("[data-workspace-delete-mount]");
+await removeButton?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    updatedWorkspacePayload: globalThis.__updatedWorkspacePayload,
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+    )
+
+    assert payload["updatedWorkspacePayload"] == {
+        "workspaceId": "alpha-project",
+        "payload": {
+            "default_mount_name": "ops",
+            "mounts": [
+                {
+                    "mount_name": "prod",
+                    "provider": "ssh",
+                    "provider_config": {
+                        "ssh_profile_id": "prod",
+                        "remote_root": "/srv/app",
+                    },
+                },
+                {
+                    "mount_name": "ops",
+                    "provider": "local",
+                    "provider_config": {
+                        "root_path": "/work/ops",
+                    },
+                },
+            ],
+        },
+    }
+    assert payload["toastCalls"] == [
+        {
+            "title": "Mount Removed",
+            "message": "Removed mount default.",
+            "tone": "success",
+        }
+    ]
+
+
+def test_project_view_mount_profiles_button_opens_workspace_settings(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openWorkspaceProjectView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.window = {
+    openSettings(tab) {
+        globalThis.__openedSettingsTab = tab;
+    },
+};
+
+initializeProjectView();
+await openWorkspaceProjectView({
+    workspace_id: "alpha-project",
+    default_mount_name: "default",
+    mounts: [
+        {
+            mount_name: "default",
+            provider: "local",
+            provider_config: {
+                root_path: "/work/alpha-project",
+            },
+        },
+    ],
+});
+await flushTasks();
+await flushTasks();
+
+const button = document.querySelector("[data-workspace-open-settings]");
+button?.onclick?.();
+
+console.log(JSON.stringify({
+    buttonFound: Boolean(button),
+    openedSettingsTab: globalThis.__openedSettingsTab || "",
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+    )
+
+    assert payload["buttonFound"] is True
+    assert payload["openedSettingsTab"] == "workspace"
     assert payload["toastCalls"] == []
 
 
@@ -325,6 +1036,19 @@ export async function fetchGitHubTriggerRules() {
 
 export async function reloadSkillsConfig() {
     return { status: "ok" };
+}
+
+export async function fetchSshProfiles() {
+    return globalThis.__mockSshProfiles || [];
+}
+
+export async function updateWorkspace(workspaceId, payload) {
+    globalThis.__updatedWorkspacePayload = { workspaceId, payload };
+    return {
+        workspace_id: workspaceId,
+        default_mount_name: payload?.default_mount_name || "default",
+        mounts: Array.isArray(payload?.mounts) ? payload.mounts : [],
+    };
 }
 
 export async function createTrigger() {
@@ -956,6 +1680,22 @@ def test_feedback_form_dialog_supports_inline_submit_errors() -> None:
     assert "feedback-dialog-submit-error" in source
     assert "setDialogSubmittingState({" in source
     assert "submitError.hidden = false;" in source
+
+
+def test_feedback_form_dialog_supports_conditional_field_visibility() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "feedback.js"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "bindConditionalFieldVisibility(hosts.dialogRoot, activeDialog.fields, formInputs);"
+        in source
+    )
+    assert "data-feedback-form-field" in source
+    assert "function evaluateDialogFieldVisibility(field, currentValues)" in source
+    assert "function findFirstVisibleFormInput(formInputs)" in source
+    assert "visibleWhen" in source
 
 
 def test_project_view_updates_local_github_rule_state_after_mutations() -> None:
@@ -2889,15 +3629,16 @@ export async function fetchWorkspaceSnapshot(workspaceId) {
     };
 }
 
-export async function openWorkspaceRoot(workspaceId) {
-    globalThis.__openWorkspaceRootCalls.push(workspaceId);
+export async function openWorkspaceRoot(workspaceId, mount = null) {
+    globalThis.__openWorkspaceRootCalls.push({ workspaceId, mount });
     return { status: "ok" };
 }
 
-export async function fetchWorkspaceTree(workspaceId, path) {
-    globalThis.__treeRequests.push(path);
+export async function fetchWorkspaceTree(workspaceId, path, mount = null) {
+    globalThis.__treeRequests.push({ workspaceId, path, mount });
     return {
         workspace_id: workspaceId,
+        mount_name: mount || "default",
         directory_path: path,
         children: [
             {
@@ -2911,11 +3652,12 @@ export async function fetchWorkspaceTree(workspaceId, path) {
     };
 }
 
-export async function fetchWorkspaceDiffs(workspaceId) {
+export async function fetchWorkspaceDiffs(workspaceId, mount = null) {
     await new Promise(resolve => setTimeout(resolve, 0));
-    globalThis.__diffRequests.push(workspaceId);
+    globalThis.__diffRequests.push({ workspaceId, mount });
     return {
         workspace_id: workspaceId,
+        mount_name: mount || "default",
         root_path: "/work/alpha-project",
         is_git_repository: true,
         git_root_path: "/work/alpha-project",
@@ -2929,11 +3671,12 @@ export async function fetchWorkspaceDiffs(workspaceId) {
     };
 }
 
-export async function fetchWorkspaceDiffFile(workspaceId, path) {
+export async function fetchWorkspaceDiffFile(workspaceId, path, mount = null) {
     await new Promise(resolve => setTimeout(resolve, 0));
-    globalThis.__diffFileRequests.push(path);
+    globalThis.__diffFileRequests.push({ workspaceId, path, mount });
     return {
         workspace_id: workspaceId,
+        mount_name: mount || "default",
         path,
         change_type: "modified",
         diff: "changed file",
@@ -3090,12 +3833,31 @@ export async function disableGitHubTriggerRule(triggerRuleId) {
     return { trigger_rule_id: triggerRuleId, enabled: false };
 }
 """.strip()
-    resolved_mock_api_source = mock_api_source or default_mock_api_source
+    resolved_mock_api_source = (
+        _merge_mock_api_source(default_mock_api_source, mock_api_source)
+        if mock_api_source
+        else default_mock_api_source
+    )
     required_api_fallbacks = {
+        "fetchSshProfiles": """
+export async function fetchSshProfiles() {
+    return globalThis.__mockSshProfiles || [];
+}
+""".strip(),
+        "updateWorkspace": """
+export async function updateWorkspace(workspaceId, payload) {
+    globalThis.__updatedWorkspacePayload = { workspaceId, payload };
+    return {
+        workspace_id: workspaceId,
+        default_mount_name: payload?.default_mount_name || "default",
+        mounts: Array.isArray(payload?.mounts) ? payload.mounts : [],
+    };
+}
+""".strip(),
         "openWorkspaceRoot": """
-export async function openWorkspaceRoot(workspaceId) {
+export async function openWorkspaceRoot(workspaceId, mount = null) {
     globalThis.__openWorkspaceRootCalls = globalThis.__openWorkspaceRootCalls || [];
-    globalThis.__openWorkspaceRootCalls.push(workspaceId);
+    globalThis.__openWorkspaceRootCalls.push({ workspaceId, mount });
     return { status: "ok" };
 }
 """.strip(),
@@ -3236,6 +3998,48 @@ export const state = {
         "workspace_view.title": "{workspace} Project",
         "workspace_view.bindings": "Bindings",
         "workspace_view.tree": "Files",
+        "workspace_view.mounts": "Mounts",
+        "workspace_view.mount_add": "Add Mount",
+        "workspace_view.mount_edit": "Edit Mount",
+        "workspace_view.mount_default": "Default",
+        "workspace_view.mount_profile": "SSH profile",
+        "workspace_view.mount_profiles": "SSH Profiles",
+        "workspace_view.mount_profiles_unavailable": "Open Settings to manage reusable SSH profiles.",
+        "workspace_view.mount_profiles_failed": "Failed to load SSH profiles",
+        "workspace_view.mount_remove": "Remove Mount",
+        "workspace_view.mount_remove_failed": "Failed to update mounts",
+        "workspace_view.mount_remove_last": "At least one mount must remain configured.",
+        "workspace_view.mount_remove_confirm": "Remove mount {mount}?",
+        "workspace_view.mount_added_title": "Mount Added",
+        "workspace_view.mount_added_detail": "Added mount {mount}.",
+        "workspace_view.mount_updated_title": "Mount Updated",
+        "workspace_view.mount_updated_detail": "Updated mount {mount}.",
+        "workspace_view.mount_removed_title": "Mount Removed",
+        "workspace_view.mount_removed_detail": "Removed mount {mount}.",
+        "workspace_view.mount_dialog_add": "Choose the provider and root.",
+        "workspace_view.mount_dialog_edit": "Update mount {mount}.",
+        "workspace_view.mount_field_name": "Mount Name",
+        "workspace_view.mount_field_name_placeholder": "e.g. app",
+        "workspace_view.mount_field_provider": "Provider",
+        "workspace_view.mount_field_local_root": "Local Root Path",
+        "workspace_view.mount_field_local_root_placeholder": "/path/to/project",
+        "workspace_view.mount_field_local_root_copy": "Used only when provider is Local.",
+        "workspace_view.mount_field_ssh_profile": "SSH Profile",
+        "workspace_view.mount_field_ssh_profile_copy": "Used only when provider is SSH.",
+        "workspace_view.mount_field_remote_root": "Remote Root",
+        "workspace_view.mount_field_remote_root_placeholder": "/srv/app",
+        "workspace_view.mount_field_remote_root_copy": "Used only when provider is SSH.",
+        "workspace_view.mount_field_default": "Set as default mount",
+        "workspace_view.mount_field_default_copy": "Unprefixed workspace paths resolve to the default mount.",
+        "workspace_view.mount_profile_select_placeholder": "Select an SSH profile",
+        "workspace_view.mount_validation_name": "Mount name is required.",
+        "workspace_view.mount_validation_duplicate": "Mount {mount} already exists.",
+        "workspace_view.mount_validation_local_root": "Local root path is required.",
+        "workspace_view.mount_validation_ssh_profile": "SSH profile is required.",
+        "workspace_view.mount_validation_remote_root": "Remote root is required.",
+        "workspace_view.mount_provider.local": "Local",
+        "workspace_view.mount_provider.ssh": "SSH",
+        "workspace_view.mount_provider.unknown": "Mount",
         "workspace_view.open_root": "Open project folder",
         "workspace_view.open_root_failed": "Failed to open project folder",
         "workspace_view.diffs": "Changes",
@@ -3551,6 +4355,8 @@ globalThis.__diffRequests = [];
 globalThis.__diffFileRequests = [];
 globalThis.__treeRequests = [];
 globalThis.__openWorkspaceRootCalls = [];
+globalThis.__updatedWorkspacePayload = null;
+globalThis.__mockSshProfiles = [];
 globalThis.__showFormDialogResult = null;
 globalThis.__showFormDialogCalls = [];
 globalThis.__dispatchedEvents = [];

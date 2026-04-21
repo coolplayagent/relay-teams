@@ -3,6 +3,7 @@
  * Backward-compatible facade. New implementation lives under ./api/.
  */
 export {
+    answerUserQuestion,
     fetchSessions,
     startNewSession,
     fetchSessionHistory,
@@ -21,6 +22,8 @@ export {
     sendUserPrompt,
     resolveGate,
     resolveToolApproval,
+    listUserQuestions,
+    dispatchHumanTask,
     injectMessage,
     injectSubagentMessage,
     resumeRun,
@@ -32,6 +35,7 @@ export {
     fetchRoleConfig,
     fetchRoleConfigs,
     fetchConfigStatus,
+    fetchSshProfiles,
     fetchUiLanguageSettings,
     fetchEnvironmentVariables,
     fetchHookRuntimeView,
@@ -71,6 +75,7 @@ export {
     saveEnvironmentVariable,
     saveExternalAgent,
     saveModelProfile,
+    saveSshProfile,
     saveRoleConfig,
     createGitHubTriggerAccount,
     createGitHubRepoSubscription,
@@ -78,6 +83,7 @@ export {
     createTrigger,
     deleteEnvironmentVariable,
     deleteClawHubSkill,
+    deleteSshProfile,
     disableGitHubTriggerAccount,
     disableGitHubRepoSubscription,
     disableGitHubTriggerRule,
@@ -129,6 +135,7 @@ export {
     openWorkspace,
     openWorkspaceRoot,
     pickWorkspace,
+    updateWorkspace,
     deleteExternalAgent,
     createAutomationProject,
     deleteAutomationProject,

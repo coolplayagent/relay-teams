@@ -20,20 +20,26 @@ from relay_teams.paths import (
 )
 from relay_teams.workspace.directory_opener import open_workspace_directory
 from relay_teams.workspace.git_worktree import GitWorktreeClient
+from relay_teams.workspace.ssh_profile_service import SshProfileService
 from relay_teams.workspace.workspace_models import (
-    BranchBinding,
-    FileScopeBackend,
     WorkspaceDiffChangeType,
     WorkspaceDiffFile,
     WorkspaceDiffFileSummary,
     WorkspaceDiffListing,
-    WorkspaceFileScope,
+    WorkspaceMountProvider,
+    WorkspaceMountRecord,
+    WorkspaceMountCapabilities,
+    WorkspaceLocalMountConfig,
     WorkspaceProfile,
     WorkspaceRecord,
+    WorkspaceSshMountConfig,
     WorkspaceSnapshot,
     WorkspaceTreeListing,
     WorkspaceTreeNode,
     WorkspaceTreeNodeKind,
+    default_mount_capabilities,
+    default_workspace_profile,
+    legacy_workspace_mount_from_profile,
 )
 from relay_teams.workspace.workspace_repository import WorkspaceRepository
 
@@ -75,25 +81,133 @@ class WorkspaceService:
         *,
         repository: WorkspaceRepository,
         git_worktree_client: GitWorktreeClient | None = None,
+        ssh_profile_service: SshProfileService | None = None,
     ) -> None:
         self._repository = repository
         self._git_worktree_client = git_worktree_client or GitWorktreeClient()
+        self._ssh_profile_service = ssh_profile_service
+
+    def _mount_capabilities(
+        self,
+        mount: WorkspaceMountRecord,
+    ) -> WorkspaceMountCapabilities:
+        return mount.capabilities or default_mount_capabilities(mount.provider)
 
     def create_workspace(
         self,
         *,
         workspace_id: str,
-        root_path: Path,
+        root_path: Path | None = None,
         profile: WorkspaceProfile | None = None,
+        mounts: tuple[WorkspaceMountRecord, ...] | None = None,
+        default_mount_name: str | None = None,
     ) -> WorkspaceRecord:
-        resolved_root = self._validate_root(root_path)
         if self._repository.exists(workspace_id):
             raise ValueError(f"Workspace already exists: {workspace_id}")
+        resolved_mounts, resolved_default_mount_name = self._resolve_workspace_mounts(
+            root_path=root_path,
+            profile=profile,
+            mounts=mounts,
+            default_mount_name=default_mount_name,
+        )
         return self._repository.create(
             workspace_id=workspace_id,
-            root_path=resolved_root,
-            profile=profile,
+            mounts=resolved_mounts,
+            default_mount_name=resolved_default_mount_name,
         )
+
+    def update_workspace(
+        self,
+        workspace_id: str,
+        *,
+        mounts: tuple[WorkspaceMountRecord, ...],
+        default_mount_name: str,
+    ) -> WorkspaceRecord:
+        resolved_mounts, resolved_default_mount_name = self._resolve_workspace_mounts(
+            mounts=mounts,
+            default_mount_name=default_mount_name,
+        )
+        return self._repository.update(
+            workspace_id=workspace_id,
+            mounts=resolved_mounts,
+            default_mount_name=resolved_default_mount_name,
+        )
+
+    def _resolve_workspace_mounts(
+        self,
+        *,
+        root_path: Path | None = None,
+        profile: WorkspaceProfile | None = None,
+        mounts: tuple[WorkspaceMountRecord, ...] | None = None,
+        default_mount_name: str | None = None,
+    ) -> tuple[tuple[WorkspaceMountRecord, ...], str]:
+        if mounts is None:
+            if root_path is None:
+                raise ValueError("Workspace creation requires root_path or mounts")
+            resolved_root = self._validate_root(root_path)
+            mount_name = default_mount_name or "default"
+            resolved_mounts = (
+                legacy_workspace_mount_from_profile(
+                    root_path=resolved_root,
+                    profile=profile or default_workspace_profile(),
+                    mount_name=mount_name,
+                ),
+            )
+            resolved_default_mount_name = mount_name
+            self._validate_local_mount_scope_paths(
+                mount=resolved_mounts[0],
+                root_path=resolved_root,
+            )
+        else:
+            provided_mounts = tuple(mounts)
+            if len(provided_mounts) == 0:
+                raise ValueError("Workspace must include at least one mount")
+            normalized_mounts: list[WorkspaceMountRecord] = []
+            for mount in provided_mounts:
+                normalized_mount = mount
+                if mount.provider == WorkspaceMountProvider.LOCAL:
+                    local_root = mount.local_root_path()
+                    if local_root is None:
+                        raise ValueError(
+                            f"Workspace local mount is missing root path: {mount.mount_name}"
+                        )
+                    resolved_local_root = self._validate_root(local_root)
+                    self._validate_local_mount_scope_paths(
+                        mount=mount,
+                        root_path=resolved_local_root,
+                    )
+                    normalized_mount = mount.model_copy(
+                        update={
+                            "provider_config": WorkspaceLocalMountConfig(
+                                root_path=resolved_local_root
+                            )
+                        }
+                    )
+                if mount.provider == WorkspaceMountProvider.SSH:
+                    provider_config = mount.provider_config
+                    if not isinstance(provider_config, WorkspaceSshMountConfig):
+                        raise ValueError(
+                            f"Workspace ssh mount is missing ssh config: {mount.mount_name}"
+                        )
+                    ssh_profile_id = provider_config.ssh_profile_id
+                    if self._ssh_profile_service is not None:
+                        try:
+                            self._ssh_profile_service.require_profile(ssh_profile_id)
+                        except KeyError as exc:
+                            raise ValueError(
+                                "Workspace ssh mount references unknown ssh profile: "
+                                f"{ssh_profile_id}"
+                            ) from exc
+                normalized_mounts.append(normalized_mount)
+            resolved_mounts = tuple(normalized_mounts)
+            resolved_default_mount_name = (
+                default_mount_name or resolved_mounts[0].mount_name
+            )
+        self._validate_default_mount(
+            mounts=resolved_mounts,
+            default_mount_name=resolved_default_mount_name,
+        )
+        return resolved_mounts, resolved_default_mount_name
 
     def create_workspace_for_root(
         self,
@@ -107,7 +221,7 @@ class WorkspaceService:
             return existing
 
         workspace_id = self._next_workspace_id_for_root(resolved_root)
-        return self._repository.create(
+        return self.create_workspace(
             workspace_id=workspace_id,
             root_path=resolved_root,
             profile=profile,
@@ -116,9 +230,23 @@ class WorkspaceService:
     def get_workspace(self, workspace_id: str) -> WorkspaceRecord:
         return self._repository.get(workspace_id)
 
-    def open_workspace_root(self, workspace_id: str) -> Path:
+    def open_workspace_root(
+        self,
+        workspace_id: str,
+        *,
+        mount_name: str | None = None,
+    ) -> Path:
         record = self._repository.get(workspace_id)
-        root_path = self._validate_root(record.root_path)
+        target_mount = (
+            self._resolve_mount(record, mount_name)
+            if mount_name is not None
+            else self._primary_local_mount(record)
+        )
+        if target_mount is None:
+            raise ValueError("Workspace has no local mount to open")
+        if target_mount.provider != WorkspaceMountProvider.LOCAL:
+            raise ValueError(f"Workspace mount is not local: {target_mount.mount_name}")
+        root_path = self._resolve_local_mount_root(target_mount)
         try:
             open_workspace_directory(root_path)
         except RuntimeError:
@@ -129,6 +257,7 @@ class WorkspaceService:
                 message="Failed to open workspace root in native file manager",
                 payload={
                     "workspace_id": record.workspace_id,
+                    "mount_name": target_mount.mount_name,
                     "root_path": str(root_path),
                 },
             )
@@ -141,6 +270,7 @@ class WorkspaceService:
             message="Opened workspace root in native file manager",
             payload={
                 "workspace_id": record.workspace_id,
+                "mount_name": target_mount.mount_name,
                 "root_path": str(root_path),
             },
         )
@@ -148,16 +278,28 @@ class WorkspaceService:
 
     def get_workspace_snapshot(self, workspace_id: str) -> WorkspaceSnapshot:
         record = self._repository.get(workspace_id)
-        root_path = self._validate_root(record.root_path)
-        tree = self._build_tree_node(
-            root_path=root_path,
-            current_path=root_path,
-            include_children=True,
+        default_mount_root = record.default_mount.local_root_path()
+        mount_children = tuple(
+            WorkspaceTreeNode(
+                name=mount.mount_name,
+                path=mount.mount_name,
+                kind=WorkspaceTreeNodeKind.DIRECTORY,
+                has_children=self._mount_has_children(mount),
+                children=(),
+            )
+            for mount in record.mounts
         )
         return WorkspaceSnapshot(
             workspace_id=record.workspace_id,
-            root_path=root_path,
-            tree=tree,
+            default_mount_name=record.default_mount_name,
+            default_mount_root=default_mount_root,
+            tree=WorkspaceTreeNode(
+                name=record.workspace_id,
+                path=".",
+                kind=WorkspaceTreeNodeKind.DIRECTORY,
+                has_children=len(mount_children) > 0,
+                children=mount_children,
+            ),
         )
 
     def get_workspace_tree_listing(
@@ -165,11 +307,18 @@ class WorkspaceService:
         workspace_id: str,
         *,
         directory_path: str,
+        mount_name: str | None = None,
     ) -> WorkspaceTreeListing:
         record = self._repository.get(workspace_id)
-        root_path = self._validate_root(record.root_path)
+        mount = self._resolve_mount(record, mount_name)
+        if mount.provider != WorkspaceMountProvider.LOCAL:
+            raise ValueError(
+                f"Workspace mount does not support tree listing: {mount.mount_name}"
+            )
+        root_path = self._resolve_local_mount_root(mount)
         target_path = self._resolve_tree_path(
-            root_path=root_path, directory_path=directory_path
+            root_path=root_path,
+            directory_path=directory_path,
         )
         if not path_is_dir(target_path) or target_path.is_symlink():
             raise ValueError(f"Workspace path is not a directory: {directory_path}")
@@ -186,18 +335,47 @@ class WorkspaceService:
             normalized_directory_path = target_path.relative_to(root_path).as_posix()
         return WorkspaceTreeListing(
             workspace_id=record.workspace_id,
+            mount_name=mount.mount_name,
             directory_path=normalized_directory_path,
             children=children,
         )
 
-    def get_workspace_diffs(self, workspace_id: str) -> WorkspaceDiffListing:
+    def get_workspace_diffs(
+        self,
+        workspace_id: str,
+        *,
+        mount_name: str | None = None,
+    ) -> WorkspaceDiffListing:
         record = self._repository.get(workspace_id)
-        root_path = self._validate_root(record.root_path)
+        mount = self._resolve_mount(record, mount_name)
+        capabilities = self._mount_capabilities(mount)
+        if not capabilities.can_diff:
+            return WorkspaceDiffListing(
+                workspace_id=record.workspace_id,
+                mount_name=mount.mount_name,
+                root_path=mount.root_reference,
+                diff_files=(),
+                is_git_repository=False,
+                git_root_path=None,
+                diff_message=f"Workspace mount does not support diff: {mount.mount_name}",
+            )
+        if mount.provider != WorkspaceMountProvider.LOCAL:
+            return WorkspaceDiffListing(
+                workspace_id=record.workspace_id,
+                mount_name=mount.mount_name,
+                root_path=mount.root_reference,
+                diff_files=(),
+                is_git_repository=False,
+                git_root_path=None,
+                diff_message=f"Workspace mount provider is not yet diff-enabled: {mount.mount_name}",
+            )
+        root_path = self._resolve_local_mount_root(mount)
         try:
             git_root_path = self._resolve_git_root(root_path)
         except ValueError as exc:
             return WorkspaceDiffListing(
                 workspace_id=record.workspace_id,
+                mount_name=mount.mount_name,
                 root_path=root_path,
                 diff_files=(),
                 is_git_repository=False,
@@ -232,6 +410,7 @@ class WorkspaceService:
             )
             return WorkspaceDiffListing(
                 workspace_id=record.workspace_id,
+                mount_name=mount.mount_name,
                 root_path=root_path,
                 diff_files=(),
                 is_git_repository=True,
@@ -241,6 +420,7 @@ class WorkspaceService:
 
         return WorkspaceDiffListing(
             workspace_id=record.workspace_id,
+            mount_name=mount.mount_name,
             root_path=root_path,
             diff_files=diff_files,
             is_git_repository=True,
@@ -253,9 +433,20 @@ class WorkspaceService:
         workspace_id: str,
         *,
         path: str,
+        mount_name: str | None = None,
     ) -> WorkspaceDiffFile:
         record = self._repository.get(workspace_id)
-        root_path = self._validate_root(record.root_path)
+        mount = self._resolve_mount(record, mount_name)
+        capabilities = self._mount_capabilities(mount)
+        if not capabilities.can_diff:
+            raise ValueError(
+                f"Workspace mount does not support diff: {mount.mount_name}"
+            )
+        if mount.provider != WorkspaceMountProvider.LOCAL:
+            raise ValueError(
+                f"Workspace mount provider is not yet diff-enabled: {mount.mount_name}"
+            )
+        root_path = self._resolve_local_mount_root(mount)
         normalized_path = self._normalize_workspace_relative_path(path)
 
         _ = self._resolve_git_root(root_path)
@@ -267,6 +458,7 @@ class WorkspaceService:
         for candidate in candidates:
             if candidate.path == normalized_path:
                 return self._build_diff_file(
+                    mount_name=mount.mount_name,
                     workspace_root=root_path,
                     candidate=candidate,
                     has_head=has_head,
@@ -278,9 +470,20 @@ class WorkspaceService:
         workspace_id: str,
         *,
         path: str,
+        mount_name: str | None = None,
     ) -> tuple[Path, str]:
         record = self._repository.get(workspace_id)
-        root_path = self._validate_root(record.root_path)
+        mount = self._resolve_mount(record, mount_name)
+        capabilities = self._mount_capabilities(mount)
+        if not capabilities.can_preview:
+            raise ValueError(
+                f"Workspace mount does not support preview: {mount.mount_name}"
+            )
+        if mount.provider != WorkspaceMountProvider.LOCAL:
+            raise ValueError(
+                f"Workspace mount provider is not yet preview-enabled: {mount.mount_name}"
+            )
+        root_path = self._resolve_local_mount_root(mount)
         resolved_path = self._resolve_workspace_file_path(
             root_path=root_path,
             file_path=path,
@@ -322,13 +525,15 @@ class WorkspaceService:
         start_ref: str | None = None,
     ) -> WorkspaceRecord:
         source_record = self._repository.get(source_workspace_id)
+        source_mount = self._primary_local_mount(source_record)
+        if source_mount is None:
+            raise ValueError("Workspace has no local mount to fork")
+        source_root = self._resolve_local_mount_root(source_mount)
         normalized_workspace_id = self._normalize_workspace_id(name)
         if self._repository.exists(normalized_workspace_id):
             raise ValueError(f"Workspace already exists: {normalized_workspace_id}")
 
-        repository_root = self._git_worktree_client.ensure_repository(
-            source_record.root_path
-        )
+        repository_root = self._git_worktree_client.ensure_repository(source_root)
         if start_ref is None:
             self._git_worktree_client.fetch_ref(
                 repository_root, remote="origin", ref="main"
@@ -351,21 +556,23 @@ class WorkspaceService:
             target_path=target_path,
             start_point=start_point,
         )
-
-        profile = WorkspaceProfile(
-            file_scope=WorkspaceFileScope(
-                backend=FileScopeBackend.GIT_WORKTREE,
-                branch_binding=BranchBinding.SHARED,
-                branch_name=branch_name,
-                source_root_path=str(repository_root),
-                forked_from_workspace_id=source_workspace_id,
-            )
-        )
         try:
-            return self._repository.create(
+            return self.create_workspace(
                 workspace_id=normalized_workspace_id,
-                root_path=target_path,
-                profile=profile,
+                mounts=(
+                    legacy_workspace_mount_from_profile(
+                        root_path=target_path,
+                        profile=WorkspaceProfile(),
+                        mount_name="default",
+                    ).model_copy(
+                        update={
+                            "branch_name": branch_name,
+                            "source_root_path": str(repository_root),
+                            "forked_from_workspace_id": source_workspace_id,
+                        }
+                    ),
+                ),
+                default_mount_name="default",
             )
         except Exception:
             self._git_worktree_client.remove_worktree(
@@ -390,21 +597,113 @@ class WorkspaceService:
             raise ValueError(f"Workspace root is not a directory: {resolved_root}")
         return resolved_root
 
-    def _remove_workspace_directory(self, record: WorkspaceRecord) -> None:
-        removal_target = record.root_path
-        if record.profile.file_scope.backend == FileScopeBackend.GIT_WORKTREE:
-            repository_root = self._resolve_worktree_repository_root(record)
-            self._git_worktree_client.remove_worktree(
-                repository_root=repository_root,
-                target_path=record.root_path,
+    def _validate_local_mount_scope_paths(
+        self,
+        *,
+        mount: WorkspaceMountRecord,
+        root_path: Path,
+    ) -> None:
+        self._validate_mount_relative_root(root_path, mount.working_directory)
+        for relative_path in mount.readable_paths:
+            self._validate_mount_relative_root(root_path, relative_path)
+        for relative_path in mount.writable_paths:
+            self._validate_mount_relative_root(root_path, relative_path)
+
+    def _validate_mount_relative_root(
+        self, root_path: Path, relative_path: str
+    ) -> None:
+        candidate = (root_path / relative_path).resolve()
+        resolved_root = root_path.resolve()
+        if candidate != resolved_root and resolved_root not in candidate.parents:
+            raise ValueError(
+                f"Workspace file scope escapes mount root: {relative_path}"
             )
-            self._git_worktree_client.prune(repository_root)
-            removal_target = self._workspace_storage_dir(record.workspace_id)
+
+    def _validate_default_mount(
+        self,
+        *,
+        mounts: tuple[WorkspaceMountRecord, ...],
+        default_mount_name: str,
+    ) -> None:
+        for mount in mounts:
+            if mount.mount_name != default_mount_name:
+                continue
+            if mount.provider != WorkspaceMountProvider.LOCAL:
+                raise ValueError(
+                    f"Workspace default mount must be local: {default_mount_name}"
+                )
+            return
+        raise ValueError(f"default mount does not exist: {default_mount_name}")
+
+    def _resolve_mount(
+        self,
+        record: WorkspaceRecord,
+        mount_name: str | None,
+    ) -> WorkspaceMountRecord:
+        if mount_name is None:
+            return record.default_mount
+        return record.mount_by_name(mount_name)
+
+    def _primary_local_mount(
+        self, record: WorkspaceRecord
+    ) -> WorkspaceMountRecord | None:
+        default_mount = record.default_mount
+        if default_mount.provider == WorkspaceMountProvider.LOCAL:
+            return default_mount
+        return record.first_local_mount()
+
+    def _resolve_local_mount_root(self, mount: WorkspaceMountRecord) -> Path:
+        if mount.provider != WorkspaceMountProvider.LOCAL:
+            raise ValueError(f"Workspace mount is not local: {mount.mount_name}")
+        root_path = mount.local_root_path()
+        if root_path is None:
+            raise ValueError(
+                f"Workspace local mount is missing root path: {mount.mount_name}"
+            )
+        return self._validate_root(root_path)
+
+    def _mount_has_children(self, mount: WorkspaceMountRecord) -> bool:
+        if mount.provider != WorkspaceMountProvider.LOCAL:
+            return True
+        root_path = mount.local_root_path()
+        if root_path is None or not path_exists(root_path):
+            return False
+        return len(self._iter_tree_entries(root_path.resolve())) > 0
+
+    def _remove_workspace_directory(self, record: WorkspaceRecord) -> None:
+        removal_targets: list[Path] = []
+        for mount in record.mounts:
+            if mount.provider != WorkspaceMountProvider.LOCAL:
+                raise RuntimeError(
+                    f"Cannot remove directory for non-local workspace mount: {mount.mount_name}"
+                )
+            root_path = self._resolve_local_mount_root(mount)
+            if mount.source_root_path is not None:
+                repository_root = self._resolve_worktree_repository_root(mount)
+                self._git_worktree_client.remove_worktree(
+                    repository_root=repository_root,
+                    target_path=root_path,
+                )
+                self._git_worktree_client.prune(repository_root)
+                removal_targets.append(self._workspace_storage_dir(record.workspace_id))
+                continue
+            removal_targets.append(root_path)
         try:
-            self._remove_filesystem_path(removal_target)
+            seen: set[Path] = set()
+            for target_path in removal_targets:
+                resolved = target_path.resolve()
+                if resolved in seen:
+                    continue
+                self._remove_filesystem_path(resolved)
+                seen.add(resolved)
         except OSError as exc:
+            failed_target = (
+                removal_targets[0]
+                if len(removal_targets) > 0
+                else Path(record.workspace_id)
+            )
             raise RuntimeError(
-                f"Failed to remove workspace path: {removal_target}"
+                f"Failed to remove workspace path: {failed_target}"
             ) from exc
 
     def _remove_filesystem_path(self, target_path: Path) -> None:
@@ -417,8 +716,10 @@ class WorkspaceService:
 
     def _find_workspace_by_root(self, root_path: Path) -> WorkspaceRecord | None:
         for workspace in self._repository.list_all():
-            if workspace.root_path == root_path:
-                return workspace
+            for mount in workspace.mounts:
+                mount_root = mount.local_root_path()
+                if mount_root is not None and mount_root == root_path:
+                    return workspace
         return None
 
     def _next_workspace_id_for_root(self, root_path: Path) -> str:
@@ -446,11 +747,11 @@ class WorkspaceService:
         config_dir = get_project_config_dir()
         return config_dir / "workspaces" / workspace_id
 
-    def _resolve_worktree_repository_root(self, record: WorkspaceRecord) -> Path:
-        source_root_path = record.profile.file_scope.source_root_path
+    def _resolve_worktree_repository_root(self, mount: WorkspaceMountRecord) -> Path:
+        source_root_path = mount.source_root_path
         if not source_root_path:
             raise ValueError(
-                f"Workspace {record.workspace_id} is missing worktree source_root_path"
+                f"Workspace mount {mount.mount_name} is missing worktree source_root_path"
             )
         return Path(source_root_path).expanduser().resolve()
 
@@ -560,60 +861,6 @@ class WorkspaceService:
             )
         )
 
-    def _collect_workspace_diffs(
-        self,
-        workspace_root: Path,
-    ) -> tuple[bool, Path | None, tuple[WorkspaceDiffFile, ...], str | None]:
-        try:
-            git_root_path = self._resolve_git_root(workspace_root)
-        except ValueError as exc:
-            return False, None, (), str(exc)
-
-        has_head = self._git_head_exists(workspace_root)
-        try:
-            candidates = self._list_diff_candidates(
-                workspace_root=workspace_root,
-                has_head=has_head,
-            )
-            diff_files = tuple(
-                self._build_diff_file(
-                    workspace_root=workspace_root,
-                    candidate=candidate,
-                    has_head=has_head,
-                )
-                for candidate in candidates
-            )
-        except ValueError as exc:
-            log_event(
-                _logger,
-                30,
-                event="workspace.snapshot.diff_failed",
-                message="Failed to collect workspace diff",
-                payload={
-                    "workspace_root": str(workspace_root),
-                    "detail": str(exc),
-                },
-            )
-            return True, git_root_path, (), str(exc)
-        return True, git_root_path, diff_files, None
-
-    def _resolve_git_root(self, workspace_root: Path) -> Path:
-        completed = self._run_git(
-            ("rev-parse", "--show-toplevel"),
-            cwd=workspace_root,
-        )
-        stdout = completed.stdout
-        if not isinstance(stdout, str):
-            raise ValueError("Git returned non-text output for git root")
-        return Path(stdout.strip()).expanduser().resolve()
-
-    def _git_head_exists(self, workspace_root: Path) -> bool:
-        try:
-            _ = self._run_git(("rev-parse", "--verify", "HEAD"), cwd=workspace_root)
-        except ValueError:
-            return False
-        return True
-
     def _list_diff_candidates(
         self,
         *,
@@ -680,7 +927,7 @@ class WorkspaceService:
             line = raw_line.strip()
             if not line:
                 continue
-            parts = line.split("	")
+            parts = line.split("\t")
             status = parts[0]
             if status.startswith("R") and len(parts) >= 3:
                 candidates.append(
@@ -733,6 +980,7 @@ class WorkspaceService:
     def _build_diff_file(
         self,
         *,
+        mount_name: str,
         workspace_root: Path,
         candidate: _WorkspaceDiffCandidate,
         has_head: bool,
@@ -763,12 +1011,30 @@ class WorkspaceService:
             )
         )
         return WorkspaceDiffFile(
+            mount_name=mount_name,
             path=candidate.path,
             previous_path=candidate.previous_path,
             change_type=candidate.change_type,
             diff=diff_text,
             is_binary=is_binary,
         )
+
+    def _resolve_git_root(self, workspace_root: Path) -> Path:
+        completed = self._run_git(
+            ("rev-parse", "--show-toplevel"),
+            cwd=workspace_root,
+        )
+        stdout = completed.stdout
+        if not isinstance(stdout, str):
+            raise ValueError("Git returned non-text output for git root")
+        return Path(stdout.strip()).expanduser().resolve()
+
+    def _git_head_exists(self, workspace_root: Path) -> bool:
+        try:
+            _ = self._run_git(("rev-parse", "--verify", "HEAD"), cwd=workspace_root)
+        except ValueError:
+            return False
+        return True
 
     def _read_git_blob_bytes(
         self,

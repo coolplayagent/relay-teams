@@ -601,6 +601,11 @@
         align-items: stretch;
     }
 
+    .recovery-question-input {
+        width: 100%;
+        min-width: 0;
+    }
+
     .recovery-approval-buttons {
         width: 100%;
     }
@@ -626,6 +631,195 @@
     display: flex;
     flex-direction: column;
     gap: 0.45rem;
+}
+
+.recovery-question-host {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 0.55rem;
+}
+
+.recovery-question-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.recovery-question-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    padding: 0.9rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-sm);
+}
+
+.recovery-question-header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.recovery-question-copy {
+    min-width: 0;
+}
+
+.recovery-question-title {
+    color: var(--text-primary);
+    font-size: 0.92rem;
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+.recovery-question-meta {
+    margin-top: 0.2rem;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+
+.recovery-question-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+}
+
+.recovery-question-submit {
+    height: 2rem;
+    padding: 0 0.8rem;
+    border: 1px solid var(--button-primary-border);
+    border-radius: var(--radius-sm);
+    background: var(--button-primary-bg);
+    color: var(--button-primary-text);
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.recovery-question-submit:hover {
+    background: var(--button-primary-hover);
+}
+
+.recovery-question-submit:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.recovery-question-status {
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    line-height: 1.35;
+}
+
+.recovery-question-status.is-error {
+    color: var(--danger);
+}
+
+.recovery-question-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.recovery-question-field {
+    padding: 0;
+    border: 0;
+    min-width: 0;
+}
+
+.recovery-question-field + .recovery-question-field {
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.recovery-question-field-header {
+    margin-bottom: 0.28rem;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    line-height: 1.3;
+}
+
+.recovery-question-text {
+    width: 100%;
+    margin-bottom: 0.5rem;
+    color: var(--text-primary);
+    font-size: 0.84rem;
+    font-weight: 500;
+    line-height: 1.4;
+}
+
+.recovery-question-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.recovery-question-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface-muted);
+    cursor: pointer;
+}
+
+.recovery-question-option input {
+    margin-top: 0.12rem;
+    accent-color: var(--primary);
+}
+
+.recovery-question-option-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    width: 100%;
+    min-width: 0;
+}
+
+.recovery-question-option-label {
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    line-height: 1.35;
+}
+
+.recovery-question-option-description {
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    line-height: 1.35;
+}
+
+.recovery-question-input {
+    width: 80%;
+    max-width: 100%;
+    min-width: 12rem;
+    height: 2rem;
+    padding: 0 0.65rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tool-body);
+    color: var(--text-primary);
+    font: inherit;
+    line-height: 2rem;
+    appearance: none;
+    overflow: hidden;
+}
+
+.recovery-question-option-supplement {
+    margin-top: 0.35rem;
+}
+
+.recovery-question-input:focus {
+    outline: 2px solid color-mix(in srgb, var(--primary) 42%, transparent);
+    outline-offset: 0;
+    border-color: color-mix(in srgb, var(--primary) 42%, var(--border-color));
 }
 
 .recovery-approval-card {

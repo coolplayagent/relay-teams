@@ -126,15 +126,15 @@ def test_clawhub_probe_validates_token_without_passing_it_on_cli(
 
     assert result.ok is True
     assert result.clawhub_version == "clawhub 0.4.2"
-    assert result.clawhub_path == "/usr/bin/clawhub"
+    assert result.clawhub_path == str(Path("/usr/bin/clawhub"))
     assert result.diagnostics.binary_available is True
     assert result.diagnostics.token_configured is True
     assert result.diagnostics.installation_attempted is False
     assert result.diagnostics.installed_during_probe is False
     assert all("ch_secret" not in command for command in observed_commands)
     assert observed_commands == [
-        ["/usr/bin/clawhub", "--cli-version"],
-        ["/usr/bin/clawhub", "whoami"],
+        [str(Path("/usr/bin/clawhub")), "--cli-version"],
+        [str(Path("/usr/bin/clawhub")), "whoami"],
     ]
 
 

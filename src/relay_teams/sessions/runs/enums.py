@@ -44,6 +44,8 @@ class RunEventType(str, Enum):
     INJECTION_APPLIED = "injection_applied"
     TOOL_APPROVAL_REQUESTED = "tool_approval_requested"
     TOOL_APPROVAL_RESOLVED = "tool_approval_resolved"
+    USER_QUESTION_REQUESTED = "user_question_requested"
+    USER_QUESTION_ANSWERED = "user_question_answered"
     NOTIFICATION_REQUESTED = "notification_requested"
     SUBAGENT_STOPPED = "subagent_stopped"
     SUBAGENT_RESUMED = "subagent_resumed"

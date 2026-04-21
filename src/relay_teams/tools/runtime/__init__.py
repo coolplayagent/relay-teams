@@ -9,6 +9,7 @@ if TYPE_CHECKING:
         ApprovalTicketRecord,
         ApprovalTicketRepository,
         ApprovalTicketStatus,
+        ApprovalTicketStatusConflictError,
         approval_signature_key,
     )
     from relay_teams.tools.runtime.approval_state import (
@@ -32,6 +33,7 @@ __all__ = [
     "ApprovalTicketRecord",
     "ApprovalTicketRepository",
     "ApprovalTicketStatus",
+    "ApprovalTicketStatusConflictError",
     "ToolApprovalAction",
     "ToolApprovalDecision",
     "ToolApprovalManager",
@@ -61,6 +63,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ApprovalTicketStatus": (
         "relay_teams.tools.runtime.approval_ticket_repo",
         "ApprovalTicketStatus",
+    ),
+    "ApprovalTicketStatusConflictError": (
+        "relay_teams.tools.runtime.approval_ticket_repo",
+        "ApprovalTicketStatusConflictError",
     ),
     "ToolApprovalAction": (
         "relay_teams.tools.runtime.approval_state",

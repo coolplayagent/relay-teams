@@ -791,6 +791,12 @@
     min-height: 0;
 }
 
+.workspace-view-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+}
+
 .workspace-view-grid {
     display: grid;
     grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.5fr);
@@ -817,9 +823,29 @@
     background: color-mix(in srgb, var(--bg-surface) 98%, transparent);
 }
 
+.workspace-view-panel-header-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.65rem;
+    min-width: 0;
+}
+
 .workspace-view-panel-header h3 {
     margin: 0;
     font-size: 0.95rem;
+}
+
+.workspace-panel-header-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+}
+
+.workspace-panel-action-btn {
+    min-height: 2rem;
+    padding-inline: 0.7rem;
 }
 
 .workspace-view-panel-meta {
@@ -827,6 +853,124 @@
     color: var(--text-secondary);
     font-size: 0.72rem;
     font-family: var(--font-mono);
+}
+
+.workspace-view-root-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+}
+
+.workspace-mount-strip {
+    overflow: hidden;
+}
+
+.workspace-mount-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.75rem;
+    padding: 0.9rem 1rem 1rem;
+}
+
+.workspace-mount-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.42rem;
+    width: 100%;
+    padding: 0.8rem 0.9rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+    border-radius: 14px;
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 96%, transparent), color-mix(in srgb, var(--bg-base) 92%, transparent));
+    color: var(--text-primary);
+    text-align: left;
+    transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.workspace-mount-card:hover,
+.workspace-mount-card:focus-visible {
+    border-color: color-mix(in srgb, var(--primary) 24%, var(--border-color));
+    box-shadow: 0 10px 22px -20px rgba(15, 23, 42, 0.5);
+    transform: translateY(-1px);
+    outline: none;
+}
+
+.workspace-mount-card.is-active {
+    border-color: color-mix(in srgb, var(--primary) 30%, var(--border-color));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 16%, transparent);
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--primary) 8%, var(--bg-surface)), color-mix(in srgb, var(--bg-base) 92%, transparent));
+}
+
+.workspace-mount-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    width: 100%;
+}
+
+.workspace-mount-card-head strong {
+    min-width: 0;
+    font-size: 0.86rem;
+}
+
+.workspace-mount-card-badges {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+}
+
+.workspace-view-provider-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.35rem;
+    padding: 0.08rem 0.48rem;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+    background: color-mix(in srgb, var(--bg-base) 88%, transparent);
+    color: var(--text-secondary);
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.workspace-view-provider-badge.is-default {
+    color: var(--primary);
+    border-color: color-mix(in srgb, var(--primary) 28%, transparent);
+    background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+.workspace-view-provider-badge.is-remote {
+    color: var(--warning, #b7791f);
+    border-color: color-mix(in srgb, var(--warning, #b7791f) 30%, transparent);
+    background: color-mix(in srgb, var(--warning, #b7791f) 10%, transparent);
+}
+
+.workspace-mount-card-path,
+.workspace-mount-card-meta {
+    display: block;
+    min-width: 0;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+}
+
+.workspace-mount-card-path {
+    color: var(--text-primary);
+    font-size: 0.74rem;
+}
+
+.workspace-mount-card-meta {
+    color: var(--text-secondary);
+    font-size: 0.7rem;
 }
 
 .workspace-view-path-button {
@@ -1261,6 +1405,20 @@
     .project-view-toolbar-actions {
         width: 100%;
         justify-content: flex-end;
+    }
+
+    .workspace-mount-list {
+        grid-template-columns: 1fr;
+    }
+
+    .workspace-view-panel-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .workspace-panel-header-actions {
+        width: 100%;
+        justify-content: flex-start;
     }
 }
 

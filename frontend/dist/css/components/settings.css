@@ -1295,6 +1295,17 @@
     line-height: 1.45;
 }
 
+.workspace-private-key-textarea {
+    min-height: 180px;
+}
+
+.workspace-auth-state {
+    margin: 0.8rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+
 .form-group-inline-action {
     margin-bottom: 0;
 }

@@ -8,8 +8,9 @@ import pytest
 from relay_teams.workspace import WorkspaceHandle
 from relay_teams.workspace.workspace_models import (
     WorkspaceLocations,
+    WorkspaceMountProvider,
     WorkspaceRef,
-    default_workspace_profile,
+    build_local_workspace_mount,
 )
 
 
@@ -26,18 +27,30 @@ def _build_workspace_handle(
     resolved_execution_root = execution_root or scope_root
     resolved_execution_root.mkdir(parents=True, exist_ok=True)
     tmp_root = workspace_dir / "tmp"
-    profile = default_workspace_profile()
     return WorkspaceHandle(
         ref=WorkspaceRef(
             workspace_id="workspace",
             session_id="session",
             role_id="role",
             conversation_id="conversation",
-            profile=profile,
+            default_mount_name="default",
+            mount_names=("default",),
         ),
-        profile=profile,
+        mounts=(
+            build_local_workspace_mount(
+                mount_name="default",
+                root_path=scope_root,
+                working_directory=(
+                    resolved_execution_root.relative_to(scope_root).as_posix()
+                    if resolved_execution_root != scope_root
+                    else "."
+                ),
+            ),
+        ),
         locations=WorkspaceLocations(
             workspace_dir=workspace_dir,
+            mount_name="default",
+            provider=WorkspaceMountProvider.LOCAL,
             scope_root=scope_root,
             execution_root=resolved_execution_root,
             tmp_root=tmp_root,
@@ -64,6 +77,28 @@ def test_resolve_read_path_allows_absolute_path_outside_workspace(
     assert resolved == external_file.resolve()
 
 
+def test_resolve_workspace_path_allows_absolute_path_in_extra_read_root(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    extra_read_root = tmp_path / "skills"
+    workspace = _build_workspace_handle(
+        workspace_dir=workspace_root,
+        scope_root=workspace_root,
+        readable_roots=(workspace_root, workspace_root / "tmp", extra_read_root),
+    )
+    external_file = extra_read_root / "notes.txt"
+    external_file.parent.mkdir(parents=True, exist_ok=True)
+    external_file.write_text("notes\n", encoding="utf-8")
+
+    resolved = workspace.resolve_workspace_path(str(external_file), write=False)
+
+    assert resolved.mount_name == "default"
+    assert resolved.host_bypass is False
+    assert resolved.local_path == external_file.resolve()
+    assert resolved.logical_path == external_file.resolve().as_posix()
+
+
 def test_resolve_read_path_allows_absolute_path_inside_workspace(
     tmp_path: Path,
 ) -> None:
@@ -80,7 +115,7 @@ def test_resolve_read_path_allows_absolute_path_inside_workspace(
     assert resolved == workspace_file.resolve()
 
 
-def test_resolve_read_path_allows_relative_escape_outside_workspace(
+def test_resolve_read_path_rejects_relative_escape_outside_workspace(
     tmp_path: Path,
 ) -> None:
     workspace_root = tmp_path / "workspace"
@@ -91,9 +126,8 @@ def test_resolve_read_path_allows_relative_escape_outside_workspace(
     external_file = tmp_path / "outside.txt"
     external_file.write_text("outside\n", encoding="utf-8")
 
-    resolved = workspace.resolve_read_path("../outside.txt")
-
-    assert resolved == external_file.resolve()
+    with pytest.raises(ValueError, match="outside workspace read scope"):
+        workspace.resolve_read_path("../outside.txt")
 
 
 def test_resolve_workdir_rejects_outside_path(

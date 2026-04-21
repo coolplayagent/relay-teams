@@ -46,7 +46,7 @@ from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.triggers import GitHubTriggerService
 from relay_teams.gateway.wechat import WeChatGatewayService
-from relay_teams.workspace import WorkspaceManager, WorkspaceService
+from relay_teams.workspace import SshProfileService, WorkspaceManager, WorkspaceService
 from relay_teams.hooks import HookService
 
 
@@ -170,6 +170,10 @@ def get_workspace_service(request: Request) -> WorkspaceService:
 
 def get_workspace_manager(request: Request) -> WorkspaceManager:
     return get_container(request).workspace_manager
+
+
+def get_ssh_profile_service(request: Request) -> SshProfileService:
+    return get_container(request).ssh_profile_service
 
 
 def get_media_asset_service(request: Request) -> MediaAssetService:

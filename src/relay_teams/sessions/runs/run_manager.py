@@ -78,6 +78,7 @@ from relay_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRecord,
     ApprovalTicketRepository,
     ApprovalTicketStatus,
+    ApprovalTicketStatusConflictError,
 )
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
@@ -89,6 +90,22 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRecord,
     RunRuntimeRepository,
     RunRuntimeStatus,
+)
+from relay_teams.sessions.runs.user_question_manager import (
+    UserQuestionClosedError,
+    UserQuestionManager,
+)
+from relay_teams.sessions.runs.user_question_models import (
+    NONE_OF_THE_ABOVE_OPTION_LABEL,
+    UserQuestionAnswer,
+    UserQuestionAnswerSubmission,
+    UserQuestionPrompt,
+    UserQuestionSelection,
+    UserQuestionRequestStatus,
+)
+from relay_teams.sessions.runs.user_question_repository import (
+    UserQuestionRepository,
+    UserQuestionStatusConflictError,
 )
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 from relay_teams.sessions.session_repository import SessionRepository
@@ -163,6 +180,79 @@ def _extract_shell_grant_metadata(
     except ValueError:
         return None
     return workspace_key, resolved_runtime_family, normalized_command, prefix_candidates
+
+
+def _validate_user_question_answers(
+    *,
+    questions: tuple[UserQuestionPrompt, ...],
+    answers: UserQuestionAnswerSubmission,
+) -> UserQuestionAnswerSubmission:
+    if len(questions) != len(answers.answers):
+        raise ValueError("answers length must match the number of requested questions")
+    validated_answers: list[UserQuestionAnswer] = []
+    for index, (question, answer) in enumerate(
+        zip(questions, answers.answers, strict=True)
+    ):
+        allowed_labels = {option.label for option in question.options}
+        selections = tuple(
+            UserQuestionSelection(
+                label=selection.label.strip(),
+                supplement=str(selection.supplement or "").strip() or None,
+            )
+            for selection in answer.selections
+            if selection.label.strip()
+        )
+        labels = tuple(selection.label for selection in selections)
+        if not question.multiple and len(labels) > 1:
+            raise ValueError(f"Question {index + 1} does not allow multiple choices")
+        invalid = [label for label in labels if label not in allowed_labels]
+        if invalid:
+            joined = ", ".join(invalid)
+            raise ValueError(f"Question {index + 1} has unknown options: {joined}")
+        if NONE_OF_THE_ABOVE_OPTION_LABEL in labels and len(labels) > 1:
+            raise ValueError(
+                f"Question {index + 1} cannot combine None of the above with other options"
+            )
+        validated_answers.append(
+            UserQuestionAnswer(
+                selections=selections,
+            )
+        )
+    return UserQuestionAnswerSubmission(answers=tuple(validated_answers))
+
+
+def _user_question_status_conflict_message(
+    *,
+    question_id: str,
+    status: UserQuestionRequestStatus,
+) -> str:
+    if status == UserQuestionRequestStatus.ANSWERED:
+        return f"User question {question_id} was already answered"
+    if status == UserQuestionRequestStatus.TIMED_OUT:
+        return f"User question {question_id} has timed out"
+    if status == UserQuestionRequestStatus.COMPLETED:
+        return f"User question {question_id} was already completed"
+    return f"User question {question_id} is not pending"
+
+
+def _approval_ticket_status_conflict_message(
+    *,
+    tool_call_id: str,
+    status: ApprovalTicketStatus,
+) -> str:
+    if status == ApprovalTicketStatus.APPROVED:
+        return f"Tool approval {tool_call_id} was already approved"
+    if status == ApprovalTicketStatus.DENIED:
+        return f"Tool approval {tool_call_id} was already denied"
+    if status == ApprovalTicketStatus.TIMED_OUT:
+        return f"Tool approval {tool_call_id} has timed out"
+    if status == ApprovalTicketStatus.COMPLETED:
+        return f"Tool approval {tool_call_id} was already completed"
+    return f"Tool approval {tool_call_id} is not pending"
+
+
+def _is_run_already_running_conflict(*, run_id: str, error: RuntimeError) -> bool:
+    return str(error) == f"Run {run_id} is already running"
 
 
 class AutoRecoveryReason(StrEnum):
@@ -241,6 +331,7 @@ class RunManager:
         agent_repo: AgentInstanceRepository | None = None,
         message_repo: MessageRepository | None = None,
         approval_ticket_repo: ApprovalTicketRepository | None = None,
+        user_question_repo: UserQuestionRepository | None = None,
         run_runtime_repo: RunRuntimeRepository | None = None,
         run_intent_repo: RunIntentRepository | None = None,
         run_state_repo: RunStateRepository | None = None,
@@ -252,6 +343,7 @@ class RunManager:
         media_asset_service: MediaAssetService | None = None,
         runtime_role_resolver: RuntimeRoleResolver | None = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
+        user_question_manager: UserQuestionManager | None = None,
         hook_service: HookService | None = None,
     ) -> None:
         self._meta_agent: MetaAgent = meta_agent
@@ -272,6 +364,7 @@ class RunManager:
         self._approval_ticket_repo: ApprovalTicketRepository | None = (
             approval_ticket_repo
         )
+        self._user_question_repo: UserQuestionRepository | None = user_question_repo
         self._run_runtime_repo: RunRuntimeRepository | None = run_runtime_repo
         self._run_intent_repo: RunIntentRepository | None = run_intent_repo
         self._run_state_repo: RunStateRepository | None = run_state_repo
@@ -283,6 +376,7 @@ class RunManager:
         self._media_asset_service = media_asset_service
         self._runtime_role_resolver = runtime_role_resolver
         self._shell_approval_repo = shell_approval_repo
+        self._user_question_manager: UserQuestionManager | None = user_question_manager
         self._hook_service = hook_service
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
@@ -1733,6 +1827,10 @@ class RunManager:
     def _stop_run_local(self, run_id: str) -> None:
         self._run_control_manager.clear_paused_subagent_for_run(run_id)
         if run_id in self._pending_runs and run_id not in self._running_run_ids:
+            self._complete_pending_user_questions(
+                run_id=run_id,
+                reason="run_stopped",
+            )
             intent = self._pending_runs.pop(run_id)
             session_id = intent.session_id
             if session_id is None:
@@ -1776,6 +1874,11 @@ class RunManager:
         requested = self._run_control_manager.request_run_stop(run_id)
         if not requested and run_id not in self._running_run_ids:
             raise KeyError(f"Run {run_id} not found")
+        if requested:
+            self._complete_pending_user_questions(
+                run_id=run_id,
+                reason="run_stopped",
+            )
         if self._run_runtime_repo is not None and requested:
             runtime = self._run_runtime_repo.get(run_id)
             if runtime is not None:
@@ -2078,10 +2181,87 @@ class RunManager:
         return runtime.session_id
 
     def stop_subagent(self, run_id: str, instance_id: str) -> dict[str, str]:
-        return self._run_control_manager.stop_subagent(
+        stopped = self._run_control_manager.stop_subagent(
             run_id=run_id,
             instance_id=instance_id,
         )
+        self._complete_pending_user_questions(
+            run_id=run_id,
+            instance_id=instance_id,
+            reason="subagent_stopped",
+        )
+        return stopped
+
+    def _complete_pending_user_questions(
+        self,
+        *,
+        run_id: str,
+        instance_id: str | None = None,
+        reason: str,
+    ) -> None:
+        repo = self._user_question_repo
+        if repo is None:
+            return
+        records = repo.list_by_run(run_id)
+        targets = tuple(
+            record
+            for record in records
+            if instance_id is None or record.instance_id == instance_id
+        )
+        if not targets:
+            if self._user_question_manager is None:
+                return
+            if instance_id is None:
+                self._user_question_manager.mark_questions_closed_for_run(
+                    run_id=run_id,
+                    reason=reason,
+                )
+                return
+            _ = self._user_question_manager.mark_questions_closed_for_instance(
+                run_id=run_id,
+                instance_id=instance_id,
+                reason=reason,
+            )
+            return
+        for record in targets:
+            resolved_record = None
+            try:
+                resolved_record = repo.resolve(
+                    question_id=record.question_id,
+                    status=UserQuestionRequestStatus.COMPLETED,
+                    answers=record.answers,
+                    expected_status=UserQuestionRequestStatus.REQUESTED,
+                )
+            except UserQuestionStatusConflictError:
+                pass
+            if resolved_record is not None:
+                self._safe_publish_run_event(
+                    RunEvent(
+                        session_id=resolved_record.session_id,
+                        run_id=run_id,
+                        trace_id=run_id,
+                        task_id=resolved_record.task_id,
+                        instance_id=resolved_record.instance_id,
+                        role_id=resolved_record.role_id,
+                        event_type=RunEventType.USER_QUESTION_ANSWERED,
+                        payload_json=dumps(
+                            {
+                                "question_id": record.question_id,
+                                "status": resolved_record.status.value,
+                                "instance_id": resolved_record.instance_id,
+                                "role_id": resolved_record.role_id,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ),
+                    failure_event="run.event.publish_failed",
+                )
+            if self._user_question_manager is not None:
+                self._user_question_manager.mark_question_closed(
+                    run_id=run_id,
+                    question_id=record.question_id,
+                    reason=reason,
+                )
 
     def create_monitor(
         self,
@@ -2263,32 +2443,57 @@ class RunManager:
         )
         if ticket is not None and ticket.run_id != run_id:
             raise KeyError(f"Tool approval {tool_call_id} not found for run {run_id}")
+        resolved_ticket = ticket
+        if self._approval_ticket_repo is not None:
+            try:
+                resolved_ticket = self._approval_ticket_repo.resolve(
+                    tool_call_id=tool_call_id,
+                    status=(
+                        ApprovalTicketStatus.APPROVED
+                        if _approval_action_is_approved(action)
+                        else ApprovalTicketStatus.DENIED
+                    ),
+                    feedback=feedback,
+                    expected_status=ApprovalTicketStatus.REQUESTED,
+                )
+            except ApprovalTicketStatusConflictError as exc:
+                raise RuntimeError(
+                    _approval_ticket_status_conflict_message(
+                        tool_call_id=tool_call_id,
+                        status=exc.actual_status,
+                    )
+                ) from exc
         if _approval_action_requires_shell_grant(action):
             self._persist_shell_approval_grants(ticket=ticket, action=action)
-        if self._approval_ticket_repo is not None:
-            self._approval_ticket_repo.resolve(
-                tool_call_id=tool_call_id,
-                status=(
-                    ApprovalTicketStatus.APPROVED
-                    if _approval_action_is_approved(action)
-                    else ApprovalTicketStatus.DENIED
-                ),
-                feedback=feedback,
-            )
         if approval is not None:
-            self._tool_approval_manager.resolve_approval(
-                run_id=run_id,
-                tool_call_id=tool_call_id,
-                action=cast(ToolApprovalAction, action),
-                feedback=feedback,
-            )
+            try:
+                self._tool_approval_manager.resolve_approval(
+                    run_id=run_id,
+                    tool_call_id=tool_call_id,
+                    action=cast(ToolApprovalAction, action),
+                    feedback=feedback,
+                )
+            except KeyError:
+                pass
         if run_id in self._running_run_ids or runtime is None:
             return
 
-        instance_id = approval["instance_id"] if approval is not None else None
-        role_id = approval["role_id"] if approval is not None else None
-        tool_name = approval["tool_name"] if approval is not None else ""
-        self._run_event_hub.publish(
+        instance_id = (
+            approval["instance_id"]
+            if approval is not None
+            else (resolved_ticket.instance_id if resolved_ticket is not None else None)
+        )
+        role_id = (
+            approval["role_id"]
+            if approval is not None
+            else (resolved_ticket.role_id if resolved_ticket is not None else None)
+        )
+        tool_name = (
+            approval["tool_name"]
+            if approval is not None
+            else (resolved_ticket.tool_name if resolved_ticket is not None else "")
+        )
+        self._safe_publish_run_event(
             RunEvent(
                 session_id=runtime.session_id,
                 run_id=run_id,
@@ -2307,7 +2512,8 @@ class RunManager:
                         "role_id": role_id,
                     }
                 ),
-            )
+            ),
+            failure_event="run.event.publish_failed",
         )
 
     def _persist_shell_approval_grants(
@@ -2354,6 +2560,135 @@ class RunManager:
             for item in self._approval_ticket_repo.list_open_by_run(run_id)
         ]
 
+    def list_user_questions(self, run_id: str) -> list[dict[str, JsonValue]]:
+        repo = self._require_user_question_repo()
+        runtime = self._runtime_for_run(run_id)
+        if runtime is None:
+            raise KeyError(f"Run {run_id} not found")
+        return [
+            cast(dict[str, JsonValue], item.model_dump(mode="json"))
+            for item in repo.list_by_run(run_id)
+        ]
+
+    def answer_user_question(
+        self,
+        *,
+        run_id: str,
+        question_id: str,
+        answers: UserQuestionAnswerSubmission,
+    ) -> dict[str, JsonValue]:
+        repo = self._require_user_question_repo()
+        runtime = self._runtime_for_run(run_id)
+        if runtime is None:
+            raise KeyError(f"Run {run_id} not found")
+        if runtime.status == RunRuntimeStatus.STOPPING:
+            raise RuntimeError(
+                f"Run {run_id} is stopping. Wait for it to stop before answering."
+            )
+        record = repo.get(question_id)
+        if record is None or record.run_id != run_id:
+            raise KeyError(f"User question {question_id} not found for run {run_id}")
+        if record.status != UserQuestionRequestStatus.REQUESTED:
+            raise RuntimeError(
+                _user_question_status_conflict_message(
+                    question_id=question_id,
+                    status=record.status,
+                )
+            )
+        validated_answers = _validate_user_question_answers(
+            questions=record.questions,
+            answers=answers,
+        )
+        try:
+            resolved_record = repo.resolve(
+                question_id=question_id,
+                status=UserQuestionRequestStatus.ANSWERED,
+                answers=validated_answers.answers,
+                expected_status=UserQuestionRequestStatus.REQUESTED,
+            )
+        except UserQuestionStatusConflictError as exc:
+            raise RuntimeError(
+                _user_question_status_conflict_message(
+                    question_id=question_id,
+                    status=exc.actual_status,
+                )
+            ) from exc
+        manager_question = (
+            self._user_question_manager.get_question(
+                run_id=run_id,
+                question_id=question_id,
+            )
+            if self._user_question_manager is not None
+            else None
+        )
+        if self._user_question_manager is not None and manager_question is not None:
+            try:
+                self._user_question_manager.resolve_question(
+                    run_id=run_id,
+                    question_id=question_id,
+                    answers=validated_answers,
+                )
+            except (KeyError, UserQuestionClosedError):
+                manager_question = None
+        self._safe_publish_run_event(
+            RunEvent(
+                session_id=resolved_record.session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=resolved_record.task_id,
+                instance_id=(
+                    manager_question["instance_id"]
+                    if manager_question is not None
+                    else None
+                ),
+                role_id=manager_question["role_id"]
+                if manager_question is not None
+                else None,
+                event_type=RunEventType.USER_QUESTION_ANSWERED,
+                payload_json=dumps(
+                    {
+                        "question_id": question_id,
+                        "answers": [
+                            answer.model_dump(mode="json")
+                            for answer in validated_answers.answers
+                        ],
+                        "instance_id": (
+                            manager_question["instance_id"]
+                            if manager_question is not None
+                            else resolved_record.instance_id
+                        ),
+                        "role_id": (
+                            manager_question["role_id"]
+                            if manager_question is not None
+                            else resolved_record.role_id
+                        ),
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+            failure_event="run.event.publish_failed",
+        )
+        current_runtime = self._runtime_for_run(run_id)
+        if (
+            run_id not in self._running_run_ids
+            and current_runtime is not None
+            and current_runtime.is_recoverable
+            and current_runtime.status
+            in {RunRuntimeStatus.PAUSED, RunRuntimeStatus.STOPPED}
+            and not self._has_pending_resolvable_question_for_session(
+                resolved_record.session_id
+            )
+            and not self._has_running_agents_for_run(run_id)
+        ):
+            try:
+                _ = self.resume_run(run_id)
+            except RuntimeError as exc:
+                if not _is_run_already_running_conflict(run_id=run_id, error=exc):
+                    raise
+            else:
+                self.ensure_run_started(run_id)
+        return cast(dict[str, JsonValue], resolved_record.model_dump(mode="json"))
+
     def _merge_intent(self, current: str, followup: str) -> str:
         return f"{current}\n\n{followup}" if current.strip() else followup
 
@@ -2368,6 +2703,13 @@ class RunManager:
         ):
             raise RuntimeError(
                 f"Run {run_id} is waiting for tool approval. Resolve the pending approval before continuing."
+            )
+        if (
+            self._user_question_repo is not None
+            and self._has_pending_resolvable_question_for_session(runtime.session_id)
+        ):
+            raise RuntimeError(
+                f"Run {run_id} is waiting for manual action. Answer the pending question before continuing."
             )
         if runtime.status == RunRuntimeStatus.STOPPING:
             raise RuntimeError(
@@ -2415,6 +2757,19 @@ class RunManager:
         except KeyError:
             return False
         return record.run_id == run_id and record.status == InstanceStatus.RUNNING
+
+    def _has_running_agents_for_run(self, run_id: str) -> bool:
+        if self._agent_repo is None:
+            return False
+        return any(True for _ in self._agent_repo.list_running(run_id))
+
+    def _has_pending_resolvable_question_for_session(self, session_id: str) -> bool:
+        if self._user_question_repo is None:
+            return False
+        for record in self._user_question_repo.list_by_session(session_id):
+            if self._runtime_for_run(record.run_id) is not None:
+                return True
+        return False
 
     def _can_enqueue_followup_to_coordinator(self, run_id: str) -> bool:
         if not self._injection_manager.is_active(run_id):
@@ -3089,6 +3444,11 @@ class RunManager:
         if self._agent_repo is None:
             raise RuntimeError("RunManager requires agent_repo for recovery")
         return self._agent_repo
+
+    def _require_user_question_repo(self) -> UserQuestionRepository:
+        if self._user_question_repo is None:
+            raise RuntimeError("RunManager requires user_question_repo")
+        return self._user_question_repo
 
     def _require_media_asset_service(self) -> MediaAssetService:
         if self._media_asset_service is None:

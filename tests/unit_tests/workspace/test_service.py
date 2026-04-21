@@ -14,6 +14,7 @@ from relay_teams.workspace import (
     WorkspaceProfile,
     WorkspaceRepository,
     WorkspaceService,
+    build_local_workspace_mount,
 )
 
 
@@ -101,6 +102,108 @@ def test_workspace_service_creates_and_lists_workspace(tmp_path: Path) -> None:
     listed = service.list_workspaces()
     assert len(listed) == 1
     assert listed[0].workspace_id == "project-alpha"
+
+
+def test_workspace_service_updates_mounts_and_default_mount(tmp_path: Path) -> None:
+    db_path = tmp_path / "workspace_service.db"
+    app_root = tmp_path / "app-root"
+    ops_root = tmp_path / "ops-root"
+    service = WorkspaceService(repository=WorkspaceRepository(db_path))
+    app_root.mkdir()
+    ops_root.mkdir()
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=app_root,
+    )
+
+    updated = service.update_workspace(
+        "project-alpha",
+        default_mount_name="ops",
+        mounts=(
+            build_local_workspace_mount(mount_name="app", root_path=app_root),
+            build_local_workspace_mount(mount_name="ops", root_path=ops_root),
+        ),
+    )
+
+    assert updated.default_mount_name == "ops"
+    assert [mount.mount_name for mount in updated.mounts] == ["app", "ops"]
+    assert updated.root_path == ops_root.resolve()
+
+
+def test_workspace_service_rejects_local_mount_scope_escape_on_create(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "workspace_service.db"
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    service = WorkspaceService(repository=WorkspaceRepository(db_path))
+
+    with pytest.raises(ValueError, match="Workspace file scope escapes mount root"):
+        _ = service.create_workspace(
+            workspace_id="project-alpha",
+            mounts=(
+                build_local_workspace_mount(
+                    mount_name="default",
+                    root_path=root_path,
+                    working_directory="../outside",
+                ),
+            ),
+            default_mount_name="default",
+        )
+
+
+def test_workspace_service_persists_local_mount_root_as_absolute_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "workspace_service.db"
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    service = WorkspaceService(repository=WorkspaceRepository(db_path))
+    monkeypatch.chdir(tmp_path)
+
+    created = service.create_workspace(
+        workspace_id="project-alpha",
+        mounts=(
+            build_local_workspace_mount(
+                mount_name="default",
+                root_path=Path("workspace-root"),
+            ),
+        ),
+        default_mount_name="default",
+    )
+
+    assert created.mounts[0].local_root_path() == root_path.resolve()
+    assert (
+        service.get_workspace("project-alpha").mounts[0].local_root_path()
+        == root_path.resolve()
+    )
+
+
+def test_workspace_service_rejects_local_mount_scope_escape_on_update(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "workspace_service.db"
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    service = WorkspaceService(repository=WorkspaceRepository(db_path))
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    with pytest.raises(ValueError, match="Workspace file scope escapes mount root"):
+        _ = service.update_workspace(
+            "project-alpha",
+            mounts=(
+                build_local_workspace_mount(
+                    mount_name="default",
+                    root_path=root_path,
+                    writable_paths=("../outside",),
+                ),
+            ),
+            default_mount_name="default",
+        )
 
 
 def test_workspace_service_rejects_missing_root(tmp_path: Path) -> None:
@@ -370,17 +473,13 @@ def test_workspace_service_returns_progressive_snapshot_and_tree_listing(
 
     assert snapshot.workspace_id == "project-alpha"
     assert snapshot.root_path == root_path.resolve()
+    assert snapshot.default_mount_name == "default"
     assert snapshot.tree.path == "."
-    assert [item.path for item in snapshot.tree.children] == [
-        "docs",
-        "src",
-        "package.json",
-    ]
+    assert [item.path for item in snapshot.tree.children] == ["default"]
     assert snapshot.tree.children[0].has_children is True
     assert snapshot.tree.children[0].children == ()
-    assert snapshot.tree.children[1].has_children is True
-    assert snapshot.tree.children[1].children == ()
     assert src_listing.workspace_id == "project-alpha"
+    assert src_listing.mount_name == "default"
     assert src_listing.directory_path == "src"
     assert [item.path for item in src_listing.children] == [
         "src/nested",

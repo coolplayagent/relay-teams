@@ -26,6 +26,15 @@ def test_settings_markup_links_labels_to_controls_and_wraps_api_key_in_form() ->
     assert 'for="proxy-no-proxy"' in settings_source
     assert 'for="proxy-probe-url"' in settings_source
     assert 'for="proxy-probe-timeout"' in settings_source
+    assert 'for="workspace-ssh-profile-id"' in settings_source
+    assert 'for="workspace-ssh-profile-host"' in settings_source
+    assert 'for="workspace-ssh-profile-username"' in settings_source
+    assert 'for="workspace-ssh-profile-password"' in settings_source
+    assert 'for="workspace-ssh-profile-port"' in settings_source
+    assert 'for="workspace-ssh-profile-shell"' in settings_source
+    assert 'for="workspace-ssh-profile-timeout"' in settings_source
+    assert 'for="workspace-ssh-profile-private-key-name"' in settings_source
+    assert 'for="workspace-ssh-profile-private-key"' in settings_source
     assert 'for="role-id-input"' in settings_source
     assert 'for="role-name-input"' in settings_source
     assert 'for="role-version-input"' in settings_source

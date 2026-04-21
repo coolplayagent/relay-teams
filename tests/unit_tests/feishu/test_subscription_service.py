@@ -243,6 +243,36 @@ def test_subscription_service_stop_shuts_down_shared_runner_factory() -> None:
     assert runner_factory.shutdown_calls == 1
 
 
+def test_subscription_service_reload_tolerates_runner_start_failure() -> None:
+    runtime = _build_runtime(
+        trigger_id="trg_a",
+        name="bot_a",
+        app_id="cli_a",
+        app_name="bot-a",
+        app_secret="secret-a",
+    )
+
+    class _FailingRunner:
+        def start(self) -> None:
+            raise RuntimeError("sdk unavailable")
+
+        def stop(self) -> None:
+            return None
+
+        def is_alive(self) -> bool:
+            return False
+
+    service = FeishuSubscriptionService(
+        runtime_config_lookup=_FakeRuntimeConfigLookup((runtime,)),
+        event_handler=_FakeHandler(),
+        runner_factory=lambda **_kwargs: _FailingRunner(),
+    )
+
+    service.start()
+
+    assert service._runners == {}
+
+
 def test_feishu_ws_hub_reuses_single_thread_for_multiple_bots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -182,11 +182,25 @@ class FeishuSubscriptionService:
                     ):
                         continue
                     self._stop_runner_locked(trigger_id=trigger_id, reason="reload")
-                runner = self._runner_factory(
-                    runtime_config=runtime_config,
-                    event_handler=self._event_handler,
-                )
-                runner.start()
+                try:
+                    runner = self._runner_factory(
+                        runtime_config=runtime_config,
+                        event_handler=self._event_handler,
+                    )
+                    runner.start()
+                except Exception as exc:
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        event="feishu.subscription.start_failed",
+                        message="Feishu SDK subscription failed to start",
+                        payload={
+                            "trigger_id": trigger_id,
+                            "app_id": runtime_config.environment.app_id,
+                        },
+                        exc_info=exc,
+                    )
+                    continue
                 self._runners[trigger_id] = (runtime_config, runner)
                 log_event(
                     logger,

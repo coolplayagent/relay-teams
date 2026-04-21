@@ -60,6 +60,7 @@ _DEFAULT_REDACTION_KEYS = frozenset(
         "authorization",
         "client_secret",
         "proxy_password",
+        "private_key",
     }
 )
 _HEADER_TOKEN_PATTERN = re.compile(

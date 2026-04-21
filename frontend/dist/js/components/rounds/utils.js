@@ -18,7 +18,11 @@ export function esc(text) {
 export function roundStateTone(round) {
     const phase = String(round?.run_phase || '');
     const status = String(round?.run_status || '');
-    if (phase === 'awaiting_tool_approval' || phase === 'awaiting_subagent_followup') {
+    if (
+        phase === 'awaiting_tool_approval'
+        || phase === 'awaiting_subagent_followup'
+        || phase === 'awaiting_manual_action'
+    ) {
         return 'warning';
     }
     switch (status) {
@@ -39,6 +43,7 @@ export function roundStateLabel(round) {
     const phase = String(round?.run_phase || '');
     const status = String(round?.run_status || '');
     if (phase === 'awaiting_tool_approval') return t('rounds.state.awaiting_approval');
+    if (phase === 'awaiting_manual_action') return t('rounds.state.awaiting_manual_action');
     if (phase === 'awaiting_subagent_followup') return t('rounds.state.awaiting_followup');
     switch (status) {
         case 'queued':

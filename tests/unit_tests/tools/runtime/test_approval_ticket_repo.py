@@ -4,9 +4,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 
+import pytest
+
 from relay_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRepository,
     ApprovalTicketStatus,
+    ApprovalTicketStatusConflictError,
     approval_signature_key,
 )
 from relay_teams.tools.workspace_tools.shell import build_shell_cache_key
@@ -194,6 +197,57 @@ def test_approval_ticket_repo_persists_metadata_json(tmp_path: Path) -> None:
     assert created.metadata["runtime_family"] == "git-bash"
     assert created.metadata["normalized_command"] == "git status"
     assert created.metadata["prefix_candidates"] == ["git status"]
+
+
+def test_approval_ticket_repo_resolve_honors_expected_status(tmp_path: Path) -> None:
+    repository = ApprovalTicketRepository(tmp_path / "approval_ticket_cas_ok.db")
+
+    created = repository.upsert_requested(
+        tool_call_id="call-approved",
+        run_id="run-1",
+        session_id="session-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="dispatch_task",
+        args_preview="{}",
+    )
+
+    resolved = repository.resolve(
+        tool_call_id=created.tool_call_id,
+        status=ApprovalTicketStatus.APPROVED,
+        expected_status=ApprovalTicketStatus.REQUESTED,
+    )
+
+    assert resolved.status == ApprovalTicketStatus.APPROVED
+
+
+def test_approval_ticket_repo_resolve_raises_on_status_conflict(tmp_path: Path) -> None:
+    repository = ApprovalTicketRepository(tmp_path / "approval_ticket_cas_conflict.db")
+
+    created = repository.upsert_requested(
+        tool_call_id="call-approved",
+        run_id="run-1",
+        session_id="session-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="writer",
+        tool_name="dispatch_task",
+        args_preview="{}",
+    )
+    _ = repository.resolve(
+        tool_call_id=created.tool_call_id,
+        status=ApprovalTicketStatus.APPROVED,
+    )
+
+    with pytest.raises(ApprovalTicketStatusConflictError) as exc_info:
+        repository.resolve(
+            tool_call_id=created.tool_call_id,
+            status=ApprovalTicketStatus.TIMED_OUT,
+            expected_status=ApprovalTicketStatus.REQUESTED,
+        )
+
+    assert exc_info.value.actual_status == ApprovalTicketStatus.APPROVED
 
 
 def test_find_reusable_does_not_cross_exec_context_boundaries(tmp_path: Path) -> None:

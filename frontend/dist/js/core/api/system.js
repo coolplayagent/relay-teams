@@ -8,6 +8,36 @@ export async function fetchConfigStatus() {
     return requestJson('/api/system/configs', undefined, 'Failed to fetch config status');
 }
 
+export async function fetchSshProfiles() {
+    return requestJson(
+        '/api/system/configs/workspace/ssh-profiles',
+        undefined,
+        'Failed to fetch SSH profiles',
+    );
+}
+
+export async function saveSshProfile(sshProfileId, config) {
+    return requestJson(
+        `/api/system/configs/workspace/ssh-profiles/${encodeURIComponent(sshProfileId)}`,
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config }),
+        },
+        'Failed to save SSH profile',
+    );
+}
+
+export async function deleteSshProfile(sshProfileId) {
+    return requestJson(
+        `/api/system/configs/workspace/ssh-profiles/${encodeURIComponent(sshProfileId)}`,
+        {
+            method: 'DELETE',
+        },
+        'Failed to delete SSH profile',
+    );
+}
+
 export async function fetchUiLanguageSettings() {
     return requestJson('/api/system/configs/ui-language', undefined, 'Failed to fetch UI language');
 }

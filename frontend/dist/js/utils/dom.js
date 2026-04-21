@@ -16,6 +16,7 @@ export const els = {
   backgroundTaskHost: qs("#background-task-host"),
   recoveryBannerHost: qs("#recovery-banner-host"),
   recoveryApprovalHost: qs("#recovery-approval-host"),
+  recoveryQuestionHost: qs("#recovery-question-host"),
   inspectorPanel: qs("#rail-inspector"),
   systemLogs: qs("#system-logs"),
   chatMessages: qs("#chat-messages"),
