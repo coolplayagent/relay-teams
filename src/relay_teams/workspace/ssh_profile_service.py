@@ -7,19 +7,22 @@ from math import ceil
 from pathlib import Path
 import os
 import shutil
+import shlex
 import subprocess
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, mkdtemp
 import time
 
 from pydantic import BaseModel, ConfigDict
 
 from relay_teams.env import build_subprocess_env
 from relay_teams.workspace.ssh_profile_models import (
+    SshProfileCommandResult,
     SshProfileConfig,
     SshProfileConnectivityDiagnostics,
     SshProfileConnectivityProbeRequest,
     SshProfileConnectivityProbeResult,
     SshProfilePasswordRevealView,
+    SshProfilePreparedCommand,
     SshProfileRecord,
     SshProfileStoredConfig,
 )
@@ -30,6 +33,7 @@ from relay_teams.workspace.ssh_profile_secret_store import (
 )
 
 _DEFAULT_CONNECT_TIMEOUT_SECONDS = 15
+_DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 _MAX_CONNECT_TIMEOUT_SECONDS = 300
 _SSH_PROBE_COMMAND = "echo relay-teams-ssh-probe"
 
@@ -195,6 +199,196 @@ class SshProfileService:
             error_message=error_message or "SSH probe failed.",
             retryable=retryable,
         )
+
+    def run_remote_command(
+        self,
+        *,
+        ssh_profile_id: str,
+        command: str,
+        timeout_seconds: float | None = None,
+    ) -> SshProfileCommandResult:
+        remote_command = command.strip()
+        if not remote_command:
+            raise ValueError("SSH remote command must not be empty")
+        request = SshProfileConnectivityProbeRequest(ssh_profile_id=ssh_profile_id)
+        resolved = self._resolve_probe_config(request)
+        connect_timeout_seconds = self._resolve_probe_timeout_seconds(
+            request,
+            resolved.config,
+        )
+        command_timeout_seconds = (
+            float(timeout_seconds)
+            if timeout_seconds is not None
+            else float(_DEFAULT_COMMAND_TIMEOUT_SECONDS)
+        )
+        if command_timeout_seconds <= 0:
+            raise ValueError("SSH remote command timeout must be positive")
+
+        ssh_path = self._ssh_path_lookup("ssh")
+        if ssh_path is None:
+            raise ValueError("ssh executable was not found on PATH.")
+
+        with TemporaryDirectory(prefix="relay-teams-ssh-command-") as temp_dir:
+            temp_root = Path(temp_dir)
+            private_key_path = self._write_probe_private_key(
+                temp_root=temp_root,
+                private_key=resolved.private_key,
+            )
+            env = self._build_probe_env(
+                temp_root=temp_root,
+                password=resolved.password,
+            )
+            ssh_command = self._build_ssh_command(
+                ssh_path=ssh_path,
+                config=resolved.config,
+                private_key_path=private_key_path,
+                timeout_seconds=connect_timeout_seconds,
+                uses_password=resolved.password is not None,
+                remote_command=remote_command,
+            )
+            try:
+                completed = self._process_runner(
+                    ssh_command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    timeout=connect_timeout_seconds + command_timeout_seconds + 2,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ValueError("SSH remote command timed out.") from exc
+            except OSError as exc:
+                raise ValueError(f"SSH remote command failed: {exc}") from exc
+
+        return SshProfileCommandResult(
+            exit_code=completed.returncode,
+            stdout=completed.stdout or "",
+            stderr=completed.stderr or "",
+        )
+
+    def prepare_remote_command(
+        self,
+        *,
+        ssh_profile_id: str,
+        command: str,
+        cwd: str,
+        env: dict[str, str] | None = None,
+        tty: bool = False,
+    ) -> SshProfilePreparedCommand:
+        remote_command = command.strip()
+        if not remote_command:
+            raise ValueError("SSH remote command must not be empty")
+        remote_cwd = cwd.strip()
+        if not remote_cwd:
+            raise ValueError("SSH remote command cwd must not be empty")
+        request = SshProfileConnectivityProbeRequest(ssh_profile_id=ssh_profile_id)
+        resolved = self._resolve_probe_config(request)
+        ssh_path = self._ssh_path_lookup("ssh")
+        if ssh_path is None:
+            raise ValueError("ssh executable was not found on PATH.")
+        temp_root = Path(mkdtemp(prefix="relay-teams-ssh-process-"))
+        private_key_path = self._write_probe_private_key(
+            temp_root=temp_root,
+            private_key=resolved.private_key,
+        )
+        process_env = self._build_probe_env(
+            temp_root=temp_root,
+            password=resolved.password,
+        )
+        argv = self._build_ssh_command(
+            ssh_path=ssh_path,
+            config=resolved.config,
+            private_key_path=private_key_path,
+            timeout_seconds=self._resolve_probe_timeout_seconds(
+                request,
+                resolved.config,
+            ),
+            uses_password=resolved.password is not None,
+            remote_command=self._build_remote_shell_command(
+                config=resolved.config,
+                command=remote_command,
+                cwd=remote_cwd,
+                env=env,
+            ),
+            allocate_tty=tty,
+        )
+        return SshProfilePreparedCommand(
+            argv=argv,
+            env=process_env,
+            temp_root=temp_root,
+        )
+
+    def ensure_filesystem_mount(
+        self,
+        *,
+        ssh_profile_id: str,
+        remote_root: str,
+        local_root: Path,
+    ) -> None:
+        resolved_local_root = local_root.expanduser().resolve()
+        resolved_local_root.mkdir(parents=True, exist_ok=True)
+        if resolved_local_root.is_mount():
+            return
+        sshfs_path = self._ssh_path_lookup("sshfs")
+        if sshfs_path is None:
+            raise ValueError(
+                "sshfs executable was not found on PATH; cannot materialize ssh workspace mount"
+            )
+        resolved = self._resolve_probe_config(
+            SshProfileConnectivityProbeRequest(ssh_profile_id=ssh_profile_id)
+        )
+        config = resolved.config
+        normalized_remote_root = remote_root.strip()
+        if not normalized_remote_root:
+            raise ValueError("SSH filesystem mount remote root must not be empty")
+        with TemporaryDirectory(prefix="relay-teams-sshfs-") as temp_dir:
+            temp_root = Path(temp_dir)
+            private_key_path = self._write_probe_private_key(
+                temp_root=temp_root,
+                private_key=resolved.private_key,
+            )
+            env = self._build_probe_env(
+                temp_root=temp_root,
+                password=resolved.password,
+            )
+            command = self._build_sshfs_command(
+                sshfs_path=sshfs_path,
+                config=config,
+                remote_root=normalized_remote_root,
+                local_root=resolved_local_root,
+                private_key_path=private_key_path,
+                uses_password=resolved.password is not None,
+            )
+            try:
+                completed = self._process_runner(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    timeout=self._resolve_probe_timeout_seconds(
+                        SshProfileConnectivityProbeRequest(
+                            ssh_profile_id=ssh_profile_id
+                        ),
+                        config,
+                    )
+                    + 10,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ValueError("SSH filesystem mount timed out.") from exc
+            except OSError as exc:
+                raise ValueError(f"SSH filesystem mount failed: {exc}") from exc
+        if completed.returncode != 0:
+            detail = _combined_process_output(completed)
+            raise ValueError(
+                f"SSH filesystem mount failed: {detail or f'exit code {completed.returncode}'}"
+            )
 
     def save_profile(
         self,
@@ -407,6 +601,26 @@ class SshProfileService:
         timeout_seconds: float,
         uses_password: bool,
     ) -> tuple[str, ...]:
+        return self._build_ssh_command(
+            ssh_path=ssh_path,
+            config=config,
+            private_key_path=private_key_path,
+            timeout_seconds=timeout_seconds,
+            uses_password=uses_password,
+            remote_command=_SSH_PROBE_COMMAND,
+        )
+
+    def _build_ssh_command(
+        self,
+        *,
+        ssh_path: str,
+        config: SshProfileConfig,
+        private_key_path: Path | None,
+        timeout_seconds: float,
+        uses_password: bool,
+        remote_command: str,
+        allocate_tty: bool = False,
+    ) -> tuple[str, ...]:
         command = [
             ssh_path,
             "-o",
@@ -424,13 +638,77 @@ class SshProfileService:
             "-o",
             f"BatchMode={'no' if uses_password else 'yes'}",
         ]
+        if allocate_tty:
+            command.append("-tt")
         if private_key_path is not None:
             command.extend(["-i", str(private_key_path), "-o", "IdentitiesOnly=yes"])
         if config.port is not None:
             command.extend(["-p", str(config.port)])
         if config.username is not None:
             command.extend(["-l", config.username])
-        command.extend(["--", config.host, _SSH_PROBE_COMMAND])
+        command.extend(["--", config.host, remote_command])
+        return tuple(command)
+
+    def _build_remote_shell_command(
+        self,
+        *,
+        config: SshProfileConfig,
+        command: str,
+        cwd: str,
+        env: dict[str, str] | None,
+    ) -> str:
+        shell = config.remote_shell or "bash"
+        env_prefix = ""
+        if env:
+            env_parts = [
+                f"{key}={shlex.quote(value)}"
+                for key, value in sorted(env.items())
+                if _is_portable_env_name(key)
+            ]
+            if env_parts:
+                env_prefix = "env " + " ".join(env_parts) + " "
+        return (
+            f"cd {shlex.quote(cwd)} && "
+            f"{env_prefix}{shlex.quote(shell)} -lc {shlex.quote(command)}"
+        )
+
+    def _build_sshfs_command(
+        self,
+        *,
+        sshfs_path: str,
+        config: SshProfileConfig,
+        remote_root: str,
+        local_root: Path,
+        private_key_path: Path | None,
+        uses_password: bool,
+    ) -> tuple[str, ...]:
+        remote_target = config.host
+        if config.username is not None:
+            remote_target = f"{config.username}@{config.host}"
+        command = [
+            sshfs_path,
+            f"{remote_target}:{remote_root}",
+            str(local_root),
+            "-o",
+            "reconnect",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            "NumberOfPasswordPrompts=1",
+            "-o",
+            f"BatchMode={'no' if uses_password else 'yes'}",
+        ]
+        if config.port is not None:
+            command.extend(["-p", str(config.port)])
+        if private_key_path is not None:
+            command.extend(
+                [
+                    "-o",
+                    f"IdentityFile={private_key_path}",
+                    "-o",
+                    "IdentitiesOnly=yes",
+                ]
+            )
         return tuple(command)
 
     def _build_probe_result(
@@ -502,3 +780,12 @@ def _classify_ssh_failure(
     if returncode == 255:
         return "ssh_failed", True, False
     return "ssh_failed", False, False
+
+
+def _is_portable_env_name(value: str) -> bool:
+    if not value:
+        return False
+    first = value[0]
+    if not (first == "_" or first.isalpha()):
+        return False
+    return all(char == "_" or char.isalnum() for char in value)

@@ -3,17 +3,26 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
+from relay_teams.secrets import AppSecretStore
 from relay_teams.workspace import (
     FileScopeBackend,
     GitWorktreeClient,
+    SshProfileConfig,
+    SshProfileRepository,
+    SshProfileSecretStore,
+    SshProfileService,
     WorkspaceFileScope,
+    WorkspaceMountProvider,
+    WorkspaceMountRecord,
     WorkspaceProfile,
     WorkspaceRepository,
     WorkspaceService,
+    WorkspaceSshMountConfig,
     build_local_workspace_mount,
 )
 
@@ -84,6 +93,11 @@ class FakeGitWorktreeClient(GitWorktreeClient):
 
     def prune(self, repository_root: Path) -> None:
         self.prune_calls.append(repository_root)
+
+
+class _FileOnlySecretStore(AppSecretStore):
+    def has_usable_keyring_backend(self) -> bool:
+        return False
 
 
 def test_workspace_service_creates_and_lists_workspace(tmp_path: Path) -> None:
@@ -487,6 +501,91 @@ def test_workspace_service_returns_progressive_snapshot_and_tree_listing(
     ]
     assert src_listing.children[0].has_children is True
     assert src_listing.children[1].has_children is False
+
+
+def test_workspace_service_lists_ssh_mount_tree_with_saved_profile(
+    tmp_path: Path,
+) -> None:
+    captured_commands: list[tuple[str, ...]] = []
+
+    def run_ssh_command(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        command_tuple = tuple(command)
+        captured_commands.append(command_tuple)
+        remote_command = command_tuple[-1]
+        stdout = (
+            "file\t0\tmain.py\n"
+            if "/srv/app/src" in remote_command
+            else "file\t0\tREADME.md\ndirectory\t1\tsrc\n"
+        )
+        return subprocess.CompletedProcess(
+            args=command_tuple,
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+
+    local_root = tmp_path / "local-root"
+    local_root.mkdir()
+    ssh_profile_service = SshProfileService(
+        repository=SshProfileRepository(tmp_path / "ssh_profiles.db"),
+        config_dir=tmp_path,
+        secret_store=SshProfileSecretStore(secret_store=_FileOnlySecretStore()),
+        ssh_path_lookup=lambda _name: "/usr/bin/ssh",
+        process_runner=run_ssh_command,
+    )
+    _ = ssh_profile_service.save_profile(
+        ssh_profile_id="container",
+        config=SshProfileConfig(
+            host="127.0.0.1",
+            username="root",
+            port=2222,
+            password="secret",
+        ),
+    )
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db"),
+        ssh_profile_service=ssh_profile_service,
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        mounts=(
+            build_local_workspace_mount(mount_name="default", root_path=local_root),
+            WorkspaceMountRecord(
+                mount_name="container",
+                provider=WorkspaceMountProvider.SSH,
+                provider_config=WorkspaceSshMountConfig(
+                    ssh_profile_id="container",
+                    remote_root="/srv/app",
+                ),
+            ),
+        ),
+        default_mount_name="default",
+    )
+
+    root_listing = service.get_workspace_tree_listing(
+        "project-alpha",
+        directory_path=".",
+        mount_name="container",
+    )
+    src_listing = service.get_workspace_tree_listing(
+        "project-alpha",
+        directory_path="src",
+        mount_name="container",
+    )
+
+    assert root_listing.mount_name == "container"
+    assert root_listing.directory_path == "."
+    assert [item.path for item in root_listing.children] == ["src", "README.md"]
+    assert root_listing.children[0].has_children is True
+    assert src_listing.directory_path == "src"
+    assert [item.path for item in src_listing.children] == ["src/main.py"]
+    assert captured_commands[0][-3:-1] == ("--", "127.0.0.1")
+    assert "BatchMode=no" in captured_commands[0]
+    assert "/srv/app" in captured_commands[0][-1]
+    assert "/srv/app/src" in captured_commands[1][-1]
 
 
 def test_workspace_service_rejects_tree_path_that_escapes_workspace_root(

@@ -133,6 +133,17 @@ class WorkspaceHandle(BaseModel):
             or resolved_root in resolved_candidate.parents
         )
 
+    @staticmethod
+    def _is_posix_path_within_root(candidate: str, root: str) -> bool:
+        normalized_root = posixpath.normpath(root)
+        normalized_candidate = posixpath.normpath(candidate)
+        if normalized_root == "/":
+            return normalized_candidate.startswith("/")
+        return (
+            normalized_candidate == normalized_root
+            or normalized_candidate.startswith(normalized_root.rstrip("/") + "/")
+        )
+
     def _validate_allowed_local_path(
         self,
         path: Path,
@@ -167,6 +178,8 @@ class WorkspaceHandle(BaseModel):
         write: bool,
     ) -> tuple[Path, ...]:
         root_path = mount.local_root_path()
+        if root_path is None and mount.provider == WorkspaceMountProvider.SSH:
+            root_path = self._ssh_local_mount_root(mount.mount_name)
         if root_path is None:
             raise ValueError(f"Workspace mount is not local: {mount.mount_name}")
         if (
@@ -222,6 +235,12 @@ class WorkspaceHandle(BaseModel):
             raise ValueError(f"Workspace path escapes ssh mount root: {raw_path}")
         return logical_path
 
+    def _ssh_local_mount_root(self, mount_name: str) -> Path | None:
+        for remote_mount_root in self.locations.remote_mount_roots:
+            if remote_mount_root.mount_name == mount_name:
+                return remote_mount_root.local_root.resolve()
+        return None
+
     def _resolve_absolute_local_workspace_path(
         self,
         candidate: Path,
@@ -262,6 +281,52 @@ class WorkspaceHandle(BaseModel):
             )
         return None
 
+    def _resolve_absolute_ssh_workspace_path(
+        self,
+        candidate: Path,
+        *,
+        normalized_path: str,
+        raw_path: str,
+        write: bool,
+    ) -> ResolvedWorkspacePath | None:
+        resolved_candidate = candidate.resolve()
+        remote_candidate = posixpath.normpath(normalized_path.replace("\\", "/"))
+        for remote_mount_root in self.locations.remote_mount_roots:
+            mount = self.mount_by_name(remote_mount_root.mount_name)
+            if mount.provider != WorkspaceMountProvider.SSH:
+                continue
+            local_root = remote_mount_root.local_root.resolve()
+            remote_root = posixpath.normpath(remote_mount_root.remote_root.strip())
+            logical_path: str | None = None
+            if self._is_path_within_root(resolved_candidate, local_root):
+                logical_path = (
+                    resolved_candidate.relative_to(local_root).as_posix()
+                    if resolved_candidate != local_root
+                    else "."
+                )
+            elif self._is_posix_path_within_root(remote_candidate, remote_root):
+                logical_path = (
+                    posixpath.relpath(remote_candidate, remote_root)
+                    if remote_candidate != remote_root
+                    else "."
+                )
+            if logical_path is None:
+                continue
+            local_path = self._validate_allowed_local_path(
+                (local_root / logical_path).resolve(),
+                allowed_roots=self._resolve_local_mount_roots(mount, write=write),
+                raw_path=raw_path,
+                write=write,
+            )
+            return ResolvedWorkspacePath(
+                mount_name=mount.mount_name,
+                provider=WorkspaceMountProvider.SSH,
+                logical_path=logical_path,
+                local_path=local_path,
+                remote_path=self._resolve_remote_path(mount, logical_path),
+            )
+        return None
+
     def resolve_workspace_path(
         self,
         raw_path: str,
@@ -279,6 +344,14 @@ class WorkspaceHandle(BaseModel):
             )
             if resolved_absolute is not None:
                 return resolved_absolute
+            resolved_ssh_absolute = self._resolve_absolute_ssh_workspace_path(
+                path_obj,
+                normalized_path=normalized_path,
+                raw_path=raw_path,
+                write=write,
+            )
+            if resolved_ssh_absolute is not None:
+                return resolved_ssh_absolute
             if allow_host_read_bypass and not write:
                 return ResolvedWorkspacePath(
                     mount_name=None,
@@ -351,10 +424,23 @@ class WorkspaceHandle(BaseModel):
                 local_path=resolved_path,
             )
         remote_path = self._resolve_remote_path(resolved_mount, normalized_logical_path)
+        local_root = self._ssh_local_mount_root(resolved_mount.mount_name)
+        local_path = None
+        if local_root is not None:
+            local_path = self._validate_allowed_local_path(
+                (local_root / normalized_logical_path).resolve(),
+                allowed_roots=self._resolve_local_mount_roots(
+                    resolved_mount,
+                    write=write,
+                ),
+                raw_path=raw_path,
+                write=write,
+            )
         return ResolvedWorkspacePath(
             mount_name=resolved_mount.mount_name,
             provider=resolved_mount.provider,
             logical_path=normalized_logical_path,
+            local_path=local_path,
             remote_path=remote_path,
         )
 

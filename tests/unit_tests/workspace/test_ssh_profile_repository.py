@@ -93,12 +93,13 @@ def test_workspace_service_requires_existing_ssh_profile(tmp_path: Path) -> None
         config=SshProfileConfig(host="prod-alias"),
     )
 
-    with pytest.raises(ValueError, match="Workspace default mount must be local: prod"):
-        workspace_service.create_workspace(
-            workspace_id="project-alpha",
-            mounts=(mount,),
-            default_mount_name="prod",
-        )
+    remote_default = workspace_service.create_workspace(
+        workspace_id="remote-project",
+        mounts=(mount,),
+        default_mount_name="prod",
+    )
+
+    assert remote_default.default_mount_name == "prod"
 
     created = workspace_service.create_workspace(
         workspace_id="project-alpha",

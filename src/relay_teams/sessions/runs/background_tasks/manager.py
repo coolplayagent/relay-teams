@@ -12,8 +12,10 @@ import importlib
 import json
 import logging
 import os
+import posixpath
 from pathlib import Path
 import struct
+import shutil
 from typing import Literal, Protocol, cast
 from uuid import uuid4
 
@@ -53,6 +55,12 @@ from relay_teams.sessions.runs.background_tasks.command_runtime import (
     windows_conpty_supported,
 )
 from relay_teams.workspace import WorkspaceHandle
+from relay_teams.workspace.ssh_profile_service import SshProfileService
+from relay_teams.workspace.workspace_models import (
+    WorkspaceMountProvider,
+    WorkspaceMountRecord,
+    WorkspaceSshMountConfig,
+)
 
 LOGGER = get_logger(__name__)
 
@@ -222,8 +230,9 @@ class _BackgroundTaskTransport(ABC):
 
 
 class _PipeTransport(_BackgroundTaskTransport):
-    def __init__(self, proc: _PipeProcess) -> None:
+    def __init__(self, proc: _PipeProcess, *, cleanup_root: Path | None = None) -> None:
         self._proc = proc
+        self._cleanup_root = cleanup_root
 
     @property
     def tty(self) -> bool:
@@ -276,6 +285,8 @@ class _PipeTransport(_BackgroundTaskTransport):
     async def close(self) -> None:
         if self._proc.stdin is not None:
             self._proc.stdin.close()
+        if self._cleanup_root is not None:
+            await asyncio.to_thread(shutil.rmtree, self._cleanup_root, True)
 
 
 class _PosixPtyTransport(_BackgroundTaskTransport):
@@ -284,9 +295,11 @@ class _PosixPtyTransport(_BackgroundTaskTransport):
         *,
         proc: asyncio.subprocess.Process,
         master_fd: int,
+        cleanup_root: Path | None = None,
     ) -> None:
         self._proc = proc
         self._master_fd = master_fd
+        self._cleanup_root = cleanup_root
 
     @property
     def tty(self) -> bool:
@@ -327,6 +340,8 @@ class _PosixPtyTransport(_BackgroundTaskTransport):
     async def close(self) -> None:
         with contextlib.suppress(OSError):
             os.close(self._master_fd)
+        if self._cleanup_root is not None:
+            await asyncio.to_thread(shutil.rmtree, self._cleanup_root, True)
 
 
 class _WindowsConPtyTransport(_BackgroundTaskTransport):
@@ -422,10 +437,12 @@ class BackgroundTaskManager:
         repository: BackgroundTaskRepository,
         run_event_hub: RunEventHub,
         monitor_service: MonitorService | None = None,
+        ssh_profile_service: SshProfileService | None = None,
     ) -> None:
         self._repository = repository
         self._run_event_hub = run_event_hub
         self._monitor_service = monitor_service
+        self._ssh_profile_service = ssh_profile_service
         self._runtimes: dict[str, _BackgroundTaskRuntime] = {}
         self._admission_lock = asyncio.Lock()
         self._completion_listener: _BackgroundTaskCompletionListener | None = None
@@ -477,6 +494,7 @@ class BackgroundTaskManager:
             )
             runtime = await self._spawn_runtime(
                 record=record,
+                workspace=workspace,
                 cwd=cwd,
                 env=env,
                 log_file_path=log_file_path,
@@ -756,27 +774,46 @@ class BackgroundTaskManager:
         self,
         *,
         record: BackgroundTaskRecord,
+        workspace: WorkspaceHandle,
         cwd: Path,
         env: dict[str, str] | None,
         log_file_path: Path,
     ) -> _BackgroundTaskRuntime:
         queue: asyncio.Queue[tuple[str, str] | None] = asyncio.Queue()
+        ssh_context = self._resolve_ssh_execution_context(
+            workspace=workspace,
+            cwd=cwd,
+        )
         if record.tty:
-            transport = await self._spawn_tty_transport(
-                command=record.command,
-                cwd=cwd,
-                env=env,
-            )
+            if ssh_context is None:
+                transport = await self._spawn_tty_transport(
+                    command=record.command,
+                    cwd=cwd,
+                    env=env,
+                )
+            else:
+                transport = await self._spawn_ssh_tty_transport(
+                    command=record.command,
+                    ssh_context=ssh_context,
+                    env=env,
+                )
         else:
-            proc = await create_command_subprocess(
-                command=record.command,
-                cwd=cwd,
-                env=env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            transport = _PipeTransport(proc)
+            if ssh_context is None:
+                proc = await create_command_subprocess(
+                    command=record.command,
+                    cwd=cwd,
+                    env=env,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                transport = _PipeTransport(proc)
+            else:
+                transport = await self._spawn_ssh_pipe_transport(
+                    command=record.command,
+                    ssh_context=ssh_context,
+                    env=env,
+                )
         runtime = _BackgroundTaskRuntime(
             record=record,
             transport=transport,
@@ -785,6 +822,157 @@ class BackgroundTaskManager:
         )
         runtime.pump_tasks.extend(transport.start_pumps(manager=self, runtime=runtime))
         return runtime
+
+    def _resolve_ssh_execution_context(
+        self,
+        *,
+        workspace: WorkspaceHandle,
+        cwd: Path,
+    ) -> tuple[WorkspaceMountRecord, str] | None:
+        resolved_cwd = cwd.resolve()
+        for remote_mount_root in workspace.locations.remote_mount_roots:
+            local_root = remote_mount_root.local_root.resolve()
+            if resolved_cwd != local_root and local_root not in resolved_cwd.parents:
+                continue
+            mount = workspace.mount_by_name(remote_mount_root.mount_name)
+            if mount.provider != WorkspaceMountProvider.SSH:
+                continue
+            remote_cwd = remote_mount_root.remote_root
+            if resolved_cwd != local_root:
+                remote_cwd = posixpath.join(
+                    remote_mount_root.remote_root,
+                    resolved_cwd.relative_to(local_root).as_posix(),
+                )
+            return mount, remote_cwd
+        return None
+
+    async def _spawn_ssh_pipe_transport(
+        self,
+        *,
+        command: str,
+        ssh_context: tuple[WorkspaceMountRecord, str],
+        env: dict[str, str] | None,
+    ) -> _PipeTransport:
+        proc, cleanup_root = await self._create_ssh_subprocess(
+            command=command,
+            ssh_context=ssh_context,
+            env=env,
+            tty=False,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        return _PipeTransport(proc, cleanup_root=cleanup_root)
+
+    async def _create_ssh_subprocess(
+        self,
+        *,
+        command: str,
+        ssh_context: tuple[WorkspaceMountRecord, str],
+        env: dict[str, str] | None,
+        tty: bool,
+        stdin: int | None,
+        stdout: int | None,
+        stderr: int | None,
+    ) -> tuple[_PipeProcess, Path]:
+        if self._ssh_profile_service is None:
+            raise ValueError("SSH workspace command execution requires ssh profiles")
+        mount, remote_cwd = ssh_context
+        provider_config = mount.provider_config
+        if not isinstance(provider_config, WorkspaceSshMountConfig):
+            raise ValueError(
+                f"Workspace ssh mount is missing ssh config: {mount.mount_name}"
+            )
+        prepared = self._ssh_profile_service.prepare_remote_command(
+            ssh_profile_id=provider_config.ssh_profile_id,
+            command=command,
+            cwd=remote_cwd,
+            env=env,
+            tty=tty,
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *prepared.argv,
+                env=prepared.env,
+                stdin=stdin,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=_start_new_session(),
+            )
+        except Exception:
+            shutil.rmtree(prepared.temp_root, ignore_errors=True)
+            raise
+        return proc, prepared.temp_root
+
+    async def _spawn_ssh_tty_transport(
+        self,
+        *,
+        command: str,
+        ssh_context: tuple[WorkspaceMountRecord, str],
+        env: dict[str, str] | None,
+    ) -> _PosixPtyTransport:
+        if not _posix_pty_supported():
+            raise ValueError(_tty_unsupported_message())
+        assert pty is not None
+        proc, cleanup_root = await self._create_ssh_pty_process(
+            command=command,
+            ssh_context=ssh_context,
+            env=env,
+        )
+        return _PosixPtyTransport(
+            proc=proc[0],
+            master_fd=proc[1],
+            cleanup_root=cleanup_root,
+        )
+
+    async def _create_ssh_pty_process(
+        self,
+        *,
+        command: str,
+        ssh_context: tuple[WorkspaceMountRecord, str],
+        env: dict[str, str] | None,
+    ) -> tuple[tuple[asyncio.subprocess.Process, int], Path]:
+        if self._ssh_profile_service is None:
+            raise ValueError("SSH workspace command execution requires ssh profiles")
+        mount, remote_cwd = ssh_context
+        provider_config = mount.provider_config
+        if not isinstance(provider_config, WorkspaceSshMountConfig):
+            raise ValueError(
+                f"Workspace ssh mount is missing ssh config: {mount.mount_name}"
+            )
+        prepared = self._ssh_profile_service.prepare_remote_command(
+            ssh_profile_id=provider_config.ssh_profile_id,
+            command=command,
+            cwd=remote_cwd,
+            env=env,
+            tty=True,
+        )
+        assert pty is not None
+        master_fd, slave_fd = pty.openpty()
+        _set_terminal_size(
+            master_fd,
+            columns=_DEFAULT_PTY_COLUMNS,
+            rows=_DEFAULT_PTY_ROWS,
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *prepared.argv,
+                env=prepared.env,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                start_new_session=_start_new_session(),
+            )
+        except Exception:
+            shutil.rmtree(prepared.temp_root, ignore_errors=True)
+            with contextlib.suppress(OSError):
+                os.close(master_fd)
+            with contextlib.suppress(OSError):
+                os.close(slave_fd)
+            raise
+        with contextlib.suppress(OSError):
+            os.close(slave_fd)
+        return (proc, master_fd), prepared.temp_root
 
     async def _spawn_tty_transport(
         self,

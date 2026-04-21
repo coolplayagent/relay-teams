@@ -35,7 +35,11 @@ from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.workspace import WorkspaceHandle
 from relay_teams.workspace.workspace_models import (
     WorkspaceLocations,
+    WorkspaceMountProvider,
+    WorkspaceMountRecord,
     WorkspaceRef,
+    WorkspaceRemoteMountRoot,
+    WorkspaceSshMountConfig,
     build_local_workspace_mount,
 )
 
@@ -67,6 +71,51 @@ def _build_workspace_handle(tmp_path: Path) -> WorkspaceHandle:
             tmp_root=tmp_root,
             readable_roots=(scope_root, tmp_root),
             writable_roots=(scope_root, tmp_root),
+        ),
+    )
+
+
+def _build_ssh_workspace_handle(tmp_path: Path) -> WorkspaceHandle:
+    workspace_dir = tmp_path / ".agent-teams" / "workspaces" / "remote"
+    local_root = workspace_dir / "ssh_mounts" / "prod"
+    tmp_root = workspace_dir / "tmp"
+    local_root.mkdir(parents=True, exist_ok=True)
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    return WorkspaceHandle(
+        ref=WorkspaceRef(
+            workspace_id="workspace-1",
+            session_id="session-1",
+            role_id="writer",
+            conversation_id="conversation-1",
+            default_mount_name="prod",
+            mount_names=("prod",),
+        ),
+        mounts=(
+            WorkspaceMountRecord(
+                mount_name="prod",
+                provider=WorkspaceMountProvider.SSH,
+                provider_config=WorkspaceSshMountConfig(
+                    ssh_profile_id="prod",
+                    remote_root="/srv/app",
+                ),
+            ),
+        ),
+        locations=WorkspaceLocations(
+            workspace_dir=workspace_dir,
+            mount_name="prod",
+            provider=WorkspaceMountProvider.SSH,
+            scope_root=local_root,
+            execution_root=local_root,
+            tmp_root=tmp_root,
+            readable_roots=(local_root, tmp_root),
+            writable_roots=(local_root, tmp_root),
+            remote_mount_roots=(
+                WorkspaceRemoteMountRoot(
+                    mount_name="prod",
+                    local_root=local_root,
+                    remote_root="/srv/app",
+                ),
+            ),
         ),
     )
 
@@ -180,6 +229,24 @@ class _FakeMonitorSink:
     ) -> None:
         _ = (subscription, message)
         self.body_texts.append(envelope.body_text)
+
+
+def test_background_task_manager_resolves_ssh_execution_context(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-manager.db")
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    workspace = _build_ssh_workspace_handle(tmp_path)
+    cwd = workspace.execution_root / "src" / "service"
+    cwd.mkdir(parents=True)
+
+    context = manager._resolve_ssh_execution_context(workspace=workspace, cwd=cwd)
+
+    assert context is not None
+    mount, remote_cwd = context
+    assert mount.mount_name == "prod"
+    assert remote_cwd == "/srv/app/src/service"
 
 
 @pytest.mark.asyncio
@@ -561,6 +628,7 @@ async def test_background_task_manager_stop_marks_terminal_stopped(
     async def _fake_spawn_runtime(
         *,
         record: BackgroundTaskRecord,
+        workspace: WorkspaceHandle,
         cwd: Path,
         env: dict[str, str] | None,
         log_file_path: Path,
@@ -615,6 +683,7 @@ async def test_background_task_manager_stop_completes_when_close_fails(
     async def _fake_spawn_runtime(
         *,
         record: BackgroundTaskRecord,
+        workspace: WorkspaceHandle,
         cwd: Path,
         env: dict[str, str] | None,
         log_file_path: Path,
@@ -944,6 +1013,7 @@ async def test_start_session_serializes_admission_with_async_lock(
     async def _fake_spawn_runtime(
         *,
         record: BackgroundTaskRecord,
+        workspace: WorkspaceHandle,
         cwd: Path,
         env: dict[str, str] | None,
         log_file_path: Path,
@@ -1015,6 +1085,7 @@ async def test_start_session_rolls_back_runtime_when_persistence_fails(
     async def _fake_spawn_runtime(
         *,
         record: BackgroundTaskRecord,
+        workspace: WorkspaceHandle,
         cwd: Path,
         env: dict[str, str] | None,
         log_file_path: Path,
