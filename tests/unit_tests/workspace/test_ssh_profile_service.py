@@ -336,6 +336,74 @@ def test_ssh_profile_service_materializes_filesystem_mount(
     assert "BatchMode=no" in captured_command[0]
 
 
+def test_ssh_profile_service_validates_existing_filesystem_mount_signature(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_command: list[tuple[str, ...]] = []
+
+    def run_command(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        command_tuple = tuple(command)
+        captured_command.append(command_tuple)
+        return subprocess.CompletedProcess(
+            args=command_tuple,
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    service = SshProfileService(
+        repository=SshProfileRepository(tmp_path / "workspace.db"),
+        config_dir=tmp_path,
+        secret_store=SshProfileSecretStore(secret_store=_FileOnlySecretStore()),
+        ssh_path_lookup=lambda name: f"/usr/bin/{name}",
+        process_runner=run_command,
+    )
+    _ = service.save_profile(
+        ssh_profile_id="prod",
+        config=SshProfileConfig(host="prod-alias", username="deploy", port=2222),
+    )
+    local_root = tmp_path / "ssh_mount"
+    service.ensure_filesystem_mount(
+        ssh_profile_id="prod",
+        remote_root="/srv/app",
+        local_root=local_root,
+    )
+    signature_path = local_root.parent / ".ssh_mount.sshfs.json"
+    assert signature_path.is_file()
+
+    original_is_mount = Path.is_mount
+
+    def fake_is_mount(path: Path) -> bool:
+        if path == local_root.resolve():
+            return True
+        return original_is_mount(path)
+
+    monkeypatch.setattr(Path, "is_mount", fake_is_mount)
+
+    captured_command.clear()
+    service.ensure_filesystem_mount(
+        ssh_profile_id="prod",
+        remote_root="/srv/app",
+        local_root=local_root,
+    )
+    assert captured_command == []
+
+    _ = service.save_profile(
+        ssh_profile_id="prod",
+        config=SshProfileConfig(host="new-prod-alias", username="deploy", port=2222),
+    )
+    with pytest.raises(ValueError, match="cannot be reused"):
+        service.ensure_filesystem_mount(
+            ssh_profile_id="prod",
+            remote_root="/srv/app",
+            local_root=local_root,
+        )
+
+
 def test_ssh_profile_service_prepares_remote_process_command(
     tmp_path: Path,
 ) -> None:

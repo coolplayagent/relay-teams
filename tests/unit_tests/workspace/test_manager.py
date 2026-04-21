@@ -19,6 +19,7 @@ from relay_teams.workspace import (
     WorkspaceRepository,
     WorkspaceService,
     WorkspaceSshMountConfig,
+    build_local_workspace_mount,
 )
 
 
@@ -237,6 +238,46 @@ def test_workspace_manager_materializes_default_ssh_mount(
         handle.resolve_path("src/app.py", write=True)
         == (expected_local_root / "src" / "app.py").resolve()
     )
+
+
+def test_workspace_manager_does_not_materialize_secondary_ssh_mount(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "workspace.db"
+    local_root = tmp_path / "project"
+    local_root.mkdir()
+    service = WorkspaceService(repository=WorkspaceRepository(db_path))
+    _ = service.create_workspace(
+        workspace_id="local-project",
+        mounts=(
+            build_local_workspace_mount(mount_name="default", root_path=local_root),
+            WorkspaceMountRecord(
+                mount_name="prod",
+                provider=WorkspaceMountProvider.SSH,
+                provider_config=WorkspaceSshMountConfig(
+                    ssh_profile_id="prod",
+                    remote_root="/srv/app",
+                ),
+            ),
+        ),
+        default_mount_name="default",
+    )
+    manager = WorkspaceManager(
+        project_root=tmp_path,
+        app_config_dir=tmp_path / ".agent-teams",
+        workspace_repo=WorkspaceRepository(db_path),
+    )
+
+    handle = manager.resolve(
+        session_id="session-1",
+        role_id="designer",
+        instance_id=None,
+        workspace_id="local-project",
+    )
+
+    assert handle.locations.provider == WorkspaceMountProvider.LOCAL
+    assert handle.locations.scope_root == local_root.resolve()
+    assert handle.locations.remote_mount_roots == ()
 
 
 def test_workspace_manager_rejects_ssh_mount_without_profile_service(

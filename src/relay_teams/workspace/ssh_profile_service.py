@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+import json
 from math import ceil
 from pathlib import Path
 import os
@@ -45,6 +46,17 @@ class _ResolvedSshProbeConfig(BaseModel):
     config: SshProfileConfig
     password: str | None = None
     private_key: str | None = None
+
+
+class _SshFilesystemMountSignature(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: int = 1
+    ssh_profile_id: str
+    host: str
+    username: str | None = None
+    port: int | None = None
+    remote_root: str
 
 
 class SshProfileService:
@@ -330,13 +342,6 @@ class SshProfileService:
     ) -> None:
         resolved_local_root = local_root.expanduser().resolve()
         resolved_local_root.mkdir(parents=True, exist_ok=True)
-        if resolved_local_root.is_mount():
-            return
-        sshfs_path = self._ssh_path_lookup("sshfs")
-        if sshfs_path is None:
-            raise ValueError(
-                "sshfs executable was not found on PATH; cannot materialize ssh workspace mount"
-            )
         resolved = self._resolve_probe_config(
             SshProfileConnectivityProbeRequest(ssh_profile_id=ssh_profile_id)
         )
@@ -344,6 +349,22 @@ class SshProfileService:
         normalized_remote_root = remote_root.strip()
         if not normalized_remote_root:
             raise ValueError("SSH filesystem mount remote root must not be empty")
+        signature = self._build_filesystem_mount_signature(
+            ssh_profile_id=ssh_profile_id,
+            config=config,
+            remote_root=normalized_remote_root,
+        )
+        if resolved_local_root.is_mount():
+            self._validate_existing_filesystem_mount(
+                local_root=resolved_local_root,
+                expected=signature,
+            )
+            return
+        sshfs_path = self._ssh_path_lookup("sshfs")
+        if sshfs_path is None:
+            raise ValueError(
+                "sshfs executable was not found on PATH; cannot materialize ssh workspace mount"
+            )
         with TemporaryDirectory(prefix="relay-teams-sshfs-") as temp_dir:
             temp_root = Path(temp_dir)
             private_key_path = self._write_probe_private_key(
@@ -389,6 +410,10 @@ class SshProfileService:
             raise ValueError(
                 f"SSH filesystem mount failed: {detail or f'exit code {completed.returncode}'}"
             )
+        self._write_filesystem_mount_signature(
+            local_root=resolved_local_root,
+            signature=signature,
+        )
 
     def save_profile(
         self,
@@ -710,6 +735,72 @@ class SshProfileService:
                 ]
             )
         return tuple(command)
+
+    def _build_filesystem_mount_signature(
+        self,
+        *,
+        ssh_profile_id: str,
+        config: SshProfileConfig,
+        remote_root: str,
+    ) -> _SshFilesystemMountSignature:
+        return _SshFilesystemMountSignature(
+            ssh_profile_id=ssh_profile_id,
+            host=config.host,
+            username=config.username,
+            port=config.port,
+            remote_root=remote_root,
+        )
+
+    def _validate_existing_filesystem_mount(
+        self,
+        *,
+        local_root: Path,
+        expected: _SshFilesystemMountSignature,
+    ) -> None:
+        existing = self._read_filesystem_mount_signature(local_root)
+        if existing == expected:
+            return
+        if existing is None:
+            detail = "missing relay-teams mount metadata"
+        else:
+            detail = "relay-teams mount metadata does not match the requested target"
+        raise ValueError(
+            f"Existing SSH filesystem mount cannot be reused at {local_root}: "
+            f"{detail}. Unmount it before changing the SSH profile or remote root."
+        )
+
+    def _read_filesystem_mount_signature(
+        self,
+        local_root: Path,
+    ) -> _SshFilesystemMountSignature | None:
+        signature_path = self._filesystem_mount_signature_path(local_root)
+        try:
+            raw_signature = signature_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return None
+        try:
+            return _SshFilesystemMountSignature.model_validate_json(raw_signature)
+        except (ValueError, json.JSONDecodeError):
+            return None
+
+    def _write_filesystem_mount_signature(
+        self,
+        *,
+        local_root: Path,
+        signature: _SshFilesystemMountSignature,
+    ) -> None:
+        signature_path = self._filesystem_mount_signature_path(local_root)
+        signature_path.parent.mkdir(parents=True, exist_ok=True)
+        signature_path.write_text(
+            f"{signature.model_dump_json(indent=2)}\n",
+            encoding="utf-8",
+        )
+
+    def _filesystem_mount_signature_path(self, local_root: Path) -> Path:
+        signature_name = f".{local_root.name or 'root'}.sshfs.json"
+        return local_root.parent / signature_name
 
     def _build_probe_result(
         self,

@@ -72,13 +72,12 @@ class WorkspaceManager(BaseModel):
         )
         workspace_dir = config_dir / "workspaces" / workspace_id
         tmp_root = workspace_dir / "tmp"
-        remote_mount_roots = self._materialize_remote_mounts(
+        default_remote_root = self._materialize_default_remote_mount(
             record=record,
             workspace_dir=workspace_dir,
         )
-        default_remote_root = self._remote_mount_root_by_name(
-            remote_mount_roots,
-            record.default_mount_name,
+        remote_mount_roots = (
+            () if default_remote_root is None else (default_remote_root,)
         )
         if default_remote_root is not None:
             return self._build_ssh_mount_locations(
@@ -203,51 +202,36 @@ class WorkspaceManager(BaseModel):
             remote_mount_roots=remote_mount_roots,
         )
 
-    def _materialize_remote_mounts(
+    def _materialize_default_remote_mount(
         self,
         *,
         record: WorkspaceRecord,
         workspace_dir: Path,
-    ) -> tuple[WorkspaceRemoteMountRoot, ...]:
-        remote_roots: list[WorkspaceRemoteMountRoot] = []
-        for mount in record.mounts:
-            if mount.provider != WorkspaceMountProvider.SSH:
-                continue
-            provider_config = mount.provider_config
-            if not isinstance(provider_config, WorkspaceSshMountConfig):
-                raise ValueError(
-                    f"Workspace ssh mount is missing ssh config: {mount.mount_name}"
-                )
-            local_root = (workspace_dir / "ssh_mounts" / mount.mount_name).resolve()
-            if self.ssh_profile_service is None:
-                raise ValueError(
-                    "Workspace ssh mount requires ssh profile service: "
-                    f"{mount.mount_name}"
-                )
-            local_root.mkdir(parents=True, exist_ok=True)
-            self.ssh_profile_service.ensure_filesystem_mount(
-                ssh_profile_id=provider_config.ssh_profile_id,
-                remote_root=provider_config.remote_root,
-                local_root=local_root,
-            )
-            remote_roots.append(
-                WorkspaceRemoteMountRoot(
-                    mount_name=mount.mount_name,
-                    local_root=local_root,
-                    remote_root=provider_config.remote_root,
-                )
-            )
-        return tuple(remote_roots)
-
-    def _remote_mount_root_by_name(
-        self,
-        remote_mount_roots: tuple[WorkspaceRemoteMountRoot, ...],
-        mount_name: str,
     ) -> WorkspaceRemoteMountRoot | None:
-        for remote_mount_root in remote_mount_roots:
-            if remote_mount_root.mount_name == mount_name:
-                return remote_mount_root
-        return None
+        mount = record.default_mount
+        if mount.provider != WorkspaceMountProvider.SSH:
+            return None
+        provider_config = mount.provider_config
+        if not isinstance(provider_config, WorkspaceSshMountConfig):
+            raise ValueError(
+                f"Workspace ssh mount is missing ssh config: {mount.mount_name}"
+            )
+        local_root = (workspace_dir / "ssh_mounts" / mount.mount_name).resolve()
+        if self.ssh_profile_service is None:
+            raise ValueError(
+                f"Workspace ssh mount requires ssh profile service: {mount.mount_name}"
+            )
+        local_root.mkdir(parents=True, exist_ok=True)
+        self.ssh_profile_service.ensure_filesystem_mount(
+            ssh_profile_id=provider_config.ssh_profile_id,
+            remote_root=provider_config.remote_root,
+            local_root=local_root,
+        )
+        return WorkspaceRemoteMountRoot(
+            mount_name=mount.mount_name,
+            local_root=local_root,
+            remote_root=provider_config.remote_root,
+        )
 
     def _append_unique_roots(
         self,
