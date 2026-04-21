@@ -4,6 +4,7 @@
  */
 import { buildWorkspaceImagePreviewUrl } from '../../../core/api/workspaces.js';
 import { state } from '../../../core/state.js';
+import { t } from '../../../utils/i18n.js';
 import { parseMarkdown } from '../../../utils/markdown.js';
 
 const DATA_IMAGE_PREFIX = 'data:image/';
@@ -67,23 +68,29 @@ export function appendStructuredContentPart(targetEl, part) {
     return mediaEl;
 }
 
-function buildImageFigure(imageDataUrl) {
+function buildImageFigure(imageDataUrl, name = '') {
     const figureEl = document.createElement('figure');
     figureEl.className = 'msg-image';
 
     const imageEl = document.createElement('img');
     imageEl.className = 'msg-image-preview';
     imageEl.src = imageDataUrl;
-    imageEl.alt = 'Assistant image';
+    imageEl.alt = String(name || t('media.preview_alt')).trim();
     imageEl.loading = 'lazy';
     imageEl.decoding = 'async';
+    imageEl.tabIndex = 0;
+    imageEl.setAttribute('role', 'button');
+    imageEl.setAttribute('data-image-preview-trigger', 'true');
+    imageEl.setAttribute('data-image-preview-src', imageDataUrl);
+    imageEl.setAttribute('data-image-preview-name', String(name || '').trim());
+    imageEl.setAttribute('title', t('media.preview_open'));
     figureEl.appendChild(imageEl);
     return figureEl;
 }
 
 function buildMediaFigure({ modality, url, mimeType, name }) {
     if (modality === 'image') {
-        return buildImageFigure(url);
+        return buildImageFigure(url, name);
     }
     const figureEl = document.createElement('figure');
     figureEl.className = `msg-media msg-media-${modality || 'file'}`;

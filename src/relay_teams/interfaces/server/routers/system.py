@@ -366,6 +366,8 @@ def save_model_profile(
             profile["is_default"] = req.is_default
         if req.ssl_verify is not None:
             profile["ssl_verify"] = req.ssl_verify
+        if req.capabilities is not None:
+            profile["capabilities"] = req.capabilities.model_dump(mode="json")
         if req.api_key is not None and req.api_key.strip():
             profile["api_key"] = req.api_key
         if req.headers is not None:

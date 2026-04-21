@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import mimetypes
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -16,6 +17,7 @@ from pydantic_ai.messages import (
 )
 
 from relay_teams.media.asset_repository import MediaAssetRepository
+from relay_teams.media.prompt_content import UserPromptContent
 from relay_teams.media.models import (
     ContentPart,
     InlineMediaContentPart,
@@ -26,6 +28,10 @@ from relay_teams.media.models import (
     TextContentPart,
 )
 from relay_teams.workspace import WorkspaceManager
+
+_LOCAL_ASSET_URL_PATTERN = re.compile(
+    r"^/api/sessions/(?P<session_id>[^/]+)/media/(?P<asset_id>[^/]+)/file$"
+)
 
 
 class MediaAssetService:
@@ -251,11 +257,41 @@ class MediaAssetService:
             media_type=record.mime_type,
         )
 
+    def to_persisted_user_prompt_content(
+        self,
+        *,
+        parts: tuple[ContentPart, ...],
+    ) -> UserPromptContent:
+        if not parts:
+            return ""
+        if all(isinstance(part, TextContentPart) for part in parts):
+            return "\n\n".join(
+                part.text for part in parts if isinstance(part, TextContentPart)
+            ).strip()
+        content: list[UserContent] = []
+        for part in parts:
+            if isinstance(part, TextContentPart):
+                content.append(part.text)
+                continue
+            if isinstance(part, InlineMediaContentPart):
+                raise ValueError(
+                    "Inline media must be normalized before provider execution"
+                )
+            url = str(part.url).strip()
+            if part.modality == MediaModality.IMAGE:
+                content.append(ImageUrl(url=url, media_type=part.mime_type))
+                continue
+            if part.modality == MediaModality.AUDIO:
+                content.append(AudioUrl(url=url, media_type=part.mime_type))
+                continue
+            content.append(VideoUrl(url=url, media_type=part.mime_type))
+        return tuple(content)
+
     def to_provider_user_prompt_content(
         self,
         *,
         parts: tuple[ContentPart, ...],
-    ) -> str | tuple[UserContent, ...]:
+    ) -> UserPromptContent:
         if not parts:
             return ""
         if all(isinstance(part, TextContentPart) for part in parts):
@@ -274,6 +310,32 @@ class MediaAssetService:
             content.append(self.load_provider_content(part=part))
         return tuple(content)
 
+    def hydrate_user_prompt_content(
+        self,
+        *,
+        content: UserPromptContent,
+    ) -> UserPromptContent:
+        if isinstance(content, str):
+            return content
+        hydrated: list[UserContent] = []
+        for item in content:
+            local_reference = self._parse_local_asset_url(item)
+            if local_reference is None:
+                hydrated.append(item)
+                continue
+            session_id, asset_id = local_reference
+            file_path, media_type = self.get_asset_file(
+                session_id=session_id,
+                asset_id=asset_id,
+            )
+            hydrated.append(
+                BinaryContent(
+                    data=file_path.read_bytes(),
+                    media_type=media_type,
+                )
+            )
+        return tuple(hydrated)
+
     def _storage_dir(self, *, workspace_id: str, session_id: str) -> Path:
         return (
             self._workspace_manager.session_artifact_dir(
@@ -282,6 +344,19 @@ class MediaAssetService:
             )
             / "media"
         )
+
+    def _parse_local_asset_url(self, item: UserContent) -> tuple[str, str] | None:
+        if isinstance(item, BinaryContent):
+            return None
+        url = ""
+        if isinstance(item, (ImageUrl, AudioUrl, VideoUrl)):
+            url = str(item.url).strip()
+        if not url:
+            return None
+        match = _LOCAL_ASSET_URL_PATTERN.match(url)
+        if match is None:
+            return None
+        return match.group("session_id"), match.group("asset_id")
 
 
 def infer_media_modality(content_type: str, filename: str = "") -> MediaModality:

@@ -203,11 +203,7 @@ class OpenAICompatibleProvider(LLMProvider):
         if self._config.provider == ProviderType.MAAS:
             return ProviderCapabilities()
         return ProviderCapabilities(
-            input_modalities=(
-                MediaModality.IMAGE,
-                MediaModality.AUDIO,
-                MediaModality.VIDEO,
-            ),
+            input_modalities=self._config.capabilities.supported_input_modalities(),
             conversation_output_modalities=(
                 MediaModality.IMAGE,
                 MediaModality.AUDIO,

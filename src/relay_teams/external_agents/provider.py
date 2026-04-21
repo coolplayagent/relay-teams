@@ -22,6 +22,7 @@ from relay_teams.computer import (
     build_computer_tool_payload,
     describe_external_acp_tool,
 )
+from relay_teams.media import user_prompt_content_to_text
 from relay_teams.external_agents.acp_client import (
     AcpProtocolError,
     AcpTransportClient,
@@ -1480,7 +1481,7 @@ def _extract_latest_user_prompt(
         if len(prompt_parts) != len(message.parts):
             continue
         combined = "\n".join(
-            str(part.content or "").strip() for part in prompt_parts
+            user_prompt_content_to_text(part.content) for part in prompt_parts
         ).strip()
         if combined:
             return combined

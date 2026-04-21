@@ -31,6 +31,7 @@ from relay_teams.providers.model_config import (
     SamplingConfig,
     default_model_fallback_config,
 )
+from relay_teams.providers.model_capabilities import resolve_model_capabilities
 from relay_teams.providers.model_fallback_config_manager import (
     ModelFallbackConfigManager,
 )
@@ -273,6 +274,12 @@ def load_llm_profile_state(
             headers=headers,
             maas_auth=maas_auth,
             ssl_verify=ssl_verify,
+            capabilities=resolve_model_capabilities(
+                provider=provider,
+                base_url=base_url,
+                model_name=model,
+                metadata=cfg,
+            ),
             context_window=(
                 int(context_window_raw)
                 if isinstance(context_window_raw, int) and context_window_raw > 0

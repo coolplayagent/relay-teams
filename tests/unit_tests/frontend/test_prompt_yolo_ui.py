@@ -65,6 +65,71 @@ console.log(JSON.stringify(globalThis.__captured));
     assert payload["body"]["thinking"] == {"enabled": True, "effort": "high"}
 
 
+def test_send_user_prompt_uses_explicit_input_parts_when_provided(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/core/api/runs.js").read_text(encoding="utf-8")
+    temp_dir = tmp_path / "api_input_parts"
+    temp_dir.mkdir()
+    (temp_dir / "runs.js").write_text(source, encoding="utf-8")
+    (temp_dir / "request.js").write_text(
+        """
+export async function requestJson(url, options, errorMessage) {
+    globalThis.__captured = {
+        url,
+        errorMessage,
+        method: options.method,
+        body: JSON.parse(options.body),
+    };
+    return { run_id: "run-1", session_id: "session-1" };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    runner = """
+import { sendUserPrompt } from "./runs.js";
+
+await sendUserPrompt(
+    "session-1",
+    "",
+    false,
+    { enabled: false, effort: null },
+    "writer",
+    [
+        {
+            kind: "inline_media",
+            modality: "image",
+            mime_type: "image/png",
+            base64_data: "QUJDRA==",
+            name: "diagram.png",
+            size_bytes: 4,
+        },
+    ],
+);
+console.log(JSON.stringify(globalThis.__captured));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["body"]["input"] == [
+        {
+            "kind": "inline_media",
+            "modality": "image",
+            "mime_type": "image/png",
+            "base64_data": "QUJDRA==",
+            "name": "diagram.png",
+            "size_bytes": 4,
+        }
+    ]
+
+
 def test_prompt_controls_toggle_mode_specific_fields_and_thinking_effort(
     tmp_path: Path,
 ) -> None:
@@ -183,6 +248,8 @@ export const state = {
 };
 
 let normalModeRoles = [];
+let coordinatorRoleOption = null;
+let mainAgentRoleOption = null;
 
 export function applyCurrentSessionRecord(record) {
     state.currentSessionMode = String(record?.session_mode || "normal");
@@ -203,6 +270,17 @@ export function getNormalModeRoles() {
     return normalModeRoles;
 }
 
+export function getPrimaryRoleId() {
+    return String(state.mainAgentRoleId || "MainAgent");
+}
+
+export function getRoleOption(roleId) {
+    if (String(roleId || "") === String(state.mainAgentRoleId || "")) {
+        return mainAgentRoleOption;
+    }
+    return normalModeRoles.find(role => role.role_id === roleId) || null;
+}
+
 export function getRoleDisplayName(roleId, { fallback = "Agent" } = {}) {
     if (String(roleId || "") === String(state.mainAgentRoleId || "")) {
         return "Main Agent";
@@ -215,12 +293,28 @@ export function setCoordinatorRoleId(roleId) {
     state.coordinatorRoleId = String(roleId || "");
 }
 
+export function setCoordinatorRoleOption(roleOption) {
+    coordinatorRoleOption = roleOption;
+}
+
 export function setMainAgentRoleId(roleId) {
     state.mainAgentRoleId = String(roleId || "");
 }
 
+export function setMainAgentRoleOption(roleOption) {
+    mainAgentRoleOption = roleOption;
+}
+
 export function setNormalModeRoles(roleOptions) {
     normalModeRoles = Array.isArray(roleOptions) ? roleOptions : [];
+}
+
+export function roleSupportsInputModality(roleId, modality) {
+    return String(roleId || "") !== "" && String(modality || "") === "image";
+}
+
+export function getRoleInputModalitySupport(roleId, modality) {
+    return roleSupportsInputModality(roleId, modality);
 }
 """.strip(),
         encoding="utf-8",
@@ -261,6 +355,9 @@ function createElement(initial = {}) {
         addEventListener(type, listener) {
             this._listeners.set(type, listener);
         },
+        querySelectorAll() {
+            return [];
+        },
         dispatch(type) {
             const listener = this._listeners.get(type);
             if (listener) {
@@ -285,6 +382,7 @@ export const els = {
     orchestrationPresetField: createElement({ hidden: true }),
     orchestrationPresetSelect: createElement(),
     promptInput: createElement(),
+    promptAttachments: createElement(),
     sendBtn: createElement(),
     stopBtn: createElement(),
 };
@@ -460,8 +558,8 @@ export function appendRoundUserMessage(runId, text) {
     globalThis.__roundMessages.push({ runId, text });
 }
 
-export function createLiveRound(runId, text) {
-    globalThis.__liveRounds.push({ runId, text });
+export function createLiveRound(runId, text, inputParts) {
+    globalThis.__liveRounds.push({ runId, text, inputParts });
 }
 """.strip(),
         encoding="utf-8",
@@ -552,6 +650,8 @@ let normalModeRoles = [
     { role_id: "writer", name: "Writer", description: "Draft final responses" },
     { role_id: "reviewer", name: "Reviewer", description: "Check correctness and risk" },
 ];
+let coordinatorRoleOption = null;
+let mainAgentRoleOption = null;
 
 export function applyCurrentSessionRecord() {
     return undefined;
@@ -569,6 +669,16 @@ export function getNormalModeRoles() {
     return normalModeRoles;
 }
 
+export function getPrimaryRoleId() {
+    return String(state.currentNormalRootRoleId || mainAgentRoleId);
+}
+
+export function getRoleOption(roleId) {
+    if (roleId === coordinatorRoleId) return coordinatorRoleOption;
+    if (roleId === mainAgentRoleId) return mainAgentRoleOption;
+    return normalModeRoles.find(role => role.role_id === roleId) || null;
+}
+
 export function getRoleDisplayName(roleId, { fallback = "Agent" } = {}) {
     if (roleId === coordinatorRoleId) return "Coordinator";
     if (roleId === mainAgentRoleId) return "Main Agent";
@@ -580,12 +690,28 @@ export function setCoordinatorRoleId(roleId) {
     coordinatorRoleId = String(roleId || "");
 }
 
+export function setCoordinatorRoleOption(roleOption) {
+    coordinatorRoleOption = roleOption;
+}
+
 export function setMainAgentRoleId(roleId) {
     mainAgentRoleId = String(roleId || "");
 }
 
+export function setMainAgentRoleOption(roleOption) {
+    mainAgentRoleOption = roleOption;
+}
+
 export function setNormalModeRoles(roleOptions) {
     normalModeRoles = Array.isArray(roleOptions) ? roleOptions : [];
+}
+
+export function roleSupportsInputModality(roleId, modality) {
+    return String(roleId || "") !== "" && String(modality || "") === "image";
+}
+
+export function getRoleInputModalitySupport(roleId, modality) {
+    return roleSupportsInputModality(roleId, modality);
 }
 """.strip(),
         encoding="utf-8",
@@ -616,6 +742,7 @@ function createElement(initial = {}) {
         style: { display: "", height: "" },
         classList: { toggle() { return undefined; } },
         addEventListener() { return undefined; },
+        querySelectorAll() { return []; },
         focus() { return undefined; },
         ...initial,
     };
@@ -623,6 +750,7 @@ function createElement(initial = {}) {
 
 export const els = {
     promptInput: createElement({ value: "@Writer ship it" }),
+    promptAttachments: createElement(),
     sendBtn: createElement(),
     stopBtn: createElement({ style: { display: "none" } }),
     yoloToggle: createElement({ checked: true }),
@@ -706,13 +834,18 @@ console.log(JSON.stringify({
         "writer",
     ]
     assert payload["liveRounds"] == [
-        {"runId": "run-1", "text": "ship it"},
-        {"runId": "run-1", "text": "ship it"},
+        {
+            "runId": "run-1",
+            "text": "ship it",
+            "inputParts": [{"kind": "text", "text": "ship it"}],
+        },
+        {
+            "runId": "run-1",
+            "text": "ship it",
+            "inputParts": [{"kind": "text", "text": "ship it"}],
+        },
     ]
-    assert payload["roundMessages"] == [
-        {"runId": "run-1", "text": "ship it"},
-        {"runId": "run-1", "text": "ship it"},
-    ]
+    assert payload["roundMessages"] == []
 
 
 def test_prompt_role_mentions_offer_autocomplete_and_insert_selection(
@@ -834,6 +967,8 @@ let normalModeRoles = [
     { role_id: "writer", name: "Writer", description: "Draft final responses" },
     { role_id: "reviewer", name: "Reviewer", description: "Check correctness and risk" },
 ];
+let coordinatorRoleOption = null;
+let mainAgentRoleOption = null;
 
 export function applyCurrentSessionRecord() {
     return undefined;
@@ -851,6 +986,16 @@ export function getNormalModeRoles() {
     return normalModeRoles;
 }
 
+export function getPrimaryRoleId() {
+    return String(state.currentNormalRootRoleId || mainAgentRoleId);
+}
+
+export function getRoleOption(roleId) {
+    if (roleId === coordinatorRoleId) return coordinatorRoleOption;
+    if (roleId === mainAgentRoleId) return mainAgentRoleOption;
+    return normalModeRoles.find(role => role.role_id === roleId) || null;
+}
+
 export function getRoleDisplayName(roleId, { fallback = "Agent" } = {}) {
     if (roleId === coordinatorRoleId) return "Coordinator";
     if (roleId === mainAgentRoleId) return "Main Agent";
@@ -862,12 +1007,28 @@ export function setCoordinatorRoleId(roleId) {
     coordinatorRoleId = String(roleId || "");
 }
 
+export function setCoordinatorRoleOption(roleOption) {
+    coordinatorRoleOption = roleOption;
+}
+
 export function setMainAgentRoleId(roleId) {
     mainAgentRoleId = String(roleId || "");
 }
 
+export function setMainAgentRoleOption(roleOption) {
+    mainAgentRoleOption = roleOption;
+}
+
 export function setNormalModeRoles(roleOptions) {
     normalModeRoles = Array.isArray(roleOptions) ? roleOptions : [];
+}
+
+export function roleSupportsInputModality(roleId, modality) {
+    return String(roleId || "") !== "" && String(modality || "") === "image";
+}
+
+export function getRoleInputModalitySupport(roleId, modality) {
+    return roleSupportsInputModality(roleId, modality);
 }
 """.strip(),
         encoding="utf-8",
@@ -902,6 +1063,9 @@ function createElement(initial = {}) {
         addEventListener(type, listener) {
             this._listeners.set(type, listener);
         },
+        querySelectorAll() {
+            return [];
+        },
         querySelector(selector) {
             if (selector !== ".prompt-mention-item.active") {
                 return null;
@@ -927,6 +1091,7 @@ export const els = {
         selectionEnd: 1,
         hidden: false,
     }),
+    promptAttachments: createElement({ hidden: false }),
     promptMentionMenu: createElement({ hidden: true }),
     sendBtn: createElement({ hidden: false }),
     stopBtn: createElement({ style: { display: "none" }, hidden: false }),
@@ -1076,3 +1241,590 @@ console.log(JSON.stringify({
     assert payload["fullwidthValue"] == "＠Main Agent "
     assert payload["fullwidthSelectionStart"] == 12
     assert payload["fullwidthSelectionEnd"] == 12
+
+
+def test_handle_send_sends_pasted_image_as_inline_media_for_multimodal_role(
+    tmp_path: Path,
+) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+import {
+    handlePromptComposerPaste,
+    handleSend,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+globalThis.__pastePrevented = false;
+globalThis.FileReader = class {
+    constructor() {
+        this.result = null;
+        this.onload = null;
+        this.onerror = null;
+        this.error = null;
+    }
+    readAsDataURL(file) {
+        this.result = file.__dataUrl;
+        this.onload?.();
+    }
+};
+
+await handlePromptComposerPaste({
+    clipboardData: {
+        items: [
+            {
+                type: "image/png",
+                getAsFile() {
+                    return {
+                        name: "diagram.png",
+                        size: 4,
+                        __dataUrl: "data:image/png;base64,QUJDRA==",
+                    };
+                },
+            },
+        ],
+    },
+    preventDefault() {
+        globalThis.__pastePrevented = true;
+    },
+});
+
+await handleSend();
+
+console.log(JSON.stringify({
+    pastePrevented: globalThis.__pastePrevented,
+    streamCalls: globalThis.__streamCalls,
+    logs: globalThis.__logs,
+    attachmentHtmlAfterSend: els.promptAttachments.innerHTML,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["pastePrevented"] is True
+    assert len(payload["streamCalls"]) == 1
+    assert payload["streamCalls"][0]["promptText"] == "[image]"
+    assert payload["streamCalls"][0]["options"]["inputParts"] == [
+        {
+            "kind": "inline_media",
+            "modality": "image",
+            "mime_type": "image/png",
+            "base64_data": "QUJDRA==",
+            "name": "diagram.png",
+            "size_bytes": 4,
+            "width": None,
+            "height": None,
+        }
+    ]
+    assert (
+        'data-image-preview-trigger="true"' in payload["attachmentHtmlAfterSend"]
+        or payload["attachmentHtmlAfterSend"] == ""
+    )
+    assert payload["attachmentHtmlAfterSend"] == ""
+
+
+def test_handle_send_blocks_pasted_image_for_text_only_role(tmp_path: Path) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=False)
+    runner = """
+import {
+    handlePromptComposerPaste,
+    handleSend,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+globalThis.__pastePrevented = false;
+globalThis.FileReader = class {
+    constructor() {
+        this.result = null;
+        this.onload = null;
+        this.onerror = null;
+        this.error = null;
+    }
+    readAsDataURL(file) {
+        this.result = file.__dataUrl;
+        this.onload?.();
+    }
+};
+
+await handlePromptComposerPaste({
+    clipboardData: {
+        items: [
+            {
+                type: "image/png",
+                getAsFile() {
+                    return {
+                        name: "diagram.png",
+                        size: 4,
+                        __dataUrl: "data:image/png;base64,QUJDRA==",
+                    };
+                },
+            },
+        ],
+    },
+    preventDefault() {
+        globalThis.__pastePrevented = true;
+    },
+});
+
+await handleSend();
+
+console.log(JSON.stringify({
+    streamCalls: globalThis.__streamCalls,
+    logs: globalThis.__logs,
+    notifications: globalThis.__notifications,
+    attachmentHtml: els.promptAttachments.innerHTML,
+    attachmentClassName: els.promptAttachments.className,
+    promptStatusText: els.promptInputStatus.textContent,
+    promptStatusHidden: els.promptInputStatus.hidden,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["streamCalls"] == []
+    assert payload["notifications"] == [
+        {
+            "title": "Send Blocked",
+            "message": "gpt-4.1-mini is currently configured as not supporting image input. Remove the image, or go to Settings > Model and set Image Input to Supports image input for this model.",
+            "tone": "warning",
+        }
+    ]
+    assert any(
+        "is currently configured as not supporting image input" in entry["message"]
+        for entry in payload["logs"]
+    )
+    assert "prompt-attachment" in payload["attachmentHtml"]
+    assert 'data-image-preview-trigger="true"' in payload["attachmentHtml"]
+    assert 'role="button"' in payload["attachmentHtml"]
+    assert "is-error" in payload["attachmentClassName"]
+    assert payload["promptStatusText"] == (
+        "gpt-4.1-mini is currently configured as not supporting image input. Remove the image, or go to Settings > Model and set Image Input to Supports image input for this model."
+    )
+    assert payload["promptStatusHidden"] is False
+
+
+def test_handle_send_blocks_pasted_image_when_image_support_is_unknown(
+    tmp_path: Path,
+) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=None)
+    runner = """
+import {
+    handlePromptComposerPaste,
+    handleSend,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+
+class FakeFileReader {
+  readAsDataURL(file) {
+    this.result = file.__dataUrl;
+    this.onload?.();
+  }
+}
+
+globalThis.FileReader = FakeFileReader;
+
+const fakeFile = {
+  name: "diagram.png",
+  size: 2048,
+  type: "image/png",
+  __dataUrl: "data:image/png;base64,QUJDRA==",
+};
+
+await handlePromptComposerPaste({
+  preventDefault() {
+    return undefined;
+  },
+  clipboardData: {
+    items: [{
+      type: "image/png",
+      getAsFile() {
+        return fakeFile;
+      },
+    }],
+  },
+});
+
+await handleSend();
+
+console.log(JSON.stringify({
+  streamCalls: globalThis.__streamCalls,
+  logs: globalThis.__logs,
+  notifications: globalThis.__notifications,
+  promptStatusText: els.promptInputStatus.textContent,
+  promptStatusHidden: els.promptInputStatus.hidden,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["streamCalls"] == []
+    assert payload["notifications"] == [
+        {
+            "title": "Send Blocked",
+            "message": "Cannot confirm whether gpt-4.1-mini supports image input. Remove the image, or go to Settings > Model and set Image Input to Supports image input for this model.",
+            "tone": "warning",
+        }
+    ]
+    assert any(
+        "Cannot confirm whether gpt-4.1-mini supports image input." in entry["message"]
+        for entry in payload["logs"]
+    )
+    assert payload["promptStatusText"] == (
+        "Cannot confirm whether gpt-4.1-mini supports image input. Remove the image, or go to Settings > Model and set Image Input to Supports image input for this model."
+    )
+    assert payload["promptStatusHidden"] is False
+
+
+def _write_multimodal_prompt_fixture(
+    tmp_path: Path,
+    *,
+    role_supports_image: bool | None,
+) -> Path:
+    source = Path("frontend/dist/js/app/prompt.js").read_text(encoding="utf-8")
+    temp_dir = tmp_path / (
+        "prompt_multimodal_supported"
+        if role_supports_image is True
+        else "prompt_multimodal_unknown"
+        if role_supports_image is None
+        else "prompt_multimodal_blocked"
+    )
+    temp_dir.mkdir()
+    (temp_dir / "prompt.js").write_text(
+        source.replace("../components/rounds.js", "./mockRounds.mjs")
+        .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
+        .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../core/api.js", "./mockApi.mjs")
+        .replace("./recovery.js", "./mockRecovery.mjs")
+        .replace("../core/state.js", "./mockState.mjs")
+        .replace("../core/stream.js", "./mockStream.mjs")
+        .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/feedback.js", "./mockFeedback.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
+        .replace("../utils/logger.js", "./mockLogger.mjs"),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRounds.mjs").write_text(
+        """
+export function appendRoundUserMessage() {
+    return undefined;
+}
+
+export function createLiveRound() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockContextIndicators.mjs").write_text(
+        """
+export function refreshVisibleContextIndicators() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockMessageRenderer.mjs").write_text(
+        """
+export function clearAllStreamState() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockApi.mjs").write_text(
+        """
+export async function fetchRoleConfigOptions() {
+    return {
+        coordinator_role_id: "Coordinator",
+        main_agent_role_id: "MainAgent",
+        coordinator_role: {
+            role_id: "Coordinator",
+            name: "Coordinator",
+            description: "",
+            model_profile: "default",
+            input_modalities: [],
+        },
+        main_agent_role: {
+            role_id: "MainAgent",
+            name: "Main Agent",
+            description: "",
+            model_profile: "default",
+            model_name: "gpt-4.1-mini",
+            input_modalities: ["image"],
+        },
+        normal_mode_roles: [
+            {
+                role_id: "MainAgent",
+                name: "Main Agent",
+                description: "",
+                model_profile: "default",
+                model_name: "gpt-4.1-mini",
+                input_modalities: ["image"],
+            },
+        ],
+    };
+}
+
+export async function fetchOrchestrationConfig() {
+    return {
+        default_orchestration_preset_id: "",
+        presets: [],
+    };
+}
+
+export async function updateSessionTopology() {
+    return {
+        session_mode: "normal",
+        normal_root_role_id: "MainAgent",
+        orchestration_preset_id: null,
+        can_switch_mode: true,
+    };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRecovery.mjs").write_text(
+        """
+export async function hydrateSessionView() {
+    return null;
+}
+
+export function startSessionContinuity() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        f"""
+export const state = {{
+    currentSessionId: "session-1",
+    currentSessionMode: "normal",
+    currentSessionCanSwitchMode: true,
+    currentNormalRootRoleId: "MainAgent",
+    currentOrchestrationPresetId: null,
+    pausedSubagent: null,
+    isGenerating: false,
+    yolo: true,
+    thinking: {{ enabled: false, effort: "medium" }},
+    instanceRoleMap: {{}},
+    roleInstanceMap: {{}},
+    taskInstanceMap: {{}},
+    activeAgentRoleId: null,
+    activeAgentInstanceId: null,
+    autoSwitchedSubagentInstances: {{}},
+    activeRunId: null,
+}};
+
+let normalModeRoles = [
+    {{
+        role_id: "MainAgent",
+        name: "Main Agent",
+        description: "",
+        model_profile: "default",
+        model_name: "gpt-4.1-mini",
+        input_modalities: {json.dumps(["image"] if role_supports_image is True else [])},
+    }},
+];
+
+export function applyCurrentSessionRecord() {{
+    return undefined;
+}}
+
+export function getCoordinatorRoleId() {{
+    return "Coordinator";
+}}
+
+export function getMainAgentRoleId() {{
+    return "MainAgent";
+}}
+
+export function getNormalModeRoles() {{
+    return normalModeRoles;
+}}
+
+export function getPrimaryRoleId() {{
+    return "MainAgent";
+}}
+
+export function getRoleOption(roleId) {{
+    return normalModeRoles.find(role => role.role_id === roleId) || null;
+}}
+
+export function getRoleDisplayName(roleId, {{ fallback = "Agent" }} = {{}}) {{
+    if (roleId === "MainAgent") {{
+        return "Main Agent";
+    }}
+    return fallback;
+}}
+
+export function setCoordinatorRoleId() {{
+    return undefined;
+}}
+
+export function setCoordinatorRoleOption() {{
+    return undefined;
+}}
+
+export function setMainAgentRoleId() {{
+    return undefined;
+}}
+
+export function setMainAgentRoleOption() {{
+    return undefined;
+}}
+
+export function setNormalModeRoles(roleOptions) {{
+    normalModeRoles = Array.isArray(roleOptions) ? roleOptions : [];
+}}
+
+export function roleSupportsInputModality(roleId, modality) {{
+    return (
+        String(roleId || "") === "MainAgent"
+        && String(modality || "") === "image"
+        && {str(role_supports_image is True).lower()}
+    );
+}}
+
+export function getRoleInputModalitySupport(roleId, modality) {{
+    if (String(roleId || "") !== "MainAgent" || String(modality || "") !== "image") {{
+        return null;
+    }}
+    return {json.dumps(role_supports_image)};
+}}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockStream.mjs").write_text(
+        """
+export async function startIntentStream(promptText, sessionId, onCompleted, options = {}) {
+    globalThis.__streamCalls.push({
+        promptText,
+        sessionId,
+        options,
+    });
+    return onCompleted;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockDom.mjs").write_text(
+        """
+function createElement(initial = {}) {
+    const element = {
+        value: "",
+        checked: false,
+        disabled: false,
+        hidden: false,
+        textContent: "",
+        innerHTML: "",
+        title: "",
+        className: "",
+        selectionStart: 0,
+        selectionEnd: 0,
+        scrollHeight: 36,
+        style: { display: "", height: "" },
+        querySelectorAll() { return []; },
+        addEventListener() { return undefined; },
+        focus() { return undefined; },
+        ...initial,
+    };
+    element.classList = {
+        toggle(name, enabled) {
+            const tokens = new Set(String(element.className || "").split(/\\s+/).filter(Boolean));
+            const shouldEnable = enabled !== false;
+            if (shouldEnable) {
+                tokens.add(name);
+            } else {
+                tokens.delete(name);
+            }
+            element.className = Array.from(tokens).join(" ");
+            return shouldEnable;
+        },
+    };
+    return element;
+}
+
+export const els = {
+    promptInput: createElement({ value: "" }),
+    promptAttachments: createElement(),
+    promptMentionMenu: createElement({ hidden: true }),
+    promptInputStatus: createElement({ hidden: true }),
+    sendBtn: createElement(),
+    stopBtn: createElement({ style: { display: "none" } }),
+    yoloToggle: createElement({ checked: true }),
+    thinkingModeToggle: createElement({ checked: false }),
+    thinkingEffortSelect: createElement({ value: "medium", disabled: true }),
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockFeedback.mjs").write_text(
+        """
+export function showToast() {
+    globalThis.__notifications.push(arguments[0]);
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+const translations = {
+    "composer.error.image_input_unsupported": "{agent} is currently configured as not supporting image input. Remove the image, or go to Settings > Model and set Image Input to Supports image input for this model.",
+    "composer.error.image_input_unknown": "Cannot confirm whether {agent} supports image input. Remove the image, or go to Settings > Model and set Image Input to Supports image input for this model.",
+    "composer.toast.send_blocked_title": "Send Blocked",
+};
+
+export function t(key) {
+    return translations[key] || key;
+}
+
+export function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockLogger.mjs").write_text(
+        """
+export function sysLog(message, tone = "log-info") {
+    globalThis.__logs.push({ message, tone });
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    return temp_dir

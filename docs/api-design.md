@@ -104,7 +104,7 @@ The response body is a root object whose keys are profile ids and whose values u
 ### `GET /system/configs/model/profiles`
 
 Returns normalized model profiles.
-Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `headers[]` for additional request headers, `is_default` to mark the runtime default profile, optional `context_window` for next-send context preview UI, optional `fallback_policy_id` to bind that profile to a fallback policy, and `fallback_priority` to rank it as a fallback candidate.
+Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `headers[]` for additional request headers, `is_default` to mark the runtime default profile, optional `context_window` for next-send context preview UI, optional `fallback_policy_id` to bind that profile to a fallback policy, `fallback_priority` to rank it as a fallback candidate, structured `capabilities.input/output.*`, and a derived `input_modalities[]` compatibility field so the UI can label profiles that accept direct media input.
 `provider` currently supports `openai_compatible`, `bigmodel`, `minimax`, `maas`, and the internal/testing-only `echo`. MAAS profiles also return `maas_auth` with `username` and `has_password` so the web UI can preserve the stored password without echoing it back. The MAAS login endpoint and `app-id` are fixed by the backend.
 When no profile is explicitly marked default, the backend resolves the default in this order: a profile named `default`, the only configured profile, then the first profile by name.
 
@@ -172,6 +172,8 @@ For `maas`, the backend merges model ids from top-level `user_model_list` and ne
 When the provider exposes per-model context-limit metadata in the catalog payload, the response also includes `model_entries[]` with:
 - `model`
 - optional `context_window`
+- `capabilities`
+- `input_modalities[]`
 
 The settings UI uses `model_entries[].context_window` to auto-fill the profile context window field after model discovery. Providers that return only model ids will still populate `models[]`, but `context_window` remains user-specified.
 For a small set of known provider/model pairs, the backend also applies a built-in context-window fallback when the provider returns only model ids.
@@ -1162,6 +1164,12 @@ Notes:
   - `{"kind":"text","text":"..."}`
   - `{"kind":"media_ref", ...}`
   - `{"kind":"inline_media", ...}` for small ingress-only image/audio payloads that are normalized immediately into stored `media_ref` assets
+- Conversation runs may combine text and pasted images in the same `input` array.
+- For image paste ingress, the frontend sends `inline_media` parts with:
+  - `modality: "image"`
+  - `mime_type`
+  - `base64_data`
+  - optional `name`, `size_bytes`, `width`, and `height`
 - `run_kind` supports:
   - `conversation`
   - `generate_image`
@@ -1740,14 +1748,34 @@ Returns editor options for role settings.
 Response fields:
 - `coordinator_role_id`
 - `main_agent_role_id`
+- `coordinator_role`
+  - `role_id`
+  - `name`
+  - `description`
+  - `model_profile`
+  - `capabilities`
+  - `input_modalities[]`
+- `main_agent_role`
+  - `role_id`
+  - `name`
+  - `description`
+  - `model_profile`
+  - `capabilities`
+  - `input_modalities[]`
 - `normal_mode_roles[]`
   - `role_id`
   - `name`
   - `description`
+  - `model_profile`
+  - `capabilities`
+  - `input_modalities[]`
 - `subagent_roles[]`
   - `role_id`
   - `name`
   - `description`
+  - `model_profile`
+  - `capabilities`
+  - `input_modalities[]`
 - `role_modes[]`: `primary | subagent | all`
 - `tools`
 - `mcp_servers`
@@ -1765,6 +1793,9 @@ Response fields:
 Notes:
 - Same-name builtin/app skills are both returned. Frontends must treat `ref` as
   the stable identity and use `name` only for display.
+- `capabilities.input/output.*` is the canonical multimodal contract for a role's
+  resolved runtime model profile. `input_modalities[]` is derived from
+  `capabilities.input` for compatibility with existing consumers.
 - `normal_mode_roles[]` contains non-system roles whose `mode` is `primary` or `all`.
 - `subagent_roles[]` contains non-system roles whose `mode` is `subagent` or `all`.
 - Returns `503` when required builtin/system roles such as `Coordinator` or

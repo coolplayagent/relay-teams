@@ -94,6 +94,7 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
             yolo,
             thinking,
             options.targetRoleId || null,
+            Array.isArray(options.inputParts) ? options.inputParts : null,
         );
         runId = run.run_id;
         clearRunUnavailableCooldown(runId);

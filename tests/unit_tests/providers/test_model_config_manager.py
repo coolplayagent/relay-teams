@@ -218,6 +218,44 @@ def test_get_model_profiles_returns_fallback_settings(tmp_path: Path) -> None:
     assert profiles["default"]["fallback_priority"] == 7
 
 
+def test_get_model_profiles_preserves_raw_image_capability_override_state(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+
+    manager.save_model_profile(
+        "default",
+        {
+            "provider": "openai_compatible",
+            "model": "gpt-4o-mini",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "secret-key",
+            "capabilities": {
+                "input": {
+                    "text": True,
+                    "image": None,
+                },
+                "output": {
+                    "text": True,
+                },
+            },
+        },
+    )
+
+    profiles = manager.get_model_profiles()
+    raw_capabilities = cast(dict[str, JsonValue], profiles["default"]["capabilities"])
+    resolved_capabilities = cast(
+        dict[str, JsonValue],
+        profiles["default"]["resolved_capabilities"],
+    )
+    raw_input = cast(dict[str, JsonValue], raw_capabilities["input"])
+    resolved_input = cast(dict[str, JsonValue], resolved_capabilities["input"])
+
+    assert raw_input["image"] is None
+    assert resolved_input["image"] is True
+    assert profiles["default"]["input_modalities"] == ["image"]
+
+
 def test_save_model_profile_preserves_existing_fallback_settings_when_omitted(
     tmp_path: Path,
 ) -> None:

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from relay_teams.providers.maas_auth import maas_password_secret_field_name
+from relay_teams.providers.model_capabilities import resolve_model_capabilities
 from relay_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_BASE_URL,
@@ -66,8 +67,20 @@ class ModelConfigManager:
             normalized_profile = _normalize_profile_context_window(profile)
             headers = self._resolve_headers(name, normalized_profile)
             maas_auth = self._resolve_maas_auth(name, normalized_profile)
+            raw_provider = str(normalized_profile.get("provider", "openai_compatible"))
+            try:
+                provider = ProviderType(raw_provider)
+            except ValueError:
+                provider = ProviderType.OPENAI_COMPATIBLE
+            capabilities = resolve_model_capabilities(
+                provider=provider,
+                base_url=str(normalized_profile.get("base_url", "")),
+                model_name=str(normalized_profile.get("model", "")),
+                metadata=normalized_profile,
+            )
+            raw_capabilities = normalized_profile.get("capabilities")
             result[name] = {
-                "provider": normalized_profile.get("provider", "openai_compatible"),
+                "provider": raw_provider,
                 "model": normalized_profile.get("model", ""),
                 "base_url": normalized_profile.get("base_url", ""),
                 "api_key": api_key,
@@ -90,6 +103,14 @@ class ModelConfigManager:
                     "connect_timeout_seconds",
                     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
                 ),
+                "capabilities": (
+                    raw_capabilities if isinstance(raw_capabilities, dict) else None
+                ),
+                "resolved_capabilities": capabilities.model_dump(mode="json"),
+                "input_modalities": [
+                    modality.value
+                    for modality in capabilities.supported_input_modalities()
+                ],
             }
         return result
 

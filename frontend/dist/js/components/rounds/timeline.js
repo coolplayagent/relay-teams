@@ -15,9 +15,12 @@ import {
     clearAllStreamState,
     getCoordinatorStreamOverlay,
     renderHistoricalMessageList,
-    getOrCreateStreamBlock,
-    appendStreamChunk,
 } from '../messageRenderer.js';
+import {
+    normalizePromptContentParts,
+    renderPromptContentParts,
+    summarizePromptContentParts,
+} from '../messageRenderer/helpers/prompt.js';
 import { renderRoundNavigator, setActiveRoundNav } from './navigator.js';
 import { applyRoundPage, fetchInitialRoundsPage, fetchOlderRoundsPage } from './paging.js';
 import { roundsState } from './state.js';
@@ -48,9 +51,11 @@ export async function loadSessionRounds(sessionId, options = {}) {
     }
 }
 
-export function createLiveRound(runId, intentText) {
+export function createLiveRound(runId, intentText, intentParts = null) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
+    const normalizedIntent = normalizeRoundIntentText(intentText);
+    const normalizedIntentParts = normalizeRoundIntentParts(intentParts);
 
     const existingIndex = roundsState.currentRounds.findIndex(round => round.run_id === safeRunId);
     if (existingIndex === -1) {
@@ -59,7 +64,8 @@ export function createLiveRound(runId, intentText) {
             {
                 run_id: safeRunId,
                 created_at: new Date().toISOString(),
-                intent: intentText,
+                intent: normalizedIntent,
+                intent_parts: normalizedIntentParts,
                 primary_role_id: getRunPrimaryRoleId(safeRunId) || null,
                 coordinator_messages: [],
                 instance_role_map: {},
@@ -68,6 +74,7 @@ export function createLiveRound(runId, intentText) {
                 run_phase: 'running',
                 is_recoverable: true,
                 pending_tool_approval_count: 0,
+                has_user_messages: true,
             },
         ];
     } else {
@@ -75,10 +82,13 @@ export function createLiveRound(runId, intentText) {
             round.run_id === safeRunId
                 ? {
                     ...round,
+                    intent: normalizedIntent || round.intent,
+                    intent_parts: normalizedIntentParts || round.intent_parts || null,
                     primary_role_id: round.primary_role_id || getRunPrimaryRoleId(safeRunId) || null,
                     run_status: round.run_status || 'running',
                     run_phase: round.run_phase || 'running',
                     is_recoverable: round.is_recoverable !== false,
+                    has_user_messages: true,
                 }
                 : round,
         );
@@ -104,32 +114,48 @@ function shouldPreserveSubagentView(sessionId) {
     );
 }
 
-export function appendRoundUserMessage(runId, text) {
+export function appendRoundUserMessage(runId, promptPayload) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
+    const normalizedIntentParts = normalizeRoundIntentParts(promptPayload);
+    const normalizedIntentText = buildRoundIntentPreviewText(promptPayload);
     const roundIndex = roundsState.currentRounds.findIndex(round => round.run_id === safeRunId);
     if (roundIndex >= 0) {
         roundsState.currentRounds = roundsState.currentRounds.map(round =>
             round.run_id === safeRunId
-                ? { ...round, has_user_messages: true }
+                ? {
+                    ...round,
+                    has_user_messages: true,
+                    intent: normalizedIntentText || round.intent,
+                    intent_parts: normalizedIntentParts || round.intent_parts || null,
+                }
                 : round,
         );
         if (roundsState.currentRound?.run_id === safeRunId) {
             roundsState.currentRound = roundsState.currentRounds[roundIndex];
         }
         syncExportedState();
+        if (!shouldPreserveSubagentView(state.currentSessionId)) {
+            renderSessionTimeline(roundsState.currentRounds, { preserveScroll: false });
+        } else {
+            patchRoundHeader(roundsState.currentRounds[roundIndex], roundIndex);
+        }
     }
-    const section = document.querySelector(`.session-round-section[data-run-id="${safeRunId}"]`);
-    if (!section) return;
-    const empty = section.querySelector('.panel-empty');
-    if (empty) empty.remove();
+}
 
-    const primaryRoleId = getRunPrimaryRoleId(safeRunId);
-    const primaryRoleLabel = getRunPrimaryRoleLabel(safeRunId);
-    getOrCreateStreamBlock(section, 'primary', primaryRoleId, primaryRoleLabel, safeRunId);
-    appendStreamChunk('primary', '', safeRunId, primaryRoleId, primaryRoleLabel);
+function normalizeRoundIntentParts(promptPayload) {
+    return normalizePromptContentParts(promptPayload);
+}
 
-    els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+function buildRoundIntentPreviewText(promptPayload) {
+    const normalizedIntentParts = normalizeRoundIntentParts(promptPayload);
+    if (normalizedIntentParts && normalizedIntentParts.length > 0) {
+        const summary = summarizePromptContentParts(normalizedIntentParts);
+        if (summary) {
+            return summary;
+        }
+    }
+    return normalizeRoundIntentText(promptPayload);
 }
 
 export function appendRoundRetryEvent(runId, retryEvent) {
@@ -475,7 +501,7 @@ function renderRoundSection(round, index) {
             </div>
             <div class="round-detail-badges">${renderRoundBadges(round, stateLabel, stateTone, approvalCount)}</div>
         </div>`;
-    header.appendChild(buildRoundIntentBlock(round.intent || t('rounds.no_intent')));
+    header.appendChild(buildRoundIntentBlock(round.intent, round.intent_parts));
     section.appendChild(header);
     renderRoundRetryEvents(section, round.retry_events || []);
     if (round.compaction_marker_before) {
@@ -548,8 +574,11 @@ function renderRoundSection(round, index) {
     return section;
 }
 
-function buildRoundIntentBlock(intentText) {
-    const normalized = normalizeRoundIntentText(intentText);
+function buildRoundIntentBlock(intentText, intentParts = null) {
+    const normalizedParts = normalizeRoundIntentParts(intentParts);
+    const normalized = normalizedParts && normalizedParts.length > 0
+        ? summarizePromptContentParts(normalizedParts)
+        : normalizeRoundIntentText(intentText);
 
     const block = document.createElement('details');
     block.className = 'round-detail-intent';
@@ -577,7 +606,11 @@ function buildRoundIntentBlock(intentText) {
         toggleEl.textContent = t('rounds.expand');
     }
     if (bodyEl) {
-        bodyEl.textContent = normalized;
+        if (normalizedParts && normalizedParts.length > 0) {
+            renderRoundIntentStructuredContent(bodyEl, normalizedParts);
+        } else {
+            bodyEl.textContent = normalized;
+        }
     }
     if (collapseBtn) {
         collapseBtn.textContent = t('rounds.collapse');
@@ -588,10 +621,14 @@ function buildRoundIntentBlock(intentText) {
     }
     block.addEventListener('toggle', () => {
         if (toggleEl) {
-            toggleEl.textContent = t('rounds.expand');
+            toggleEl.textContent = block.open ? t('rounds.collapse') : t('rounds.expand');
         }
     });
     return block;
+}
+
+function renderRoundIntentStructuredContent(bodyEl, parts) {
+    renderPromptContentParts(bodyEl, parts);
 }
 
 function normalizeRoundIntentText(intentText) {
@@ -858,6 +895,11 @@ function patchRoundHeader(round, roundIndex) {
         const stateTone = roundStateTone(round);
         const approvalCount = Number(round.pending_tool_approval_count || 0);
         badgesEl.innerHTML = renderRoundBadges(round, stateLabel, stateTone, approvalCount);
+    }
+
+    const intentEl = section.querySelector('.round-detail-intent');
+    if (intentEl) {
+        intentEl.replaceWith(buildRoundIntentBlock(round.intent, round.intent_parts));
     }
 }
 

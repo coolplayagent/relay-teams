@@ -12,6 +12,7 @@ from pydantic import (
     model_validator,
 )
 
+from relay_teams.media import MediaModality
 from relay_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 from relay_teams.validation import RequiredIdentifierStr
 
@@ -80,6 +81,36 @@ class SamplingConfig(BaseModel):
     top_k: int | None = Field(default=None, ge=1)
 
 
+class ModelModalityMatrix(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    text: bool | None = None
+    image: bool | None = None
+    audio: bool | None = None
+    video: bool | None = None
+    pdf: bool | None = None
+
+    def supported_media_modalities(self) -> tuple[MediaModality, ...]:
+        modalities: list[MediaModality] = []
+        if self.image is True:
+            modalities.append(MediaModality.IMAGE)
+        if self.audio is True:
+            modalities.append(MediaModality.AUDIO)
+        if self.video is True:
+            modalities.append(MediaModality.VIDEO)
+        return tuple(modalities)
+
+
+class ModelCapabilities(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    input: ModelModalityMatrix = Field(default_factory=ModelModalityMatrix)
+    output: ModelModalityMatrix = Field(default_factory=ModelModalityMatrix)
+
+    def supported_input_modalities(self) -> tuple[MediaModality, ...]:
+        return self.input.supported_media_modalities()
+
+
 class ModelRequestHeader(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -120,6 +151,7 @@ class ModelEndpointConfig(BaseModel):
     headers: tuple[ModelRequestHeader, ...] = ()
     maas_auth: MaaSAuthConfig | None = None
     ssl_verify: bool | None = None
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     context_window: int | None = Field(default=None, ge=1)
     fallback_policy_id: str | None = Field(default=None, min_length=1)
     fallback_priority: int = Field(default=0, ge=0, le=1_000_000)
@@ -175,6 +207,18 @@ class ModelEndpointConfig(BaseModel):
             "Model endpoint config requires api_key or at least one configured header."
         )
 
+    @model_validator(mode="after")
+    def _sync_capabilities(self) -> "ModelEndpointConfig":
+        from relay_teams.providers.model_capabilities import resolve_model_capabilities
+
+        self.capabilities = resolve_model_capabilities(
+            provider=self.provider,
+            base_url=self.base_url,
+            model_name=self.model,
+            metadata={"capabilities": self.capabilities.model_dump(mode="json")},
+        )
+        return self
+
 
 class ModelProfileConfigPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -187,6 +231,7 @@ class ModelProfileConfigPayload(BaseModel):
     headers: tuple[ModelRequestHeader, ...] | None = None
     maas_auth: MaaSAuthConfig | None = None
     ssl_verify: bool | None = None
+    capabilities: ModelCapabilities | None = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     max_tokens: int | None = Field(default=None, ge=1)
@@ -215,12 +260,33 @@ class ModelConfigPayload(
 
 
 class ProviderModelInfo(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid")
 
     profile: str = Field(min_length=1)
     provider: ProviderType
     model: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
+    input_modalities: tuple[MediaModality, ...] = ()
+
+    @model_validator(mode="after")
+    def _sync_capabilities(self) -> "ProviderModelInfo":
+        from relay_teams.providers.model_capabilities import resolve_model_capabilities
+
+        capabilities = resolve_model_capabilities(
+            provider=self.provider,
+            base_url=self.base_url,
+            model_name=self.model,
+            metadata={
+                "capabilities": self.capabilities.model_dump(mode="json"),
+                "input_modalities": [
+                    modality.value for modality in self.input_modalities
+                ],
+            },
+        )
+        self.capabilities = capabilities
+        self.input_modalities = capabilities.supported_input_modalities()
+        return self
 
 
 class LlmRetryConfig(BaseModel):

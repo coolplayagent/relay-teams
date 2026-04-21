@@ -71,6 +71,8 @@ let projectMenuDismissBound = false;
 let languageRefreshBound = false;
 let pendingSessionAnimation = null;
 let loadProjectsRequestId = 0;
+let lastProjectsRenderSignature = '';
+const SIDEBAR_INTERACTION_REFRESH_DELAY_MS = 240;
 
 const SESSION_ANIMATION_ENTER_MS = 220;
 const SESSION_ANIMATION_REMOVE_MS = 180;
@@ -78,6 +80,28 @@ const SESSION_ANIMATION_ACTIVATE_MS = 240;
 
 export function setSelectSessionHandler(handler) {
     selectSessionHandler = handler;
+}
+
+function isProjectsListInteracting() {
+    const projectsList = els.projectsList;
+    if (!projectsList) {
+        return false;
+    }
+    if (typeof projectsList.matches === 'function' && projectsList.matches(':hover')) {
+        return true;
+    }
+    if (typeof projectsList.querySelector === 'function' && projectsList.querySelector(':hover')) {
+        return true;
+    }
+    const activeElement = document?.activeElement;
+    if (
+        activeElement
+        && typeof projectsList.contains === 'function'
+        && projectsList.contains(activeElement)
+    ) {
+        return true;
+    }
+    return false;
 }
 
 function clearActiveSessionView() {
@@ -503,6 +527,16 @@ function renderProjectsToolbar() {
     toolbar.querySelector('.projects-toolbar-new-btn')?.addEventListener('click', () => void handleNewProjectClick());
     toolbar.querySelector('.projects-toolbar-sort-btn')?.addEventListener('click', () => toggleProjectSortMode());
     return toolbar;
+}
+
+function renderNodeSignature(node) {
+    if (!node) {
+        return '';
+    }
+    const className = String(node.className || '').trim();
+    const innerHtml = typeof node.innerHTML === 'string' ? node.innerHTML : '';
+    const textContent = typeof node.textContent === 'string' ? node.textContent : '';
+    return `${className}::${innerHtml}::${textContent}`;
 }
 
 function getActiveFeatureId() {
@@ -1092,23 +1126,36 @@ export async function loadProjects() {
             }
         });
         void maybeSyncBackgroundStreams(sessions);
-        els.projectsList.innerHTML = '';
-        els.projectsList.appendChild(renderFeatureNav());
-        els.projectsList.appendChild(renderProjectsToolbar());
-        syncProjectSortButton();
         const groups = buildProjectGroups(
             Array.isArray(workspaces) ? workspaces : [],
             Array.isArray(sessions) ? sessions : [],
         );
+        const nextNodes = [renderFeatureNav(), renderProjectsToolbar()];
         if (groups.length === 0) {
             openProjectMenuId = null;
-            els.projectsList.appendChild(renderEmptyProjectsState());
+            nextNodes.push(renderEmptyProjectsState());
+            const nextSignature = nextNodes.map(renderNodeSignature).join('\n');
+            if (nextSignature === lastProjectsRenderSignature) {
+                return;
+            }
+            lastProjectsRenderSignature = nextSignature;
+            els.projectsList.innerHTML = '';
+            nextNodes.forEach(node => els.projectsList.appendChild(node));
             return;
         }
         if (!groups.some(group => group.key === openProjectMenuId)) {
             openProjectMenuId = null;
         }
-        groups.forEach(group => els.projectsList.appendChild(renderProjectCard(group)));
+        groups.forEach(group => nextNodes.push(renderProjectCard(group)));
+        const nextSignature = nextNodes.map(renderNodeSignature).join('\n');
+        if (nextSignature === lastProjectsRenderSignature) {
+            prefetchVisibleSubagentSessions(groups);
+            return;
+        }
+        lastProjectsRenderSignature = nextSignature;
+        els.projectsList.innerHTML = '';
+        nextNodes.forEach(node => els.projectsList.appendChild(node));
+        syncProjectSortButton();
         prefetchVisibleSubagentSessions(groups);
         playPendingSessionAnimation();
     } catch (error) {
@@ -1121,10 +1168,15 @@ export async function loadProjects() {
 
 export function scheduleSessionsRefresh(delayMs = 120) {
     if (refreshTimer) clearTimeout(refreshTimer);
+    const safeDelayMs = Math.max(0, Number(delayMs) || 0);
     refreshTimer = setTimeout(() => {
         refreshTimer = null;
+        if (isProjectsListInteracting()) {
+            scheduleSessionsRefresh(Math.max(safeDelayMs, SIDEBAR_INTERACTION_REFRESH_DELAY_MS));
+            return;
+        }
         void loadProjects();
-    }, delayMs);
+    }, safeDelayMs);
 }
 
 export function toggleProjectSortMode() {
