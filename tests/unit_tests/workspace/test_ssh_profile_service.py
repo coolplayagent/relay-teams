@@ -174,9 +174,53 @@ def test_ssh_profile_service_probes_saved_profile_with_secrets(
     assert captured_command[0][:2] == ("/usr/bin/ssh", "-o")
     assert "ConnectTimeout=12" in captured_command[0]
     assert "BatchMode=no" in captured_command[0]
-    assert captured_command[0][-3:] == (
+    assert captured_command[0][-4:] == (
         "deploy",
+        "--",
         "prod-alias",
+        "echo relay-teams-ssh-probe",
+    )
+
+
+def test_ssh_profile_service_probe_command_terminates_options_before_host(
+    tmp_path: Path,
+) -> None:
+    captured_command: list[tuple[str, ...]] = []
+
+    def run_probe(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        command_tuple = tuple(command)
+        captured_command.append(command_tuple)
+        return subprocess.CompletedProcess(
+            args=command_tuple,
+            returncode=0,
+            stdout="relay-teams-ssh-probe\n",
+            stderr="",
+        )
+
+    service = SshProfileService(
+        repository=SshProfileRepository(tmp_path / "workspace.db"),
+        config_dir=tmp_path,
+        secret_store=SshProfileSecretStore(secret_store=_FileOnlySecretStore()),
+        ssh_path_lookup=lambda _name: "/usr/bin/ssh",
+        process_runner=run_probe,
+    )
+
+    result = service.probe_connectivity(
+        SshProfileConnectivityProbeRequest(
+            override=SshProfileConfig(
+                host="-V",
+                username="deploy",
+            )
+        )
+    )
+
+    assert result.ok is True
+    option_terminator_index = captured_command[0].index("--")
+    assert captured_command[0][option_terminator_index + 1 :] == (
+        "-V",
         "echo relay-teams-ssh-probe",
     )
 

@@ -430,7 +430,7 @@ class SshProfileService:
             command.extend(["-p", str(config.port)])
         if config.username is not None:
             command.extend(["-l", config.username])
-        command.extend([config.host, _SSH_PROBE_COMMAND])
+        command.extend(["--", config.host, _SSH_PROBE_COMMAND])
         return tuple(command)
 
     def _build_probe_result(
