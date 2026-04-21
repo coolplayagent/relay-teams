@@ -156,7 +156,8 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
         'data-tab="model"'
     )
     assert tabs_html.index('data-tab="model"') < tabs_html.index('data-tab="mcp"')
-    assert tabs_html.index('data-tab="mcp"') < tabs_html.index('data-tab="agents"')
+    assert tabs_html.index('data-tab="mcp"') < tabs_html.index('data-tab="hooks"')
+    assert tabs_html.index('data-tab="hooks"') < tabs_html.index('data-tab="agents"')
     assert tabs_html.index('data-tab="agents"') < tabs_html.index('data-tab="roles"')
     assert tabs_html.index('data-tab="roles"') < tabs_html.index(
         'data-tab="orchestration"'
@@ -173,6 +174,7 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     )
     assert ">Model</span>" in tabs_html
     assert ">MCP</span>" in tabs_html
+    assert ">Hooks</span>" in tabs_html
     assert ">Agents</span>" in tabs_html
     assert ">Web</span>" in tabs_html
     assert ">Environment</span>" in tabs_html
@@ -388,6 +390,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     )
 
     mock_model_profiles_path = tmp_path / "mockModelProfiles.mjs"
+    mock_hooks_settings_path = tmp_path / "mockHooksSettings.mjs"
     mock_agents_settings_path = tmp_path / "mockAgentsSettings.mjs"
     mock_environment_path = tmp_path / "mockEnvironmentVariables.mjs"
     mock_notifications_path = tmp_path / "mockNotifications.mjs"
@@ -424,6 +427,18 @@ export function bindEnvironmentVariableSettingsHandlers() {
 
 export async function loadEnvironmentVariablesPanel() {
     globalThis.__loadCalls.environment += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_hooks_settings_path.write_text(
+        """
+export function bindHooksSettingsHandlers() {
+    globalThis.__bindCalls.hooks += 1;
+}
+
+export async function loadHooksSettingsPanel() {
+    globalThis.__loadCalls.hooks += 1;
 }
 """.strip(),
         encoding="utf-8",
@@ -578,6 +593,8 @@ export function t(key) {
         'settings.panel.skills.description': 'Check installed skills and refresh the server-side registry.',
         'settings.panel.mcp.title': 'MCP',
         'settings.panel.mcp.description': 'Review the currently loaded MCP servers and reload the runtime view.',
+        'settings.panel.hooks.title': 'Hooks',
+        'settings.panel.hooks.description': 'Inspect the hook handlers currently loaded for this workspace.',
         'settings.panel.agents.title': 'Agents',
         'settings.panel.agents.description': 'Configure ACP-compatible external agents and make them available for role bindings.',
         'settings.panel.roles.title': 'Roles',
@@ -609,6 +626,7 @@ export function translateDocument() {
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("./agentsSettings.js", "./mockAgentsSettings.mjs")
+        .replace("./hooksSettings.js", "./mockHooksSettings.mjs")
         .replace("./modelProfiles.js", "./mockModelProfiles.mjs")
         .replace("./environmentVariables.js", "./mockEnvironmentVariables.mjs")
         .replace("./notifications.js", "./mockNotifications.mjs")
@@ -786,6 +804,7 @@ function createDocument() {{
 
 globalThis.__bindCalls = {{
     model: 0,
+    hooks: 0,
     agents: 0,
     roles: 0,
     orchestration: 0,
@@ -800,6 +819,7 @@ globalThis.__bindCalls = {{
 }};
 globalThis.__loadCalls = {{
     model: 0,
+    hooks: 0,
     agents: 0,
     roles: 0,
     orchestration: 0,

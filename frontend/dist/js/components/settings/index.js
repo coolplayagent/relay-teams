@@ -3,6 +3,7 @@
  * Settings modal shell and tab routing.
  */
 import { bindAgentSettingsHandlers, loadAgentSettingsPanel } from './agentsSettings.js';
+import { bindHooksSettingsHandlers, loadHooksSettingsPanel } from './hooksSettings.js';
 import { bindModelProfileHandlers, loadModelProfilesPanel } from './modelProfiles.js';
 import {
     bindNotificationSettingsHandlers,
@@ -37,6 +38,10 @@ const TAB_METADATA = {
     mcp: {
         titleKey: 'settings.panel.mcp.title',
         descriptionKey: 'settings.panel.mcp.description',
+    },
+    hooks: {
+        titleKey: 'settings.panel.hooks.title',
+        descriptionKey: 'settings.panel.hooks.description',
     },
     agents: {
         titleKey: 'settings.panel.agents.title',
@@ -94,6 +99,9 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="mcp">
                         <span class="settings-tab-label" data-i18n="settings.tab.mcp">MCP</span>
+                    </button>
+                    <button class="settings-tab" data-tab="hooks">
+                        <span class="settings-tab-label" data-i18n="settings.tab.hooks">Hooks</span>
                     </button>
                     <button class="settings-tab" data-tab="agents">
                         <span class="settings-tab-label" data-i18n="settings.tab.agents">Agents</span>
@@ -345,6 +353,11 @@ function createModal() {
                     <div class="settings-panel" id="mcp-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack status-stack" id="mcp-status"></div>
+                        </div>
+                    </div>
+                    <div class="settings-panel" id="hooks-panel" style="display:none;">
+                        <div class="settings-section">
+                            <div class="settings-content-stack status-stack" id="hooks-runtime-status"></div>
                         </div>
                     </div>
                     <div class="settings-panel" id="agents-panel" style="display:none;">
@@ -896,6 +909,7 @@ function setupEventListeners() {
     });
 
     bindModelProfileHandlers();
+    bindHooksSettingsHandlers();
     bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
@@ -930,6 +944,7 @@ async function showPanel(tab) {
     updatePanelHeading(tab);
     renderPanelActions(tab);
     bindModelProfileHandlers();
+    bindHooksSettingsHandlers();
     bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
@@ -940,6 +955,8 @@ async function showPanel(tab) {
 
     if (tab === 'model') {
         await loadModelProfilesPanel();
+    } else if (tab === 'hooks') {
+        await loadHooksSettingsPanel();
     } else if (tab === 'agents') {
         await loadAgentSettingsPanel();
     } else if (tab === 'roles') {

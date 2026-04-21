@@ -116,6 +116,31 @@ class HookRuntimeSnapshot(BaseModel):
     )
 
 
+class LoadedHookRuntimeView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    handler_type: HookHandlerType
+    event_name: HookEventName
+    matcher: str = "*"
+    if_condition: str | None = None
+    tool_names: tuple[str, ...] = ()
+    role_ids: tuple[str, ...] = ()
+    session_modes: tuple[str, ...] = ()
+    run_kinds: tuple[str, ...] = ()
+    timeout_seconds: float = 5.0
+    run_async: bool = False
+    on_error: str = "ignore"
+    source: HookSourceInfo
+
+
+class HookRuntimeView(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sources: tuple[HookSourceInfo, ...] = ()
+    loaded_hooks: tuple[LoadedHookRuntimeView, ...] = ()
+
+
 class HookExecutionResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

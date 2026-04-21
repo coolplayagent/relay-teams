@@ -14,6 +14,7 @@ from relay_teams.hooks.hook_event_models import (
 )
 from relay_teams.hooks.hook_loader import HookLoader
 from relay_teams.hooks.hook_models import (
+    HookRuntimeView,
     HookDecision,
     HookDecisionBundle,
     HookDecisionType,
@@ -22,6 +23,7 @@ from relay_teams.hooks.hook_models import (
     HookExecutionStatus,
     HookHandlerConfig,
     HookHandlerType,
+    LoadedHookRuntimeView,
     HooksConfig,
 )
 from relay_teams.hooks.hook_runtime_state import HookRuntimeState
@@ -39,8 +41,10 @@ __all__ = [
     "HookHandlerType",
     "HookLoader",
     "HookRuntimeState",
+    "HookRuntimeView",
     "HookService",
     "HooksConfig",
+    "LoadedHookRuntimeView",
     "PermissionRequestInput",
     "PostToolUseFailureInput",
     "PostToolUseInput",

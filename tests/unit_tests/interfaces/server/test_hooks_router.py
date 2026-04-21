@@ -31,6 +31,36 @@ class _FakeHookService:
             }
         )
 
+    def get_runtime_view(self) -> dict[str, object]:
+        return {
+            "sources": [
+                {
+                    "scope": "project",
+                    "path": "/workspace/.relay-teams/hooks.json",
+                }
+            ],
+            "loaded_hooks": [
+                {
+                    "name": "python policy.py",
+                    "handler_type": "command",
+                    "event_name": "PreToolUse",
+                    "matcher": "shell",
+                    "if_condition": None,
+                    "tool_names": ["shell"],
+                    "role_ids": [],
+                    "session_modes": [],
+                    "run_kinds": [],
+                    "timeout_seconds": 5.0,
+                    "run_async": False,
+                    "on_error": "ignore",
+                    "source": {
+                        "scope": "project",
+                        "path": "/workspace/.relay-teams/hooks.json",
+                    },
+                }
+            ],
+        }
+
     def save_user_config(self, payload: object) -> HooksConfig:
         config = HooksConfig.model_validate(payload)
         self.saved = config.model_dump(mode="json")
@@ -55,6 +85,18 @@ def test_get_hooks_config() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["hooks"]["PreToolUse"][0]["matcher"] == "shell"
+
+
+def test_get_hooks_runtime_view() -> None:
+    client = _create_client(_FakeHookService())
+
+    response = client.get("/api/system/configs/hooks/runtime")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sources"][0]["scope"] == "project"
+    assert payload["loaded_hooks"][0]["name"] == "python policy.py"
+    assert payload["loaded_hooks"][0]["event_name"] == "PreToolUse"
 
 
 def test_save_hooks_config() -> None:

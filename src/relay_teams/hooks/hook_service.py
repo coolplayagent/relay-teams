@@ -20,8 +20,10 @@ from relay_teams.hooks.hook_models import (
     HookHandlerConfig,
     HookHandlerType,
     HookRuntimeSnapshot,
+    HookRuntimeView,
     HookSourceInfo,
     HooksConfig,
+    LoadedHookRuntimeView,
 )
 from relay_teams.hooks.hook_runtime_state import HookRuntimeState
 from relay_teams.logger import get_logger, log_event
@@ -51,6 +53,39 @@ class HookService:
 
     def get_effective_config(self) -> HookRuntimeSnapshot:
         return self._loader.load_snapshot()
+
+    def get_runtime_view(self) -> HookRuntimeView:
+        snapshot = self._loader.load_snapshot()
+        loaded_hooks: list[LoadedHookRuntimeView] = []
+        for event_name, groups in snapshot.hooks.items():
+            for resolved in groups:
+                for handler in resolved.group.hooks:
+                    loaded_hooks.append(
+                        LoadedHookRuntimeView(
+                            name=(
+                                handler.name
+                                or handler.command
+                                or handler.url
+                                or handler.type.value
+                            ),
+                            handler_type=handler.type,
+                            event_name=event_name,
+                            matcher=resolved.group.matcher,
+                            if_condition=resolved.group.if_condition,
+                            tool_names=resolved.group.tool_names,
+                            role_ids=resolved.group.role_ids,
+                            session_modes=resolved.group.session_modes,
+                            run_kinds=resolved.group.run_kinds,
+                            timeout_seconds=handler.timeout_seconds,
+                            run_async=handler.run_async,
+                            on_error=handler.on_error,
+                            source=resolved.source,
+                        )
+                    )
+        return HookRuntimeView(
+            sources=snapshot.sources,
+            loaded_hooks=tuple(loaded_hooks),
+        )
 
     def save_user_config(self, payload: object) -> HooksConfig:
         config = self._loader.validate_payload(payload)

@@ -34,6 +34,7 @@ export {
     fetchConfigStatus,
     fetchUiLanguageSettings,
     fetchEnvironmentVariables,
+    fetchHookRuntimeView,
     fetchExternalAgent,
     fetchExternalAgents,
     fetchMcpServerTools,

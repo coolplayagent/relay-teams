@@ -880,6 +880,71 @@
     flex-wrap: wrap;
 }
 
+.hooks-runtime-list {
+    gap: 1rem;
+}
+
+.hooks-runtime-card .mcp-status-card-header {
+    padding: 1.1rem 1.25rem 0.7rem;
+}
+
+.hooks-runtime-card .mcp-status-card-heading {
+    width: 100%;
+    align-items: center;
+    text-align: center;
+}
+
+.hooks-runtime-card .hooks-runtime-detail-list {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    padding: 0 1.25rem 0.9rem;
+}
+
+.hooks-runtime-card .hooks-runtime-detail-row {
+    display: grid;
+    grid-template-columns: repeat(2, 240px);
+    justify-content: center;
+    gap: 0.8rem;
+    width: fit-content;
+    max-width: 100%;
+    margin: 0 auto;
+    padding: 0.8rem 0;
+    border-top: 1px solid var(--settings-divider);
+}
+
+.hooks-runtime-card .hooks-runtime-detail-row:first-child {
+    border-top: none;
+}
+
+.hooks-runtime-card .hooks-runtime-detail-item {
+    width: 240px;
+    min-width: 0;
+    padding: 0 0.2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.24rem;
+    text-align: center;
+}
+
+.hooks-runtime-card .hooks-runtime-detail-label {
+    min-width: 0;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.hooks-runtime-card .hooks-runtime-detail-value {
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.45;
+    word-break: break-word;
+}
 .mcp-tools-list {
     border-top: 1px solid var(--settings-divider);
     padding: 0 1rem;
@@ -2370,6 +2435,18 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 }
 
 @media (max-width: 720px) {
+    .hooks-runtime-card .hooks-runtime-detail-row {
+        grid-template-columns: repeat(2, minmax(160px, 200px));
+        width: fit-content;
+        max-width: 100%;
+        gap: 0.6rem;
+    }
+
+    .hooks-runtime-card .hooks-runtime-detail-item {
+        width: min(200px, 100%);
+        max-width: 100%;
+    }
+
     .settings-tabs {
         grid-template-columns: 1fr;
     }
