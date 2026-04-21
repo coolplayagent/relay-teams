@@ -1097,6 +1097,9 @@ async def test_execute_coordinator_receives_task_runtime_contract(
     )
     assert "### writer_agent" in provider.system_prompts[0]
     assert "- Source: static" in provider.system_prompts[0]
+    assert "## Workspace Environments" in provider.system_prompts[0]
+    assert "- Workspace ID: default" in provider.system_prompts[0]
+    assert "### Mount: default (default)" in provider.system_prompts[0]
 
 
 @pytest.mark.asyncio
