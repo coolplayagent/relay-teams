@@ -12,6 +12,7 @@ from relay_teams.roles.role_models import (
     RoleDocumentSummary,
     RoleMode,
     RoleSkillOption,
+    RoleToolGroupOption,
     RoleValidationResult,
 )
 from relay_teams.roles.memory_models import (
@@ -54,6 +55,7 @@ __all__ = [
     "RoleRegistry",
     "SystemRolesUnavailableError",
     "RoleSkillOption",
+    "RoleToolGroupOption",
     "RoleValidationResult",
     "RuntimeRoleResolver",
     "ensure_required_system_roles",
