@@ -42,6 +42,7 @@ from relay_teams.env.web_config_models import (
     WebProvider,
 )
 from relay_teams.env.web_connectivity import WebConnectivityProbeResult
+from relay_teams.media import MediaModality
 from relay_teams.interfaces.server.deps import (
     get_clawhub_config_service,
     get_clawhub_skill_service,
@@ -88,7 +89,13 @@ from relay_teams.skills.clawhub_models import (
 from relay_teams.skills.skill_models import SkillScope
 from relay_teams.notifications.models import NotificationConfig
 from relay_teams.agents.orchestration.settings_models import OrchestrationSettings
-from relay_teams.workspace import SshProfileConfig, SshProfileRecord
+from relay_teams.workspace import (
+    SshProfileConfig,
+    SshProfileConnectivityProbeRequest,
+    SshProfileConnectivityProbeResult,
+    SshProfilePasswordRevealView,
+    SshProfileRecord,
+)
 
 
 class _FakeSystemService:
@@ -154,6 +161,9 @@ class _FakeSystemService:
                 private_key_name="id_ed25519",
             )
         }
+        self.ssh_profile_passwords: dict[str, str] = {
+            "prod": "relay-secret",
+        }
 
     def get_config_status(self) -> dict[str, object]:
         return {"model": {"loaded": True}}
@@ -200,6 +210,23 @@ class _FakeSystemService:
                 "context_window": 128000,
                 "fallback_policy_id": "same_provider_then_other_provider",
                 "fallback_priority": 3,
+                "capabilities": {
+                    "input": {
+                        "text": True,
+                        "image": True,
+                        "audio": False,
+                        "video": False,
+                        "pdf": False,
+                    },
+                    "output": {
+                        "text": True,
+                        "image": False,
+                        "audio": False,
+                        "video": False,
+                        "pdf": False,
+                    },
+                },
+                "input_modalities": ["image"],
             }
         }
 
@@ -490,12 +517,14 @@ class _FakeSystemService:
                 provider=ProviderType.OPENAI_COMPATIBLE,
                 model="gpt-4o-mini",
                 base_url="https://example.com/v1",
+                input_modalities=(MediaModality.IMAGE,),
             ),
             ProviderModelInfo(
                 profile="glm",
                 provider=ProviderType.BIGMODEL,
                 model="glm-4.5",
                 base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+                input_modalities=(MediaModality.IMAGE,),
             ),
             ProviderModelInfo(
                 profile="echo",
@@ -515,7 +544,49 @@ class _FakeSystemService:
         ModelConnectivityProbeResult
         | GitHubConnectivityProbeResult
         | ClawHubConnectivityProbeResult
+        | SshProfileConnectivityProbeResult
     ):
+        if isinstance(request, SshProfileConnectivityProbeRequest):
+            ssh_profile_id = request.ssh_profile_id or "draft"
+            record = self.ssh_profiles.get(ssh_profile_id)
+            return SshProfileConnectivityProbeResult.model_validate(
+                {
+                    "ok": True,
+                    "ssh_profile_id": request.ssh_profile_id,
+                    "host": (
+                        request.override.host
+                        if request.override is not None
+                        else record.host
+                        if record is not None
+                        else "draft-host"
+                    ),
+                    "port": (
+                        request.override.port
+                        if request.override is not None
+                        else record.port
+                        if record is not None
+                        else None
+                    ),
+                    "username": (
+                        request.override.username
+                        if request.override is not None
+                        else record.username
+                        if record is not None
+                        else None
+                    ),
+                    "latency_ms": 44,
+                    "checked_at": "2026-04-21T00:00:00Z",
+                    "diagnostics": {
+                        "binary_available": True,
+                        "host_reachable": True,
+                        "used_password": False,
+                        "used_private_key": False,
+                        "used_system_config": True,
+                        "exit_code": 0,
+                    },
+                    "retryable": False,
+                }
+            )
         if isinstance(request, ClawHubConnectivityProbeRequest):
             return ClawHubConnectivityProbeResult.model_validate(
                 {
@@ -649,6 +720,13 @@ class _FakeSystemService:
     def get_profile(self, ssh_profile_id: str) -> SshProfileRecord:
         return self.ssh_profiles[ssh_profile_id]
 
+    def reveal_password(self, ssh_profile_id: str) -> SshProfilePasswordRevealView:
+        if ssh_profile_id not in self.ssh_profiles:
+            raise KeyError(ssh_profile_id)
+        return SshProfilePasswordRevealView(
+            password=self.ssh_profile_passwords.get(ssh_profile_id)
+        )
+
     def save_profile(
         self,
         *,
@@ -690,12 +768,15 @@ class _FakeSystemService:
             ),
         )
         self.ssh_profiles[ssh_profile_id] = record
+        if config.password is not None:
+            self.ssh_profile_passwords[ssh_profile_id] = config.password
         return record
 
     def delete_profile(self, ssh_profile_id: str) -> None:
         if ssh_profile_id not in self.ssh_profiles:
             raise KeyError(ssh_profile_id)
         del self.ssh_profiles[ssh_profile_id]
+        self.ssh_profile_passwords.pop(ssh_profile_id, None)
 
 
 def _create_test_client(fake_service: object) -> TestClient:
@@ -779,6 +860,33 @@ def test_list_and_get_ssh_profiles() -> None:
     assert get_response.json()["username"] == "deploy"
     assert get_response.json()["has_private_key"] is True
     assert get_response.json()["private_key_name"] == "id_ed25519"
+
+
+def test_reveal_ssh_profile_password() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/workspace/ssh-profiles/prod:reveal-password"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"password": "relay-secret"}
+
+
+def test_probe_ssh_profile_connectivity() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/workspace/ssh-profiles:probe",
+        json={"ssh_profile_id": "prod"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["ssh_profile_id"] == "prod"
+    assert payload["host"] == "prod-alias"
+    assert payload["latency_ms"] == 44
 
 
 def test_save_and_delete_ssh_profile() -> None:
@@ -1303,6 +1411,8 @@ def test_get_provider_models() -> None:
     payload = response.json()
     assert len(payload) == 3
     assert payload[0]["profile"] == "default"
+    assert payload[0]["input_modalities"] == ["image"]
+    assert payload[0]["capabilities"]["input"]["image"] is True
 
 
 def test_get_model_config() -> None:
@@ -1434,6 +1544,8 @@ def test_get_model_profiles_returns_api_key() -> None:
         "same_provider_then_other_provider"
     )
     assert payload["default"]["fallback_priority"] == 3
+    assert payload["default"]["input_modalities"] == ["image"]
+    assert payload["default"]["capabilities"]["input"]["image"] is True
 
 
 def test_get_model_profiles_returns_maas_password() -> None:
@@ -1453,6 +1565,23 @@ def test_get_model_profiles_returns_maas_password() -> None:
                         "has_password": True,
                     },
                     "is_default": True,
+                    "capabilities": {
+                        "input": {
+                            "text": True,
+                            "image": None,
+                            "audio": None,
+                            "video": None,
+                            "pdf": None,
+                        },
+                        "output": {
+                            "text": True,
+                            "image": None,
+                            "audio": None,
+                            "video": None,
+                            "pdf": None,
+                        },
+                    },
+                    "input_modalities": [],
                 }
             }
 
@@ -1465,6 +1594,7 @@ def test_get_model_profiles_returns_maas_password() -> None:
     assert payload["maas"]["maas_auth"]["username"] == "relay-user"
     assert payload["maas"]["maas_auth"]["password"] == "relay-password"
     assert payload["maas"]["maas_auth"]["has_password"] is True
+    assert payload["maas"]["capabilities"]["input"]["image"] is None
 
 
 def test_get_provider_models_with_filter() -> None:

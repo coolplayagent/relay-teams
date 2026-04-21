@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import cast
 
 from pydantic_ai.messages import (
+    ImageUrl,
     ModelRequest,
     ModelResponse,
     ToolCallPart,
@@ -149,6 +150,51 @@ def test_append_user_prompt_if_missing_dedupes_only_tail_prompt(tmp_path: Path) 
     assert len(history) == 1
     assert isinstance(history[0], ModelRequest)
     assert history[0].parts[0].content == "query time"
+
+
+def test_append_user_prompt_if_missing_dedupes_structured_prompt_content(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_structured_prompt.db"
+    repo = MessageRepository(db_path)
+    prompt_content = (
+        "describe this image",
+        ImageUrl(
+            url="/api/sessions/session-1/media/asset-1/file",
+            media_type="image/png",
+        ),
+    )
+
+    inserted_first = repo.append_user_prompt_if_missing(
+        session_id="session-1",
+        workspace_id="default",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        content=prompt_content,
+    )
+    inserted_second = repo.append_user_prompt_if_missing(
+        session_id="session-1",
+        workspace_id="default",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        content=prompt_content,
+    )
+
+    assert inserted_first is True
+    assert inserted_second is False
+    history = repo.get_history_for_task("inst-1", "task-1")
+    assert len(history) == 1
+    assert isinstance(history[0], ModelRequest)
+    prompt_part = history[0].parts[0]
+    assert isinstance(prompt_part, UserPromptPart)
+    assert isinstance(prompt_part.content, list)
+    assert prompt_part.content[0] == "describe this image"
+    assert prompt_part.content[1] == ImageUrl(
+        url="/api/sessions/session-1/media/asset-1/file",
+        media_type="image/png",
+    )
 
 
 def test_conversation_history_can_span_multiple_instances(tmp_path: Path) -> None:

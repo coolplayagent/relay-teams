@@ -43,6 +43,7 @@ from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
 from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime import (
@@ -152,6 +153,7 @@ class ExternalAcpHostToolBridge:
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         background_task_service: BackgroundTaskService | None,
+        todo_service: TodoService | None = None,
         monitor_service: MonitorService | None = None,
         workspace_manager: WorkspaceManager,
         role_memory_service: RoleMemoryService | None,
@@ -184,6 +186,7 @@ class ExternalAcpHostToolBridge:
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._background_task_service = background_task_service
+        self._todo_service = todo_service
         self._monitor_service = monitor_service
         self._workspace_manager = workspace_manager
         self._media_asset_service = media_asset_service
@@ -514,6 +517,7 @@ class ExternalAcpHostToolBridge:
             computer_runtime=self._computer_runtime,
             background_task_service=self._background_task_service,
             monitor_service=self._monitor_service,
+            todo_service=self._todo_service,
             run_id=request.run_id,
             trace_id=request.trace_id,
             task_id=request.task_id,

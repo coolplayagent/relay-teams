@@ -8,6 +8,7 @@ from relay_teams.roles.temporary_role_models import (
     TemporaryRoleSource,
     TemporaryRoleSpec,
 )
+from relay_teams.roles.role_models import RoleMode
 from relay_teams.tools._description_loader import load_tool_description
 from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 
@@ -75,6 +76,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     skills=payload.skills or (),
                     model_profile=payload.model_profile or "default",
                     system_prompt=payload.system_prompt,
+                    mode=RoleMode.SUBAGENT,
                     template_role_id=payload.template_role_id,
                 ),
             )

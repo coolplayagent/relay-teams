@@ -9,14 +9,17 @@ from relay_teams.external_agents import ExternalAgentOption, ExternalAgentTransp
 from relay_teams.interfaces.server.deps import (
     get_external_agent_config_service,
     get_mcp_service,
+    get_model_config_service,
     get_role_registry,
     get_role_settings_service,
     get_skills_config_reload_service,
     get_skill_registry,
     get_tool_registry,
 )
+from relay_teams.media import MediaModality
 from relay_teams.interfaces.server.routers import roles
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSummary
+from relay_teams.providers.model_config import ModelEndpointConfig, ProviderType
 from relay_teams.roles import (
     NormalModeRoleOption,
     RoleConfigSource,
@@ -164,6 +167,31 @@ class _FakeExternalAgentService:
         )
 
 
+class _FakeModelConfigService:
+    def __init__(self) -> None:
+        self.runtime = type(
+            "_Runtime",
+            (),
+            {
+                "llm_profiles": {
+                    "default": ModelEndpointConfig(
+                        provider=ProviderType.OPENAI_COMPATIBLE,
+                        model="gpt-4.1-mini",
+                        base_url="https://api.openai.com/v1",
+                        api_key="test-key",
+                    ),
+                    "writer": ModelEndpointConfig(
+                        provider=ProviderType.OPENAI_COMPATIBLE,
+                        model="gpt-4.1-nano",
+                        base_url="https://api.openai.com/v1",
+                        api_key="test-key",
+                    ),
+                },
+                "default_model_profile": "default",
+            },
+        )()
+
+
 def _create_test_client(
     *,
     registry: RoleRegistry | None = None,
@@ -220,6 +248,9 @@ def _create_test_client(
     app.dependency_overrides[get_role_settings_service] = lambda: resolved_service
     app.dependency_overrides[get_tool_registry] = lambda: _FakeToolRegistry()
     app.dependency_overrides[get_mcp_service] = lambda: _FakeMcpService()
+    app.dependency_overrides[get_model_config_service] = lambda: (
+        _FakeModelConfigService()
+    )
     app.dependency_overrides[get_skill_registry] = lambda: resolved_skill_registry
     app.dependency_overrides[get_skills_config_reload_service] = lambda: (
         resolved_skills_reload_service
@@ -360,11 +391,30 @@ def test_get_role_config_options() -> None:
     assert response.json() == RoleConfigOptions(
         coordinator_role_id="Coordinator",
         main_agent_role_id="MainAgent",
+        coordinator_role=NormalModeRoleOption(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates the run.",
+            model_profile="default",
+            model_name="gpt-4.1-mini",
+            input_modalities=(MediaModality.IMAGE,),
+        ),
+        main_agent_role=NormalModeRoleOption(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Executes normal-mode runs.",
+            model_profile="default",
+            model_name="gpt-4.1-mini",
+            input_modalities=(MediaModality.IMAGE,),
+        ),
         normal_mode_roles=(
             NormalModeRoleOption(
                 role_id="MainAgent",
                 name="Main Agent",
                 description="Executes normal-mode runs.",
+                model_profile="default",
+                model_name="gpt-4.1-mini",
+                input_modalities=(MediaModality.IMAGE,),
             ),
         ),
         subagent_roles=(
@@ -372,6 +422,9 @@ def test_get_role_config_options() -> None:
                 role_id="writer",
                 name="Writer",
                 description="Drafts user-facing content.",
+                model_profile="default",
+                model_name="gpt-4.1-mini",
+                input_modalities=(MediaModality.IMAGE,),
             ),
         ),
         tools=("create_tasks", "dispatch_task"),

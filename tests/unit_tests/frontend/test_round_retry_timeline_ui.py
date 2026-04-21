@@ -48,9 +48,11 @@ def _run_round_timeline_script(tmp_path: Path, runner_source: str) -> dict[str, 
         "../../core/api.js": "./mockApi.mjs",
         "../agentPanel.js": "./mockAgentPanel.mjs",
         "../messageRenderer.js": "./mockMessageRenderer.mjs",
+        "../messageRenderer/helpers/prompt.js": "./mockPromptHelpers.mjs",
         "./navigator.js": "./mockNavigator.mjs",
         "./paging.js": "./mockPaging.mjs",
         "./state.js": "./mockRoundsState.mjs",
+        "./todo.js": "./mockTodo.mjs",
         "./utils.js": "./mockRoundUtils.mjs",
         "../../utils/logger.js": "./mockLogger.mjs",
         "../../utils/i18n.js": "./mockI18n.mjs",
@@ -137,6 +139,22 @@ export function appendStreamChunk() {
 """.strip(),
         encoding="utf-8",
     )
+    (tmp_path / "mockPromptHelpers.mjs").write_text(
+        """
+export function normalizePromptContentParts(parts) {
+    return Array.isArray(parts) ? parts : [];
+}
+
+export function renderPromptContentParts() {
+    return undefined;
+}
+
+export function summarizePromptContentParts() {
+    return '';
+}
+""".strip(),
+        encoding="utf-8",
+    )
     (tmp_path / "mockNavigator.mjs").write_text(
         """
 export function renderRoundNavigator() {
@@ -171,6 +189,18 @@ export const roundsState = {
     currentRound: null,
     currentRounds: [],
 };
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockTodo.mjs").write_text(
+        """
+export function normalizeRoundTodoSnapshot() {
+    return null;
+}
+
+export function areRoundTodoSnapshotsEqual(left, right) {
+    return left === right;
+}
 """.strip(),
         encoding="utf-8",
     )

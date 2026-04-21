@@ -38,7 +38,7 @@ from relay_teams.agents.tasks.models import TaskEnvelope
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.logger import get_logger, log_event
-from relay_teams.media import MediaAssetService
+from relay_teams.media import MediaAssetService, merge_user_prompt_content
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
@@ -946,7 +946,7 @@ class TaskExecutionService(BaseModel):
                 run_intent = None
             if run_intent is not None and run_intent.input:
                 provider_content = (
-                    self.media_asset_service.to_provider_user_prompt_content(
+                    self.media_asset_service.to_persisted_user_prompt_content(
                         parts=run_intent.input
                     )
                 )
@@ -1047,13 +1047,7 @@ class TaskExecutionService(BaseModel):
         appendix = self._user_prompt_skill_appendix(user_prompt_text)
         if not appendix:
             return provider_content
-        if isinstance(provider_content, str):
-            if not provider_content.strip():
-                return appendix
-            return f"{provider_content.rstrip()}\n\n{appendix}"
-        if isinstance(provider_content, tuple):
-            return (*provider_content, appendix)
-        return provider_content
+        return merge_user_prompt_content(provider_content, appendix)
 
     def _user_prompt_skill_appendix(self, user_prompt_text: str) -> str:
         prompt = user_prompt_text.strip()

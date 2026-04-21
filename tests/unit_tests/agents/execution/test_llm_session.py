@@ -29,7 +29,12 @@ from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.llm_retry import LlmRetryErrorInfo, LlmRetrySchedule
-from relay_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
+from relay_teams.providers.model_config import (
+    LlmRetryConfig,
+    ModelCapabilities,
+    ModelEndpointConfig,
+    ModelModalityMatrix,
+)
 from relay_teams.providers.model_fallback import LlmFallbackDecision
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.tools.runtime.persisted_state import (
@@ -40,6 +45,8 @@ from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventNam
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.assistant_errors import AssistantRunError
 from pydantic_ai.messages import (
+    BinaryContent,
+    ImageUrl,
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
@@ -48,6 +55,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from relay_teams.media import MediaRefContentPart, MediaModality, TextContentPart
 
 
 def test_maybe_enrich_tool_result_payload_wraps_builtin_computer_results() -> None:
@@ -264,7 +272,11 @@ async def _zero_mcp_context_tokens(
     return 0
 
 
-def _build_request(*, user_prompt: str | None = "User prompt") -> LLMRequest:
+def _build_request(
+    *,
+    user_prompt: str | None = "User prompt",
+    input: tuple[TextContentPart | MediaRefContentPart, ...] = (),
+) -> LLMRequest:
     return LLMRequest(
         run_id="run-1",
         trace_id="trace-1",
@@ -276,6 +288,7 @@ def _build_request(*, user_prompt: str | None = "User prompt") -> LLMRequest:
         role_id="writer",
         system_prompt="System prompt",
         user_prompt=user_prompt,
+        input=input,
     )
 
 
@@ -437,6 +450,80 @@ async def test_prepare_prompt_context_inserts_replay_bridge_for_resume_history()
     assert prepared_history[1:] == base_history
 
 
+@pytest.mark.asyncio
+async def test_prepare_prompt_context_keeps_persisted_media_urls_for_prompt_deduplication() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    persisted_prompt = (
+        "describe this image",
+        ImageUrl(
+            url="/api/sessions/session-1/media/asset-1/file",
+            media_type="image/png",
+        ),
+    )
+    session._config = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        context_window=600,
+    )
+    session._message_repo = cast(
+        MessageRepository,
+        _FakeMessageRepo(
+            [ModelRequest(parts=[UserPromptPart(content=persisted_prompt)])]
+        ),
+    )
+    session._conversation_microcompact_service = None
+    session._conversation_compaction_service = None
+    session._estimated_mcp_context_tokens = _zero_mcp_context_tokens
+    session._estimated_tool_context_tokens = lambda **_kwargs: 120
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Describe the preserved image."),
+    )
+
+    class _FakeMediaAssetService:
+        def hydrate_user_prompt_content(self, *, content: object) -> object:
+            if content == persisted_prompt:
+                return (
+                    "describe this image",
+                    BinaryContent(data=b"image-bytes", media_type="image/png"),
+                )
+            return content
+
+    cast(Any, session)._media_asset_service = _FakeMediaAssetService()
+
+    prepared = await AgentLlmSession._prepare_prompt_context(
+        session,
+        request=_build_request(user_prompt="describe this image"),
+        conversation_id="conv-1",
+        system_prompt="System prompt",
+        reserve_user_prompt_tokens=True,
+        allowed_tools=(),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+
+    prepared_history = list(prepared.history)
+    assert len(prepared_history) == 1
+    prepared_message = prepared_history[0]
+    assert isinstance(prepared_message, ModelRequest)
+    prepared_part = prepared_message.parts[0]
+    assert isinstance(prepared_part, UserPromptPart)
+    assert prepared_part.content == persisted_prompt
+
+    next_history, rebuild_context = AgentLlmSession._persist_user_prompt_if_needed(
+        session,
+        request=_build_request(user_prompt="describe this image"),
+        history=prepared_history,
+        content=persisted_prompt,
+    )
+
+    assert rebuild_context is False
+    assert next_history == prepared_history
+
+
 def test_coerce_history_to_provider_safe_sequence_drops_orphan_tool_prefix() -> None:
     session = object.__new__(AgentLlmSession)
     session._run_intent_repo = cast(
@@ -520,6 +607,101 @@ def test_coerce_history_to_provider_safe_sequence_keeps_bridge_when_prefix_drop_
     bridge_part = bridge_message.parts[0]
     assert isinstance(bridge_part, UserPromptPart)
     assert "Resume the preserved execution state after repair." in bridge_part.content
+
+
+def test_validate_request_input_capabilities_rejects_unsupported_image() -> None:
+    session = object.__new__(AgentLlmSession)
+    session._config = ModelEndpointConfig(
+        model="text-only",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        capabilities=ModelCapabilities(
+            input=ModelModalityMatrix(text=True, image=False),
+            output=ModelModalityMatrix(text=True),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="does not support image input"):
+        AgentLlmSession._validate_request_input_capabilities(
+            session,
+            _build_request(
+                user_prompt=None,
+                input=(
+                    MediaRefContentPart(
+                        kind="media_ref",
+                        asset_id="asset-1",
+                        session_id="session-1",
+                        modality=MediaModality.IMAGE,
+                        mime_type="image/png",
+                        url="/api/sessions/session-1/media/asset-1/file",
+                    ),
+                ),
+            ),
+        )
+
+
+def test_validate_request_input_capabilities_rejects_unknown_image_support() -> None:
+    session = object.__new__(AgentLlmSession)
+    session._config = ModelEndpointConfig(
+        model="unknown-image-support",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        capabilities=ModelCapabilities(
+            input=ModelModalityMatrix(text=True, image=None),
+            output=ModelModalityMatrix(text=True),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="support for image input is unknown"):
+        AgentLlmSession._validate_request_input_capabilities(
+            session,
+            _build_request(
+                user_prompt=None,
+                input=(
+                    MediaRefContentPart(
+                        kind="media_ref",
+                        asset_id="asset-1",
+                        session_id="session-1",
+                        modality=MediaModality.IMAGE,
+                        mime_type="image/png",
+                        url="/api/sessions/session-1/media/asset-1/file",
+                    ),
+                ),
+            ),
+        )
+
+
+def test_validate_history_input_capabilities_rejects_unsupported_image() -> None:
+    session = object.__new__(AgentLlmSession)
+    session._config = ModelEndpointConfig(
+        model="text-only",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        capabilities=ModelCapabilities(
+            input=ModelModalityMatrix(text=True, image=False),
+            output=ModelModalityMatrix(text=True),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="does not support image input"):
+        AgentLlmSession._validate_history_input_capabilities(
+            session,
+            [
+                ModelRequest(
+                    parts=[
+                        UserPromptPart(
+                            content=(
+                                "describe this image",
+                                ImageUrl(
+                                    url="/api/sessions/session-1/media/asset-1/file",
+                                    media_type="image/png",
+                                ),
+                            )
+                        )
+                    ]
+                )
+            ],
+        )
 
 
 def test_coerce_history_to_provider_safe_sequence_prefers_explicit_user_prompt_over_bridge() -> (
@@ -639,6 +821,100 @@ def test_persist_user_prompt_keeps_ephemeral_prompt_in_memory_when_not_persisted
     appended_part = appended_message.parts[0]
     assert isinstance(appended_part, UserPromptPart)
     assert appended_part.content == "ephemeral prompt"
+
+
+def test_current_request_prompt_content_uses_persisted_media_references() -> None:
+    session = object.__new__(AgentLlmSession)
+
+    class _FakeMediaAssetService:
+        def to_persisted_user_prompt_content(self, *, parts: object) -> object:
+            _ = parts
+            return (
+                "describe this image",
+                ImageUrl(
+                    url="/api/sessions/session-1/media/asset-1/file",
+                    media_type="image/png",
+                ),
+            )
+
+    cast(Any, session)._media_asset_service = _FakeMediaAssetService()
+
+    content = AgentLlmSession._current_request_prompt_content(
+        session,
+        _build_request(
+            user_prompt="describe this image",
+            input=(
+                TextContentPart(text="describe this image"),
+                MediaRefContentPart(
+                    asset_id="asset-1",
+                    session_id="session-1",
+                    modality=MediaModality.IMAGE,
+                    mime_type="image/png",
+                    url="/api/sessions/session-1/media/asset-1/file",
+                ),
+            ),
+        ),
+    )
+
+    assert content == (
+        "describe this image",
+        ImageUrl(
+            url="/api/sessions/session-1/media/asset-1/file",
+            media_type="image/png",
+        ),
+    )
+
+
+def test_hydrate_history_media_content_replaces_local_urls_before_provider_send() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+
+    class _FakeMediaAssetService:
+        def hydrate_user_prompt_content(self, *, content: object) -> object:
+            if content == (
+                "describe this image",
+                ImageUrl(
+                    url="/api/sessions/session-1/media/asset-1/file",
+                    media_type="image/png",
+                ),
+            ):
+                return (
+                    "describe this image",
+                    BinaryContent(
+                        data=b"image-bytes",
+                        media_type="image/png",
+                    ),
+                )
+            return content
+
+    cast(Any, session)._media_asset_service = _FakeMediaAssetService()
+    history = [
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=(
+                        "describe this image",
+                        ImageUrl(
+                            url="/api/sessions/session-1/media/asset-1/file",
+                            media_type="image/png",
+                        ),
+                    )
+                )
+            ]
+        )
+    ]
+
+    hydrated = AgentLlmSession._hydrate_history_media_content(session, history)
+
+    assert len(hydrated) == 1
+    hydrated_message = hydrated[0]
+    assert isinstance(hydrated_message, ModelRequest)
+    hydrated_part = hydrated_message.parts[0]
+    assert isinstance(hydrated_part, UserPromptPart)
+    assert hydrated_part.content[0] == "describe this image"
+    assert isinstance(hydrated_part.content[1], BinaryContent)
+    assert hydrated_part.content[1].data == b"image-bytes"
 
 
 def test_apply_streamed_text_fallback_repairs_truncated_final_message() -> None:

@@ -137,6 +137,7 @@ from relay_teams.hooks import (
 
 if TYPE_CHECKING:
     from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
+    from relay_teams.sessions.runs.todo_service import TodoService
 
 logger = get_logger(__name__)
 _T = TypeVar("_T")
@@ -339,6 +340,7 @@ class RunManager:
         run_state_repo: RunStateRepository | None = None,
         background_task_manager: BackgroundTaskManager | None = None,
         background_task_service: BackgroundTaskService | None = None,
+        todo_service: TodoService | None = None,
         monitor_service: MonitorService | None = None,
         notification_service: NotificationService | None = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
@@ -372,6 +374,7 @@ class RunManager:
         self._run_state_repo: RunStateRepository | None = run_state_repo
         self._background_task_manager = background_task_manager
         self._background_task_service = background_task_service
+        self._todo_service = todo_service
         self._monitor_service = monitor_service
         self._notification_service: NotificationService | None = notification_service
         self._orchestration_settings_service = orchestration_settings_service
@@ -2531,6 +2534,15 @@ class RunManager:
         if record.execution_mode != "background":
             raise KeyError(f"Background task {background_task_id} not found")
         return record.model_dump(mode="json")
+
+    def get_todo(self, run_id: str) -> dict[str, object]:
+        if self._todo_service is None:
+            raise RuntimeError("Todo service is not configured")
+        snapshot = self._todo_service.get_for_run(
+            run_id=run_id,
+            session_id=self._require_run_session_id(run_id),
+        )
+        return snapshot.model_dump(mode="json")
 
     async def stop_background_task(
         self,

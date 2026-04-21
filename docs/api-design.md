@@ -104,7 +104,7 @@ The response body is a root object whose keys are profile ids and whose values u
 ### `GET /system/configs/model/profiles`
 
 Returns normalized model profiles.
-Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `headers[]` for additional request headers, `is_default` to mark the runtime default profile, optional `context_window` for next-send context preview UI, optional `fallback_policy_id` to bind that profile to a fallback policy, and `fallback_priority` to rank it as a fallback candidate.
+Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `headers[]` for additional request headers, `is_default` to mark the runtime default profile, optional `context_window` for next-send context preview UI, optional `fallback_policy_id` to bind that profile to a fallback policy, `fallback_priority` to rank it as a fallback candidate, structured `capabilities.input/output.*`, and a derived `input_modalities[]` compatibility field so the UI can label profiles that accept direct media input.
 `provider` currently supports `openai_compatible`, `bigmodel`, `minimax`, `maas`, and the internal/testing-only `echo`. MAAS profiles also return `maas_auth` with `username` and `has_password` so the web UI can preserve the stored password without echoing it back. The MAAS login endpoint and `app-id` are fixed by the backend.
 When no profile is explicitly marked default, the backend resolves the default in this order: a profile named `default`, the only configured profile, then the first profile by name.
 
@@ -172,6 +172,8 @@ For `maas`, the backend merges model ids from top-level `user_model_list` and ne
 When the provider exposes per-model context-limit metadata in the catalog payload, the response also includes `model_entries[]` with:
 - `model`
 - optional `context_window`
+- `capabilities`
+- `input_modalities[]`
 
 The settings UI uses `model_entries[].context_window` to auto-fill the profile context window field after model discovery. Providers that return only model ids will still populate `models[]`, but `context_window` remains user-specified.
 For a small set of known provider/model pairs, the backend also applies a built-in context-window fallback when the provider returns only model ids.
@@ -551,11 +553,86 @@ Each item includes:
 - `created_at`
 - `updated_at`
 
-Passwords and private key bodies are not echoed by the API.
+Passwords and private key bodies are not echoed by list/get/upsert responses.
 
 ### `GET /system/configs/workspace/ssh-profiles/{ssh_profile_id}`
 
 Returns one SSH profile with the same response shape as the list endpoint.
+
+### `POST /system/configs/workspace/ssh-profiles/{ssh_profile_id}:reveal-password`
+
+Returns the stored SSH password for one profile:
+
+```json
+{
+  "password": "optional-password"
+}
+```
+
+The response returns `null` when no password is stored. Private key bodies remain non-readable through the settings API.
+
+### `POST /system/configs/workspace/ssh-profiles:probe`
+
+Tests whether an SSH profile can open a remote SSH session. The probe is used by both the saved profile list and the profile editor.
+
+Request body for a saved profile:
+
+```json
+{
+  "ssh_profile_id": "prod",
+  "timeout_ms": 15000
+}
+```
+
+Request body for unsaved editor values or a saved profile with draft overrides:
+
+```json
+{
+  "ssh_profile_id": "prod",
+  "override": {
+    "host": "prod-alias",
+    "username": "deploy",
+    "password": "optional-password",
+    "port": 22,
+    "remote_shell": "/bin/bash",
+    "connect_timeout_seconds": 15,
+    "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+    "private_key_name": "id_ed25519"
+  },
+  "timeout_ms": 15000
+}
+```
+
+Rules:
+- Either `ssh_profile_id` or `override` is required.
+- When `ssh_profile_id` is supplied and `override.password` or `override.private_key` is omitted, the probe reuses the stored secret for that field.
+- When no password or private key is available, the probe falls back to the host system SSH configuration.
+- The server shells out to `ssh`, writes any draft private key to a temporary 0600 identity file, and removes temporary files after the probe.
+
+Response body:
+
+```json
+{
+  "ok": true,
+  "ssh_profile_id": "prod",
+  "host": "prod-alias",
+  "port": 22,
+  "username": "deploy",
+  "latency_ms": 44,
+  "checked_at": "2026-04-21T00:00:00Z",
+  "diagnostics": {
+    "binary_available": true,
+    "host_reachable": true,
+    "used_password": false,
+    "used_private_key": false,
+    "used_system_config": true,
+    "exit_code": 0
+  },
+  "error_code": null,
+  "error_message": null,
+  "retryable": false
+}
+```
 
 ### `PUT /system/configs/workspace/ssh-profiles/{ssh_profile_id}`
 
@@ -814,6 +891,7 @@ Notes:
 - `microcompact` is present when the run used request-level prompt-view compaction. It is not a persisted history boundary and does not imply that a history marker was written.
 - `microcompact.estimated_tokens_before/after` reflects history-token estimates around the request-level microcompact pass, not the full prompt token total.
 - `microcompact` reflects the latest model-step payload for that run. If a later attempt in the same run reports `microcompact_applied = false`, the round projection clears the stale badge state instead of keeping the older value.
+- `todo` is present when the run has a persisted run-scoped todo snapshot. It mirrors `GET /runs/{run_id}/todo`.
 - `clear_marker_before` is present on the first round after a session history clear boundary. The frontend uses it to render a divider and collapse older segments by default.
 - `compaction_marker_before` is present on the first round whose coordinator conversation continues after an automatic history compaction boundary. The frontend uses it to render a non-collapsing divider.
 - `compaction_marker_before.label` is `History compacted (rolling summary)` when the marker metadata reports `compaction_strategy = rolling_summary`; older markers without strategy metadata may still render as `History compacted`.
@@ -840,7 +918,7 @@ Returns active run recovery state, pending tool approvals, pending user question
 - `primary_role_id`
 
 For `running` or `queued` recoverable runs, the frontend uses these event ids to automatically reconnect the SSE stream without a manual "Connect Stream" action.
-`round_snapshot` mirrors the same round projection contract as `/sessions/{session_id}/rounds/{run_id}`, including `primary_role_id`.
+`round_snapshot` mirrors the same round projection contract as `/sessions/{session_id}/rounds/{run_id}`, including `primary_role_id` and any persisted `todo` snapshot.
 `round_snapshot.background_task_count` mirrors the current managed background task count for the active run.
 When a run is waiting for an `ask_question` answer, the public `active_run.phase` is `awaiting_manual_action`.
 
@@ -1086,6 +1164,12 @@ Notes:
   - `{"kind":"text","text":"..."}`
   - `{"kind":"media_ref", ...}`
   - `{"kind":"inline_media", ...}` for small ingress-only image/audio payloads that are normalized immediately into stored `media_ref` assets
+- Conversation runs may combine text and pasted images in the same `input` array.
+- For image paste ingress, the frontend sends `inline_media` parts with:
+  - `modality: "image"`
+  - `mime_type`
+  - `base64_data`
+  - optional `name`, `size_bytes`, `width`, and `height`
 - `run_kind` supports:
   - `conversation`
   - `generate_image`
@@ -1283,6 +1367,35 @@ Response:
 ### `GET /runs/{run_id}/background-tasks/{background_task_id}`
 
 Returns one managed background task snapshot for the run.
+
+### `GET /runs/{run_id}/todo`
+
+Returns the latest persisted run-scoped todo snapshot for the run.
+
+Response:
+
+```json
+{
+  "todo": {
+    "run_id": "run-1",
+    "session_id": "session-1",
+    "items": [
+      {"content": "Inspect issue 399 requirements", "status": "completed"},
+      {"content": "Implement run todo persistence", "status": "in_progress"},
+      {"content": "Verify API and CLI output", "status": "pending"}
+    ],
+    "version": 2,
+    "updated_at": "2026-04-20T10:00:00Z",
+    "updated_by_role_id": "MainAgent",
+    "updated_by_instance_id": "instance-1"
+  }
+}
+```
+
+Notes:
+- Missing todo state returns an empty snapshot with `items=[]` and `version=0`; the endpoint does not return `404` just because the run has not written todo state yet.
+- `status` is one of `pending`, `in_progress`, or `completed`.
+- At most one item may be `in_progress`.
 
 ### `POST /runs/{run_id}/background-tasks/{background_task_id}:stop`
 
@@ -1635,14 +1748,34 @@ Returns editor options for role settings.
 Response fields:
 - `coordinator_role_id`
 - `main_agent_role_id`
+- `coordinator_role`
+  - `role_id`
+  - `name`
+  - `description`
+  - `model_profile`
+  - `capabilities`
+  - `input_modalities[]`
+- `main_agent_role`
+  - `role_id`
+  - `name`
+  - `description`
+  - `model_profile`
+  - `capabilities`
+  - `input_modalities[]`
 - `normal_mode_roles[]`
   - `role_id`
   - `name`
   - `description`
+  - `model_profile`
+  - `capabilities`
+  - `input_modalities[]`
 - `subagent_roles[]`
   - `role_id`
   - `name`
   - `description`
+  - `model_profile`
+  - `capabilities`
+  - `input_modalities[]`
 - `role_modes[]`: `primary | subagent | all`
 - `tools`
 - `mcp_servers`
@@ -1660,6 +1793,9 @@ Response fields:
 Notes:
 - Same-name builtin/app skills are both returned. Frontends must treat `ref` as
   the stable identity and use `name` only for display.
+- `capabilities.input/output.*` is the canonical multimodal contract for a role's
+  resolved runtime model profile. `input_modalities[]` is derived from
+  `capabilities.input` for compatibility with existing consumers.
 - `normal_mode_roles[]` contains non-system roles whose `mode` is `primary` or `all`.
 - `subagent_roles[]` contains non-system roles whose `mode` is `subagent` or `all`.
 - Returns `503` when required builtin/system roles such as `Coordinator` or
@@ -1798,6 +1934,32 @@ Shared result fields include:
 - `completed`
 
 `wait_background_task` is a completion wait, not a polling primitive: it accepts only `background_task_id` and returns after the managed task reaches a terminal state. Use `list_background_tasks` for in-progress status snapshots.
+
+### Todo Tool Family
+
+The built-in todo tools maintain a run-scoped local execution plan that is separate from delegated task contracts:
+- `todo_write`
+- `todo_read`
+
+Shared todo snapshot fields include:
+- `run_id`
+- `session_id`
+- `items`
+- `version`
+- `updated_at`
+- `updated_by_role_id`
+- `updated_by_instance_id`
+
+`todo_write` always replaces the full table. It does not append or patch individual rows.
+
+Todo item fields:
+- `content`
+- `status`: `pending | in_progress | completed`
+
+Rules:
+- At most one todo item may be `in_progress`.
+- An empty `items` array clears the run todo while preserving versioned history through the latest snapshot row.
+- `todo_read` returns the latest persisted snapshot or the synthetic empty snapshot when no todo has been written yet.
 
 ### `spawn_subagent`
 

@@ -116,6 +116,14 @@ export function appendStreamOutputParts(
         streamState.set(streamKey, st);
     }
     if (!st || !Array.isArray(outputParts)) return;
+    appendOverlayOutputParts(
+        runId || st.runId,
+        instanceId || st.instanceId,
+        roleId || st.roleId,
+        label || st.label,
+        outputParts,
+        { includeText: false },
+    );
     outputParts.forEach(part => {
         if (!part || typeof part !== 'object') return;
         if (part.kind === 'text') {
@@ -569,6 +577,19 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
     if (evType === 'text_delta') {
         clearOverlayEntryCleanupTimer(runId, streamKey);
         updateOverlayText(runId, streamKey, roleId, label, payload?.text || '');
+        setOverlayIdleCursor(runId, streamKey, roleId, label, false);
+        return;
+    }
+    if (evType === 'output_delta') {
+        clearOverlayEntryCleanupTimer(runId, streamKey);
+        appendOverlayOutputParts(
+            runId,
+            streamKey,
+            roleId,
+            label,
+            Array.isArray(payload?.output) ? payload.output : [],
+            { includeText: true },
+        );
         setOverlayIdleCursor(runId, streamKey, roleId, label, false);
         return;
     }
@@ -1277,6 +1298,39 @@ function updateOverlayText(runId, instanceId, roleId, label, text) {
     entry.parts.push({ kind: 'text', content: nextText });
 }
 
+function appendOverlayOutputParts(
+    runId,
+    instanceId,
+    roleId,
+    label,
+    outputParts,
+    options = {},
+) {
+    const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
+    if (!entry) return;
+    const includeText = options.includeText === true;
+    const parts = Array.isArray(outputParts) ? outputParts : [];
+    parts.forEach(rawPart => {
+        const normalizedPart = normalizeOverlayOutputPart(rawPart);
+        if (!normalizedPart) {
+            return;
+        }
+        if (normalizedPart.kind === 'text') {
+            if (!includeText) {
+                return;
+            }
+            const lastPart = entry.parts[entry.parts.length - 1];
+            if (lastPart && lastPart.kind === 'text') {
+                lastPart.content = String(lastPart.content || '') + normalizedPart.content;
+            } else {
+                entry.parts.push(normalizedPart);
+            }
+            return;
+        }
+        entry.parts.push(normalizedPart);
+    });
+}
+
 function setOverlayTextStreaming(runId, instanceId, roleId, label, isStreaming) {
     const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
     if (!entry) return;
@@ -1418,6 +1472,31 @@ function normalizeOverlayToolArgs(args) {
         return args;
     }
     return {};
+}
+
+function normalizeOverlayOutputPart(part) {
+    if (!part || typeof part !== 'object') {
+        return null;
+    }
+    const kind = String(part.kind || '').trim();
+    if (kind === 'text') {
+        const content = String(part.text || part.content || '');
+        return content ? { kind: 'text', content } : null;
+    }
+    if (kind !== 'media_ref') {
+        return null;
+    }
+    const url = String(part.url || '').trim();
+    if (!url) {
+        return null;
+    }
+    return {
+        kind: 'media_ref',
+        modality: String(part.modality || '').trim(),
+        mime_type: String(part.mime_type || '').trim(),
+        url,
+        name: String(part.name || '').trim(),
+    };
 }
 
 function findOverlayThinkingPartByKey(entry, key) {

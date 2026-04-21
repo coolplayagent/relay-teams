@@ -306,6 +306,8 @@ def test_ssh_profile_sdk_calls_expected_endpoints(monkeypatch) -> None:
     assert client.list_ssh_profiles() == [{"ssh_profile_id": "prod"}]
     assert client.get_ssh_profile("prod") == {"status": "ok"}
     assert client.save_ssh_profile("prod", {"host": "prod-alias"}) == {"status": "ok"}
+    assert client.reveal_ssh_profile_password("prod") == {"status": "ok"}
+    assert client.probe_ssh_profile({"ssh_profile_id": "prod"}) == {"status": "ok"}
     assert client.delete_ssh_profile("prod") == {"status": "ok"}
     assert calls == [
         ("GET", "/api/system/configs/workspace/ssh-profiles", None),
@@ -314,6 +316,16 @@ def test_ssh_profile_sdk_calls_expected_endpoints(monkeypatch) -> None:
             "PUT",
             "/api/system/configs/workspace/ssh-profiles/prod",
             {"config": {"host": "prod-alias"}},
+        ),
+        (
+            "POST",
+            "/api/system/configs/workspace/ssh-profiles/prod:reveal-password",
+            None,
+        ),
+        (
+            "POST",
+            "/api/system/configs/workspace/ssh-profiles:probe",
+            {"ssh_profile_id": "prod"},
         ),
         ("DELETE", "/api/system/configs/workspace/ssh-profiles/prod", None),
     ]
@@ -413,6 +425,32 @@ def test_get_github_config_calls_expected_endpoint(monkeypatch) -> None:
     assert captured == {
         "method": "GET",
         "path": "/api/system/configs/github",
+        "payload": None,
+    }
+
+
+def test_get_run_todo_calls_expected_endpoint(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"todo": {"run_id": "run-1", "items": []}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.get_run_todo("run-1")
+
+    assert response == {"todo": {"run_id": "run-1", "items": []}}
+    assert captured == {
+        "method": "GET",
+        "path": "/api/runs/run-1/todo",
         "payload": None,
     }
 

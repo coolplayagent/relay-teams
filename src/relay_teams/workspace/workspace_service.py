@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import difflib
 import mimetypes
+import posixpath
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -47,6 +49,34 @@ from relay_teams.workspace.workspace_repository import WorkspaceRepository
 _NON_WORKSPACE_ID_CHARS = re.compile(r"[^a-z0-9]+")
 _GIT_TIMEOUT_SECONDS = 30.0
 _BINARY_DIFF_MESSAGE = "Binary file changed"
+_SSH_TREE_LIST_TIMEOUT_SECONDS = 30.0
+_SSH_TREE_ENTRY_SEPARATOR = "\t"
+_SSH_TREE_NOT_DIRECTORY_MARKER = "relay-teams-error:not-directory"
+_SSH_TREE_LIST_SCRIPT = """
+set -eu
+dir=$1
+if [ ! -d "$dir" ]; then
+    printf '%s\\n' 'relay-teams-error:not-directory' >&2
+    exit 2
+fi
+find "$dir" -mindepth 1 -maxdepth 1 ! -name .git -exec sh -c '
+for path do
+    name=${path##*/}
+    if [ -d "$path" ] && [ ! -L "$path" ]; then
+        kind=directory
+        if find "$path" -mindepth 1 -maxdepth 1 ! -name .git -print -quit | grep -q .; then
+            has_children=1
+        else
+            has_children=0
+        fi
+    else
+        kind=file
+        has_children=0
+    fi
+    printf "%s\\t%s\\t%s\\n" "$kind" "$has_children" "$name"
+done
+' sh {} +
+"""
 _WORKSPACE_IMAGE_MEDIA_TYPES = frozenset(
     {
         "image/avif",
@@ -312,6 +342,12 @@ class WorkspaceService:
         record = self._repository.get(workspace_id)
         mount = self._resolve_mount(record, mount_name)
         if mount.provider != WorkspaceMountProvider.LOCAL:
+            if mount.provider == WorkspaceMountProvider.SSH:
+                return self._get_ssh_workspace_tree_listing(
+                    record=record,
+                    mount=mount,
+                    directory_path=directory_path,
+                )
             raise ValueError(
                 f"Workspace mount does not support tree listing: {mount.mount_name}"
             )
@@ -338,6 +374,50 @@ class WorkspaceService:
             mount_name=mount.mount_name,
             directory_path=normalized_directory_path,
             children=children,
+        )
+
+    def _get_ssh_workspace_tree_listing(
+        self,
+        *,
+        record: WorkspaceRecord,
+        mount: WorkspaceMountRecord,
+        directory_path: str,
+    ) -> WorkspaceTreeListing:
+        if self._ssh_profile_service is None:
+            raise ValueError(
+                f"Workspace ssh mount cannot list files without ssh profiles: {mount.mount_name}"
+            )
+        provider_config = mount.provider_config
+        if not isinstance(provider_config, WorkspaceSshMountConfig):
+            raise ValueError(
+                f"Workspace ssh mount is missing ssh config: {mount.mount_name}"
+            )
+        remote_path, normalized_directory_path = self._resolve_ssh_tree_path(
+            mount=mount,
+            directory_path=directory_path,
+        )
+        result = self._ssh_profile_service.run_remote_command(
+            ssh_profile_id=provider_config.ssh_profile_id,
+            command=self._build_ssh_tree_list_command(remote_path),
+            timeout_seconds=_SSH_TREE_LIST_TIMEOUT_SECONDS,
+        )
+        if result.exit_code != 0:
+            detail = (result.stderr or result.stdout).strip()
+            if _SSH_TREE_NOT_DIRECTORY_MARKER in detail:
+                raise ValueError(f"Workspace path is not a directory: {directory_path}")
+            raise ValueError(
+                "Failed to list workspace ssh mount "
+                f"{mount.mount_name}: {detail or f'exit code {result.exit_code}'}"
+            )
+        return WorkspaceTreeListing(
+            workspace_id=record.workspace_id,
+            mount_name=mount.mount_name,
+            directory_path=normalized_directory_path,
+            children=self._parse_ssh_tree_entries(
+                mount=mount,
+                directory_path=normalized_directory_path,
+                output=result.stdout,
+            ),
         )
 
     def get_workspace_diffs(
@@ -628,10 +708,6 @@ class WorkspaceService:
         for mount in mounts:
             if mount.mount_name != default_mount_name:
                 continue
-            if mount.provider != WorkspaceMountProvider.LOCAL:
-                raise ValueError(
-                    f"Workspace default mount must be local: {default_mount_name}"
-                )
             return
         raise ValueError(f"default mount does not exist: {default_mount_name}")
 
@@ -790,6 +866,101 @@ class WorkspaceService:
             ),
             has_children=has_children,
             children=children,
+        )
+
+    def _resolve_ssh_tree_path(
+        self,
+        *,
+        mount: WorkspaceMountRecord,
+        directory_path: str,
+    ) -> tuple[str, str]:
+        provider_config = mount.provider_config
+        if not isinstance(provider_config, WorkspaceSshMountConfig):
+            raise ValueError(
+                f"Workspace ssh mount is missing ssh config: {mount.mount_name}"
+            )
+        remote_root = posixpath.normpath(provider_config.remote_root.strip())
+        if not posixpath.isabs(remote_root):
+            raise ValueError(
+                f"Workspace ssh mount remote root must be absolute: {mount.mount_name}"
+            )
+
+        normalized_input = directory_path.strip().replace("\\", "/") or "."
+        if posixpath.isabs(normalized_input):
+            raise ValueError(f"Workspace path must be relative: {directory_path}")
+        normalized_path = posixpath.normpath(normalized_input)
+        if normalized_path == ".." or normalized_path.startswith("../"):
+            raise ValueError(f"Workspace path escapes root: {directory_path}")
+
+        remote_path = posixpath.normpath(posixpath.join(remote_root, normalized_path))
+        if remote_root != "/":
+            root_prefix = remote_root.rstrip("/")
+            if remote_path != remote_root and not remote_path.startswith(
+                root_prefix + "/"
+            ):
+                raise ValueError(f"Workspace path escapes root: {directory_path}")
+        normalized_directory_path = (
+            "."
+            if remote_path == remote_root
+            else posixpath.relpath(remote_path, remote_root)
+        )
+        return remote_path, normalized_directory_path
+
+    def _build_ssh_tree_list_command(self, remote_path: str) -> str:
+        return (
+            f"sh -c {shlex.quote(_SSH_TREE_LIST_SCRIPT)} sh {shlex.quote(remote_path)}"
+        )
+
+    def _parse_ssh_tree_entries(
+        self,
+        *,
+        mount: WorkspaceMountRecord,
+        directory_path: str,
+        output: str,
+    ) -> tuple[WorkspaceTreeNode, ...]:
+        nodes: list[WorkspaceTreeNode] = []
+        for raw_line in output.splitlines():
+            line = raw_line.rstrip("\n")
+            if not line:
+                continue
+            parts = line.split(_SSH_TREE_ENTRY_SEPARATOR, maxsplit=2)
+            if len(parts) != 3:
+                raise ValueError(
+                    f"Workspace ssh mount returned malformed tree entry: {mount.mount_name}"
+                )
+            kind_text, has_children_text, name = parts
+            if not name or "/" in name or name in {".", ".."}:
+                raise ValueError(
+                    f"Workspace ssh mount returned invalid tree entry: {mount.mount_name}"
+                )
+            if kind_text == WorkspaceTreeNodeKind.DIRECTORY.value:
+                kind = WorkspaceTreeNodeKind.DIRECTORY
+            elif kind_text == WorkspaceTreeNodeKind.FILE.value:
+                kind = WorkspaceTreeNodeKind.FILE
+            else:
+                raise ValueError(
+                    f"Workspace ssh mount returned unknown tree entry kind: {mount.mount_name}"
+                )
+            child_path = name
+            if directory_path != ".":
+                child_path = posixpath.join(directory_path, name)
+            nodes.append(
+                WorkspaceTreeNode(
+                    name=name,
+                    path=child_path,
+                    kind=kind,
+                    has_children=has_children_text == "1",
+                    children=(),
+                )
+            )
+        return tuple(
+            sorted(
+                nodes,
+                key=lambda node: (
+                    0 if node.kind == WorkspaceTreeNodeKind.DIRECTORY else 1,
+                    node.name.casefold(),
+                ),
+            )
         )
 
     def _resolve_tree_path(self, *, root_path: Path, directory_path: str) -> Path:

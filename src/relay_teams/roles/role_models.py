@@ -5,8 +5,10 @@ from enum import Enum
 from pathlib import Path
 
 from relay_teams.computer import ExecutionSurface
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from relay_teams.media import MediaModality
+from relay_teams.providers.model_config import ModelCapabilities
 from relay_teams.roles.memory_models import MemoryProfile, default_memory_profile
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
@@ -95,6 +97,54 @@ class NormalModeRoleOption(BaseModel):
     role_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
+    model_profile: str = Field(min_length=1)
+    model_name: str = ""
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
+    input_modalities: tuple[MediaModality, ...] = ()
+
+    @model_validator(mode="after")
+    def _sync_capabilities(self) -> "NormalModeRoleOption":
+        input_capabilities = self.capabilities.input.model_copy(
+            update={
+                "image": (
+                    True
+                    if MediaModality.IMAGE in self.input_modalities
+                    else self.capabilities.input.image
+                ),
+                "audio": (
+                    True
+                    if MediaModality.AUDIO in self.input_modalities
+                    else self.capabilities.input.audio
+                ),
+                "video": (
+                    True
+                    if MediaModality.VIDEO in self.input_modalities
+                    else self.capabilities.input.video
+                ),
+                "text": (
+                    True
+                    if self.capabilities.input.text is None
+                    else self.capabilities.input.text
+                ),
+            }
+        )
+        output_capabilities = self.capabilities.output.model_copy(
+            update={
+                "text": (
+                    True
+                    if self.capabilities.output.text is None
+                    else self.capabilities.output.text
+                )
+            }
+        )
+        self.capabilities = self.capabilities.model_copy(
+            update={
+                "input": input_capabilities,
+                "output": output_capabilities,
+            }
+        )
+        self.input_modalities = self.capabilities.supported_input_modalities()
+        return self
 
 
 class RoleAgentOption(BaseModel):
@@ -119,6 +169,8 @@ class RoleConfigOptions(BaseModel):
 
     coordinator_role_id: RequiredIdentifierStr
     main_agent_role_id: RequiredIdentifierStr
+    coordinator_role: NormalModeRoleOption | None = None
+    main_agent_role: NormalModeRoleOption | None = None
     normal_mode_roles: tuple[NormalModeRoleOption, ...] = ()
     subagent_roles: tuple[NormalModeRoleOption, ...] = ()
     role_modes: tuple[RoleMode, ...] = Field(default=tuple(mode for mode in RoleMode))

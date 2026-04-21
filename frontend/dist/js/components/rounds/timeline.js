@@ -15,12 +15,16 @@ import {
     clearAllStreamState,
     getCoordinatorStreamOverlay,
     renderHistoricalMessageList,
-    getOrCreateStreamBlock,
-    appendStreamChunk,
 } from '../messageRenderer.js';
+import {
+    normalizePromptContentParts,
+    renderPromptContentParts,
+    summarizePromptContentParts,
+} from '../messageRenderer/helpers/prompt.js';
 import { renderRoundNavigator, setActiveRoundNav } from './navigator.js';
 import { applyRoundPage, fetchInitialRoundsPage, fetchOlderRoundsPage } from './paging.js';
 import { roundsState } from './state.js';
+import { areRoundTodoSnapshotsEqual, normalizeRoundTodoSnapshot } from './todo.js';
 import { roundSectionId, esc, roundStateLabel, roundStateTone } from './utils.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 import { formatMessage, t } from '../../utils/i18n.js';
@@ -47,9 +51,11 @@ export async function loadSessionRounds(sessionId, options = {}) {
     }
 }
 
-export function createLiveRound(runId, intentText) {
+export function createLiveRound(runId, intentText, intentParts = null) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
+    const normalizedIntent = normalizeRoundIntentText(intentText);
+    const normalizedIntentParts = normalizeRoundIntentParts(intentParts);
 
     const existingIndex = roundsState.currentRounds.findIndex(round => round.run_id === safeRunId);
     if (existingIndex === -1) {
@@ -58,7 +64,8 @@ export function createLiveRound(runId, intentText) {
             {
                 run_id: safeRunId,
                 created_at: new Date().toISOString(),
-                intent: intentText,
+                intent: normalizedIntent,
+                intent_parts: normalizedIntentParts,
                 primary_role_id: getRunPrimaryRoleId(safeRunId) || null,
                 coordinator_messages: [],
                 instance_role_map: {},
@@ -67,6 +74,7 @@ export function createLiveRound(runId, intentText) {
                 run_phase: 'running',
                 is_recoverable: true,
                 pending_tool_approval_count: 0,
+                has_user_messages: true,
             },
         ];
     } else {
@@ -74,10 +82,13 @@ export function createLiveRound(runId, intentText) {
             round.run_id === safeRunId
                 ? {
                     ...round,
+                    intent: normalizedIntent || round.intent,
+                    intent_parts: normalizedIntentParts || round.intent_parts || null,
                     primary_role_id: round.primary_role_id || getRunPrimaryRoleId(safeRunId) || null,
                     run_status: round.run_status || 'running',
                     run_phase: round.run_phase || 'running',
                     is_recoverable: round.is_recoverable !== false,
+                    has_user_messages: true,
                 }
                 : round,
         );
@@ -103,32 +114,48 @@ function shouldPreserveSubagentView(sessionId) {
     );
 }
 
-export function appendRoundUserMessage(runId, text) {
+export function appendRoundUserMessage(runId, promptPayload) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
+    const normalizedIntentParts = normalizeRoundIntentParts(promptPayload);
+    const normalizedIntentText = buildRoundIntentPreviewText(promptPayload);
     const roundIndex = roundsState.currentRounds.findIndex(round => round.run_id === safeRunId);
     if (roundIndex >= 0) {
         roundsState.currentRounds = roundsState.currentRounds.map(round =>
             round.run_id === safeRunId
-                ? { ...round, has_user_messages: true }
+                ? {
+                    ...round,
+                    has_user_messages: true,
+                    intent: normalizedIntentText || round.intent,
+                    intent_parts: normalizedIntentParts || round.intent_parts || null,
+                }
                 : round,
         );
         if (roundsState.currentRound?.run_id === safeRunId) {
             roundsState.currentRound = roundsState.currentRounds[roundIndex];
         }
         syncExportedState();
+        if (!shouldPreserveSubagentView(state.currentSessionId)) {
+            renderSessionTimeline(roundsState.currentRounds, { preserveScroll: false });
+        } else {
+            patchRoundHeader(roundsState.currentRounds[roundIndex], roundIndex);
+        }
     }
-    const section = document.querySelector(`.session-round-section[data-run-id="${safeRunId}"]`);
-    if (!section) return;
-    const empty = section.querySelector('.panel-empty');
-    if (empty) empty.remove();
+}
 
-    const primaryRoleId = getRunPrimaryRoleId(safeRunId);
-    const primaryRoleLabel = getRunPrimaryRoleLabel(safeRunId);
-    getOrCreateStreamBlock(section, 'primary', primaryRoleId, primaryRoleLabel, safeRunId);
-    appendStreamChunk('primary', '', safeRunId, primaryRoleId, primaryRoleLabel);
+function normalizeRoundIntentParts(promptPayload) {
+    return normalizePromptContentParts(promptPayload);
+}
 
-    els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+function buildRoundIntentPreviewText(promptPayload) {
+    const normalizedIntentParts = normalizeRoundIntentParts(promptPayload);
+    if (normalizedIntentParts && normalizedIntentParts.length > 0) {
+        const summary = summarizePromptContentParts(normalizedIntentParts);
+        if (summary) {
+            return summary;
+        }
+    }
+    return normalizeRoundIntentText(promptPayload);
 }
 
 export function appendRoundRetryEvent(runId, retryEvent) {
@@ -223,7 +250,9 @@ export function overlayRoundRecoveryState(runId, overlay = {}) {
     syncExportedState();
     patchRoundHeader(nextRound, roundIndex);
     syncRetryTimelineTimer();
-    renderRoundNavigator(roundsState.currentRounds, selectRound);
+    renderRoundNavigator(roundsState.currentRounds, selectRound, {
+        activeRunId: roundsState.activeRunId,
+    });
     setActiveRoundNav(roundsState.activeRunId);
 
     if (roundsState.currentRound?.run_id === safeRunId) {
@@ -234,6 +263,50 @@ export function overlayRoundRecoveryState(runId, overlay = {}) {
     }
 }
 
+export function updateRoundTodo(runId, todoSnapshot) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return;
+    }
+    const normalizedTodo = normalizeRoundTodoSnapshot(todoSnapshot, safeRunId, state.currentSessionId);
+    let changed = false;
+    roundsState.currentRounds = roundsState.currentRounds.map(round => {
+        if (round.run_id !== safeRunId) {
+            return round;
+        }
+        const previousTodo = normalizeRoundTodoSnapshot(round.todo, safeRunId, state.currentSessionId);
+        if (areRoundTodoSnapshotsEqual(previousTodo, normalizedTodo)) {
+            return round;
+        }
+        changed = true;
+        if (normalizedTodo === null) {
+            const { todo: _todo, ...rest } = round;
+            return rest;
+        }
+        return {
+            ...round,
+            todo: normalizedTodo,
+        };
+    });
+    if (!changed) {
+        syncRoundTodoVisibility();
+        return;
+    }
+    if (roundsState.currentRound?.run_id === safeRunId) {
+        roundsState.currentRound = roundsState.currentRounds.find(
+            round => round.run_id === safeRunId,
+        ) || null;
+    }
+    syncExportedState();
+    syncRoundTodoVisibility();
+}
+
+export function syncRoundTodoVisibility() {
+    renderRoundNavigator(roundsState.currentRounds, selectRound, {
+        activeRunId: roundsState.activeRunId,
+    });
+}
+
 export function selectRound(round) {
     if (!round) return;
     expandHistorySegmentForRun(round.run_id);
@@ -241,9 +314,8 @@ export function selectRound(round) {
     if (!section) return;
     roundsState.pendingScrollTargetRunId = round.run_id;
     roundsState.pendingScrollUnlockAt = Date.now() + 1600;
-    roundsState.activeRunId = round.run_id;
-    roundsState.activeVisibility = Number.POSITIVE_INFINITY;
-    setActiveRoundNav(round.run_id);
+    const nextRound = roundsState.currentRounds.find(item => item.run_id === round.run_id) || round;
+    applyActiveRoundState(nextRound, Number.POSITIVE_INFINITY);
     section.scrollIntoView({ behavior: 'smooth', block: 'start' });
     emphasizeRoundSection(section);
 }
@@ -280,7 +352,7 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
         state.taskStatusMap = {};
         roundsState.activeRunId = null;
         setRoundPendingApprovals('', [], {});
-        renderRoundNavigator([], selectRound);
+        renderRoundNavigator([], selectRound, { activeRunId: null });
         syncRetryTimelineTimer();
         if (shouldHideDuringRender) {
             container.style.visibility = '';
@@ -320,7 +392,7 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
         container.appendChild(segmentEl);
     });
 
-    renderRoundNavigator(rounds, selectRound);
+    renderRoundNavigator(rounds, selectRound, { activeRunId: roundsState.activeRunId });
     bindScrollSync();
 
     if (opts.preserveScroll) {
@@ -401,14 +473,8 @@ function activateRoundSection(section, visibleScore) {
         return;
     }
 
-    roundsState.activeRunId = runId;
-    roundsState.activeVisibility = visibleScore;
-    roundsState.currentRound = roundsState.currentRounds.find(r => r.run_id === runId) || null;
-    const pendingApprovals = roundsState.currentRound?.pending_tool_approvals || [];
-    setRoundPendingApprovals(runId, pendingApprovals);
-    syncExportedState();
-
-    setActiveRoundNav(runId);
+    const nextRound = roundsState.currentRounds.find(round => round.run_id === runId) || null;
+    applyActiveRoundState(nextRound, visibleScore);
 }
 
 function renderRoundSection(round, index) {
@@ -435,7 +501,7 @@ function renderRoundSection(round, index) {
             </div>
             <div class="round-detail-badges">${renderRoundBadges(round, stateLabel, stateTone, approvalCount)}</div>
         </div>`;
-    header.appendChild(buildRoundIntentBlock(round.intent || t('rounds.no_intent')));
+    header.appendChild(buildRoundIntentBlock(round.intent, round.intent_parts));
     section.appendChild(header);
     renderRoundRetryEvents(section, round.retry_events || []);
     if (round.compaction_marker_before) {
@@ -508,8 +574,11 @@ function renderRoundSection(round, index) {
     return section;
 }
 
-function buildRoundIntentBlock(intentText) {
-    const normalized = normalizeRoundIntentText(intentText);
+function buildRoundIntentBlock(intentText, intentParts = null) {
+    const normalizedParts = normalizeRoundIntentParts(intentParts);
+    const normalized = normalizedParts && normalizedParts.length > 0
+        ? summarizePromptContentParts(normalizedParts)
+        : normalizeRoundIntentText(intentText);
 
     const block = document.createElement('details');
     block.className = 'round-detail-intent';
@@ -537,7 +606,11 @@ function buildRoundIntentBlock(intentText) {
         toggleEl.textContent = t('rounds.expand');
     }
     if (bodyEl) {
-        bodyEl.textContent = normalized;
+        if (normalizedParts && normalizedParts.length > 0) {
+            renderRoundIntentStructuredContent(bodyEl, normalizedParts);
+        } else {
+            bodyEl.textContent = normalized;
+        }
     }
     if (collapseBtn) {
         collapseBtn.textContent = t('rounds.collapse');
@@ -548,15 +621,35 @@ function buildRoundIntentBlock(intentText) {
     }
     block.addEventListener('toggle', () => {
         if (toggleEl) {
-            toggleEl.textContent = t('rounds.expand');
+            toggleEl.textContent = block.open ? t('rounds.collapse') : t('rounds.expand');
         }
     });
     return block;
 }
 
+function renderRoundIntentStructuredContent(bodyEl, parts) {
+    renderPromptContentParts(bodyEl, parts);
+}
+
 function normalizeRoundIntentText(intentText) {
     const normalized = String(intentText || '').replace(/\r\n?/g, '\n').trim();
     return normalized || t('rounds.no_intent');
+}
+
+function applyActiveRoundState(round, visibleScore) {
+    const safeRunId = String(round?.run_id || '').trim();
+    if (!safeRunId) {
+        return;
+    }
+    roundsState.activeRunId = safeRunId;
+    roundsState.activeVisibility = visibleScore;
+    roundsState.currentRound = round;
+    const pendingApprovals = Array.isArray(round.pending_tool_approvals)
+        ? round.pending_tool_approvals
+        : [];
+    setRoundPendingApprovals(safeRunId, pendingApprovals);
+    syncExportedState();
+    setActiveRoundNav(safeRunId);
 }
 
 function splitRoundsByHistoryMarkers(rounds) {
@@ -708,16 +801,7 @@ function activateLatestRound(rounds) {
     const latestRound = Array.isArray(rounds) && rounds.length > 0
         ? rounds[rounds.length - 1]
         : null;
-    if (!latestRound?.run_id) {
-        return;
-    }
-    roundsState.activeRunId = latestRound.run_id;
-    roundsState.activeVisibility = Number.POSITIVE_INFINITY;
-    roundsState.currentRound = latestRound;
-    const pendingApprovals = latestRound.pending_tool_approvals || [];
-    setRoundPendingApprovals(latestRound.run_id, pendingApprovals);
-    syncExportedState();
-    setActiveRoundNav(latestRound.run_id);
+    applyActiveRoundState(latestRound, Number.POSITIVE_INFINITY);
 }
 
 function schedulePostLayoutRoundSync(container) {
@@ -811,6 +895,11 @@ function patchRoundHeader(round, roundIndex) {
         const stateTone = roundStateTone(round);
         const approvalCount = Number(round.pending_tool_approval_count || 0);
         badgesEl.innerHTML = renderRoundBadges(round, stateLabel, stateTone, approvalCount);
+    }
+
+    const intentEl = section.querySelector('.round-detail-intent');
+    if (intentEl) {
+        intentEl.replaceWith(buildRoundIntentBlock(round.intent, round.intent_parts));
     }
 }
 

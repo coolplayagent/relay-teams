@@ -340,6 +340,9 @@ class AgentTeamsClient:
             return [item for item in items if isinstance(item, dict)]
         return []
 
+    def get_run_todo(self, run_id: str) -> dict[str, JsonValue]:
+        return self._request_json("GET", f"/api/runs/{run_id}/todo")
+
     def resolve_tool_approval(
         self, run_id: str, tool_call_id: str, action: str, feedback: str = ""
     ) -> dict[str, JsonValue]:
@@ -727,6 +730,22 @@ class AgentTeamsClient:
             "PUT",
             f"/api/system/configs/workspace/ssh-profiles/{quote(ssh_profile_id, safe='')}",
             {"config": payload},
+        )
+
+    def reveal_ssh_profile_password(self, ssh_profile_id: str) -> dict[str, JsonValue]:
+        return self._request_json(
+            "POST",
+            f"/api/system/configs/workspace/ssh-profiles/{quote(ssh_profile_id, safe='')}:reveal-password",
+        )
+
+    def probe_ssh_profile(
+        self,
+        payload: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "POST",
+            "/api/system/configs/workspace/ssh-profiles:probe",
+            payload,
         )
 
     def delete_ssh_profile(self, ssh_profile_id: str) -> dict[str, JsonValue]:

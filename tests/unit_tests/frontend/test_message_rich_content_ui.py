@@ -25,6 +25,7 @@ def test_render_rich_content_appends_workspace_image_preview(tmp_path: Path) -> 
         source_path.read_text(encoding="utf-8")
         .replace("../../../core/api/workspaces.js", "./mockWorkspacesApi.mjs")
         .replace("../../../core/state.js", "./mockState.mjs")
+        .replace("../../../utils/i18n.js", "./mockI18n.mjs")
         .replace("../../../utils/markdown.js", "./mockMarkdown.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
@@ -39,10 +40,18 @@ export function buildWorkspaceImagePreviewUrl(workspaceId, path) {
     )
     (tmp_path / "mockState.mjs").write_text(
         """
-export const state = {
-    currentWorkspaceId: 'hello',
-    currentProjectViewWorkspaceId: null,
-};
+    export const state = {
+        currentWorkspaceId: 'hello',
+        currentProjectViewWorkspaceId: null,
+    };
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockI18n.mjs").write_text(
+        """
+export function t(key) {
+    return String(key || '');
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -66,6 +75,7 @@ class FakeElement {
         this.alt = '';
         this.loading = '';
         this.decoding = '';
+        this.attributes = {};
     }
 
     appendChild(child) {
@@ -76,6 +86,10 @@ class FakeElement {
     replaceChildren(...children) {
         this.innerHTML = '';
         this.children = children;
+    }
+
+    setAttribute(name, value) {
+        this.attributes[name] = value;
     }
 }
 

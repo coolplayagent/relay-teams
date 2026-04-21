@@ -19,7 +19,7 @@ from relay_teams.env.web_config_models import (
 from relay_teams.gateway.acp_stdio import AcpGatewayServer, _AcpRequestContext
 from relay_teams.gateway.gateway_cli import _build_acp_stdio_runtime
 from pydantic import JsonValue
-from playwright.sync_api import Page
+from playwright.sync_api import Locator, Page
 from playwright.sync_api import expect
 from playwright.sync_api import sync_playwright
 import pytest
@@ -35,6 +35,7 @@ _GATEWAY_CALLS_LABEL = re.compile(r"(Gateway Calls|Gateway 调用)")
 _GATEWAY_FIRST_UPDATE_LABEL = re.compile(r"(Prompt First Update ms|首个更新 ms)")
 _GATEWAY_LATENCY_LABEL = re.compile(r"(Gateway Latency|Gateway 时延)")
 _GATEWAY_COLD_STARTS_LABEL = re.compile(r"(Gateway Cold Starts|Gateway 冷启动)")
+_REMOTE_WORKSPACE_LABEL = re.compile(r"(Remote Workspace|远端工作区)")
 _LANG_PATTERN = re.compile(r"^(en|en-US|zh-CN)$")
 _VIEWPORT_WIDTH = 1600
 _VIEWPORT_HEIGHT = 1200
@@ -409,7 +410,6 @@ def test_browser_shell_settings_and_session_management(
         arg=initial_lang,
         timeout=_WAIT_TIMEOUT_MS,
     )
-
     initial_background = _body_background(page)
     page.locator("#toggle-theme").click()
     page.wait_for_function(
@@ -665,6 +665,86 @@ def test_browser_settings_modal_does_not_close_after_dragging_out_of_content(
 
     page.mouse.click(end_x, end_y)
     expect(settings_modal).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
+
+
+def test_browser_remote_workspace_settings_group_ssh_fields(
+    browser_page: Page,
+    integration_env: IntegrationEnvironment,
+) -> None:
+    page = browser_page
+    _open_app(page, integration_env)
+    _open_workspace_settings_panel(page, integration_env)
+
+    expect(page.locator('.settings-tab[data-tab="workspace"]')).to_contain_text(
+        _REMOTE_WORKSPACE_LABEL,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(page.locator("#settings-panel-title")).to_contain_text(
+        _REMOTE_WORKSPACE_LABEL,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+
+    page.locator("#add-ssh-profile-btn").click()
+    expect(page.locator("#workspace-ssh-profile-editor")).to_be_visible(
+        timeout=_WAIT_TIMEOUT_MS
+    )
+    expect(
+        page.locator(".workspace-auth-grid #workspace-ssh-profile-username")
+    ).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    auth_title = page.locator(".profile-editor-subsection-header h5")
+    auth_copy = page.locator(".profile-editor-subsection-header p").first
+    auth_system_copy = page.locator(".profile-editor-subsection-header p").nth(1)
+    _assert_locator_below(
+        auth_title,
+        auth_copy,
+    )
+    _assert_locator_below(
+        auth_copy,
+        auth_system_copy,
+    )
+    _assert_locators_share_left_edge(
+        auth_title,
+        auth_copy,
+        auth_system_copy,
+    )
+    expect(auth_system_copy).to_contain_text("系统 SSH 配置")
+    expect(page.locator("#workspace-ssh-profile-private-key-name")).to_have_attribute(
+        "type",
+        "hidden",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    private_key_name_label = page.locator(
+        'label[for="workspace-ssh-profile-private-key-name"]'
+    )
+    expect(private_key_name_label).to_have_count(0, timeout=_WAIT_TIMEOUT_MS)
+
+    _assert_locators_share_row(
+        page.locator("#workspace-ssh-profile-id"),
+        page.locator("#workspace-ssh-profile-host"),
+        page.locator("#workspace-ssh-profile-port"),
+    )
+    _assert_locators_share_row(
+        page.locator("#workspace-ssh-profile-shell"),
+        page.locator("#workspace-ssh-profile-timeout"),
+    )
+    _assert_locators_share_row(
+        page.locator("#workspace-ssh-profile-username"),
+        page.locator("#workspace-ssh-profile-password"),
+    )
+    _assert_locators_share_left_edge(
+        page.locator("#workspace-ssh-profile-username"),
+        page.locator("#workspace-ssh-profile-private-key"),
+    )
+    _assert_vertical_gap_matches(
+        page.locator('label[for="workspace-ssh-profile-username"]'),
+        page.locator("#workspace-ssh-profile-username"),
+        page.locator(".workspace-private-key-label-row"),
+        page.locator("#workspace-ssh-profile-private-key"),
+    )
+    _assert_locators_share_right_edge(
+        page.locator("#workspace-ssh-profile-private-key"),
+        page.locator("#workspace-ssh-profile-import-private-key-btn"),
+    )
 
 
 @pytest.mark.skip(reason="Flaky on CI - timing issues with browser automation")
@@ -1790,10 +1870,91 @@ def _open_web_settings_panel(
     expect(page.locator("#web-panel")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
 
 
+def _open_workspace_settings_panel(
+    page: Page, integration_env: IntegrationEnvironment
+) -> None:
+    page.locator("#settings-btn").click()
+    expect(page.locator("#settings-modal")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "GET"
+            and response.url
+            == f"{integration_env.api_base_url}/api/system/configs/workspace/ssh-profiles"
+            and response.ok
+        )
+    ):
+        page.locator('.settings-tab[data-tab="workspace"]').click()
+    expect(page.locator("#workspace-panel")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+
+
 def _assert_builtin_searxng_instances(page: Page) -> None:
     assert _locator_texts(
         page.locator("#web-searxng-builtins-list .trigger-readonly-value")
     ) == list(DEFAULT_SEARXNG_INSTANCE_SEEDS)
+
+
+def _assert_locators_share_row(*locators: Locator) -> None:
+    top_positions: list[float] = []
+    bottom_positions: list[float] = []
+    for locator in locators:
+        expect(locator).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+        box = locator.bounding_box()
+        assert box is not None
+        top_positions.append(box["y"])
+        bottom_positions.append(box["y"] + box["height"])
+    assert max(top_positions) - min(top_positions) < 6.0
+    assert max(bottom_positions) - min(bottom_positions) < 6.0
+
+
+def _assert_locators_share_left_edge(*locators: Locator) -> None:
+    left_positions: list[float] = []
+    for locator in locators:
+        expect(locator).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+        box = locator.bounding_box()
+        assert box is not None
+        left_positions.append(box["x"])
+    assert max(left_positions) - min(left_positions) < 2.0
+
+
+def _assert_locators_share_right_edge(*locators: Locator) -> None:
+    right_positions: list[float] = []
+    for locator in locators:
+        expect(locator).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+        box = locator.bounding_box()
+        assert box is not None
+        right_positions.append(box["x"] + box["width"])
+    assert max(right_positions) - min(right_positions) < 2.0
+
+
+def _assert_locator_below(anchor: Locator, subject: Locator) -> None:
+    expect(anchor).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    expect(subject).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    anchor_box = anchor.bounding_box()
+    subject_box = subject.bounding_box()
+    assert anchor_box is not None
+    assert subject_box is not None
+    assert subject_box["y"] > anchor_box["y"] + anchor_box["height"]
+
+
+def _assert_vertical_gap_matches(
+    reference_upper: Locator,
+    reference_lower: Locator,
+    subject_upper: Locator,
+    subject_lower: Locator,
+) -> None:
+    reference_gap = _vertical_gap_between(reference_upper, reference_lower)
+    subject_gap = _vertical_gap_between(subject_upper, subject_lower)
+    assert abs(reference_gap - subject_gap) < 2.0
+
+
+def _vertical_gap_between(upper: Locator, lower: Locator) -> float:
+    expect(upper).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    expect(lower).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    upper_box = upper.bounding_box()
+    lower_box = lower.bounding_box()
+    assert upper_box is not None
+    assert lower_box is not None
+    return lower_box["y"] - (upper_box["y"] + upper_box["height"])
 
 
 def _create_session_via_sidebar(page: Page) -> str:
@@ -2097,6 +2258,89 @@ async def _run_gateway_observability_probe(server: AcpGatewayServer) -> None:
     prompt_result = prompt_response.get("result")
     assert isinstance(prompt_result, dict)
     assert prompt_result.get("runStatus") == "completed"
+
+
+def test_browser_round_todo_card_renders_and_collapses(
+    browser_page: Page,
+    integration_env: IntegrationEnvironment,
+    api_client: httpx.Client,
+) -> None:
+    page = browser_page
+    _open_app(page, integration_env)
+    if not page.locator("body").evaluate(
+        "element => element.classList.contains('light-theme')"
+    ):
+        page.locator("#toggle-theme").click()
+        page.wait_for_function(
+            "document.body.classList.contains('light-theme')",
+            timeout=_WAIT_TIMEOUT_MS,
+        )
+
+    session_id = _create_session_via_sidebar(page)
+    prompt = "[todo-validation] 维护当前 run 的 todo，并完成一次持久化校验。"
+
+    expect(page.locator("#prompt-input")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    page.locator("#prompt-input").fill(prompt)
+    page.locator("#send-btn").click()
+
+    run_id = _wait_for_run_id(api_client, session_id)
+    round_nav = page.locator("#round-nav-float")
+    round_node = round_nav.locator(f'.round-nav-node[data-run-id="{run_id}"]')
+    todo_card = round_node.locator(".round-nav-todo-branch .round-todo-card")
+
+    expect(todo_card).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
+    expect(round_node).to_have_class(
+        re.compile(r".*\bactive\b.*"), timeout=_WAIT_TIMEOUT_MS
+    )
+    expect(round_nav.locator(".round-nav-resizer")).to_have_count(
+        1,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(todo_card).to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
+    expect(todo_card.locator(".round-todo-item")).to_have_count(
+        3,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(todo_card).to_contain_text(
+        "Inspect issue 399 requirements",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(todo_card).to_contain_text(
+        "Implement run todo persistence",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(todo_card.locator(".round-todo-item-text").first).to_have_attribute(
+        "title",
+        "Inspect issue 399 requirements",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(page.locator(".round-todo-card")).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
+    expect(page.locator(".session-round-section .round-todo-card")).to_have_count(
+        0,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+
+    expanded_width = round_nav.evaluate(
+        "element => element.getBoundingClientRect().width"
+    )
+    round_nav.locator(".round-nav-toggle").click()
+    collapsed_width = round_nav.evaluate(
+        "element => element.getBoundingClientRect().width"
+    )
+    assert collapsed_width < expanded_width
+
+    round_nav.locator(".round-nav-toggle").click()
+    expect(todo_card).to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
+
+    todo_card.locator(".round-todo-summary").click()
+    expect(todo_card).not_to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
+    expect(todo_card.locator(".round-todo-body")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
+
+    todo_card.locator(".round-todo-summary").click()
+    expect(todo_card).to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
+    expect(todo_card.locator(".round-todo-body")).to_be_visible(
+        timeout=_WAIT_TIMEOUT_MS
+    )
 
 
 def _resolve_playwright_browser_root() -> Path:

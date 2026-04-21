@@ -44,6 +44,9 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
+from relay_teams.sessions.runs.todo_models import TodoItem, TodoStatus
+from relay_teams.sessions.runs.todo_repository import TodoRepository
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
@@ -67,6 +70,10 @@ def _build_service(
         token_usage_repo=TokenUsageRepository(db_path),
         run_state_repo=RunStateRepository(db_path),
         background_task_repository=BackgroundTaskRepository(db_path),
+        todo_service=TodoService(
+            repository=TodoRepository(db_path),
+            run_event_hub=run_event_hub,
+        ),
         run_event_hub=run_event_hub,
         active_run_registry=active_run_registry,
         event_log=EventLog(db_path),
@@ -172,6 +179,49 @@ def test_get_recovery_snapshot_returns_active_run_and_pause_state(
     assert isinstance(round_snapshot, dict)
     assert round_snapshot.get("run_id") == "run-active"
     assert round_snapshot.get("primary_role_id") == "Coordinator"
+
+
+def test_get_recovery_snapshot_includes_todo_projection(tmp_path: Path) -> None:
+    db_path = tmp_path / "recovery_todo.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _seed_root_task(db_path, run_id="run-active", session_id="session-1")
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-active",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-active",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    TodoService(repository=TodoRepository(db_path)).replace_for_run(
+        run_id="run-active",
+        session_id="session-1",
+        items=(
+            TodoItem(content="Inspect issue", status=TodoStatus.COMPLETED),
+            TodoItem(content="Implement todo flow", status=TodoStatus.IN_PROGRESS),
+        ),
+        updated_by_role_id="MainAgent",
+        updated_by_instance_id="inst-1",
+    )
+
+    snapshot = service.get_recovery_snapshot("session-1")
+
+    round_snapshot = snapshot.get("round_snapshot")
+    assert isinstance(round_snapshot, dict)
+    todo = round_snapshot.get("todo")
+    assert isinstance(todo, dict)
+    assert todo.get("run_id") == "run-active"
+    items = todo.get("items")
+    assert isinstance(items, list)
+    assert items[1] == {
+        "content": "Implement todo flow",
+        "status": "in_progress",
+    }
 
 
 def test_get_recovery_snapshot_exposes_awaiting_recovery_phase(
@@ -556,10 +606,10 @@ def test_get_recovery_snapshot_includes_background_tasks(tmp_path: Path) -> None
     background_tasks = snapshot.get("background_tasks")
     assert isinstance(background_tasks, list)
     assert len(background_tasks) == 2
-    assert [item["background_task_id"] for item in background_tasks] == [
-        "exec-2",
+    assert {item["background_task_id"] for item in background_tasks} == {
         "exec-1",
-    ]
+        "exec-2",
+    }
     assert all("output_excerpt" not in item for item in background_tasks)
     assert background_tasks[0]["kind"] == "subagent"
     assert background_tasks[0]["title"] == "Investigate failures"

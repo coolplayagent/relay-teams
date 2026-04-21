@@ -27,6 +27,7 @@ from pydantic_ai.profiles.openai import OpenAIModelProfile
 
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.logger import get_logger, log_event
+from relay_teams.media import user_prompt_content_to_text
 from relay_teams.net.llm_client import build_llm_http_client
 from relay_teams.providers.llm_retry import (
     extract_retry_error_info,
@@ -753,7 +754,7 @@ def _render_message(message: ModelRequest | ModelResponse) -> str:
     fragments: list[str] = []
     for part in message.parts:
         if isinstance(part, UserPromptPart):
-            fragments.append(f"User: {str(part.content or '').strip()}")
+            fragments.append(f"User: {user_prompt_content_to_text(part.content)}")
         elif isinstance(part, TextPart):
             fragments.append(f"Assistant: {str(part.content or '').strip()}")
         elif isinstance(part, ThinkingPart):

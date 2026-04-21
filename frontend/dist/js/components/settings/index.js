@@ -127,7 +127,7 @@ function createModal() {
                         <span class="settings-tab-label" data-i18n="settings.tab.proxy">Proxy</span>
                     </button>
                     <button class="settings-tab" data-tab="workspace">
-                        <span class="settings-tab-label" data-i18n="settings.tab.workspace">Workspace</span>
+                        <span class="settings-tab-label" data-i18n="settings.tab.workspace">Remote Workspace</span>
                     </button>
                     <button class="settings-tab" data-tab="environment">
                         <span class="settings-tab-label" data-i18n="settings.tab.environment">Environment</span>
@@ -300,11 +300,24 @@ function createModal() {
                                                 </div>
                                                 <div class="form-group-span-2" id="profile-maas-model-slot"></div>
                                             </div>
-                                        </div>
-                                        <div class="profile-model-discovery-status" id="profile-model-discovery-status" style="display:none;"></div>
-                                        <div class="profile-editor-subsection">
-                                            <h5 data-i18n="settings.model.request_controls">Request Controls</h5>
-                                            <div class="form-row">
+                                         </div>
+                                         <div class="profile-model-discovery-status" id="profile-model-discovery-status" style="display:none;"></div>
+                                         <div class="profile-editor-subsection">
+                                             <h5 data-i18n="settings.model.capability_section">Capabilities</h5>
+                                             <div class="form-row">
+                                                 <div class="form-group">
+                                                     <label for="profile-image-capability" data-i18n="settings.model.image_capability">Image Input</label>
+                                                     <select id="profile-image-capability">
+                                                         <option value="follow_detection" data-i18n="settings.model.image_capability_follow">Follow detection</option>
+                                                         <option value="supported" data-i18n="settings.model.image_capability_supported">Supports image input</option>
+                                                         <option value="unsupported" data-i18n="settings.model.image_capability_unsupported">Text only</option>
+                                                     </select>
+                                                 </div>
+                                             </div>
+                                         </div>
+                                         <div class="profile-editor-subsection">
+                                             <h5 data-i18n="settings.model.request_controls">Request Controls</h5>
+                                             <div class="form-row">
                                                 <div class="form-group">
                                                     <label for="profile-temperature" data-i18n="settings.model.temperature">Temperature</label>
                                                     <input type="number" id="profile-temperature" value="0.7" step="0.1" min="0" max="2" autocomplete="off">
@@ -787,31 +800,27 @@ function createModal() {
                                 <div class="profile-editor" id="workspace-ssh-profile-editor" style="display:none;">
                                     <div class="profile-editor-header">
                                         <h4 id="workspace-ssh-profile-editor-title" data-i18n="settings.workspace.add_profile">Add SSH Profile</h4>
-                                        <p data-i18n="settings.workspace.editor_copy">Reusable SSH profiles are referenced by workspace mounts. You can save a username, an optional password, or import a private key.</p>
+                                        <p data-i18n="settings.workspace.editor_copy">Reusable SSH profiles are referenced by remote workspace mounts. You can save a username, an optional password, or import a private key.</p>
                                     </div>
                                     <form class="profile-editor-form" id="workspace-ssh-profile-form" autocomplete="off">
-                                        <div class="profile-editor-grid">
-                                            <div class="form-group">
+                                        <div class="profile-editor-grid workspace-profile-grid">
+                                            <div class="form-group workspace-field-span-1">
                                                 <label for="workspace-ssh-profile-id" data-i18n="settings.workspace.profile_id">Profile ID</label>
                                                 <input type="text" id="workspace-ssh-profile-id" placeholder="e.g. prod, staging" data-i18n-placeholder="settings.workspace.profile_id_placeholder" autocomplete="off">
                                             </div>
-                                            <div class="form-group">
+                                            <div class="form-group workspace-field-span-1">
                                                 <label for="workspace-ssh-profile-host" data-i18n="settings.workspace.host">Host</label>
                                                 <input type="text" id="workspace-ssh-profile-host" placeholder="e.g. prod-alias" data-i18n-placeholder="settings.workspace.host_placeholder" autocomplete="off">
                                             </div>
-                                            <div class="form-group">
-                                                <label for="workspace-ssh-profile-username" data-i18n="settings.workspace.username">Username</label>
-                                                <input type="text" id="workspace-ssh-profile-username" placeholder="Optional username" data-i18n-placeholder="settings.workspace.username_placeholder" autocomplete="username">
-                                            </div>
-                                            <div class="form-group">
+                                            <div class="form-group workspace-field-span-1">
                                                 <label for="workspace-ssh-profile-port" data-i18n="settings.workspace.port">Port</label>
                                                 <input type="text" id="workspace-ssh-profile-port" placeholder="22" data-i18n-placeholder="settings.workspace.port_placeholder" inputmode="numeric" autocomplete="off">
                                             </div>
-                                            <div class="form-group form-group-span-2">
+                                            <div class="form-group workspace-field-span-2">
                                                 <label for="workspace-ssh-profile-shell" data-i18n="settings.workspace.remote_shell">Remote Shell</label>
                                                 <input type="text" id="workspace-ssh-profile-shell" placeholder="e.g. /bin/bash" data-i18n-placeholder="settings.workspace.remote_shell_placeholder" autocomplete="off">
                                             </div>
-                                            <div class="form-group">
+                                            <div class="form-group workspace-field-span-1">
                                                 <label for="workspace-ssh-profile-timeout" data-i18n="settings.workspace.connect_timeout_seconds">Connect Timeout (s)</label>
                                                 <input type="text" id="workspace-ssh-profile-timeout" placeholder="15" data-i18n-placeholder="settings.workspace.connect_timeout_seconds_placeholder" inputmode="numeric" autocomplete="off">
                                             </div>
@@ -819,10 +828,15 @@ function createModal() {
                                         <div class="profile-editor-subsection">
                                             <div class="profile-editor-subsection-header">
                                                 <h5 data-i18n="settings.workspace.auth_title">Authentication</h5>
-                                                <p data-i18n="settings.workspace.auth_copy">Set a username, optionally save a password, or import a private key. Leaving password and private key blank keeps the current stored secret or falls back to the system SSH environment.</p>
+                                                <p data-i18n="settings.workspace.auth_copy">Set a username, optionally save a password, or import a private key.</p>
+                                                <p data-i18n="settings.workspace.auth_system_copy">If password and private key are empty, Agent Teams falls back to your system SSH configuration.</p>
                                             </div>
-                                            <div class="profile-editor-grid">
-                                                <div class="form-group">
+                                            <div class="profile-editor-grid workspace-auth-grid">
+                                                <div class="form-group workspace-auth-field">
+                                                    <label for="workspace-ssh-profile-username" data-i18n="settings.workspace.username">Username</label>
+                                                    <input type="text" id="workspace-ssh-profile-username" placeholder="Optional username" data-i18n-placeholder="settings.workspace.username_placeholder" autocomplete="username">
+                                                </div>
+                                                <div class="form-group workspace-auth-field">
                                                     <label for="workspace-ssh-profile-password" data-i18n="settings.workspace.password">Password</label>
                                                     <div class="secure-input-row">
                                                         <input type="password" id="workspace-ssh-profile-password" placeholder="Optional password" data-i18n-placeholder="settings.workspace.password_placeholder" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
@@ -834,22 +848,20 @@ function createModal() {
                                                         </button>
                                                     </div>
                                                 </div>
-                                                <div class="form-group">
-                                                    <label for="workspace-ssh-profile-private-key-name" data-i18n="settings.workspace.private_key_name">Imported Key File</label>
-                                                    <input type="text" id="workspace-ssh-profile-private-key-name" placeholder="Optional key filename" data-i18n-placeholder="settings.workspace.private_key_name_placeholder" autocomplete="off" spellcheck="false">
-                                                </div>
-                                                <div class="form-group form-group-span-2">
-                                                    <div class="form-label-row">
+                                                <div class="form-group form-group-span-2 workspace-auth-field workspace-auth-field-span-2">
+                                                    <div class="form-label-row workspace-private-key-label-row">
                                                         <label for="workspace-ssh-profile-private-key" data-i18n="settings.workspace.private_key">Private Key</label>
                                                         <div class="settings-inline-action-row">
                                                             <button class="secondary-btn section-action-btn" id="workspace-ssh-profile-import-private-key-btn" type="button" data-i18n="settings.workspace.private_key_import">Import Private Key</button>
                                                         </div>
                                                     </div>
                                                     <textarea class="config-textarea workspace-private-key-textarea" id="workspace-ssh-profile-private-key" placeholder="Paste a private key or import one from a file" data-i18n-placeholder="settings.workspace.private_key_placeholder" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+                                                    <input type="hidden" id="workspace-ssh-profile-private-key-name">
                                                     <input type="file" id="workspace-ssh-profile-private-key-file" style="display:none;" accept=".pem,.key,.ppk,text/plain">
                                                 </div>
                                             </div>
                                             <p class="workspace-auth-state" id="workspace-ssh-profile-auth-state"></p>
+                                            <div class="profile-probe-status" id="workspace-ssh-profile-probe-status" style="display:none;"></div>
                                         </div>
                                     </form>
                                 </div>
@@ -932,6 +944,7 @@ function createModal() {
                     <div class="settings-panel-actions" id="settings-panel-actions">
                         <div class="settings-panel-actions-group settings-panel-actions-group-start">
                             <button class="secondary-btn section-action-btn settings-action" id="test-profile-btn" type="button" style="display:none;">Test</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="test-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.test">Test</button>
                             <button class="secondary-btn section-action-btn settings-action" id="test-agent-btn" type="button" style="display:none;" data-i18n="settings.action.test">Test</button>
                             <button class="secondary-btn section-action-btn settings-action" id="validate-role-btn" type="button" style="display:none;" data-i18n="settings.action.validate">Validate</button>
                         </div>

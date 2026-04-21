@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from enum import StrEnum
 from json import dumps
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast, runtime_checkable
 
 from pydantic_ai._agent_graph import ModelRequestNode
 from pydantic_ai.exceptions import ModelAPIError
@@ -82,6 +82,7 @@ from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
@@ -123,7 +124,17 @@ from relay_teams.computer import (
     describe_builtin_tool,
     describe_mcp_tool,
 )
-from relay_teams.media import MediaAssetService
+from relay_teams.media import (
+    InlineMediaContentPart,
+    MediaAssetService,
+    MediaModality,
+    MediaRefContentPart,
+    TextContentPart,
+    UserPromptContent,
+    normalize_user_prompt_content,
+    user_prompt_content_key,
+    user_prompt_content_to_text,
+)
 from relay_teams.monitors import MonitorService
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime import (
@@ -184,6 +195,36 @@ _RESUME_SUPERSEDED_TOOL_CALL_ERROR_CODE = "tool_call_superseded_by_resume"
 _RESUME_SUPERSEDED_TOOL_CALL_MESSAGE = (
     "This tool call was superseded by automatic recovery after a model request failure."
 )
+
+
+def _format_modality_list(modalities: Sequence[str]) -> str:
+    normalized = [str(modality or "").strip().lower() for modality in modalities]
+    items = [item for item in normalized if item]
+    if not items:
+        return "media"
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+
+@runtime_checkable
+class _PromptContentPersistenceService(Protocol):
+    def to_persisted_user_prompt_content(
+        self,
+        *,
+        parts: tuple[
+            TextContentPart | MediaRefContentPart | InlineMediaContentPart, ...
+        ],
+    ) -> UserPromptContent: ...
+
+
+@runtime_checkable
+class _PromptContentHydrationService(Protocol):
+    def hydrate_user_prompt_content(
+        self, *, content: UserPromptContent
+    ) -> UserPromptContent: ...
 
 
 class _PreparedPromptContext(BaseModel):
@@ -459,6 +500,7 @@ class AgentLlmSession:
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         background_task_service: BackgroundTaskService | None,
+        todo_service: TodoService | None = None,
         monitor_service: MonitorService | None = None,
         workspace_manager: WorkspaceManager,
         media_asset_service: MediaAssetService | None,
@@ -509,6 +551,7 @@ class AgentLlmSession:
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._background_task_service = background_task_service
+        self._todo_service = todo_service
         self._monitor_service = monitor_service
         self._workspace_manager = workspace_manager
         self._media_asset_service = media_asset_service
@@ -584,6 +627,7 @@ class AgentLlmSession:
                     request=request,
                     contexts=hook_system_contexts,
                 )
+        self._validate_request_input_capabilities(request)
         if self._metric_recorder is not None:
             record_session_step(
                 self._metric_recorder,
@@ -655,6 +699,7 @@ class AgentLlmSession:
                 computer_runtime=self._computer_runtime,
                 background_task_service=self._background_task_service,
                 monitor_service=self._monitor_service,
+                todo_service=getattr(self, "_todo_service", None),
                 run_id=request.run_id,
                 trace_id=request.trace_id,
                 task_id=request.task_id,
@@ -724,7 +769,7 @@ class AgentLlmSession:
                     self._persist_user_prompt_if_needed(
                         request=request,
                         history=history,
-                        content=request.user_prompt,
+                        content=self._current_request_prompt_content(request),
                     )
                 )
                 if rebuild_context:
@@ -744,6 +789,7 @@ class AgentLlmSession:
                     )
                 else:
                     history = persisted_history
+            history = self._hydrate_history_media_content(history)
             seen_count = 0
             buffered_messages: list[ModelRequest | ModelResponse] = []
             restarted = False
@@ -1953,6 +1999,7 @@ class AgentLlmSession:
             run_runtime_repo=self._run_runtime_repo,
             run_intent_repo=self._run_intent_repo,
             background_task_service=self._background_task_service,
+            todo_service=getattr(self, "_todo_service", None),
             monitor_service=self._monitor_service,
             workspace_manager=self._workspace_manager,
             media_asset_service=self._media_asset_service,
@@ -3345,6 +3392,7 @@ class AgentLlmSession:
             allowed_skills=allowed_skills,
         )
         history = list(prepared_prompt.history)
+        self._validate_history_input_capabilities(history)
         prepared_system_prompt = prepared_prompt.system_prompt
         model_settings = await self._build_model_settings(
             request=request,
@@ -3431,7 +3479,7 @@ class AgentLlmSession:
             return candidate_history
         if (
             candidate_history
-            and not str(request.user_prompt or "").strip()
+            and not self._request_has_prompt_content(request)
             and history_has_valid_tool_replay(candidate_history)
         ):
             bridge_message = self._build_history_replay_bridge_message(request=request)
@@ -3451,7 +3499,7 @@ class AgentLlmSession:
                     },
                 )
                 return [bridge_message, *candidate_history]
-        if str(request.user_prompt or "").strip():
+        if self._request_has_prompt_content(request):
             log_event(
                 LOGGER,
                 logging.WARNING,
@@ -3558,7 +3606,7 @@ class AgentLlmSession:
             (len(system_prompt.encode("utf-8")) // _ESTIMATED_TOKEN_BYTES)
             + _ESTIMATED_TOKEN_OVERHEAD,
         )
-        user_prompt = str(request.user_prompt or "").strip()
+        user_prompt = request.prompt_text.strip()
         estimated_user_prompt_tokens = (
             estimator.estimate_message_tokens(
                 ModelRequest(parts=[UserPromptPart(content=user_prompt)])
@@ -3966,14 +4014,17 @@ class AgentLlmSession:
         *,
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
-        content: str | None,
+        content: UserPromptContent | None,
     ) -> tuple[list[ModelRequest | ModelResponse], bool]:
-        prompt = str(content or "").strip()
-        if not prompt:
+        if content is None:
             return history, False
-        if self._history_ends_with_user_prompt(history, prompt):
+        prompt_text = user_prompt_content_to_text(content)
+        if not prompt_text:
             return history, False
-        prompt_message = ModelRequest(parts=[UserPromptPart(content=prompt)])
+        prompt_key = user_prompt_content_key(content)
+        if self._history_ends_with_user_prompt(history, prompt_key):
+            return history, False
+        prompt_message = ModelRequest(parts=[UserPromptPart(content=content)])
         if not request.persist_messages:
             next_history = list(history)
             next_history.append(prompt_message)
@@ -3989,8 +4040,9 @@ class AgentLlmSession:
             instance_id=request.instance_id,
             task_id=request.task_id,
             trace_id=request.trace_id,
-            content=prompt,
+            content=content,
         )
+        prompt_message = ModelRequest(parts=[UserPromptPart(content=content)])
         if replaced:
             return (
                 self._filter_model_messages(
@@ -4019,9 +4071,9 @@ class AgentLlmSession:
     def _history_ends_with_user_prompt(
         self,
         history: Sequence[ModelRequest | ModelResponse],
-        content: str,
+        content_key: str,
     ) -> bool:
-        target = str(content or "").strip()
+        target = str(content_key or "").strip()
         if not target or not history:
             return False
         last = history[-1]
@@ -4030,10 +4082,11 @@ class AgentLlmSession:
         parts = [part for part in last.parts if isinstance(part, UserPromptPart)]
         if len(parts) != len(last.parts):
             return False
-        return (
-            "\n".join(str(part.content or "").strip() for part in parts).strip()
-            == target
+        prompt_contents = [part.content for part in parts]
+        current_key = user_prompt_content_key(
+            prompt_contents[0] if len(prompt_contents) == 1 else prompt_contents
         )
+        return current_key == target
 
     def _drop_duplicate_leading_request(
         self,
@@ -4073,9 +4126,184 @@ class AgentLlmSession:
         if len(prompt_parts) != len(message.parts):
             return None
         combined = "\n".join(
-            str(part.content or "").strip() for part in prompt_parts
+            user_prompt_content_to_text(part.content) for part in prompt_parts
         ).strip()
         return combined or None
+
+    def _current_request_prompt_content(
+        self,
+        request: LLMRequest,
+    ) -> UserPromptContent | None:
+        if request.input:
+            media_asset_service = self._prompt_content_persistence_service()
+            if media_asset_service is not None:
+                return media_asset_service.to_persisted_user_prompt_content(
+                    parts=request.input
+                )
+        prompt = str(request.user_prompt or "").strip()
+        return prompt or None
+
+    def _request_has_prompt_content(self, request: LLMRequest) -> bool:
+        return bool(request.prompt_text.strip())
+
+    def _validate_request_input_capabilities(self, request: LLMRequest) -> None:
+        self._validate_input_modalities_capabilities(
+            self._request_input_modalities(request.input)
+        )
+
+    def _validate_history_input_capabilities(
+        self,
+        history: Sequence[ModelRequest | ModelResponse],
+    ) -> None:
+        modalities: list[MediaModality] = []
+        for message in history:
+            if not isinstance(message, ModelRequest):
+                continue
+            for part in message.parts:
+                if not isinstance(part, UserPromptPart):
+                    continue
+                modalities.extend(
+                    self._user_prompt_content_modalities(
+                        cast(UserPromptContent, part.content)
+                    )
+                )
+        self._validate_input_modalities_capabilities(tuple(modalities))
+
+    def _validate_input_modalities_capabilities(
+        self,
+        modalities: Sequence[MediaModality],
+    ) -> None:
+        if not modalities:
+            return
+        unsupported: list[str] = []
+        unknown: list[str] = []
+        for modality in modalities:
+            support = self._input_modality_support(modality)
+            if support is True:
+                continue
+            if support is False:
+                if modality.value not in unsupported:
+                    unsupported.append(modality.value)
+                continue
+            if modality.value not in unknown:
+                unknown.append(modality.value)
+        if unsupported:
+            raise ValueError(
+                "This model does not support "
+                f"{_format_modality_list(unsupported)} input. "
+                "Remove the attachment or switch to a compatible model."
+            )
+        if unknown:
+            raise ValueError(
+                "This model's support for "
+                f"{_format_modality_list(unknown)} input is unknown. "
+                "Remove the attachment or switch to a model with explicit multimodal support."
+            )
+
+    def _request_input_modalities(
+        self,
+        parts: tuple[
+            TextContentPart | MediaRefContentPart | InlineMediaContentPart, ...
+        ],
+    ) -> tuple[MediaModality, ...]:
+        modalities: list[MediaModality] = []
+        for part in parts:
+            if isinstance(part, TextContentPart):
+                continue
+            modalities.append(part.modality)
+        return tuple(modalities)
+
+    def _user_prompt_content_modalities(
+        self,
+        content: UserPromptContent,
+    ) -> tuple[MediaModality, ...]:
+        modalities: list[MediaModality] = []
+        self._collect_prompt_content_modalities(
+            normalize_user_prompt_content(content), modalities
+        )
+        return tuple(modalities)
+
+    def _collect_prompt_content_modalities(
+        self,
+        content: JsonValue,
+        modalities: list[MediaModality],
+    ) -> None:
+        if isinstance(content, list):
+            for item in content:
+                self._collect_prompt_content_modalities(item, modalities)
+            return
+        if not isinstance(content, dict):
+            return
+        raw_modality = str(content.get("modality") or "").strip().lower()
+        if not raw_modality:
+            return
+        try:
+            modality = MediaModality(raw_modality)
+        except ValueError:
+            return
+        modalities.append(modality)
+
+    def _input_modality_support(self, modality: MediaModality) -> bool | None:
+        input_capabilities = self._config.capabilities.input
+        if modality == MediaModality.IMAGE:
+            return input_capabilities.image
+        if modality == MediaModality.AUDIO:
+            return input_capabilities.audio
+        return input_capabilities.video
+
+    def _hydrate_history_media_content(
+        self,
+        history: Sequence[ModelRequest | ModelResponse],
+    ) -> list[ModelRequest | ModelResponse]:
+        media_asset_service = self._prompt_content_hydration_service()
+        if media_asset_service is None:
+            return list(history)
+        hydrated_messages: list[ModelRequest | ModelResponse] = []
+        for message in history:
+            if not isinstance(message, ModelRequest):
+                hydrated_messages.append(message)
+                continue
+            next_parts: list[ModelRequestPart] = []
+            changed = False
+            for part in message.parts:
+                if not isinstance(part, UserPromptPart):
+                    next_parts.append(part)
+                    continue
+                hydrated_content = media_asset_service.hydrate_user_prompt_content(
+                    content=cast(UserPromptContent, part.content)
+                )
+                if hydrated_content != part.content:
+                    changed = True
+                next_parts.append(
+                    UserPromptPart(
+                        content=hydrated_content,
+                        timestamp=part.timestamp,
+                        part_kind=part.part_kind,
+                    )
+                )
+            if changed:
+                hydrated_messages.append(
+                    clone_model_request_with_parts(message, next_parts)
+                )
+                continue
+            hydrated_messages.append(message)
+        return hydrated_messages
+
+    def _prompt_content_persistence_service(
+        self,
+    ) -> _PromptContentPersistenceService | None:
+        media_asset_service = getattr(self, "_media_asset_service", None)
+        if not isinstance(media_asset_service, _PromptContentPersistenceService):
+            return None
+        return media_asset_service
+
+    def _prompt_content_hydration_service(
+        self,
+    ) -> _PromptContentHydrationService | None:
+        media_asset_service = getattr(self, "_media_asset_service", None)
+        if not isinstance(media_asset_service, _PromptContentHydrationService):
+            return None
+        return media_asset_service
 
     def _commit_ready_messages(
         self,

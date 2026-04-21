@@ -8,9 +8,10 @@ from time import perf_counter
 from typing import cast
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from relay_teams.logger import get_logger
+from relay_teams.media import MediaModality
 from relay_teams.net.clients import create_sync_http_client
 from relay_teams.providers.maas_auth import (
     MaaSAuthContext,
@@ -29,11 +30,16 @@ from relay_teams.providers.model_config import (
     DEFAULT_MAAS_DISCOVERY_PLUGIN_NAME,
     DEFAULT_MAAS_DISCOVERY_PLUGIN_VERSION,
     DEFAULT_MAAS_DISCOVERY_URL,
+    ModelCapabilities,
     MaaSAuthConfig,
     ModelEndpointConfig,
     ModelRequestHeader,
     ProviderType,
     SamplingConfig,
+)
+from relay_teams.providers.model_capabilities import (
+    resolve_model_capabilities,
+    resolve_model_input_modalities,
 )
 from relay_teams.providers.openai_support import build_model_request_headers
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig
@@ -120,6 +126,52 @@ class ModelDiscoveryEntry(BaseModel):
 
     model: str = Field(min_length=1)
     context_window: int | None = Field(default=None, ge=1)
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
+    input_modalities: tuple[MediaModality, ...] = ()
+
+    @model_validator(mode="after")
+    def _sync_capabilities(self) -> "ModelDiscoveryEntry":
+        input_capabilities = self.capabilities.input.model_copy(
+            update={
+                "image": (
+                    True
+                    if MediaModality.IMAGE in self.input_modalities
+                    else self.capabilities.input.image
+                ),
+                "audio": (
+                    True
+                    if MediaModality.AUDIO in self.input_modalities
+                    else self.capabilities.input.audio
+                ),
+                "video": (
+                    True
+                    if MediaModality.VIDEO in self.input_modalities
+                    else self.capabilities.input.video
+                ),
+                "text": (
+                    True
+                    if self.capabilities.input.text is None
+                    else self.capabilities.input.text
+                ),
+            }
+        )
+        output_capabilities = self.capabilities.output.model_copy(
+            update={
+                "text": (
+                    True
+                    if self.capabilities.output.text is None
+                    else self.capabilities.output.text
+                )
+            }
+        )
+        self.capabilities = self.capabilities.model_copy(
+            update={
+                "input": input_capabilities,
+                "output": output_capabilities,
+            }
+        )
+        self.input_modalities = self.capabilities.supported_input_modalities()
+        return self
 
 
 class ModelDiscoveryResult(BaseModel):
@@ -274,6 +326,16 @@ class ModelConnectivityProbeService:
                 headers=override.headers,
                 maas_auth=override.maas_auth,
                 ssl_verify=override.ssl_verify,
+                capabilities=resolve_model_capabilities(
+                    provider=override.provider or ProviderType.OPENAI_COMPATIBLE,
+                    base_url=override_base_url,
+                    model_name=override_model,
+                    metadata=(
+                        override.model_dump(mode="json", exclude_none=True)
+                        if isinstance(override, BaseModel)
+                        else None
+                    ),
+                ),
                 sampling=SamplingConfig(
                     temperature=(
                         override.temperature
@@ -368,10 +430,13 @@ class ModelConnectivityProbeService:
     ) -> ModelEndpointConfig:
         if override is None:
             return base_config
+        resolved_provider = override.provider or base_config.provider
+        resolved_model = override.model or base_config.model
+        resolved_base_url = override.base_url or base_config.base_url
         return ModelEndpointConfig(
-            provider=override.provider or base_config.provider,
-            model=override.model or base_config.model,
-            base_url=override.base_url or base_config.base_url,
+            provider=resolved_provider,
+            model=resolved_model,
+            base_url=resolved_base_url,
             api_key=override.api_key or base_config.api_key,
             headers=override.headers or base_config.headers,
             maas_auth=self._merge_maas_auth(
@@ -382,6 +447,19 @@ class ModelConnectivityProbeService:
                 override.ssl_verify
                 if override.ssl_verify is not None
                 else base_config.ssl_verify
+            ),
+            capabilities=(
+                base_config.capabilities
+                if (
+                    resolved_provider == base_config.provider
+                    and resolved_model == base_config.model
+                    and resolved_base_url == base_config.base_url
+                )
+                else resolve_model_capabilities(
+                    provider=resolved_provider,
+                    base_url=resolved_base_url,
+                    model_name=resolved_model,
+                )
             ),
             sampling=SamplingConfig(
                 temperature=(
@@ -1452,6 +1530,18 @@ class ModelConnectivityProbeService:
                             model=normalized,
                         )
                     ),
+                    capabilities=resolve_model_capabilities(
+                        provider=provider,
+                        base_url="",
+                        model_name=normalized,
+                        metadata=entry,
+                    ),
+                    input_modalities=resolve_model_input_modalities(
+                        provider=provider,
+                        base_url="",
+                        model_name=normalized,
+                        metadata=entry,
+                    ),
                 )
             )
         model_entries.sort(key=lambda item: item.model)
@@ -1507,7 +1597,20 @@ class ModelConnectivityProbeService:
             return None
 
         return tuple(
-            ModelDiscoveryEntry(model=model_id) for model_id in sorted(model_ids)
+            ModelDiscoveryEntry(
+                model=model_id,
+                capabilities=resolve_model_capabilities(
+                    provider=ProviderType.MAAS,
+                    base_url="",
+                    model_name=model_id,
+                ),
+                input_modalities=resolve_model_input_modalities(
+                    provider=ProviderType.MAAS,
+                    base_url="",
+                    model_name=model_id,
+                ),
+            )
+            for model_id in sorted(model_ids)
         )
 
     def _parse_maas_plugin_config(

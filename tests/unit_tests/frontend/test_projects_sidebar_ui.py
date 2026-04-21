@@ -1734,6 +1734,134 @@ console.log(JSON.stringify({
     assert payload["activeSessionCount"] == 1
 
 
+def test_projects_sidebar_defers_passive_refresh_while_hovering(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:01:00Z",
+        pending_tool_approval_count: 0,
+    },
+];
+
+globalThis.__fetchCounts = {
+    workspaces: 0,
+    sessions: 0,
+    automationProjects: 0,
+};
+
+export async function fetchWorkspaces() {
+    globalThis.__fetchCounts.workspaces += 1;
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    globalThis.__fetchCounts.sessions += 1;
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    globalThis.__fetchCounts.automationProjects += 1;
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    throw new Error("not used");
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    throw new Error("not used");
+}
+
+export async function deleteWorkspace() {
+    throw new Error("not used");
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function disableAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function enableAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+        runner_source="""
+import {
+    loadProjects,
+    scheduleSessionsRefresh,
+} from "./sidebar.mjs";
+
+await loadProjects();
+const initialCounts = { ...globalThis.__fetchCounts };
+
+globalThis.__projectsListHover = true;
+scheduleSessionsRefresh(0);
+await new Promise(resolve => setTimeout(resolve, 80));
+const hoveredCounts = { ...globalThis.__fetchCounts };
+
+globalThis.__projectsListHover = false;
+await new Promise(resolve => setTimeout(resolve, 320));
+const settledCounts = { ...globalThis.__fetchCounts };
+
+console.log(JSON.stringify({
+    initialCounts,
+    hoveredCounts,
+    settledCounts,
+}));
+""".strip(),
+    )
+
+    assert payload["initialCounts"] == {
+        "workspaces": 1,
+        "sessions": 1,
+        "automationProjects": 1,
+    }
+    assert payload["hoveredCounts"] == payload["initialCounts"]
+    assert payload["settledCounts"] == {
+        "workspaces": 2,
+        "sessions": 2,
+        "automationProjects": 2,
+    }
+
+
 def test_projects_sidebar_hover_hint_preserves_project_action_space() -> None:
     components_css = load_components_css()
 
@@ -2102,6 +2230,9 @@ function createContainerElement() {
         className: "",
         style: {},
         children: [],
+        matches(selector) {
+            return selector === ":hover" ? !!globalThis.__projectsListHover : false;
+        },
         get innerHTML() {
             return html;
         },
@@ -2115,7 +2246,13 @@ function createContainerElement() {
             this.children.push(child);
             return child;
         },
+        contains(target) {
+            return target === this || this.children.includes(target);
+        },
         querySelector(selector) {
+            if (selector === ":hover") {
+                return globalThis.__projectsListHover ? this : null;
+            }
             return this.querySelectorAll(selector)[0] || null;
         },
         querySelectorAll(selector) {
@@ -2159,6 +2296,9 @@ export function createDomEnvironment() {
         },
         createElement() {
             return createCardElement();
+        },
+        get activeElement() {
+            return globalThis.__documentActiveElement || null;
         },
         addEventListener(name, handler) {
             if (!listeners.has(name)) {

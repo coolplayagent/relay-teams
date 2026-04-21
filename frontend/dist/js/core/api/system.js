@@ -28,6 +28,26 @@ export async function saveSshProfile(sshProfileId, config) {
     );
 }
 
+export async function revealSshProfilePassword(sshProfileId) {
+    return requestJson(
+        `/api/system/configs/workspace/ssh-profiles/${encodeURIComponent(sshProfileId)}:reveal-password`,
+        { method: 'POST' },
+        'Failed to reveal SSH profile password',
+    );
+}
+
+export async function probeSshProfileConnection(payload) {
+    return requestJson(
+        '/api/system/configs/workspace/ssh-profiles:probe',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to test SSH profile',
+    );
+}
+
 export async function deleteSshProfile(sshProfileId) {
     return requestJson(
         `/api/system/configs/workspace/ssh-profiles/${encodeURIComponent(sshProfileId)}`,

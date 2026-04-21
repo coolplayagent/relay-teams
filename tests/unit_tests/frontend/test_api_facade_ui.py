@@ -134,7 +134,14 @@ def test_core_api_facade_exports_workspace_provider_helpers() -> None:
                 "body: null"
                 "}; "
                 f"const mod = await import({api_module_path.as_uri()!r}); "
-                "console.log([typeof mod.updateWorkspace, typeof mod.fetchSshProfiles, typeof mod.saveSshProfile, typeof mod.deleteSshProfile].join(','));"
+                "console.log(["
+                "typeof mod.updateWorkspace,"
+                "typeof mod.fetchSshProfiles,"
+                "typeof mod.saveSshProfile,"
+                "typeof mod.revealSshProfilePassword,"
+                "typeof mod.probeSshProfileConnection,"
+                "typeof mod.deleteSshProfile"
+                "].join(','));"
             ),
         ],
         capture_output=True,
@@ -151,7 +158,10 @@ def test_core_api_facade_exports_workspace_provider_helpers() -> None:
             f"STDERR:\n{completed.stderr}"
         )
 
-    assert completed.stdout.strip() == "function,function,function,function"
+    assert (
+        completed.stdout.strip()
+        == "function,function,function,function,function,function"
+    )
 
 
 def test_core_api_facade_exports_trigger_helpers() -> None:
@@ -669,6 +679,8 @@ export async function requestJson(url, options, errorMessage) {
                 f"const mod = await import({module_under_test_path.as_uri()!r}); "
                 "await mod.fetchSshProfiles(); "
                 "await mod.saveSshProfile('prod', { host: 'prod-alias', username: 'deploy', password: 'secret', private_key: 'KEY', private_key_name: 'id_ed25519' }); "
+                "await mod.revealSshProfilePassword('prod'); "
+                "await mod.probeSshProfileConnection({ ssh_profile_id: 'prod' }); "
                 "await mod.deleteSshProfile('prod'); "
                 "console.log(JSON.stringify(globalThis.__capturedRequests));"
             ),
@@ -712,6 +724,22 @@ export async function requestJson(url, options, errorMessage) {
                     "private_key_name": "id_ed25519",
                 }
             },
+        },
+        {
+            "url": "/api/system/configs/workspace/ssh-profiles/prod:reveal-password",
+            "options": {"method": "POST"},
+            "errorMessage": "Failed to reveal SSH profile password",
+            "body": None,
+        },
+        {
+            "url": "/api/system/configs/workspace/ssh-profiles:probe",
+            "options": {
+                "method": "POST",
+                "headers": {"Content-Type": "application/json"},
+                "body": '{"ssh_profile_id":"prod"}',
+            },
+            "errorMessage": "Failed to test SSH profile",
+            "body": {"ssh_profile_id": "prod"},
         },
         {
             "url": "/api/system/configs/workspace/ssh-profiles/prod",
