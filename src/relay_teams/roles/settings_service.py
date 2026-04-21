@@ -258,6 +258,7 @@ class RoleSettingsService:
                 "tools": apply_default_role_tools(
                     role_id=normalized_role_id,
                     role_name=draft.name,
+                    mode=draft.mode.value,
                     tools=tuple(item.strip() for item in draft.tools if item.strip()),
                 ),
                 "mcp_servers": tuple(

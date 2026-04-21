@@ -66,6 +66,15 @@ if TYPE_CHECKING:
     from relay_teams.sessions.runs.user_question_repository import (
         UserQuestionRepository,
     )
+    from relay_teams.sessions.runs.todo_models import (
+        TodoItem,
+        TodoSnapshot,
+        TodoStatus,
+        build_todo_snapshot,
+        empty_todo_snapshot,
+    )
+    from relay_teams.sessions.runs.todo_repository import TodoRepository
+    from relay_teams.sessions.runs.todo_service import TodoService
     from relay_teams.sessions.runs.run_state_models import (
         RunSnapshotRecord,
         RunStatePhase,
@@ -117,6 +126,11 @@ __all__ = [
     "RunStateRecord",
     "RunStateRepository",
     "RunStateStatus",
+    "TodoItem",
+    "TodoRepository",
+    "TodoService",
+    "TodoSnapshot",
+    "TodoStatus",
     "RuntimeConfig",
     "RuntimePaths",
     "TraceId",
@@ -130,6 +144,8 @@ __all__ = [
     "UserQuestionRequestRecord",
     "UserQuestionRequestStatus",
     "apply_run_event_to_state",
+    "build_todo_snapshot",
+    "empty_todo_snapshot",
     "load_runtime_config",
     "new_trace_id",
 ]
@@ -249,6 +265,11 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "relay_teams.sessions.runs.run_state_models",
         "RunStateStatus",
     ),
+    "TodoItem": ("relay_teams.sessions.runs.todo_models", "TodoItem"),
+    "TodoRepository": ("relay_teams.sessions.runs.todo_repository", "TodoRepository"),
+    "TodoService": ("relay_teams.sessions.runs.todo_service", "TodoService"),
+    "TodoSnapshot": ("relay_teams.sessions.runs.todo_models", "TodoSnapshot"),
+    "TodoStatus": ("relay_teams.sessions.runs.todo_models", "TodoStatus"),
     "RuntimeConfig": ("relay_teams.sessions.runs.runtime_config", "RuntimeConfig"),
     "RuntimePaths": ("relay_teams.sessions.runs.runtime_config", "RuntimePaths"),
     "TraceId": ("relay_teams.sessions.runs.ids", "TraceId"),
@@ -291,6 +312,14 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "apply_run_event_to_state": (
         "relay_teams.sessions.runs.run_state_models",
         "apply_run_event_to_state",
+    ),
+    "build_todo_snapshot": (
+        "relay_teams.sessions.runs.todo_models",
+        "build_todo_snapshot",
+    ),
+    "empty_todo_snapshot": (
+        "relay_teams.sessions.runs.todo_models",
+        "empty_todo_snapshot",
     ),
     "load_runtime_config": (
         "relay_teams.sessions.runs.runtime_config",

@@ -10,6 +10,9 @@ from relay_teams.agents.instances.instance_repository import AgentInstanceReposi
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.sessions.runs.todo_models import TodoItem, TodoStatus
+from relay_teams.sessions.runs.todo_repository import TodoRepository
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.session_repository import SessionRepository
@@ -70,6 +73,7 @@ def _build_service(
         approval_ticket_repo=ApprovalTicketRepository(db_path),
         run_runtime_repo=RunRuntimeRepository(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
+        todo_service=TodoService(repository=TodoRepository(db_path)),
         role_registry=role_registry,
         workspace_service=workspace_service,
     )
@@ -492,3 +496,24 @@ def test_delete_session_force_allows_active_run_cleanup(tmp_path: Path) -> None:
 
     with pytest.raises(KeyError, match="session-1"):
         service.get_session("session-1")
+
+
+def test_delete_session_cleans_persisted_run_todos(tmp_path: Path) -> None:
+    db_path = tmp_path / "session_delete_todos.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    todo_service = TodoService(repository=TodoRepository(db_path))
+    todo_service.replace_for_run(
+        run_id="run-1",
+        session_id="session-1",
+        items=(
+            TodoItem(
+                content="Inspect issue 399 requirements",
+                status=TodoStatus.PENDING,
+            ),
+        ),
+    )
+
+    service.delete_session("session-1")
+
+    assert todo_service.list_for_session("session-1") == ()

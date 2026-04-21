@@ -682,6 +682,7 @@ def _run_event_router_script(tmp_path: Path, runner_source: str) -> dict[str, ob
 
     replacements = {
         "../../app/recovery.js": "./mockRecovery.mjs",
+        "../../components/rounds.js": "./mockRounds.mjs",
         "../../components/sessionTokenUsage.js": "./mockSessionTokenUsage.mjs",
         "../state.js": "./mockState.mjs",
         "../../utils/logger.js": "./mockLogger.mjs",
@@ -718,6 +719,18 @@ export function scheduleRecoveryContinuityRefresh(options) {
         """
 export function scheduleSessionTokenUsageRefresh(options) {
     globalThis.__scheduleSessionTokenUsageRefreshCalls.push(options);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockRounds.mjs").write_text(
+        """
+export function syncRoundTodoVisibility() {
+    return undefined;
+}
+
+export function updateRoundTodo() {
+    return undefined;
 }
 """.strip(),
         encoding="utf-8",

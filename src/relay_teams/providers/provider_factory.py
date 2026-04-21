@@ -55,6 +55,7 @@ from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
 from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
@@ -84,6 +85,7 @@ def create_provider_factory(
     run_runtime_repo: RunRuntimeRepository,
     run_intent_repo: RunIntentRepository,
     background_task_service: BackgroundTaskService | None,
+    todo_service: TodoService | None = None,
     monitor_service: MonitorService | None = None,
     workspace_manager: WorkspaceManager,
     media_asset_service: MediaAssetService,
@@ -196,6 +198,7 @@ def create_provider_factory(
                 run_runtime_repo=run_runtime_repo,
                 run_intent_repo=run_intent_repo,
                 background_task_service=background_task_service,
+                todo_service=todo_service,
                 monitor_service=monitor_service,
                 workspace_manager=workspace_manager,
                 media_asset_service=media_asset_service,

@@ -45,6 +45,9 @@ from relay_teams.sessions.runs.run_state_models import (
     RunStateRecord,
     RunStateStatus,
 )
+from relay_teams.sessions.runs.todo_models import TodoItem, TodoStatus
+from relay_teams.sessions.runs.todo_repository import TodoRepository
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 from relay_teams.workspace.workspace_repository import WorkspaceRepository
 from relay_teams.workspace.workspace_service import WorkspaceService
@@ -83,6 +86,7 @@ def _build_service(
         background_task_repository=BackgroundTaskRepository(db_path),
         event_log=EventLog(db_path),
         token_usage_repo=TokenUsageRepository(db_path),
+        todo_service=TodoService(repository=TodoRepository(db_path)),
         run_event_hub=RunEventHub(),
         shared_store=shared_store,
         workspace_manager=WorkspaceManager(
@@ -445,6 +449,17 @@ def test_delete_normal_mode_subagent_cleans_child_session_state(tmp_path: Path) 
         output_tokens=7,
         requests=1,
     )
+    todo_service = TodoService(repository=TodoRepository(db_path))
+    todo_service.replace_for_run(
+        run_id=run_id,
+        session_id="session-1",
+        items=(
+            TodoItem(
+                content="Clean subagent todo snapshot",
+                status=TodoStatus.PENDING,
+            ),
+        ),
+    )
 
     shared_store = SharedStateRepository(db_path)
     shared_store.manage_state(
@@ -526,6 +541,7 @@ def test_delete_normal_mode_subagent_cleans_child_session_state(tmp_path: Path) 
     assert event_log.list_by_trace(run_id) == ()
     assert approval_repo.list_open_by_run(run_id) == ()
     assert token_usage_repo.get_by_run(run_id).total_tokens == 0
+    assert todo_service.get_for_run(run_id=run_id, session_id="session-1").version == 0
     assert task_repo.list_by_session("session-1") == ()
     assert background_task_repository.get(background_record.background_task_id) is None
     assert not background_log_path.exists()

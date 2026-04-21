@@ -239,6 +239,8 @@ def plan_fake_response(payload: object) -> dict[str, object]:
         return _plan_rolling_summary_phase_response(payload, messages)
     if _rolling_summary_recall_mode(messages):
         return _plan_rolling_summary_recall_response(messages)
+    if _todo_validation_mode(messages):
+        return _plan_todo_validation_response(payload, messages)
     if _invalid_json_auto_recovery_mode(messages):
         return _plan_invalid_json_auto_recovery_response(payload, messages)
     if _hook_read_rewrite_mode(messages):
@@ -347,6 +349,46 @@ def _plan_rolling_summary_recall_response(messages: list[object]) -> dict[str, o
 
 def _invalid_json_auto_recovery_mode(messages: list[object]) -> bool:
     return _messages_contain_user_text(messages, "[invalid-json-auto-recovery]")
+
+
+def _todo_validation_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[todo-validation]")
+
+
+def _plan_todo_validation_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    available_tools = _extract_available_tools(payload)
+    if "todo_write" not in available_tools:
+        return {
+            "kind": "text",
+            "content": "[fake-llm] todo_write is not available for this role.",
+        }
+    attempt = _next_scenario_attempt(messages, marker="[todo-validation]")
+    if attempt == 1:
+        return {
+            "kind": "tool_call",
+            "tool_name": "todo_write",
+            "tool_call_id": "call-todo-validation-1",
+            "arguments": {
+                "items": [
+                    {
+                        "content": "Inspect issue 399 requirements",
+                        "status": "completed",
+                    },
+                    {
+                        "content": "Implement run todo persistence",
+                        "status": "in_progress",
+                    },
+                    {"content": "Verify API and CLI output", "status": "pending"},
+                ]
+            },
+        }
+    return {
+        "kind": "text",
+        "content": "todo validation completed",
+    }
 
 
 def _plan_invalid_json_auto_recovery_response(

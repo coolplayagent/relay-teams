@@ -34,6 +34,7 @@ from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
 from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
@@ -136,6 +137,7 @@ class ToolDeps(BaseModel):
     computer_runtime: SkipValidation[ComputerRuntime | None] = None
     background_task_service: SkipValidation[BackgroundTaskService | None] = None
     monitor_service: SkipValidation[MonitorService | None] = None
+    todo_service: SkipValidation[TodoService | None] = None
     run_id: str
     trace_id: str
     task_id: str

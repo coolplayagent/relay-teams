@@ -82,6 +82,7 @@ from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
@@ -457,6 +458,7 @@ class AgentLlmSession:
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         background_task_service: BackgroundTaskService | None,
+        todo_service: TodoService | None = None,
         monitor_service: MonitorService | None = None,
         workspace_manager: WorkspaceManager,
         media_asset_service: MediaAssetService | None,
@@ -507,6 +509,7 @@ class AgentLlmSession:
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._background_task_service = background_task_service
+        self._todo_service = todo_service
         self._monitor_service = monitor_service
         self._workspace_manager = workspace_manager
         self._media_asset_service = media_asset_service
@@ -649,6 +652,7 @@ class AgentLlmSession:
                 computer_runtime=self._computer_runtime,
                 background_task_service=self._background_task_service,
                 monitor_service=self._monitor_service,
+                todo_service=getattr(self, "_todo_service", None),
                 run_id=request.run_id,
                 trace_id=request.trace_id,
                 task_id=request.task_id,
@@ -1946,6 +1950,7 @@ class AgentLlmSession:
             run_runtime_repo=self._run_runtime_repo,
             run_intent_repo=self._run_intent_repo,
             background_task_service=self._background_task_service,
+            todo_service=getattr(self, "_todo_service", None),
             monitor_service=self._monitor_service,
             workspace_manager=self._workspace_manager,
             media_asset_service=self._media_asset_service,

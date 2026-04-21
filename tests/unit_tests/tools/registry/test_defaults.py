@@ -44,6 +44,8 @@ def test_registry_contains_registered_local_tools() -> None:
         "spawn_subagent",
         "stop_background_task",
         "stop_monitor",
+        "todo_read",
+        "todo_write",
         "type_text",
         "update_task",
         "wait_background_task",

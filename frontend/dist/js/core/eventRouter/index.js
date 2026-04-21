@@ -3,6 +3,7 @@
  * Event switchboard for SSE RunEventType payloads.
  */
 import { scheduleRecoveryContinuityRefresh } from '../../app/recovery.js';
+import { syncRoundTodoVisibility, updateRoundTodo } from '../../components/rounds.js';
 import { scheduleSessionTokenUsageRefresh } from '../../components/sessionTokenUsage.js';
 import { state } from '../state.js';
 import { sysLog } from '../../utils/logger.js';
@@ -114,8 +115,10 @@ export function routeEvent(evType, payload, eventMeta) {
     }
     if (evType === 'run_started') {
         handleRunStarted(eventMeta);
+        syncRoundTodoVisibility();
     } else if (evType === 'run_resumed') {
         handleRunStarted(eventMeta);
+        syncRoundTodoVisibility();
     } else if (evType === 'model_step_started') {
         handleModelStepStarted(eventMeta, instanceId, roleId);
     } else if (evType === 'llm_retry_scheduled') {
@@ -142,10 +145,13 @@ export function routeEvent(evType, payload, eventMeta) {
         handleModelStepFinished(eventMeta, instanceId);
     } else if (evType === 'run_completed') {
         handleRunCompleted(eventMeta);
+        syncRoundTodoVisibility();
     } else if (evType === 'run_stopped') {
         handleRunStopped(eventMeta, payload);
+        syncRoundTodoVisibility();
     } else if (evType === 'run_failed') {
         handleRunFailed(eventMeta, payload);
+        syncRoundTodoVisibility();
     } else if (evType === 'tool_call') {
         handleToolCall(payload, eventMeta, instanceId, roleId);
     } else if (evType === 'tool_input_validation_failed') {
@@ -177,6 +183,11 @@ export function routeEvent(evType, payload, eventMeta) {
         return;
     } else if (evType === 'token_usage') {
         scheduleSessionTokenUsageRefresh({ immediate: true });
+    } else if (evType === 'todo_updated') {
+        updateRoundTodo(
+            payload?.run_id || eventMeta?.run_id || eventMeta?.trace_id || '',
+            payload,
+        );
     } else {
         sysLog(`[evt] ${evType}`, 'log-info');
     }

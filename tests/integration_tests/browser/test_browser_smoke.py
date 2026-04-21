@@ -410,7 +410,6 @@ def test_browser_shell_settings_and_session_management(
         arg=initial_lang,
         timeout=_WAIT_TIMEOUT_MS,
     )
-
     initial_background = _body_background(page)
     page.locator("#toggle-theme").click()
     page.wait_for_function(
@@ -2259,6 +2258,89 @@ async def _run_gateway_observability_probe(server: AcpGatewayServer) -> None:
     prompt_result = prompt_response.get("result")
     assert isinstance(prompt_result, dict)
     assert prompt_result.get("runStatus") == "completed"
+
+
+def test_browser_round_todo_card_renders_and_collapses(
+    browser_page: Page,
+    integration_env: IntegrationEnvironment,
+    api_client: httpx.Client,
+) -> None:
+    page = browser_page
+    _open_app(page, integration_env)
+    if not page.locator("body").evaluate(
+        "element => element.classList.contains('light-theme')"
+    ):
+        page.locator("#toggle-theme").click()
+        page.wait_for_function(
+            "document.body.classList.contains('light-theme')",
+            timeout=_WAIT_TIMEOUT_MS,
+        )
+
+    session_id = _create_session_via_sidebar(page)
+    prompt = "[todo-validation] 维护当前 run 的 todo，并完成一次持久化校验。"
+
+    expect(page.locator("#prompt-input")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    page.locator("#prompt-input").fill(prompt)
+    page.locator("#send-btn").click()
+
+    run_id = _wait_for_run_id(api_client, session_id)
+    round_nav = page.locator("#round-nav-float")
+    round_node = round_nav.locator(f'.round-nav-node[data-run-id="{run_id}"]')
+    todo_card = round_node.locator(".round-nav-todo-branch .round-todo-card")
+
+    expect(todo_card).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
+    expect(round_node).to_have_class(
+        re.compile(r".*\bactive\b.*"), timeout=_WAIT_TIMEOUT_MS
+    )
+    expect(round_nav.locator(".round-nav-resizer")).to_have_count(
+        1,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(todo_card).to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
+    expect(todo_card.locator(".round-todo-item")).to_have_count(
+        3,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(todo_card).to_contain_text(
+        "Inspect issue 399 requirements",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(todo_card).to_contain_text(
+        "Implement run todo persistence",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(todo_card.locator(".round-todo-item-text").first).to_have_attribute(
+        "title",
+        "Inspect issue 399 requirements",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(page.locator(".round-todo-card")).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
+    expect(page.locator(".session-round-section .round-todo-card")).to_have_count(
+        0,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+
+    expanded_width = round_nav.evaluate(
+        "element => element.getBoundingClientRect().width"
+    )
+    round_nav.locator(".round-nav-toggle").click()
+    collapsed_width = round_nav.evaluate(
+        "element => element.getBoundingClientRect().width"
+    )
+    assert collapsed_width < expanded_width
+
+    round_nav.locator(".round-nav-toggle").click()
+    expect(todo_card).to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
+
+    todo_card.locator(".round-todo-summary").click()
+    expect(todo_card).not_to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
+    expect(todo_card.locator(".round-todo-body")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
+
+    todo_card.locator(".round-todo-summary").click()
+    expect(todo_card).to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
+    expect(todo_card.locator(".round-todo-body")).to_be_visible(
+        timeout=_WAIT_TIMEOUT_MS
+    )
 
 
 def _resolve_playwright_browser_root() -> Path:

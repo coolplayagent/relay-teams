@@ -109,6 +109,7 @@ def test_tool_deps_can_be_instantiated_without_model_rebuild() -> None:
         agent_repo=cast(AgentInstanceRepository, object()),
         workspace=cast(WorkspaceHandle, object()),
         role_memory=None,
+        todo_service=None,
         run_id="run-1",
         trace_id="trace-1",
         task_id="task-1",

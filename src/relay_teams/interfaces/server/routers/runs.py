@@ -413,6 +413,17 @@ def list_background_tasks(
         raise http_exception_for(exc) from exc
 
 
+@router.get("/{run_id}/todo")
+def get_todo(
+    run_id: RequiredIdentifierStr,
+    service: Annotated[RunManager, Depends(get_run_service)],
+) -> dict[str, object]:
+    try:
+        return {"todo": service.get_todo(run_id)}
+    except KeyError as exc:
+        raise http_exception_for(exc) from exc
+
+
 @router.get("/{run_id}/background-tasks/{background_task_id}")
 def get_background_task(
     run_id: RequiredIdentifierStr,

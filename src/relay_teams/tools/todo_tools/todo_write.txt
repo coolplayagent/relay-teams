@@ -1,0 +1,15 @@
+Replace the current run-scoped todo list for this run.
+
+Pass the complete todo table every time. This tool does not append or patch individual rows. The last successful write wins.
+
+Input:
+- `items`: full ordered list of todo items
+
+Each todo item must include:
+- `content`
+- `status`: `pending`, `in_progress`, or `completed`
+
+Rules:
+- At most one item may be `in_progress`
+- Use an empty list to clear the todo
+- Keep the list focused on the current run rather than long-term project planning

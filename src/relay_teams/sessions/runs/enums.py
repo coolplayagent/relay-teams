@@ -18,6 +18,7 @@ class RunEventType(str, Enum):
     RUN_STARTED = "run_started"
     RUN_PAUSED = "run_paused"
     RUN_RESUMED = "run_resumed"
+    TODO_UPDATED = "todo_updated"
     BACKGROUND_TASK_STARTED = "background_task_started"
     BACKGROUND_TASK_UPDATED = "background_task_updated"
     BACKGROUND_TASK_COMPLETED = "background_task_completed"

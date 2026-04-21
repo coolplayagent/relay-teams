@@ -3,22 +3,34 @@
  * Floating round navigator rendering and active-state sync.
  */
 import { esc, roundStateLabel, roundStateTone } from './utils.js';
-import { t } from '../../utils/i18n.js';
+import { formatMessage, t } from '../../utils/i18n.js';
+import { normalizeRoundTodoSnapshot } from './todo.js';
 
 let navRounds = [];
 let navActiveRunId = null;
 let navOnSelectRound = null;
 const ROUND_NAV_COLLAPSED_KEY = 'agent_teams_round_nav_collapsed';
 const ROUND_NAV_POSITION_KEY = 'agent_teams_round_nav_position';
+const ROUND_NAV_WIDTH_KEY = 'agent_teams_round_nav_width';
+const collapsedTodoRunIds = new Set();
+const expandedTodoRunIds = new Set();
+const DEFAULT_NAV_WIDTH = 270;
+const COLLAPSED_NAV_WIDTH = 180;
+const MIN_NAV_WIDTH = 220;
+const MAX_NAV_WIDTH = 560;
 
 /** Persistent offset relative to chat container: { fromRight, fromTop }. */
 let currentOffset = null;
 let resizeObserver = null;
 let scheduledOffsetFrame = 0;
+let currentWidth = DEFAULT_NAV_WIDTH;
 
-export function renderRoundNavigator(rounds, onSelectRound) {
+export function renderRoundNavigator(rounds, onSelectRound, options = {}) {
     navRounds = Array.isArray(rounds) ? rounds : [];
     navOnSelectRound = onSelectRound;
+    if (Object.prototype.hasOwnProperty.call(options, 'activeRunId')) {
+        navActiveRunId = String(options.activeRunId || '').trim() || null;
+    }
 
     let nav = document.getElementById('round-nav-float');
     if (!nav) {
@@ -27,7 +39,10 @@ export function renderRoundNavigator(rounds, onSelectRound) {
         nav.className = 'round-nav-float';
         document.body.appendChild(nav);
         currentOffset = loadOffset();
+        currentWidth = loadWidth();
+        applyNavWidth(nav, currentWidth);
         installDrag(nav);
+        installResize(nav);
         installResizeWatch(nav);
     }
 
@@ -37,7 +52,9 @@ export function renderRoundNavigator(rounds, onSelectRound) {
         return;
     }
 
-    renderNavigatorDom(nav);
+    const list = nav.querySelector('.round-nav-list');
+    const preservedScrollTop = list?.scrollTop || 0;
+    renderNavigatorDom(nav, { scrollTop: preservedScrollTop });
     scheduleOffsetApply(nav);
 }
 
@@ -53,10 +70,10 @@ export function setActiveRoundNav(runId) {
     navActiveRunId = runId || null;
     const nav = document.getElementById('round-nav-float');
     if (!nav || navRounds.length === 0) return;
-
-    nav.querySelectorAll('.round-nav-item').forEach(el => {
-        el.classList.toggle('active', el.dataset.runId === runId);
-    });
+    const list = nav.querySelector('.round-nav-list');
+    const preservedScrollTop = list?.scrollTop || 0;
+    renderNavigatorDom(nav, { scrollTop: preservedScrollTop });
+    scheduleOffsetApply(nav);
     const active = nav.querySelector('.round-nav-item.active');
     if (active) {
         active.scrollIntoView({ block: 'nearest' });
@@ -73,10 +90,15 @@ function getChatRect() {
 
 /* ---- Rendering ---- */
 
-function renderNavigatorDom(nav) {
+function renderNavigatorDom(nav, options = {}) {
     const isCollapsed = loadCollapsedState();
     nav.style.display = 'flex';
     nav.classList.toggle('collapsed', isCollapsed);
+    if (isCollapsed) {
+        applyCollapsedWidth(nav);
+    } else {
+        applyNavWidth(nav, currentWidth);
+    }
     nav.innerHTML = `
         <div class="round-nav-header">
             <div class="round-nav-title">Rounds</div>
@@ -85,6 +107,7 @@ function renderNavigatorDom(nav) {
             </button>
         </div>
         <div class="round-nav-list"></div>
+        <div class="round-nav-resizer" aria-hidden="true"></div>
     `;
 
     const toggle = nav.querySelector('.round-nav-toggle');
@@ -100,11 +123,7 @@ function renderNavigatorDom(nav) {
             renderNavigatorDom(nav);
 
             // Pin right edge: compute new fromRight keeping the right side anchored
-            const newWidth = nav.offsetWidth;
-            const oldWidth = navRect.width;
-            const widthDelta = newWidth - oldWidth;
             currentOffset = { fromRight, fromTop: currentOffset ? currentOffset.fromTop : (navRect.top - chatRect.top) };
-            // fromRight stays same, so left shifts by widthDelta automatically
             scheduleOffsetApply(nav);
             persistOffset();
         };
@@ -113,12 +132,20 @@ function renderNavigatorDom(nav) {
     const list = nav.querySelector('.round-nav-list');
     if (!list) return;
     navRounds.forEach((round, idx) => {
+        const node = document.createElement('div');
+        node.className = 'round-nav-node';
+        node.dataset.runId = round.run_id;
+        const isActive = navActiveRunId && navActiveRunId === round.run_id;
+        if (isActive) {
+            node.classList.add('active');
+        }
+
         const item = document.createElement('button');
         item.type = 'button';
         item.className = 'round-nav-item';
         item.dataset.runId = round.run_id;
         item.title = String(round.intent || 'No intent');
-        if (navActiveRunId && navActiveRunId === round.run_id) {
+        if (isActive) {
             item.classList.add('active');
         }
         const stateLabel = roundStateLabel(round);
@@ -138,8 +165,132 @@ function renderNavigatorDom(nav) {
             setActiveRoundNav(round.run_id);
             if (navOnSelectRound) navOnSelectRound(round);
         };
-        list.appendChild(item);
+        node.appendChild(item);
+
+        const todoBranch = buildRoundNavTodoBranch(round, { isCollapsed });
+        if (todoBranch) {
+            node.classList.add('has-todo');
+            node.appendChild(todoBranch);
+        }
+
+        list.appendChild(node);
     });
+
+    if (typeof options.scrollTop === 'number') {
+        list.scrollTop = options.scrollTop;
+    }
+}
+
+function buildRoundNavTodoBranch(round, { isCollapsed }) {
+    if (isCollapsed || !shouldRenderRoundTodo(round)) {
+        return null;
+    }
+    const todo = normalizeRoundTodoSnapshot(round.todo, round.run_id);
+    if (todo === null) {
+        return null;
+    }
+    const branch = document.createElement('div');
+    branch.className = 'round-nav-todo-branch';
+    branch.dataset.runId = round.run_id;
+    branch.appendChild(buildRoundTodoCard(round, todo));
+    return branch;
+}
+
+function buildRoundTodoCard(round, todo) {
+    const inProgressCount = todo.items.filter(item => item.status === 'in_progress').length;
+    const hasIncompleteItems = roundTodoHasIncompleteItems(todo);
+    const details = document.createElement('details');
+    details.className = 'round-todo-card';
+    details.dataset.runId = round.run_id;
+    if (resolveTodoCardDefaultOpen(round.run_id, hasIncompleteItems)) {
+        details.open = true;
+    }
+    details.innerHTML = `
+        <summary class="round-todo-summary">
+            <span class="round-todo-summary-copy">
+                <span class="round-todo-title-row">
+                    <span class="round-todo-title">${esc(t('rounds.todo.title'))}</span>
+                    <span class="round-todo-count">${esc(formatMessage('rounds.todo.items', { count: todo.items.length }))}</span>
+                    ${inProgressCount > 0 ? `<span class="round-todo-count round-todo-count-progress">${esc(formatMessage('rounds.todo.in_progress_count', { count: inProgressCount }))}</span>` : ''}
+                </span>
+            </span>
+            <span class="round-todo-toggle">${esc(details.open ? t('rounds.collapse') : t('rounds.expand'))}</span>
+        </summary>
+        <div class="round-todo-body">
+            <ul class="round-todo-list">
+                ${todo.items.map((item, index) => `
+                    <li class="round-todo-item" data-status="${esc(item.status)}">
+                        <span class="round-todo-index">${index + 1}</span>
+                        <span class="round-todo-item-copy">
+                            <span class="round-todo-item-text" title="${esc(item.content)}">${esc(item.content)}</span>
+                        </span>
+                        <span class="round-todo-status${item.status === 'completed' ? ' round-todo-status-simple' : ''}" data-status="${esc(item.status)}">${esc(t(`rounds.todo.status.${item.status}`))}</span>
+                    </li>
+                `).join('')}
+            </ul>
+        </div>
+    `;
+    const toggleEl = details.querySelector('.round-todo-toggle');
+    details.addEventListener('toggle', () => {
+        updateTodoCardPreference(round.run_id, hasIncompleteItems, details.open);
+        if (toggleEl) {
+            toggleEl.textContent = details.open ? t('rounds.collapse') : t('rounds.expand');
+        }
+    });
+    return details;
+}
+
+function roundTodoHasIncompleteItems(todo) {
+    return todo.items.some(item => item.status !== 'completed');
+}
+
+function resolveTodoCardDefaultOpen(runId, hasIncompleteItems) {
+    if (hasIncompleteItems) {
+        expandedTodoRunIds.delete(runId);
+        return !collapsedTodoRunIds.has(runId);
+    }
+    collapsedTodoRunIds.delete(runId);
+    return expandedTodoRunIds.has(runId);
+}
+
+function updateTodoCardPreference(runId, hasIncompleteItems, isOpen) {
+    if (hasIncompleteItems) {
+        expandedTodoRunIds.delete(runId);
+        if (isOpen) {
+            collapsedTodoRunIds.delete(runId);
+        } else {
+            collapsedTodoRunIds.add(runId);
+        }
+        return;
+    }
+    collapsedTodoRunIds.delete(runId);
+    if (isOpen) {
+        expandedTodoRunIds.add(runId);
+    } else {
+        expandedTodoRunIds.delete(runId);
+    }
+}
+
+function shouldRenderRoundTodo(round) {
+    const safeRunId = String(round?.run_id || '').trim();
+    if (!safeRunId) {
+        return false;
+    }
+    if (safeRunId !== resolveVisibleTodoRunId()) {
+        return false;
+    }
+    return normalizeRoundTodoSnapshot(round.todo, safeRunId) !== null;
+}
+
+function resolveVisibleTodoRunId() {
+    const activeRunId = String(navActiveRunId || '').trim();
+    if (activeRunId && navRounds.some(round => round.run_id === activeRunId)) {
+        return activeRunId;
+    }
+    const latestTodoRound = [...navRounds]
+        .reverse()
+        .find(round => normalizeRoundTodoSnapshot(round.todo, round.run_id) !== null);
+    return String(latestTodoRound?.run_id || '').trim();
 }
 
 /* ---- Offset positioning ---- */
@@ -150,7 +301,7 @@ const DEFAULT_FROM_TOP = 12;
 /** Convert stored offset -> viewport left/top, clamped to chat bounds. */
 function applyOffset(nav) {
     const chatRect = getChatRect();
-    const navW = nav.offsetWidth;
+    const navW = loadCollapsedState() ? COLLAPSED_NAV_WIDTH : currentWidth;
     const navH = nav.offsetHeight;
 
     if (!currentOffset) {
@@ -168,6 +319,22 @@ function applyOffset(nav) {
     nav.style.left = left + 'px';
     nav.style.top = top + 'px';
     nav.style.right = 'auto';
+}
+
+function clampNavWidth(width) {
+    const chatRect = getChatRect();
+    const maxWithinChat = Math.max(MIN_NAV_WIDTH, Math.floor(chatRect.width - 24));
+    return Math.max(MIN_NAV_WIDTH, Math.min(Math.min(MAX_NAV_WIDTH, maxWithinChat), Math.floor(width)));
+}
+
+function applyNavWidth(nav, width) {
+    const nextWidth = clampNavWidth(width);
+    currentWidth = nextWidth;
+    nav.style.width = `${nextWidth}px`;
+}
+
+function applyCollapsedWidth(nav) {
+    nav.style.width = `${COLLAPSED_NAV_WIDTH}px`;
 }
 
 function scheduleOffsetApply(nav) {
@@ -207,6 +374,7 @@ function installDrag(nav) {
         const hdr = header();
         if (!hdr || !hdr.contains(e.target)) return;
         if (e.target.closest('.round-nav-toggle')) return;
+        if (e.target.closest('.round-nav-resizer')) return;
 
         dragging = true;
         moved = false;
@@ -256,6 +424,37 @@ function installDrag(nav) {
     });
 }
 
+function installResize(nav) {
+    let resizing = false;
+    let startX = 0;
+    let startWidth = currentWidth;
+
+    nav.addEventListener('pointerdown', (e) => {
+        if (!e.target.closest('.round-nav-resizer')) return;
+        resizing = true;
+        startX = e.clientX;
+        startWidth = currentWidth;
+        nav.classList.add('resizing');
+        nav.setPointerCapture(e.pointerId);
+        e.preventDefault();
+    });
+
+    nav.addEventListener('pointermove', (e) => {
+        if (!resizing) return;
+        const deltaX = e.clientX - startX;
+        applyNavWidth(nav, startWidth + deltaX);
+        scheduleOffsetApply(nav);
+    });
+
+    nav.addEventListener('pointerup', (e) => {
+        if (!resizing) return;
+        resizing = false;
+        nav.classList.remove('resizing');
+        nav.releasePointerCapture(e.pointerId);
+        persistWidth(currentWidth);
+    });
+}
+
 /* ---- Resize watch: re-clamp when chat container changes ---- */
 
 function installResizeWatch(nav) {
@@ -263,6 +462,11 @@ function installResizeWatch(nav) {
     if (!chat) return;
     resizeObserver = new ResizeObserver(() => {
         if (nav.style.display === 'none') return;
+        if (loadCollapsedState()) {
+            applyCollapsedWidth(nav);
+        } else {
+            applyNavWidth(nav, currentWidth);
+        }
         scheduleOffsetApply(nav);
     });
     resizeObserver.observe(chat);
@@ -280,10 +484,28 @@ function loadOffset() {
     return null;
 }
 
+function loadWidth() {
+    try {
+        const raw = localStorage.getItem(ROUND_NAV_WIDTH_KEY);
+        if (!raw || !/^\d+$/.test(raw)) {
+            return DEFAULT_NAV_WIDTH;
+        }
+        return clampNavWidth(Number(raw));
+    } catch {
+        return DEFAULT_NAV_WIDTH;
+    }
+}
+
 function persistOffset() {
     try {
         if (!currentOffset) return;
         localStorage.setItem(ROUND_NAV_POSITION_KEY, JSON.stringify(currentOffset));
+    } catch { /* ignore */ }
+}
+
+function persistWidth(width) {
+    try {
+        localStorage.setItem(ROUND_NAV_WIDTH_KEY, String(clampNavWidth(width)));
     } catch { /* ignore */ }
 }
 

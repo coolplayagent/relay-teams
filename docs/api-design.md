@@ -889,6 +889,7 @@ Notes:
 - `microcompact` is present when the run used request-level prompt-view compaction. It is not a persisted history boundary and does not imply that a history marker was written.
 - `microcompact.estimated_tokens_before/after` reflects history-token estimates around the request-level microcompact pass, not the full prompt token total.
 - `microcompact` reflects the latest model-step payload for that run. If a later attempt in the same run reports `microcompact_applied = false`, the round projection clears the stale badge state instead of keeping the older value.
+- `todo` is present when the run has a persisted run-scoped todo snapshot. It mirrors `GET /runs/{run_id}/todo`.
 - `clear_marker_before` is present on the first round after a session history clear boundary. The frontend uses it to render a divider and collapse older segments by default.
 - `compaction_marker_before` is present on the first round whose coordinator conversation continues after an automatic history compaction boundary. The frontend uses it to render a non-collapsing divider.
 - `compaction_marker_before.label` is `History compacted (rolling summary)` when the marker metadata reports `compaction_strategy = rolling_summary`; older markers without strategy metadata may still render as `History compacted`.
@@ -915,7 +916,7 @@ Returns active run recovery state, pending tool approvals, pending user question
 - `primary_role_id`
 
 For `running` or `queued` recoverable runs, the frontend uses these event ids to automatically reconnect the SSE stream without a manual "Connect Stream" action.
-`round_snapshot` mirrors the same round projection contract as `/sessions/{session_id}/rounds/{run_id}`, including `primary_role_id`.
+`round_snapshot` mirrors the same round projection contract as `/sessions/{session_id}/rounds/{run_id}`, including `primary_role_id` and any persisted `todo` snapshot.
 `round_snapshot.background_task_count` mirrors the current managed background task count for the active run.
 When a run is waiting for an `ask_question` answer, the public `active_run.phase` is `awaiting_manual_action`.
 
@@ -1358,6 +1359,35 @@ Response:
 ### `GET /runs/{run_id}/background-tasks/{background_task_id}`
 
 Returns one managed background task snapshot for the run.
+
+### `GET /runs/{run_id}/todo`
+
+Returns the latest persisted run-scoped todo snapshot for the run.
+
+Response:
+
+```json
+{
+  "todo": {
+    "run_id": "run-1",
+    "session_id": "session-1",
+    "items": [
+      {"content": "Inspect issue 399 requirements", "status": "completed"},
+      {"content": "Implement run todo persistence", "status": "in_progress"},
+      {"content": "Verify API and CLI output", "status": "pending"}
+    ],
+    "version": 2,
+    "updated_at": "2026-04-20T10:00:00Z",
+    "updated_by_role_id": "MainAgent",
+    "updated_by_instance_id": "instance-1"
+  }
+}
+```
+
+Notes:
+- Missing todo state returns an empty snapshot with `items=[]` and `version=0`; the endpoint does not return `404` just because the run has not written todo state yet.
+- `status` is one of `pending`, `in_progress`, or `completed`.
+- At most one item may be `in_progress`.
 
 ### `POST /runs/{run_id}/background-tasks/{background_task_id}:stop`
 
@@ -1873,6 +1903,32 @@ Shared result fields include:
 - `completed`
 
 `wait_background_task` is a completion wait, not a polling primitive: it accepts only `background_task_id` and returns after the managed task reaches a terminal state. Use `list_background_tasks` for in-progress status snapshots.
+
+### Todo Tool Family
+
+The built-in todo tools maintain a run-scoped local execution plan that is separate from delegated task contracts:
+- `todo_write`
+- `todo_read`
+
+Shared todo snapshot fields include:
+- `run_id`
+- `session_id`
+- `items`
+- `version`
+- `updated_at`
+- `updated_by_role_id`
+- `updated_by_instance_id`
+
+`todo_write` always replaces the full table. It does not append or patch individual rows.
+
+Todo item fields:
+- `content`
+- `status`: `pending | in_progress | completed`
+
+Rules:
+- At most one todo item may be `in_progress`.
+- An empty `items` array clears the run todo while preserving versioned history through the latest snapshot row.
+- `todo_read` returns the latest persisted snapshot or the synthetic empty snapshot when no todo has been written yet.
 
 ### `spawn_subagent`
 

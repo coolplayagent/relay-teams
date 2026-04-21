@@ -51,6 +51,7 @@ def _run_round_timeline_script(tmp_path: Path, runner_source: str) -> dict[str, 
         "./navigator.js": "./mockNavigator.mjs",
         "./paging.js": "./mockPaging.mjs",
         "./state.js": "./mockRoundsState.mjs",
+        "./todo.js": "./mockTodo.mjs",
         "./utils.js": "./mockRoundUtils.mjs",
         "../../utils/logger.js": "./mockLogger.mjs",
         "../../utils/i18n.js": "./mockI18n.mjs",
@@ -171,6 +172,18 @@ export const roundsState = {
     currentRound: null,
     currentRounds: [],
 };
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockTodo.mjs").write_text(
+        """
+export function normalizeRoundTodoSnapshot() {
+    return null;
+}
+
+export function areRoundTodoSnapshotsEqual(left, right) {
+    return left === right;
+}
 """.strip(),
         encoding="utf-8",
     )
