@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 import signal
 import os
 
@@ -9,10 +11,26 @@ from relay_teams.sessions.runs.background_tasks import command_runtime as runtim
 from relay_teams.sessions.runs.background_tasks.command_runtime import (
     CommandRuntimeKind,
     ResolvedCommandRuntime,
+    _AsyncProcessWriter,
+    create_prepared_subprocess,
     kill_process_tree_by_pid,
     build_command_env,
     resolve_command_runtime,
 )
+
+
+class _FakePipeProcess:
+    pid: int | None = 1234
+    returncode: int | None = None
+    stdin: _AsyncProcessWriter | None = None
+    stdout: asyncio.StreamReader | None = None
+    stderr: asyncio.StreamReader | None = None
+
+    async def wait(self) -> int | None:
+        return self.returncode
+
+    def kill(self) -> None:
+        self.returncode = -9
 
 
 def test_resolve_command_runtime_prefers_powershell_for_windows_cmdlets(
@@ -316,6 +334,58 @@ async def test_build_command_env_ignores_gh_lookup_errors(
     )
 
     assert env["PATH"] == "/usr/bin"
+
+
+@pytest.mark.asyncio
+async def test_create_prepared_subprocess_uses_threaded_fallback_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    fake_process = _FakePipeProcess()
+    threaded_calls: list[
+        tuple[tuple[str, ...], Path | None, dict[str, str] | None]
+    ] = []
+
+    async def fail_create_subprocess_exec(
+        *_args: str,
+        **_kwargs: object,
+    ) -> object:
+        raise NotImplementedError
+
+    def fake_create_threaded_subprocess(
+        *,
+        argv: tuple[str, ...],
+        cwd: Path | None,
+        env: dict[str, str] | None,
+        stdin: int | None,
+        stdout: int | None,
+        stderr: int | None,
+        loop: asyncio.AbstractEventLoop,
+    ) -> _FakePipeProcess:
+        _ = (stdin, stdout, stderr, loop)
+        threaded_calls.append((argv, cwd, env))
+        return fake_process
+
+    monkeypatch.setattr(
+        runtime_module.asyncio, "create_subprocess_exec", fail_create_subprocess_exec
+    )
+    monkeypatch.setattr(runtime_module, "_is_windows", lambda: True)
+    monkeypatch.setattr(
+        runtime_module,
+        "_create_threaded_subprocess",
+        fake_create_threaded_subprocess,
+    )
+
+    proc = await create_prepared_subprocess(
+        argv=("ssh", "prod", "pwd"),
+        cwd=tmp_path,
+        env={"SSH_AUTH_SOCK": "agent"},
+    )
+
+    assert proc is fake_process
+    assert threaded_calls == [
+        (("ssh", "prod", "pwd"), tmp_path, {"SSH_AUTH_SOCK": "agent"})
+    ]
 
 
 def test_kill_process_tree_by_pid_waits_for_posix_exit_before_success(

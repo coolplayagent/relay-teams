@@ -33,6 +33,8 @@ from relay_teams.sessions.runs.background_tasks.repository import (
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.workspace import WorkspaceHandle
+from relay_teams.workspace.ssh_profile_models import SshProfilePreparedCommand
+from relay_teams.workspace.ssh_profile_service import SshProfileService
 from relay_teams.workspace.workspace_models import (
     WorkspaceLocations,
     WorkspaceMountProvider,
@@ -161,6 +163,43 @@ class _FakeWindowsPtyProcess:
         self.sizes.append((rows, cols))
 
 
+class _FakePipeProcess:
+    pid: int | None = 1234
+    returncode: int | None = None
+    stdin: None = None
+    stdout: None = None
+    stderr: None = None
+
+    async def wait(self) -> int | None:
+        return self.returncode
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+
+class _FakePreparedSshProfileService:
+    def __init__(self, temp_root: Path) -> None:
+        self.temp_root = temp_root
+        self.calls: list[tuple[str, str, str, dict[str, str] | None, bool]] = []
+
+    def prepare_remote_command(
+        self,
+        *,
+        ssh_profile_id: str,
+        command: str,
+        cwd: str,
+        env: dict[str, str] | None = None,
+        tty: bool = False,
+    ) -> SshProfilePreparedCommand:
+        self.temp_root.mkdir(parents=True, exist_ok=True)
+        self.calls.append((ssh_profile_id, command, cwd, env, tty))
+        return SshProfilePreparedCommand(
+            argv=("ssh", ssh_profile_id, command),
+            env={"RELAY_TEAMS_SSH_PASSWORD": "secret"},
+            temp_root=self.temp_root,
+        )
+
+
 class _FakeTransport:
     def __init__(self, *, tty: bool = False, returncode: int | None = None) -> None:
         self.tty = tty
@@ -247,6 +286,140 @@ def test_background_task_manager_resolves_ssh_execution_context(
     mount, remote_cwd = context
     assert mount.mount_name == "prod"
     assert remote_cwd == "/srv/app/src/service"
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_ssh_pipe_uses_prepared_subprocess_helper(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-ssh-pipe.db")
+    hub = RunEventHub()
+    ssh_service = _FakePreparedSshProfileService(tmp_path / "ssh-temp-pipe")
+    manager = BackgroundTaskManager(
+        repository=repo,
+        run_event_hub=hub,
+        ssh_profile_service=cast(SshProfileService, ssh_service),
+    )
+    workspace = _build_ssh_workspace_handle(tmp_path)
+    ssh_context = manager._resolve_ssh_execution_context(
+        workspace=workspace,
+        cwd=workspace.execution_root,
+    )
+    assert ssh_context is not None
+    created_calls: list[tuple[tuple[str, ...], dict[str, str] | None]] = []
+
+    async def fake_create_prepared_subprocess(
+        *,
+        argv: tuple[str, ...],
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        stdin: int | None = None,
+        stdout: int | None = None,
+        stderr: int | None = None,
+    ) -> _FakePipeProcess:
+        _ = (cwd, stdin, stdout, stderr)
+        created_calls.append((argv, env))
+        return _FakePipeProcess()
+
+    monkeypatch.setattr(
+        manager_module,
+        "create_prepared_subprocess",
+        fake_create_prepared_subprocess,
+    )
+
+    transport = await manager._spawn_ssh_pipe_transport(
+        command="pwd",
+        ssh_context=ssh_context,
+        env={"AGENT_TEAMS_CURRENT_ROLE_ID": "writer"},
+    )
+
+    assert transport.tty is False
+    assert ssh_service.calls == [
+        (
+            "prod",
+            "pwd",
+            "/srv/app",
+            {"AGENT_TEAMS_CURRENT_ROLE_ID": "writer"},
+            False,
+        )
+    ]
+    assert created_calls == [
+        (("ssh", "prod", "pwd"), {"RELAY_TEAMS_SSH_PASSWORD": "secret"})
+    ]
+    assert ssh_service.temp_root.is_dir()
+    await transport.close()
+    assert not ssh_service.temp_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_ssh_tty_uses_windows_conpty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-ssh-winpty.db")
+    hub = RunEventHub()
+    ssh_service = _FakePreparedSshProfileService(tmp_path / "ssh-temp-pty")
+    manager = BackgroundTaskManager(
+        repository=repo,
+        run_event_hub=hub,
+        ssh_profile_service=cast(SshProfileService, ssh_service),
+    )
+    workspace = _build_ssh_workspace_handle(tmp_path)
+    ssh_context = manager._resolve_ssh_execution_context(
+        workspace=workspace,
+        cwd=workspace.execution_root,
+    )
+    assert ssh_context is not None
+    fake_process = _FakeWindowsPtyProcess()
+    spawn_calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    def fake_spawn_windows_pty_argv_process(
+        *,
+        argv: tuple[str, ...],
+        cwd: Path,
+        env: dict[str, str],
+        columns: int,
+        rows: int,
+    ) -> _FakeWindowsPtyProcess:
+        _ = (cwd, columns, rows)
+        spawn_calls.append((argv, env))
+        return fake_process
+
+    monkeypatch.setattr(manager_module, "_posix_pty_supported", lambda: False)
+    monkeypatch.setattr(manager_module, "_windows_tty_supported", lambda: True)
+    monkeypatch.setattr(
+        manager_module,
+        "_spawn_windows_pty_argv_process",
+        fake_spawn_windows_pty_argv_process,
+    )
+
+    transport = await manager._spawn_ssh_tty_transport(
+        command="bash",
+        ssh_context=ssh_context,
+        env={"AGENT_TEAMS_CURRENT_ROLE_ID": "writer"},
+    )
+
+    assert transport.tty is True
+    assert ssh_service.calls == [
+        (
+            "prod",
+            "bash",
+            "/srv/app",
+            {"AGENT_TEAMS_CURRENT_ROLE_ID": "writer"},
+            True,
+        )
+    ]
+    assert spawn_calls == [
+        (("ssh", "prod", "bash"), {"RELAY_TEAMS_SSH_PASSWORD": "secret"})
+    ]
+    assert ssh_service.temp_root.is_dir()
+    await transport.close()
+    assert not ssh_service.temp_root.exists()
 
 
 @pytest.mark.asyncio

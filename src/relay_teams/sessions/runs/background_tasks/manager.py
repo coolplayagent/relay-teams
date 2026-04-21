@@ -51,6 +51,7 @@ from relay_teams.sessions.runs.background_tasks.command_runtime import (
     build_command_argv,
     build_command_env,
     create_command_subprocess,
+    create_prepared_subprocess,
     resolve_command_runtime,
     windows_conpty_supported,
 )
@@ -345,9 +346,15 @@ class _PosixPtyTransport(_BackgroundTaskTransport):
 
 
 class _WindowsConPtyTransport(_BackgroundTaskTransport):
-    def __init__(self, proc: _WindowsPtyProcessProtocol) -> None:
+    def __init__(
+        self,
+        proc: _WindowsPtyProcessProtocol,
+        *,
+        cleanup_root: Path | None = None,
+    ) -> None:
         self._proc = proc
         self._cached_returncode: int | None = None
+        self._cleanup_root = cleanup_root
 
     @property
     def tty(self) -> bool:
@@ -400,6 +407,8 @@ class _WindowsConPtyTransport(_BackgroundTaskTransport):
     async def close(self) -> None:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._proc.close)
+        if self._cleanup_root is not None:
+            await asyncio.to_thread(shutil.rmtree, self._cleanup_root, True)
 
 
 class _BackgroundTaskRuntime:
@@ -891,13 +900,12 @@ class BackgroundTaskManager:
             tty=tty,
         )
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *prepared.argv,
+            proc = await create_prepared_subprocess(
+                argv=prepared.argv,
                 env=prepared.env,
                 stdin=stdin,
                 stdout=stdout,
                 stderr=stderr,
-                start_new_session=_start_new_session(),
             )
         except Exception:
             shutil.rmtree(prepared.temp_root, ignore_errors=True)
@@ -910,20 +918,61 @@ class BackgroundTaskManager:
         command: str,
         ssh_context: tuple[WorkspaceMountRecord, str],
         env: dict[str, str] | None,
-    ) -> _PosixPtyTransport:
-        if not _posix_pty_supported():
-            raise ValueError(_tty_unsupported_message())
-        assert pty is not None
-        proc, cleanup_root = await self._create_ssh_pty_process(
+    ) -> _BackgroundTaskTransport:
+        if _posix_pty_supported():
+            assert pty is not None
+            proc, cleanup_root = await self._create_ssh_pty_process(
+                command=command,
+                ssh_context=ssh_context,
+                env=env,
+            )
+            return _PosixPtyTransport(
+                proc=proc[0],
+                master_fd=proc[1],
+                cleanup_root=cleanup_root,
+            )
+        if _windows_tty_supported():
+            return self._spawn_ssh_windows_conpty_transport(
+                command=command,
+                ssh_context=ssh_context,
+                env=env,
+            )
+        raise ValueError(_tty_unsupported_message())
+
+    def _spawn_ssh_windows_conpty_transport(
+        self,
+        *,
+        command: str,
+        ssh_context: tuple[WorkspaceMountRecord, str],
+        env: dict[str, str] | None,
+    ) -> _WindowsConPtyTransport:
+        if self._ssh_profile_service is None:
+            raise ValueError("SSH workspace command execution requires ssh profiles")
+        mount, remote_cwd = ssh_context
+        provider_config = mount.provider_config
+        if not isinstance(provider_config, WorkspaceSshMountConfig):
+            raise ValueError(
+                f"Workspace ssh mount is missing ssh config: {mount.mount_name}"
+            )
+        prepared = self._ssh_profile_service.prepare_remote_command(
+            ssh_profile_id=provider_config.ssh_profile_id,
             command=command,
-            ssh_context=ssh_context,
+            cwd=remote_cwd,
             env=env,
+            tty=True,
         )
-        return _PosixPtyTransport(
-            proc=proc[0],
-            master_fd=proc[1],
-            cleanup_root=cleanup_root,
-        )
+        try:
+            process = _spawn_windows_pty_argv_process(
+                argv=prepared.argv,
+                cwd=Path.cwd(),
+                env=prepared.env,
+                columns=_DEFAULT_PTY_COLUMNS,
+                rows=_DEFAULT_PTY_ROWS,
+            )
+        except Exception:
+            shutil.rmtree(prepared.temp_root, ignore_errors=True)
+            raise
+        return _WindowsConPtyTransport(process, cleanup_root=prepared.temp_root)
 
     async def _create_ssh_pty_process(
         self,
@@ -1632,14 +1681,33 @@ def _spawn_windows_pty_process(
 ) -> _WindowsPtyProcessProtocol:
     if not _windows_tty_supported():
         raise ValueError(_tty_unsupported_message())
+    argv = list(build_command_argv(runtime=runtime, command=command))
+    return _spawn_windows_pty_argv_process(
+        argv=tuple(argv),
+        cwd=cwd,
+        env=env,
+        columns=columns,
+        rows=rows,
+    )
+
+
+def _spawn_windows_pty_argv_process(
+    *,
+    argv: tuple[str, ...],
+    cwd: Path,
+    env: dict[str, str],
+    columns: int,
+    rows: int,
+) -> _WindowsPtyProcessProtocol:
+    if not _windows_tty_supported():
+        raise ValueError(_tty_unsupported_message())
     module = importlib.import_module("winpty")
     factory = cast(
         _WindowsPtyProcessFactoryProtocol,
         module.__dict__["PtyProcess"],
     )
-    argv = list(build_command_argv(runtime=runtime, command=command))
     return factory.spawn(
-        argv,
+        list(argv),
         cwd=str(cwd),
         env=env,
         dimensions=(rows, columns),

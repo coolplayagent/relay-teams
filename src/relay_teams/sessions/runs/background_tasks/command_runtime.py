@@ -745,11 +745,46 @@ async def create_command_subprocess(
         )
 
 
+async def create_prepared_subprocess(
+    *,
+    argv: tuple[str, ...],
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    stdin: int | None = None,
+    stdout: int | None = None,
+    stderr: int | None = None,
+) -> _PipeProcess:
+    try:
+        return await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=str(cwd) if cwd is not None else None,
+            env=env,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=_start_new_session(),
+            creationflags=_creation_flags(),
+        )
+    except NotImplementedError:
+        if not _is_windows():
+            raise
+        loop = asyncio.get_running_loop()
+        return _create_threaded_subprocess(
+            argv=argv,
+            cwd=cwd,
+            env=env,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            loop=loop,
+        )
+
+
 def _create_threaded_subprocess(
     *,
     argv: tuple[str, ...],
-    cwd: Path,
-    env: dict[str, str],
+    cwd: Path | None,
+    env: dict[str, str] | None,
     stdin: int | None,
     stdout: int | None,
     stderr: int | None,
@@ -757,7 +792,7 @@ def _create_threaded_subprocess(
 ) -> _PipeProcess:
     proc = subprocess.Popen(
         list(argv),
-        cwd=str(cwd),
+        cwd=str(cwd) if cwd is not None else None,
         env=env,
         stdin=stdin,
         stdout=stdout,
