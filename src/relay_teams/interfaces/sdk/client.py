@@ -735,6 +735,16 @@ class AgentTeamsClient:
             f"/api/system/configs/workspace/ssh-profiles/{quote(ssh_profile_id, safe='')}:reveal-password",
         )
 
+    def probe_ssh_profile(
+        self,
+        payload: dict[str, JsonValue],
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "POST",
+            "/api/system/configs/workspace/ssh-profiles:probe",
+            payload,
+        )
+
     def delete_ssh_profile(self, ssh_profile_id: str) -> dict[str, JsonValue]:
         return self._request_json(
             "DELETE",

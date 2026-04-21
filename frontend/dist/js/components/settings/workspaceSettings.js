@@ -5,6 +5,7 @@
 import {
     deleteSshProfile,
     fetchSshProfiles,
+    probeSshProfileConnection,
     revealSshProfilePassword,
     saveSshProfile,
 } from '../../core/api.js';
@@ -17,6 +18,8 @@ const MASKED_SECRET_PLACEHOLDER = '************';
 let sshProfiles = [];
 let editingSshProfileId = null;
 let sshPasswordState = createWorkspacePasswordState();
+let sshProfileProbeStates = {};
+let draftSshProfileProbeState = null;
 
 function formatMessage(key, values = {}) {
     return Object.entries(values).reduce(
@@ -27,6 +30,7 @@ function formatMessage(key, values = {}) {
 
 export function bindWorkspaceSettingsHandlers() {
     bindActionButton('add-ssh-profile-btn', handleAddSshProfile);
+    bindActionButton('test-ssh-profile-btn', handleTestDraftSshProfile);
     bindActionButton('save-ssh-profile-btn', handleSaveSshProfile);
     bindActionButton('cancel-ssh-profile-btn', handleCancelSshProfile);
     bindActionButton('delete-ssh-profile-btn', handleDeleteSshProfile);
@@ -89,10 +93,17 @@ function renderSshProfiles() {
             void handleDeleteSshProfile(button.getAttribute('data-workspace-ssh-profile-delete'));
         };
     });
+    listEl.querySelectorAll('[data-workspace-ssh-profile-test]').forEach(button => {
+        button.onclick = () => {
+            void handleTestSshProfile(button.getAttribute('data-workspace-ssh-profile-test'));
+        };
+    });
 }
 
 function renderSshProfileCard(profile, index) {
     const sshProfileId = String(profile?.ssh_profile_id || '').trim();
+    const probeState = sshProfileProbeStates[sshProfileId] || null;
+    const testButtonLabel = probeState?.status === 'probing' ? t('settings.workspace.testing') : t('settings.action.test');
     const host = String(profile?.host || '').trim() || t('settings.workspace.no_host');
     const username = String(profile?.username || '').trim();
     const port = formatOptionalNumber(profile?.port);
@@ -135,9 +146,13 @@ function renderSshProfileCard(profile, index) {
                     </div>
                 </div>
                 <div class="profile-card-actions">
+                    <button class="settings-inline-action settings-list-action profile-card-action-btn workspace-profile-card-test-btn" type="button" data-workspace-ssh-profile-test="${escapeHtml(sshProfileId)}" title="${escapeHtml(t('settings.action.test'))}" ${probeState?.status === 'probing' ? 'disabled' : ''}>${escapeHtml(testButtonLabel)}</button>
                     <button class="settings-inline-action settings-list-action profile-card-action-btn" type="button" data-workspace-ssh-profile-edit="${escapeHtml(sshProfileId)}">${escapeHtml(t('settings.action.edit'))}</button>
                     <button class="settings-inline-action settings-list-action settings-list-action-danger profile-card-action-btn" type="button" data-workspace-ssh-profile-delete="${escapeHtml(sshProfileId)}">${escapeHtml(t('settings.action.delete'))}</button>
                 </div>
+            </div>
+            <div class="profile-card-inline-status" data-workspace-ssh-profile-probe-container="${escapeHtml(sshProfileId)}">
+                ${renderSshProbeStatusMarkup(probeState)}
             </div>
         </div>
     `;
@@ -146,6 +161,7 @@ function renderSshProfileCard(profile, index) {
 function handleAddSshProfile() {
     editingSshProfileId = null;
     sshPasswordState = createWorkspacePasswordState();
+    draftSshProfileProbeState = null;
     setInputValue('workspace-ssh-profile-id', '');
     setInputValue('workspace-ssh-profile-host', '');
     setInputValue('workspace-ssh-profile-username', '');
@@ -161,6 +177,7 @@ function handleAddSshProfile() {
     showSshProfileEditor();
     renderWorkspacePasswordField();
     updateSshProfileAuthState(null);
+    renderDraftSshProfileProbeState();
     document.getElementById('workspace-ssh-profile-id')?.focus?.();
 }
 
@@ -172,6 +189,7 @@ function handleEditSshProfile(sshProfileId) {
     }
     editingSshProfileId = normalizedId;
     sshPasswordState = createWorkspacePasswordState(Boolean(matched.has_password));
+    draftSshProfileProbeState = null;
     setInputValue('workspace-ssh-profile-id', normalizedId);
     setInputValue('workspace-ssh-profile-host', matched.host);
     setInputValue('workspace-ssh-profile-username', matched.username);
@@ -187,6 +205,7 @@ function handleEditSshProfile(sshProfileId) {
     showSshProfileEditor();
     renderWorkspacePasswordField();
     updateSshProfileAuthState(matched);
+    renderDraftSshProfileProbeState();
     document.getElementById('workspace-ssh-profile-host')?.focus?.();
 }
 
@@ -233,6 +252,8 @@ async function handleSaveSshProfile() {
         const saved = await saveSshProfile(sshProfileId, payload);
         await loadWorkspaceSettingsPanel();
         editingSshProfileId = String(saved?.ssh_profile_id || sshProfileId).trim();
+        draftSshProfileProbeState = null;
+        renderDraftSshProfileProbeState();
         showToast({
             title: t('settings.workspace.saved_title'),
             message: formatMessage('settings.workspace.saved_detail', { ssh_profile_id: editingSshProfileId }),
@@ -251,6 +272,7 @@ async function handleSaveSshProfile() {
 
 function handleCancelSshProfile() {
     editingSshProfileId = null;
+    draftSshProfileProbeState = null;
     renderSshProfiles();
 }
 
@@ -272,6 +294,8 @@ async function handleDeleteSshProfile(explicitProfileId = null) {
     try {
         await deleteSshProfile(sshProfileId);
         editingSshProfileId = null;
+        delete sshProfileProbeStates[sshProfileId];
+        draftSshProfileProbeState = null;
         await loadWorkspaceSettingsPanel();
         showToast({
             title: t('settings.workspace.deleted_title'),
@@ -289,11 +313,167 @@ async function handleDeleteSshProfile(explicitProfileId = null) {
     }
 }
 
+async function handleTestSshProfile(sshProfileId) {
+    const normalizedId = String(sshProfileId || '').trim();
+    if (!normalizedId) {
+        return;
+    }
+    const matched = sshProfiles.find(profile => String(profile?.ssh_profile_id || '').trim() === normalizedId);
+    sshProfileProbeStates = {
+        ...sshProfileProbeStates,
+        [normalizedId]: {
+            status: 'probing',
+            message: t('settings.workspace.testing'),
+        },
+    };
+    renderSshProfiles();
+
+    try {
+        const result = await probeSshProfileConnection({
+            ssh_profile_id: normalizedId,
+            timeout_ms: Math.round((matched?.connect_timeout_seconds || 15) * 1000),
+        });
+        sshProfileProbeStates = {
+            ...sshProfileProbeStates,
+            [normalizedId]: buildSshProbeState(result),
+        };
+    } catch (error) {
+        sshProfileProbeStates = {
+            ...sshProfileProbeStates,
+            [normalizedId]: {
+                status: 'failed',
+                message: formatMessage('settings.workspace.probe_failed', {
+                    error: String(error?.message || error || ''),
+                }),
+            },
+        };
+    }
+
+    renderSshProfiles();
+}
+
+async function handleTestDraftSshProfile() {
+    const payload = buildDraftSshProfileProbePayload();
+    if (!payload) {
+        return;
+    }
+    draftSshProfileProbeState = {
+        status: 'probing',
+        message: t('settings.workspace.testing'),
+    };
+    renderDraftSshProfileProbeState();
+
+    try {
+        const result = await probeSshProfileConnection(payload);
+        draftSshProfileProbeState = buildSshProbeState(result);
+    } catch (error) {
+        draftSshProfileProbeState = {
+            status: 'failed',
+            message: formatMessage('settings.workspace.probe_failed', {
+                error: String(error?.message || error || ''),
+            }),
+        };
+    }
+
+    renderDraftSshProfileProbeState();
+}
+
+function buildDraftSshProfileProbePayload() {
+    const sshProfileId = String(readInputValue('workspace-ssh-profile-id')).trim();
+    const host = String(readInputValue('workspace-ssh-profile-host')).trim();
+    if (!host) {
+        showToast({
+            title: t('settings.workspace.validation_failed_title'),
+            message: t('settings.workspace.host_required'),
+            tone: 'danger',
+        });
+        return null;
+    }
+
+    const password = readWorkspacePasswordValue();
+    const privateKey = normalizeOptionalMultilineText(readInputValue('workspace-ssh-profile-private-key'));
+    const privateKeyName = normalizeOptionalText(readInputValue('workspace-ssh-profile-private-key-name'));
+    const connectTimeoutSeconds = parseOptionalInteger(readInputValue('workspace-ssh-profile-timeout')) || 15;
+    const override = {
+        host,
+        username: normalizeOptionalText(readInputValue('workspace-ssh-profile-username')),
+        port: parseOptionalInteger(readInputValue('workspace-ssh-profile-port')),
+        remote_shell: normalizeOptionalText(readInputValue('workspace-ssh-profile-shell')),
+        connect_timeout_seconds: parseOptionalInteger(readInputValue('workspace-ssh-profile-timeout')),
+    };
+    if (password !== null) {
+        override.password = password;
+    }
+    if (privateKey !== null) {
+        override.private_key = privateKey;
+        if (privateKeyName !== null) {
+            override.private_key_name = privateKeyName;
+        }
+    }
+
+    const payload = {
+        override,
+        timeout_ms: Math.round(connectTimeoutSeconds * 1000),
+    };
+    if (sshProfileId) {
+        payload.ssh_profile_id = sshProfileId;
+    }
+    return payload;
+}
+
+function buildSshProbeState(result) {
+    if (result?.ok) {
+        return {
+            status: 'success',
+            message: formatMessage('settings.workspace.probe_success', {
+                latency_ms: result.latency_ms,
+            }),
+        };
+    }
+    const reason = result?.error_message || result?.error_code || t('settings.workspace.unknown');
+    return {
+        status: 'failed',
+        message: formatMessage('settings.workspace.connection_failed', { reason }),
+    };
+}
+
+function renderSshProbeStatusMarkup(state) {
+    if (!state) {
+        return '';
+    }
+    return `<div class="profile-card-probe-status probe-status probe-status-${state.status}">${escapeHtml(state.message)}</div>`;
+}
+
+function renderDraftSshProfileProbeState() {
+    const statusEl = document.getElementById('workspace-ssh-profile-probe-status');
+    const testBtn = document.getElementById('test-ssh-profile-btn');
+    if (!statusEl || !testBtn) {
+        return;
+    }
+    if (!draftSshProfileProbeState) {
+        statusEl.style.display = 'none';
+        statusEl.textContent = '';
+        statusEl.className = 'profile-probe-status';
+        testBtn.disabled = false;
+        testBtn.textContent = t('settings.action.test');
+        return;
+    }
+
+    statusEl.style.display = 'block';
+    statusEl.textContent = draftSshProfileProbeState.message;
+    statusEl.className = `profile-probe-status probe-status probe-status-${draftSshProfileProbeState.status}`;
+    testBtn.disabled = draftSshProfileProbeState.status === 'probing';
+    testBtn.textContent = draftSshProfileProbeState.status === 'probing'
+        ? t('settings.workspace.testing')
+        : t('settings.action.test');
+}
+
 function showSshProfileList() {
     setElementDisplay('workspace-ssh-profile-list', 'block');
     setElementDisplay('workspace-ssh-profile-editor', 'none');
     toggleWorkspaceActions({
         add: true,
+        test: false,
         save: false,
         cancel: false,
         delete: false,
@@ -305,6 +485,7 @@ function showSshProfileEditor() {
     setElementDisplay('workspace-ssh-profile-editor', 'block');
     toggleWorkspaceActions({
         add: false,
+        test: true,
         save: true,
         cancel: true,
         delete: Boolean(editingSshProfileId),
@@ -313,6 +494,7 @@ function showSshProfileEditor() {
 
 function toggleWorkspaceActions(visibility) {
     setActionDisplay('add-ssh-profile-btn', visibility.add);
+    setActionDisplay('test-ssh-profile-btn', visibility.test);
     setActionDisplay('save-ssh-profile-btn', visibility.save);
     setActionDisplay('cancel-ssh-profile-btn', visibility.cancel);
     setActionDisplay('delete-ssh-profile-btn', visibility.delete);
