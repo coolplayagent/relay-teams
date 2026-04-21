@@ -156,6 +156,105 @@ console.log(JSON.stringify({
     ]
 
 
+def test_workspace_password_toggle_reveals_saved_password_and_preserves_on_save(
+    tmp_path: Path,
+) -> None:
+    payload = _run_workspace_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    bindWorkspaceSettingsHandlers,
+    loadWorkspaceSettingsPanel,
+} from "./workspaceSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+globalThis.__mockProfiles = [
+    {
+        ssh_profile_id: "prod",
+        host: "prod-alias",
+        username: "deploy",
+        has_password: true,
+        has_private_key: false,
+        private_key_name: null,
+    },
+];
+globalThis.__mockProfilePasswords = { prod: "secret" };
+
+bindWorkspaceSettingsHandlers();
+await loadWorkspaceSettingsPanel();
+
+const editButton = document.getElementById("workspace-ssh-profile-list")
+    .querySelectorAll("[data-workspace-ssh-profile-edit]")[0];
+editButton?.onclick?.();
+
+const initial = {
+    passwordValue: document.getElementById("workspace-ssh-profile-password").value,
+    passwordType: document.getElementById("workspace-ssh-profile-password").type,
+    passwordPlaceholder: document.getElementById("workspace-ssh-profile-password").placeholder,
+    toggleDisplay: document.getElementById("toggle-workspace-ssh-profile-password-btn").style.display,
+    toggleTitle: document.getElementById("toggle-workspace-ssh-profile-password-btn").title,
+};
+
+await document.getElementById("toggle-workspace-ssh-profile-password-btn").onclick();
+const revealed = {
+    passwordValue: document.getElementById("workspace-ssh-profile-password").value,
+    passwordType: document.getElementById("workspace-ssh-profile-password").type,
+    passwordPlaceholder: document.getElementById("workspace-ssh-profile-password").placeholder,
+    toggleDisplay: document.getElementById("toggle-workspace-ssh-profile-password-btn").style.display,
+    toggleTitle: document.getElementById("toggle-workspace-ssh-profile-password-btn").title,
+    authState: document.getElementById("workspace-ssh-profile-auth-state").textContent,
+};
+
+await document.getElementById("toggle-workspace-ssh-profile-password-btn").onclick();
+await document.getElementById("save-ssh-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    initial,
+    revealed,
+    revealCalls: globalThis.__revealSshProfilePasswordCalls,
+    savePayload: globalThis.__saveSshProfilePayload,
+    notifications,
+}));
+""".strip(),
+    )
+
+    assert payload["initial"] == {
+        "passwordValue": "",
+        "passwordType": "password",
+        "passwordPlaceholder": "************",
+        "toggleDisplay": "inline-flex",
+        "toggleTitle": "Show password",
+    }
+    assert payload["revealed"] == {
+        "passwordValue": "secret",
+        "passwordType": "text",
+        "passwordPlaceholder": "",
+        "toggleDisplay": "inline-flex",
+        "toggleTitle": "Hide password",
+        "authState": "Stored password will be kept unless you enter a new one.",
+    }
+    assert payload["revealCalls"] == 1
+    assert payload["savePayload"] == {
+        "sshProfileId": "prod",
+        "config": {
+            "host": "prod-alias",
+            "username": "deploy",
+            "port": None,
+            "remote_shell": None,
+            "connect_timeout_seconds": None,
+        },
+    }
+    assert payload["notifications"] == [
+        {
+            "title": "SSH Profile Saved",
+            "message": "Saved profile prod.",
+            "tone": "success",
+        }
+    ]
+
+
 def _run_workspace_settings_script(
     tmp_path: Path, runner_source: str
 ) -> dict[str, object]:
@@ -205,6 +304,14 @@ export async function saveSshProfile(sshProfileId, config) {
     return nextRecord;
 }
 
+export async function revealSshProfilePassword(sshProfileId) {
+    globalThis.__revealSshProfilePasswordCalls += 1;
+    const passwords = globalThis.__mockProfilePasswords || {};
+    return {
+        password: passwords[sshProfileId] || null,
+    };
+}
+
 export async function deleteSshProfile(sshProfileId) {
     globalThis.__deleteSshProfileId = sshProfileId;
     globalThis.__mockProfiles = (globalThis.__mockProfiles || []).filter(
@@ -252,6 +359,8 @@ const translations = {
     "settings.workspace.private_key_inline": "pasted key",
     "settings.workspace.private_key_import_failed_title": "Private Key Import Failed",
     "settings.workspace.private_key_import_failed_detail": "Failed to import private key: {error}",
+    "settings.workspace.password_reveal_failed_title": "Password Reveal Failed",
+    "settings.workspace.password_reveal_failed_detail": "Failed to reveal SSH profile password: {error}",
     "settings.workspace.auth_method_password": "Password",
     "settings.workspace.auth_method_private_key": "Private key",
     "settings.workspace.auth_method_private_key_named": "Private key: {name}",
@@ -277,6 +386,8 @@ const translations = {
     "settings.workspace.validation_failed_title": "Validation Failed",
     "settings.workspace.profile_id_required": "Profile ID is required.",
     "settings.workspace.host_required": "Host is required.",
+    "settings.proxy.show_password": "Show password",
+    "settings.proxy.hide_password": "Hide password",
 };
 
 export function t(key) {
@@ -421,6 +532,7 @@ function createElements() {{
 
 function installGlobals(elements, notifications) {{
     globalThis.__notifications = notifications;
+    globalThis.__revealSshProfilePasswordCalls = 0;
     globalThis.document = {{
         getElementById(id) {{
             const element = elements.get(id);

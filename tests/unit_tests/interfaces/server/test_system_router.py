@@ -88,7 +88,11 @@ from relay_teams.skills.clawhub_models import (
 from relay_teams.skills.skill_models import SkillScope
 from relay_teams.notifications.models import NotificationConfig
 from relay_teams.agents.orchestration.settings_models import OrchestrationSettings
-from relay_teams.workspace import SshProfileConfig, SshProfileRecord
+from relay_teams.workspace import (
+    SshProfileConfig,
+    SshProfilePasswordRevealView,
+    SshProfileRecord,
+)
 
 
 class _FakeSystemService:
@@ -153,6 +157,9 @@ class _FakeSystemService:
                 has_private_key=True,
                 private_key_name="id_ed25519",
             )
+        }
+        self.ssh_profile_passwords: dict[str, str] = {
+            "prod": "relay-secret",
         }
 
     def get_config_status(self) -> dict[str, object]:
@@ -649,6 +656,13 @@ class _FakeSystemService:
     def get_profile(self, ssh_profile_id: str) -> SshProfileRecord:
         return self.ssh_profiles[ssh_profile_id]
 
+    def reveal_password(self, ssh_profile_id: str) -> SshProfilePasswordRevealView:
+        if ssh_profile_id not in self.ssh_profiles:
+            raise KeyError(ssh_profile_id)
+        return SshProfilePasswordRevealView(
+            password=self.ssh_profile_passwords.get(ssh_profile_id)
+        )
+
     def save_profile(
         self,
         *,
@@ -690,12 +704,15 @@ class _FakeSystemService:
             ),
         )
         self.ssh_profiles[ssh_profile_id] = record
+        if config.password is not None:
+            self.ssh_profile_passwords[ssh_profile_id] = config.password
         return record
 
     def delete_profile(self, ssh_profile_id: str) -> None:
         if ssh_profile_id not in self.ssh_profiles:
             raise KeyError(ssh_profile_id)
         del self.ssh_profiles[ssh_profile_id]
+        self.ssh_profile_passwords.pop(ssh_profile_id, None)
 
 
 def _create_test_client(fake_service: object) -> TestClient:
@@ -779,6 +796,17 @@ def test_list_and_get_ssh_profiles() -> None:
     assert get_response.json()["username"] == "deploy"
     assert get_response.json()["has_private_key"] is True
     assert get_response.json()["private_key_name"] == "id_ed25519"
+
+
+def test_reveal_ssh_profile_password() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/workspace/ssh-profiles/prod:reveal-password"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"password": "relay-secret"}
 
 
 def test_save_and_delete_ssh_profile() -> None:

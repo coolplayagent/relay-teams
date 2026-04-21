@@ -5,6 +5,7 @@
 import {
     deleteSshProfile,
     fetchSshProfiles,
+    revealSshProfilePassword,
     saveSshProfile,
 } from '../../core/api.js';
 import { showConfirmDialog, showToast } from '../../utils/feedback.js';
@@ -365,7 +366,9 @@ function bindPasswordHandlers() {
     }
     const togglePasswordBtn = document.getElementById('toggle-workspace-ssh-profile-password-btn');
     if (togglePasswordBtn) {
-        togglePasswordBtn.onclick = toggleWorkspacePasswordVisibility;
+        togglePasswordBtn.onclick = () => {
+            void toggleWorkspacePasswordVisibility();
+        };
     }
 }
 
@@ -421,11 +424,15 @@ function formatOptionalNumber(value) {
     return String(value);
 }
 
-function createWorkspacePasswordState(hasPersistedValue = false) {
+function createWorkspacePasswordState(hasPersistedValue = false, persistedValue = '') {
+    const normalizedValue = typeof persistedValue === 'string' ? persistedValue : '';
     return {
+        persistedValue: normalizedValue,
+        persistedValueLoaded: Boolean(normalizedValue.trim()),
         draftValue: '',
-        hasPersistedValue,
+        hasPersistedValue: hasPersistedValue === true || Boolean(normalizedValue.trim()),
         isDirty: false,
+        isLoadingReveal: false,
         armedForInput: false,
         revealed: false,
     };
@@ -436,6 +443,7 @@ function handleWorkspacePasswordInput() {
     const nextValue = passwordInput ? passwordInput.value : '';
     if (
         sshPasswordState.hasPersistedValue
+        && !sshPasswordState.persistedValueLoaded
         && !sshPasswordState.revealed
         && !canAcceptWorkspacePasswordInput(passwordInput)
     ) {
@@ -448,7 +456,11 @@ function handleWorkspacePasswordInput() {
         return;
     }
     sshPasswordState.draftValue = nextValue;
-    sshPasswordState.isDirty = nextValue.trim().length > 0;
+    sshPasswordState.isDirty = sshPasswordState.hasPersistedValue
+        ? sshPasswordState.persistedValueLoaded
+            ? nextValue !== sshPasswordState.persistedValue
+            : nextValue.trim().length > 0
+        : nextValue.trim().length > 0;
     if (!readWorkspacePasswordValue()) {
         sshPasswordState.revealed = false;
     }
@@ -456,21 +468,62 @@ function handleWorkspacePasswordInput() {
     updateSshProfileAuthState(findEditingSshProfile());
 }
 
-function toggleWorkspacePasswordVisibility() {
-    if (!hasWorkspacePasswordValue()) {
+async function toggleWorkspacePasswordVisibility() {
+    if (!hasWorkspacePasswordValue() || sshPasswordState.isLoadingReveal) {
         return;
     }
+    if (
+        sshPasswordState.hasPersistedValue
+        && !sshPasswordState.isDirty
+        && !sshPasswordState.revealed
+        && !sshPasswordState.persistedValueLoaded
+    ) {
+        const sshProfileId = String(editingSshProfileId || '').trim();
+        if (!sshProfileId) {
+            return;
+        }
+        sshPasswordState.isLoadingReveal = true;
+        renderWorkspacePasswordToggle();
+        try {
+            const result = await revealSshProfilePassword(sshProfileId);
+            sshPasswordState.persistedValue = typeof result?.password === 'string' ? result.password : '';
+            sshPasswordState.persistedValueLoaded = Boolean(sshPasswordState.persistedValue.trim());
+            if (!sshPasswordState.persistedValueLoaded) {
+                sshPasswordState.hasPersistedValue = false;
+                sshPasswordState.isLoadingReveal = false;
+                renderWorkspacePasswordField();
+                updateSshProfileAuthState(findEditingSshProfile());
+                return;
+            }
+        } catch (error) {
+            sshPasswordState.isLoadingReveal = false;
+            renderWorkspacePasswordToggle();
+            showToast({
+                title: t('settings.workspace.password_reveal_failed_title'),
+                message: formatMessage('settings.workspace.password_reveal_failed_detail', {
+                    error: String(error?.message || error || ''),
+                }),
+                tone: 'danger',
+            });
+            return;
+        }
+    }
+    sshPasswordState.isLoadingReveal = false;
     sshPasswordState.revealed = !sshPasswordState.revealed;
     renderWorkspacePasswordField();
+    updateSshProfileAuthState(findEditingSshProfile());
 }
 
 function readWorkspacePasswordValue() {
     const passwordInput = document.getElementById('workspace-ssh-profile-password');
     const inputValue = passwordInput ? passwordInput.value.trim() : '';
-    if (sshPasswordState.hasPersistedValue && !sshPasswordState.isDirty) {
-        return null;
+    if (!sshPasswordState.hasPersistedValue) {
+        return inputValue || null;
     }
-    return inputValue || null;
+    if (sshPasswordState.isDirty) {
+        return inputValue || null;
+    }
+    return null;
 }
 
 function renderWorkspacePasswordField() {
@@ -478,7 +531,13 @@ function renderWorkspacePasswordField() {
     if (!passwordInput) {
         return;
     }
-    if (sshPasswordState.hasPersistedValue && !sshPasswordState.isDirty) {
+    if (sshPasswordState.revealed) {
+        passwordInput.type = 'text';
+        passwordInput.value = sshPasswordState.isDirty
+            ? sshPasswordState.draftValue
+            : sshPasswordState.persistedValue;
+        passwordInput.placeholder = '';
+    } else if (sshPasswordState.hasPersistedValue && !sshPasswordState.isDirty) {
         passwordInput.type = 'password';
         passwordInput.value = '';
         passwordInput.placeholder = MASKED_SECRET_PLACEHOLDER;
@@ -496,6 +555,7 @@ function renderWorkspacePasswordToggle() {
         return;
     }
     togglePasswordBtn.style.display = hasWorkspacePasswordValue() ? 'inline-flex' : 'none';
+    togglePasswordBtn.disabled = sshPasswordState.isLoadingReveal;
     togglePasswordBtn.className = sshPasswordState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
     togglePasswordBtn.title = sshPasswordState.revealed
         ? t('settings.proxy.hide_password')
@@ -510,6 +570,9 @@ function renderWorkspacePasswordToggle() {
 function hasWorkspacePasswordValue() {
     const passwordInput = document.getElementById('workspace-ssh-profile-password');
     const inputValue = passwordInput ? passwordInput.value.trim() : '';
+    if (sshPasswordState.hasPersistedValue && !sshPasswordState.isDirty) {
+        return true;
+    }
     return Boolean(sshPasswordState.draftValue.trim() || inputValue);
 }
 
@@ -575,7 +638,7 @@ function updateSshProfileAuthState(profile) {
     if (!stateEl) {
         return;
     }
-    const password = normalizeOptionalText(readInputValue('workspace-ssh-profile-password'));
+    const password = readWorkspacePasswordValue();
     const privateKey = normalizeOptionalMultilineText(readInputValue('workspace-ssh-profile-private-key'));
     const privateKeyName = normalizeOptionalText(readInputValue('workspace-ssh-profile-private-key-name'));
     const messages = [];
@@ -597,9 +660,7 @@ function updateSshProfileAuthState(profile) {
                 : t('settings.workspace.auth_state_private_key'),
         );
     }
-    if (messages.length === 0) {
-        messages.push(t('settings.workspace.auth_state_system'));
-    }
+    stateEl.style.display = messages.length > 0 ? 'block' : 'none';
     stateEl.textContent = messages.join(' ');
 }
 

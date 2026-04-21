@@ -64,3 +64,9 @@ class SshProfileRecord(SshProfileStoredConfig):
     has_private_key: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
+class SshProfilePasswordRevealView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: str | None = None

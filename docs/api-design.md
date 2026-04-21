@@ -551,11 +551,23 @@ Each item includes:
 - `created_at`
 - `updated_at`
 
-Passwords and private key bodies are not echoed by the API.
+Passwords and private key bodies are not echoed by list/get/upsert responses.
 
 ### `GET /system/configs/workspace/ssh-profiles/{ssh_profile_id}`
 
 Returns one SSH profile with the same response shape as the list endpoint.
+
+### `POST /system/configs/workspace/ssh-profiles/{ssh_profile_id}:reveal-password`
+
+Returns the stored SSH password for one profile:
+
+```json
+{
+  "password": "optional-password"
+}
+```
+
+The response returns `null` when no password is stored. Private key bodies remain non-readable through the settings API.
 
 ### `PUT /system/configs/workspace/ssh-profiles/{ssh_profile_id}`
 

@@ -49,6 +49,7 @@ def test_ssh_profile_service_stores_password_and_private_key_in_secret_store(
     assert saved.has_password is True
     assert saved.has_private_key is True
     assert fetched.private_key_name == "id_ed25519"
+    assert service.reveal_password("prod").password == "secret"
     assert secret_store.get_password(tmp_path, "prod") == "secret"
     assert secret_store.get_private_key(tmp_path, "prod") == (
         "-----BEGIN OPENSSH PRIVATE KEY-----\nabc123\n-----END OPENSSH PRIVATE KEY-----"
