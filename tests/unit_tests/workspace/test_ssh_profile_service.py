@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 
+import relay_teams.workspace.ssh_profile_service as ssh_profile_service_module
 from relay_teams.secrets import AppSecretStore
 from relay_teams.workspace import (
     SshProfileConfig,
@@ -178,6 +179,26 @@ def test_ssh_profile_service_probes_saved_profile_with_secrets(
         "prod-alias",
         "echo relay-teams-ssh-probe",
     )
+
+
+def test_ssh_profile_service_windows_askpass_reads_password_from_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = SshProfileService(
+        repository=SshProfileRepository(tmp_path / "workspace.db"),
+        config_dir=tmp_path,
+        secret_store=SshProfileSecretStore(secret_store=_FileOnlySecretStore()),
+    )
+
+    monkeypatch.setattr(ssh_profile_service_module.os, "name", "nt")
+    askpass_path = service._write_askpass_script(tmp_path)
+    askpass_script = askpass_path.read_text(encoding="utf-8")
+
+    assert askpass_path.name == "askpass.cmd"
+    assert "powershell.exe -NoProfile -NonInteractive" in askpass_script
+    assert "$env:RELAY_TEAMS_SSH_PASSWORD" in askpass_script
+    assert "%RELAY_TEAMS_SSH_PASSWORD%" not in askpass_script
 
 
 def test_ssh_profile_service_probe_reports_auth_failure(

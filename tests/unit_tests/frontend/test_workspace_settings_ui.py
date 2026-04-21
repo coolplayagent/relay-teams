@@ -236,7 +236,6 @@ console.log(JSON.stringify({
     }
     assert "Connected in 64ms" in str(payload["savedListHtml"])
     assert payload["draftProbePayload"] == {
-        "ssh_profile_id": "staging",
         "override": {
             "host": "staging-alias",
             "username": "ops",
@@ -255,6 +254,66 @@ console.log(JSON.stringify({
         "profile-probe-status probe-status probe-status-success"
     )
     assert payload["draftButtonText"] == "Test"
+
+
+def test_workspace_settings_panel_tests_existing_draft_with_saved_profile_id(
+    tmp_path: Path,
+) -> None:
+    payload = _run_workspace_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    bindWorkspaceSettingsHandlers,
+    loadWorkspaceSettingsPanel,
+} from "./workspaceSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+globalThis.__mockProfiles = [
+    {
+        ssh_profile_id: "prod",
+        host: "prod-alias",
+        username: "deploy",
+        port: 22,
+        remote_shell: "/bin/bash",
+        connect_timeout_seconds: 12,
+        has_password: true,
+        has_private_key: true,
+        private_key_name: "id_ed25519",
+    },
+];
+
+bindWorkspaceSettingsHandlers();
+await loadWorkspaceSettingsPanel();
+
+const editButton = document.getElementById("workspace-ssh-profile-list")
+    .querySelectorAll("[data-workspace-ssh-profile-edit]")[0];
+editButton?.onclick?.();
+
+document.getElementById("workspace-ssh-profile-id").value = "renamed-prod";
+document.getElementById("workspace-ssh-profile-host").value = "prod-edited";
+await document.getElementById("test-ssh-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    draftProbePayload: globalThis.__probeSshProfilePayload,
+    draftStatusText: document.getElementById("workspace-ssh-profile-probe-status").textContent,
+}));
+""".strip(),
+    )
+
+    assert payload["draftProbePayload"] == {
+        "ssh_profile_id": "prod",
+        "override": {
+            "host": "prod-edited",
+            "username": "deploy",
+            "port": 22,
+            "remote_shell": "/bin/bash",
+            "connect_timeout_seconds": 12,
+        },
+        "timeout_ms": 12000,
+    }
+    assert payload["draftStatusText"] == "Connected in 42ms"
 
 
 def test_workspace_password_toggle_reveals_saved_password_and_preserves_on_save(

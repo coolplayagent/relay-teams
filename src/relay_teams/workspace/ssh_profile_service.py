@@ -381,7 +381,11 @@ class SshProfileService:
         if os.name == "nt":
             askpass_path = temp_root / "askpass.cmd"
             askpass_path.write_text(
-                "@echo off\r\necho %RELAY_TEAMS_SSH_PASSWORD%\r\n",
+                "@echo off\r\n"
+                "powershell.exe -NoProfile -NonInteractive "
+                "-ExecutionPolicy Bypass "
+                '-Command "[Console]::Out.WriteLine($env:RELAY_TEAMS_SSH_PASSWORD)"'
+                "\r\n",
                 encoding="utf-8",
             )
             return askpass_path

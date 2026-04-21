@@ -379,7 +379,7 @@ async function handleTestDraftSshProfile() {
 }
 
 function buildDraftSshProfileProbePayload() {
-    const sshProfileId = String(readInputValue('workspace-ssh-profile-id')).trim();
+    const savedSshProfileId = String(editingSshProfileId || '').trim();
     const host = String(readInputValue('workspace-ssh-profile-host')).trim();
     if (!host) {
         showToast({
@@ -415,8 +415,8 @@ function buildDraftSshProfileProbePayload() {
         override,
         timeout_ms: Math.round(connectTimeoutSeconds * 1000),
     };
-    if (sshProfileId) {
-        payload.ssh_profile_id = sshProfileId;
+    if (savedSshProfileId) {
+        payload.ssh_profile_id = savedSshProfileId;
     }
     return payload;
 }
