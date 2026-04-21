@@ -748,7 +748,6 @@ Response fields also include:
 - `orchestration_preset_id`
 - `started_at`
 - `can_switch_mode`
-- `subagent_session_count`: summary count of normal-mode child-session subagents so the UI can render expand affordances without fetching `GET /sessions/{session_id}/subagents` for every listed session
 
 ### `PATCH /sessions/{session_id}`
 
@@ -1726,7 +1725,7 @@ Rules:
 
 There is no public manual dispatch endpoint for delegated tasks.
 
-Delegated task dispatch is performed internally by the Coordinator through the `dispatch_task` tool.
+Delegated task dispatch is performed internally by the Coordinator through the `orch_dispatch_task` tool.
 
 Internal dispatch rules:
 - `created`: bind the task to the provided `role_id`, create or reuse the session-level subagent instance for that role, then execute.
@@ -2198,7 +2197,7 @@ Request:
     "source_kind": "im",
     "feishu_chat_type": "group"
   },
-  "tools": ["dispatch_task"],
+  "tools": ["orch_dispatch_task"],
   "skills": ["time"]
 }
 ```
@@ -2233,7 +2232,7 @@ Response:
 {
   "role_id": "Coordinator",
   "objective": "Draft release note",
-  "tools": ["dispatch_task"],
+  "tools": ["orch_dispatch_task"],
   "skills": ["time"],
   "runtime_system_prompt": "...",
   "provider_system_prompt": "...",

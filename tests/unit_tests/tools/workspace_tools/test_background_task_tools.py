@@ -245,9 +245,7 @@ async def test_spawn_subagent_runs_synchronously_by_default(
         projected = await _invoke_tool_action(action, raw_args)
         return cast(dict[str, object], projected.visible_data)
 
-    from relay_teams.tools.workspace_tools import (
-        spawn_subagent as spawn_subagent_module,
-    )
+    from relay_teams.tools.task_tools import spawn_subagent as spawn_subagent_module
 
     monkeypatch.setattr(spawn_subagent_module, "execute_tool_call", _fake_execute_tool)
 
@@ -314,9 +312,7 @@ async def test_spawn_subagent_starts_background_subagent_task_when_requested(
         projected = await _invoke_tool_action(action, raw_args)
         return cast(dict[str, object], projected.visible_data)
 
-    from relay_teams.tools.workspace_tools import (
-        spawn_subagent as spawn_subagent_module,
-    )
+    from relay_teams.tools.task_tools import spawn_subagent as spawn_subagent_module
 
     monkeypatch.setattr(spawn_subagent_module, "execute_tool_call", _fake_execute_tool)
 

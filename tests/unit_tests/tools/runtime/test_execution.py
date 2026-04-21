@@ -512,7 +512,7 @@ def test_execute_tool_publishes_sanitized_dispatch_task_result_immediately() -> 
     result = asyncio.run(
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
-            tool_name="dispatch_task",
+            tool_name="orch_dispatch_task",
             args_summary={"task_name": "ask_time"},
             action=lambda: {
                 "task_status": {
@@ -538,7 +538,7 @@ def test_execute_tool_publishes_sanitized_dispatch_task_result_immediately() -> 
         cast(dict[str, object], payload_result["data"])["task_status"],
     )["ask_time"]
     task_status_payload = cast(dict[str, object], task_status)
-    assert tool_result_payloads[0]["tool_name"] == "dispatch_task"
+    assert tool_result_payloads[0]["tool_name"] == "orch_dispatch_task"
     assert tool_result_payloads[0]["tool_call_id"] == "dispatch-call-1"
     assert tool_result_payloads[0]["error"] is False
     assert task_status_payload["status"] == "completed"
@@ -589,7 +589,7 @@ def test_execute_tool_call_rehydrates_pydantic_model_lists_from_future_annotatio
     result = asyncio.run(
         execute_tool_call(
             cast(ToolContext, cast(object, ctx)),
-            tool_name="create_tasks",
+            tool_name="orch_create_tasks",
             args_summary={"task_count": 1},
             action=_action,
             raw_args={
@@ -926,7 +926,7 @@ def test_execute_tool_marks_sqlite_lock_error_as_retryable() -> None:
     result = asyncio.run(
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
-            tool_name="dispatch_task",
+            tool_name="orch_dispatch_task",
             args_summary={"task_id": "task-2"},
             action=lambda: (_ for _ in ()).throw(
                 sqlite3.OperationalError("database is locked")

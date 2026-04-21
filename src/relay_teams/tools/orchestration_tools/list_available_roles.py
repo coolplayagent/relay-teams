@@ -13,7 +13,7 @@ DESCRIPTION = load_tool_description(__file__)
 
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
-    async def list_available_roles(ctx: ToolContext) -> dict[str, JsonValue]:
+    async def orch_list_available_roles(ctx: ToolContext) -> dict[str, JsonValue]:
         """List worker roles that can be selected for delegated tasks."""
 
         def _action() -> dict[str, JsonValue]:
@@ -51,7 +51,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
 
         return await execute_tool(
             ctx,
-            tool_name="list_available_roles",
+            tool_name="orch_list_available_roles",
             args_summary={},
             action=_action,
         )

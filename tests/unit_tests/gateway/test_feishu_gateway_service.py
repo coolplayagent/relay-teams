@@ -90,7 +90,7 @@ def _build_role_registry() -> RoleRegistry:
             name="Coordinator",
             description="Coordinates tasks.",
             version="1",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
             system_prompt="Coordinate work.",
         )
     )

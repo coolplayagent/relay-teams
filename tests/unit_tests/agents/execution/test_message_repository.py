@@ -34,17 +34,17 @@ def test_message_repo_sanitizes_stale_task_status_error_on_read(tmp_path: Path) 
             ModelResponse(
                 parts=[
                     ToolCallPart(
-                        tool_name="dispatch_task",
+                        tool_name="orch_dispatch_task",
                         args={"task": "ask_time"},
-                        tool_call_id="dispatch_task:1",
+                        tool_call_id="orch_dispatch_task:1",
                     )
                 ]
             ),
             ModelRequest(
                 parts=[
                     ToolReturnPart(
-                        tool_name="dispatch_task",
-                        tool_call_id="dispatch_task:1",
+                        tool_name="orch_dispatch_task",
+                        tool_call_id="orch_dispatch_task:1",
                         content={"ok": True},
                     )
                 ]

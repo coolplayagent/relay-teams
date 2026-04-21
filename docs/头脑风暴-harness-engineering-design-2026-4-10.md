@@ -690,8 +690,8 @@ Agent Teams 不应把自己定位成：
 ### 13.1.2 角色执行与委派
 
 - coordinator：`src/relay_teams/agents/orchestration/coordinator.py:111`
-- dispatch_task：`src/relay_teams/agents/orchestration/task_orchestration_service.py:162`
-- temporary role：`src/relay_teams/tools/task_tools/create_temporary_role.py:76`
+- orch_dispatch_task：`src/relay_teams/agents/orchestration/task_orchestration_service.py:162`
+- temporary role：`src/relay_teams/tools/orchestration_tools/create_temporary_role.py:76`
 
 ### 13.1.3 审计底座
 

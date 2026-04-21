@@ -47,7 +47,7 @@ def test_role_loader_adds_office_markdown_tool_to_non_coordinator_roles(
         "description: Drafts content\n"
         "version: 1.0.0\n"
         "tools:\n"
-        "  - dispatch_task\n"
+        "  - orch_dispatch_task\n"
         "---\n"
         "Write clearly.\n",
         encoding="utf-8",
@@ -56,7 +56,7 @@ def test_role_loader_adds_office_markdown_tool_to_non_coordinator_roles(
     role = RoleLoader().load_one(role_file)
 
     assert role.tools == (
-        "dispatch_task",
+        "orch_dispatch_task",
         "office_read_markdown",
         "todo_write",
         "todo_read",
@@ -72,9 +72,9 @@ def test_role_loader_keeps_coordinator_tools_unchanged(tmp_path: Path) -> None:
         "description: Coordinates delegated work\n"
         "version: 1.0.0\n"
         "tools:\n"
-        "  - create_tasks\n"
-        "  - update_task\n"
-        "  - dispatch_task\n"
+        "  - orch_create_tasks\n"
+        "  - orch_update_task\n"
+        "  - orch_dispatch_task\n"
         "---\n"
         "Coordinate tasks.\n",
         encoding="utf-8",
@@ -82,7 +82,7 @@ def test_role_loader_keeps_coordinator_tools_unchanged(tmp_path: Path) -> None:
 
     role = RoleLoader().load_one(role_file)
 
-    assert role.tools == ("create_tasks", "update_task", "dispatch_task")
+    assert role.tools == ("orch_create_tasks", "orch_update_task", "orch_dispatch_task")
 
 
 def test_role_registry_resolves_dynamic_coordinator_role() -> None:
@@ -94,9 +94,9 @@ def test_role_registry_resolves_dynamic_coordinator_role() -> None:
             description="Coordinates delegated work.",
             version="1.0.0",
             tools=(
-                "create_tasks",
-                "update_task",
-                "dispatch_task",
+                "orch_create_tasks",
+                "orch_update_task",
+                "orch_dispatch_task",
             ),
             system_prompt="Coordinate tasks.",
         )
@@ -142,7 +142,7 @@ def test_role_registry_lists_normal_mode_roles_with_main_agent_first() -> None:
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1.0.0",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
             system_prompt="Coordinate tasks.",
         )
     )
@@ -181,7 +181,7 @@ def test_role_registry_lists_subagent_roles_only_for_subagent_modes() -> None:
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1.0.0",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
             system_prompt="Coordinate tasks.",
         )
     )
@@ -231,7 +231,7 @@ def test_role_registry_rejects_coordinator_in_normal_mode() -> None:
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1.0.0",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
             system_prompt="Coordinate tasks.",
         )
     )
@@ -258,7 +258,7 @@ def test_role_registry_rejects_subagent_only_role_in_normal_mode() -> None:
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1.0.0",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
             system_prompt="Coordinate tasks.",
         )
     )
@@ -296,7 +296,7 @@ def test_role_registry_resolves_subagent_only_role_for_subagent_use() -> None:
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1.0.0",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
             system_prompt="Coordinate tasks.",
         )
     )

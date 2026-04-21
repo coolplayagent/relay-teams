@@ -30,7 +30,7 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
         name="Writer",
         description="Drafts user-facing content.",
         version="1.0.0",
-        tools=("dispatch_task",),
+        tools=("orch_dispatch_task",),
         system_prompt="Write clearly.",
     )
     skills_dir = tmp_path / "skills"
@@ -56,7 +56,7 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
             name="Writer V2",
             description="Drafts user-facing content with more detail.",
             version="2.0.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             mcp_servers=(),
             skills=(),
             model_profile="default",
@@ -126,7 +126,7 @@ def test_get_role_document_returns_rendered_markdown_content(tmp_path: Path) -> 
         name="Reviewer",
         description="Reviews delivered work.",
         version="1.1.0",
-        tools=("dispatch_task",),
+        tools=("orch_dispatch_task",),
         system_prompt="Review carefully.",
     )
     skills_dir = tmp_path / "skills"
@@ -162,7 +162,7 @@ def test_list_role_documents_preserves_role_mode(tmp_path: Path) -> None:
         name="Reviewer",
         description="Reviews delivered work.",
         version="1.1.0",
-        tools=("dispatch_task",),
+        tools=("orch_dispatch_task",),
         mode=RoleMode.SUBAGENT,
         system_prompt="Review carefully.",
     )
@@ -196,7 +196,7 @@ def test_get_role_document_canonicalizes_unique_skill_names(tmp_path: Path) -> N
         name="Reviewer",
         description="Reviews delivered work.",
         version="1.1.0",
-        tools=("dispatch_task",),
+        tools=("orch_dispatch_task",),
         skills=("time",),
         system_prompt="Review carefully.",
     )
@@ -334,7 +334,7 @@ def test_list_role_documents_returns_app_roles_when_builtin_roles_are_missing(
         name="Writer",
         description="Drafts user-facing content.",
         version="1.0.0",
-        tools=("dispatch_task",),
+        tools=("orch_dispatch_task",),
         system_prompt="Write clearly.",
     )
     skills_dir = tmp_path / "skills"
@@ -370,7 +370,7 @@ def test_list_role_documents_marks_builtin_override_not_deletable(
         name="Crafter",
         description="Builtin crafter role.",
         version="1.0.0",
-        tools=("dispatch_task",),
+        tools=("orch_dispatch_task",),
         system_prompt="Craft changes.",
     )
     _write_role(
@@ -379,7 +379,7 @@ def test_list_role_documents_marks_builtin_override_not_deletable(
         name="Crafter",
         description="App override for builtin crafter.",
         version="1.1.0",
-        tools=("dispatch_task",),
+        tools=("orch_dispatch_task",),
         system_prompt="Craft app changes.",
     )
     skills_dir = tmp_path / "skills"
@@ -442,7 +442,7 @@ def test_save_role_document_filters_unknown_capabilities_from_other_roles(
             name="Writer",
             description="Drafts user-facing content.",
             version="1.0.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             mcp_servers=(),
             skills=(),
             model_profile="default",
@@ -537,7 +537,7 @@ def test_validate_role_document_rejects_ambiguous_plain_skill_name(
                 name="Writer",
                 description="Drafts user-facing content.",
                 version="1.0.0",
-                tools=("dispatch_task",),
+                tools=("orch_dispatch_task",),
                 mcp_servers=(),
                 skills=("time",),
                 model_profile="default",
@@ -591,7 +591,7 @@ def test_validate_role_document_reloads_builtin_skills_once_for_unknown_builtin_
             name="Writer",
             description="Drafts user-facing content.",
             version="1.0.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             mcp_servers=(),
             skills=("builtin:skill-installer",),
             model_profile="default",
@@ -650,7 +650,7 @@ def test_save_role_document_reloads_builtin_skills_once_for_unknown_builtin_refs
             name="Writer",
             description="Drafts user-facing content.",
             version="1.0.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             mcp_servers=(),
             skills=("builtin:skill-installer",),
             model_profile="default",
@@ -697,7 +697,7 @@ def test_validate_role_document_reports_final_error_when_builtin_skill_reload_fa
                 name="Writer",
                 description="Drafts user-facing content.",
                 version="1.0.0",
-                tools=("dispatch_task",),
+                tools=("orch_dispatch_task",),
                 mcp_servers=(),
                 skills=("builtin:skill-installer",),
                 model_profile="default",
@@ -740,7 +740,7 @@ def test_validate_role_document_does_not_reload_non_builtin_unknown_skills(
                 name="Writer",
                 description="Drafts user-facing content.",
                 version="1.0.0",
-                tools=("dispatch_task",),
+                tools=("orch_dispatch_task",),
                 mcp_servers=(),
                 skills=("missing_skill",),
                 model_profile="default",
@@ -777,7 +777,7 @@ def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:
             name="New Role",
             description="Starts from a blank role.",
             version="1.0.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             mcp_servers=(),
             skills=(),
             model_profile="default",
@@ -819,9 +819,9 @@ def test_save_role_document_strips_office_tool_from_coordinator_like_role(
             description="Coordinates delegated work.",
             version="1.0.0",
             tools=(
-                "create_tasks",
-                "update_task",
-                "dispatch_task",
+                "orch_create_tasks",
+                "orch_update_task",
+                "orch_dispatch_task",
                 "office_read_markdown",
             ),
             mcp_servers=(),
@@ -832,7 +832,11 @@ def test_save_role_document_strips_office_tool_from_coordinator_like_role(
         ),
     )
 
-    assert saved.tools == ("create_tasks", "update_task", "dispatch_task")
+    assert saved.tools == (
+        "orch_create_tasks",
+        "orch_update_task",
+        "orch_dispatch_task",
+    )
 
 
 def test_save_role_document_allows_reserved_role_prompt_updates(tmp_path: Path) -> None:
@@ -845,7 +849,7 @@ def test_save_role_document_allows_reserved_role_prompt_updates(tmp_path: Path) 
         name="Main Agent",
         description="Handles normal-mode runs directly.",
         version="1.0.0",
-        tools=("dispatch_task",),
+        tools=("orch_dispatch_task",),
         system_prompt="Handle the task directly.",
     )
     skills_dir = tmp_path / "skills"
@@ -870,7 +874,7 @@ def test_save_role_document_allows_reserved_role_prompt_updates(tmp_path: Path) 
             name="Main Agent",
             description="Handles normal-mode runs directly.",
             version="1.0.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             mcp_servers=(),
             skills=(),
             model_profile="default",
@@ -899,7 +903,7 @@ def test_delete_role_document_removes_dirty_app_role_and_reloads_registry(
         name="Main Agent",
         description="Handles normal-mode runs directly.",
         version="1.0.0",
-        tools=("dispatch_task",),
+        tools=("orch_dispatch_task",),
         system_prompt="Handle the run directly.",
     )
     _write_role(
@@ -964,7 +968,7 @@ def test_delete_role_document_rejects_builtin_role(tmp_path: Path) -> None:
         name="Crafter",
         description="Builtin crafter role.",
         version="1.0.0",
-        tools=("dispatch_task",),
+        tools=("orch_dispatch_task",),
         system_prompt="Craft changes.",
     )
     skills_dir = tmp_path / "skills"
@@ -995,7 +999,7 @@ def test_delete_role_document_rejects_builtin_override(tmp_path: Path) -> None:
         name="Crafter",
         description="Builtin crafter role.",
         version="1.0.0",
-        tools=("dispatch_task",),
+        tools=("orch_dispatch_task",),
         system_prompt="Craft changes.",
     )
     _write_role(
@@ -1004,7 +1008,7 @@ def test_delete_role_document_rejects_builtin_override(tmp_path: Path) -> None:
         name="Crafter",
         description="App override for builtin crafter.",
         version="1.1.0",
-        tools=("dispatch_task",),
+        tools=("orch_dispatch_task",),
         system_prompt="Craft app changes.",
     )
     skills_dir = tmp_path / "skills"

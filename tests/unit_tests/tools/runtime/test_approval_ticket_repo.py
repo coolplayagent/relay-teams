@@ -25,7 +25,7 @@ def test_approval_ticket_repo_skips_invalid_persisted_rows(tmp_path: Path) -> No
         task_id="task-1",
         instance_id="inst-1",
         role_id="writer",
-        tool_name="dispatch_task",
+        tool_name="orch_dispatch_task",
         args_preview="{}",
     )
     _insert_approval_ticket_row(
@@ -71,7 +71,7 @@ def test_find_reusable_skips_newer_invalid_matching_ticket(tmp_path: Path) -> No
         task_id="task-1",
         instance_id="inst-1",
         role_id="writer",
-        tool_name="dispatch_task",
+        tool_name="orch_dispatch_task",
         args_preview="{}",
     )
     _insert_approval_ticket_row(
@@ -98,7 +98,7 @@ def test_find_reusable_skips_newer_invalid_matching_ticket(tmp_path: Path) -> No
         task_id="task-1",
         instance_id="inst-1",
         role_id="writer",
-        tool_name="dispatch_task",
+        tool_name="orch_dispatch_task",
         args_preview="{}",
     )
 
@@ -209,7 +209,7 @@ def test_approval_ticket_repo_resolve_honors_expected_status(tmp_path: Path) -> 
         task_id="task-1",
         instance_id="inst-1",
         role_id="writer",
-        tool_name="dispatch_task",
+        tool_name="orch_dispatch_task",
         args_preview="{}",
     )
 
@@ -232,7 +232,7 @@ def test_approval_ticket_repo_resolve_raises_on_status_conflict(tmp_path: Path) 
         task_id="task-1",
         instance_id="inst-1",
         role_id="writer",
-        tool_name="dispatch_task",
+        tool_name="orch_dispatch_task",
         args_preview="{}",
     )
     _ = repository.resolve(
@@ -382,7 +382,7 @@ def _insert_approval_ticket_row(
             "task-2",
             "inst-2",
             "writer",
-            "dispatch_task",
+            "orch_dispatch_task",
             "{}",
             ApprovalTicketStatus.REQUESTED.value,
             "",

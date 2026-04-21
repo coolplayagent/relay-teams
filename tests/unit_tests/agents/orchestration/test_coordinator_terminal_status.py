@@ -88,9 +88,9 @@ def _build_coordinator(
             description="Coordinates delegated work.",
             version="1",
             tools=(
-                "create_tasks",
-                "update_task",
-                "dispatch_task",
+                "orch_create_tasks",
+                "orch_update_task",
+                "orch_dispatch_task",
             ),
             system_prompt="Coordinate tasks.",
         )

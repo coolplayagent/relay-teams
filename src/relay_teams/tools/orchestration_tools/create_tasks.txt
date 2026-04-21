@@ -4,5 +4,5 @@ Usage:
 - Each task entry must include a clear `objective`; `title` is optional.
 - Use this tool to define work as a durable task contract.
 - Write objectives as stable outcomes and constraints, not as one-off execution prompts.
-- Use `dispatch_task` later to bind a role and send the execution prompt.
-- The result returns task identifiers; use those ids with `update_task`, `list_delegated_tasks`, or `dispatch_task`.
+- Use `orch_dispatch_task` later to bind a role and send the execution prompt.
+- The result returns task identifiers; use those ids with `orch_update_task`, `orch_list_delegated_tasks`, or `orch_dispatch_task`.

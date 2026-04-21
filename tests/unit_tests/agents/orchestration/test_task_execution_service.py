@@ -1003,7 +1003,7 @@ async def test_execute_coordinator_receives_task_runtime_contract(
             name="Coordinator Agent",
             description="Coordinates delegated work.",
             version="1",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
             system_prompt="Coordinate tasks.",
         )
     )
@@ -1088,7 +1088,7 @@ async def test_execute_coordinator_receives_task_runtime_contract(
         in provider.system_prompts[0]
     )
     assert (
-        "If no existing role is a good fit, create a run-scoped role with `create_temporary_role` before dispatch."
+        "If no existing role is a good fit, create a run-scoped role with `orch_create_temporary_role` before dispatch."
         in provider.system_prompts[0]
     )
     assert (
@@ -1113,7 +1113,7 @@ async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
             name="Coordinator Agent",
             description="Coordinates delegated work.",
             version="1",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
             system_prompt="Coordinate tasks.",
         )
     )
@@ -1167,7 +1167,7 @@ async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
         entry.name: entry.description for entry in writer_snapshot.local_tools
     }
 
-    assert coordinator_tools["create_tasks"].startswith(
+    assert coordinator_tools["orch_create_tasks"].startswith(
         "Create one or more run-scoped delegated task contracts."
     )
     assert writer_tools["read"].startswith("Read a file or directory from disk.")
