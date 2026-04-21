@@ -64,6 +64,7 @@ export {
     fetchClawHubSkills,
     fetchGitHubConfig,
     revealGitHubToken,
+    revealSshProfilePassword,
     fetchGitHubWebhookTunnelStatus,
     fetchWebConfig,
     probeModelConnection,

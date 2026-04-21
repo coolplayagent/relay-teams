@@ -5,6 +5,7 @@ from pathlib import Path
 
 from relay_teams.workspace.ssh_profile_models import (
     SshProfileConfig,
+    SshProfilePasswordRevealView,
     SshProfileRecord,
     SshProfileStoredConfig,
 )
@@ -36,6 +37,15 @@ class SshProfileService:
 
     def get_profile(self, ssh_profile_id: str) -> SshProfileRecord:
         return self._enrich_record(self._repository.get(ssh_profile_id))
+
+    def reveal_password(self, ssh_profile_id: str) -> SshProfilePasswordRevealView:
+        _ = self._repository.get(ssh_profile_id)
+        return SshProfilePasswordRevealView(
+            password=self._secret_store.get_password(
+                self._config_dir,
+                ssh_profile_id,
+            )
+        )
 
     def save_profile(
         self,

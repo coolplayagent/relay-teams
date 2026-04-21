@@ -183,7 +183,7 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     assert ">Hooks</span>" in tabs_html
     assert ">Agents</span>" in tabs_html
     assert ">Web</span>" in tabs_html
-    assert ">Workspace</span>" in tabs_html
+    assert ">Remote Workspace</span>" in tabs_html
     assert ">Environment</span>" in tabs_html
     assert ">GitHub</span>" not in tabs_html
     assert ">Skills</span>" not in tabs_html

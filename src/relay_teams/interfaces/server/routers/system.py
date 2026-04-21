@@ -112,7 +112,12 @@ from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.triggers import GitHubTriggerService
 from relay_teams.hooks import HookRuntimeView, HookService, HooksConfig
 from relay_teams.validation import RequiredIdentifierStr
-from relay_teams.workspace import SshProfileConfig, SshProfileRecord, SshProfileService
+from relay_teams.workspace import (
+    SshProfileConfig,
+    SshProfilePasswordRevealView,
+    SshProfileRecord,
+    SshProfileService,
+)
 
 router = APIRouter(prefix="/system", tags=["System"])
 
@@ -207,6 +212,22 @@ def get_ssh_profile(
 ) -> SshProfileRecord:
     try:
         return service.get_profile(ssh_profile_id)
+    except Exception as exc:
+        _raise_system_http_error(
+            exc,
+            key_error_status=404,
+            key_error_detail="SSH profile not found",
+            value_error_status=400,
+        )
+
+
+@router.post("/configs/workspace/ssh-profiles/{ssh_profile_id}:reveal-password")
+def reveal_ssh_profile_password(
+    ssh_profile_id: RequiredIdentifierStr,
+    service: SshProfileService = Depends(get_ssh_profile_service),
+) -> SshProfilePasswordRevealView:
+    try:
+        return service.reveal_password(ssh_profile_id)
     except Exception as exc:
         _raise_system_http_error(
             exc,

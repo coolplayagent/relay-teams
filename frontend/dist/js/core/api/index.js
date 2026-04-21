@@ -67,6 +67,7 @@ export {
     fetchProxyConfig,
     fetchGitHubConfig,
     revealGitHubToken,
+    revealSshProfilePassword,
     fetchGitHubWebhookTunnelStatus,
     fetchWebConfig,
     fetchSystemHealth,
