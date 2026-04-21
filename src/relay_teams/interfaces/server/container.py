@@ -669,6 +669,7 @@ class ServerContainer:
             mcp_registry=self.mcp_registry,
             orchestration_settings_service=self.orchestration_settings_service,
             media_asset_service=self.media_asset_service,
+            run_intent_repo=self.run_intent_repo,
             get_runtime=lambda: self.runtime,
         )
         self.session_ingress_service = GatewaySessionIngressService(

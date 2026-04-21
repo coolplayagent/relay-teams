@@ -24,6 +24,11 @@ from relay_teams.agents.execution.tool_call_history import (
     collect_safe_row_ids,
     normalize_replayed_messages_to_safe_boundary,
 )
+from relay_teams.media import (
+    UserPromptContent,
+    user_prompt_content_key,
+    user_prompt_content_to_text,
+)
 from relay_teams.agents.tasks.task_status_sanitizer import sanitize_task_status_payload
 from relay_teams.sessions.session_history_marker_models import SessionHistoryMarkerType
 from relay_teams.sessions.session_history_marker_repository import (
@@ -352,20 +357,21 @@ class MessageRepository:
         instance_id: str,
         task_id: str,
         trace_id: str,
-        content: str,
+        content: UserPromptContent,
         workspace_id: str,
         conversation_id: str | None = None,
         agent_role_id: str | None = None,
     ) -> bool:
         from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-        target = str(content or "").strip()
-        if not target:
+        target_key = user_prompt_content_key(content)
+        target_text = user_prompt_content_to_text(content)
+        if not target_key or not target_text:
             return False
         resolved_conversation_id = conversation_id or instance_id
         message_json = _sanitize_message_json(
             ModelMessagesTypeAdapter.dump_json(
-                [ModelRequest(parts=[UserPromptPart(content=target)])]
+                [ModelRequest(parts=[UserPromptPart(content=content)])]
             ).decode()
         )
 
@@ -406,7 +412,7 @@ class MessageRepository:
                 resolved_conversation_id,
                 task_id,
             )
-            if _history_ends_with_user_prompt(history, target):
+            if _history_ends_with_user_prompt(history, target_key):
                 return False
             return False
 
@@ -426,20 +432,21 @@ class MessageRepository:
         instance_id: str,
         task_id: str,
         trace_id: str,
-        content: str,
+        content: UserPromptContent,
         workspace_id: str,
         conversation_id: str | None = None,
         agent_role_id: str | None = None,
     ) -> bool:
         from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-        target = str(content or "").strip()
-        if not target:
+        target_key = user_prompt_content_key(content)
+        target_text = user_prompt_content_to_text(content)
+        if not target_key or not target_text:
             return False
         resolved_conversation_id = conversation_id or instance_id
         message_json = _sanitize_message_json(
             ModelMessagesTypeAdapter.dump_json(
-                [ModelRequest(parts=[UserPromptPart(content=target)])]
+                [ModelRequest(parts=[UserPromptPart(content=content)])]
             ).decode()
         )
 
@@ -469,7 +476,7 @@ class MessageRepository:
                 resolved_conversation_id,
                 task_id,
             )
-            if _history_ends_with_user_prompt(history, target):
+            if _history_ends_with_user_prompt(history, target_key):
                 return False
             now = self._next_created_at(session_id=session_id)
             self._conn.execute(
@@ -859,7 +866,7 @@ def _extract_repeatable_user_prompt(message: object) -> str | None:
     if not isinstance(parts, list) or not parts:
         return None
 
-    prompt_chunks: list[str] = []
+    prompt_chunks: list[object] = []
     for part in parts:
         if not isinstance(part, dict):
             return None
@@ -868,14 +875,16 @@ def _extract_repeatable_user_prompt(message: object) -> str | None:
             continue
         if kind != "user-prompt":
             return None
-        content = str(part.get("content") or "")
-        if not content:
+        content = part.get("content")
+        if user_prompt_content_to_text(content) == "":
             return None
         prompt_chunks.append(content)
 
     if not prompt_chunks:
         return None
-    return "\n".join(prompt_chunks).strip() or None
+    return user_prompt_content_key(
+        prompt_chunks[0] if len(prompt_chunks) == 1 else prompt_chunks
+    )
 
 
 def _truncate_message_rows_to_safe_boundary(
@@ -905,11 +914,11 @@ def _truncate_model_history_to_safe_boundary(
 
 def _history_ends_with_user_prompt(
     history: Sequence[ModelMessage],
-    content: str,
+    content_key: str,
 ) -> bool:
     from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-    target = str(content or "").strip()
+    target = str(content_key or "").strip()
     if not target or not history:
         return False
     last = history[-1]
@@ -918,10 +927,11 @@ def _history_ends_with_user_prompt(
     prompt_parts = [part for part in last.parts if isinstance(part, UserPromptPart)]
     if len(prompt_parts) != len(last.parts):
         return False
-    combined = "\n".join(
-        str(part.content or "").strip() for part in prompt_parts
-    ).strip()
-    return combined == target
+    combined_parts = [part.content for part in prompt_parts]
+    current_key = user_prompt_content_key(
+        combined_parts[0] if len(combined_parts) == 1 else combined_parts
+    )
+    return current_key == target
 
 
 def _task_history_has_response(rows: Sequence[sqlite3.Row]) -> bool:

@@ -4,6 +4,9 @@ from typing import cast
 
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.models import AgentRuntimeRecord
+from relay_teams.media import InlineMediaContentPart
+from relay_teams.media import MediaModality
+from relay_teams.media import TextContentPart
 from relay_teams.sessions.session_rounds_projection import build_session_rounds
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.sessions.runs.enums import RunEventType
@@ -199,6 +202,267 @@ def test_build_session_rounds_includes_task_instance_map() -> None:
         "task-second": "created",
         "task-unassigned": "created",
     }
+
+
+def test_build_session_rounds_projects_structured_user_prompt_intent_parts() -> None:
+    session_id = "session-1"
+    run_id = "run-vision"
+    root_task = TaskRecord(
+        envelope=TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            objective="[image: stale-objective.png]",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        ),
+    )
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=cast(AgentInstanceRepository, cast(object, _FakeAgentRepo())),
+        task_repo=cast(TaskRepository, cast(object, _FakeTaskRepo((root_task,)))),
+        approval_tickets_by_run={},
+        run_runtime_repo=cast(
+            RunRuntimeRepository,
+            cast(object, _FakeRunRuntimeRepo()),
+        ),
+        get_session_messages=lambda _: [
+            {
+                "trace_id": run_id,
+                "role": "user",
+                "created_at": "2026-04-21T10:46:50+00:00",
+                "message": {
+                    "parts": [
+                        {
+                            "part_kind": "user-prompt",
+                            "content": [
+                                {"kind": "text", "text": "这个是什么图片"},
+                                {
+                                    "kind": "inline_media",
+                                    "modality": "image",
+                                    "mime_type": "image/png",
+                                    "base64_data": "QUJD",
+                                    "name": "image.png",
+                                },
+                            ],
+                        }
+                    ]
+                },
+            }
+        ],
+    )
+
+    assert len(rounds) == 1
+    round_item = rounds[0]
+    intent_parts = cast(list[dict[str, object]], round_item["intent_parts"])
+    assert round_item["intent"] == "这个是什么图片\n\n[image: image.png]"
+    assert intent_parts == [
+        {"kind": "text", "text": "这个是什么图片"},
+        {
+            "kind": "inline_media",
+            "modality": "image",
+            "mime_type": "image/png",
+            "base64_data": "QUJD",
+            "name": "image.png",
+            "size_bytes": None,
+            "width": None,
+            "height": None,
+            "duration_ms": None,
+            "thumbnail_asset_id": None,
+        },
+    ]
+
+
+def test_build_session_rounds_prefers_run_intent_input_over_message_text() -> None:
+    session_id = "session-1"
+    run_id = "run-intent"
+    root_task = TaskRecord(
+        envelope=TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            objective="fallback objective",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        ),
+    )
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=cast(AgentInstanceRepository, cast(object, _FakeAgentRepo())),
+        task_repo=cast(TaskRepository, cast(object, _FakeTaskRepo((root_task,)))),
+        approval_tickets_by_run={},
+        run_runtime_repo=cast(
+            RunRuntimeRepository,
+            cast(object, _FakeRunRuntimeRepo()),
+        ),
+        get_session_messages=lambda _: [
+            {
+                "trace_id": run_id,
+                "role": "user",
+                "created_at": "2026-04-21T10:46:50+00:00",
+                "message": {
+                    "parts": [
+                        {
+                            "part_kind": "user-prompt",
+                            "content": "这个是什么图片\n\n[image: image.png]",
+                        }
+                    ]
+                },
+            }
+        ],
+        get_run_intent_input=lambda requested_run_id: (
+            (
+                TextContentPart(text="这个是什么图片"),
+                InlineMediaContentPart(
+                    modality=MediaModality.IMAGE,
+                    mime_type="image/png",
+                    base64_data="QUJD",
+                    name="image.png",
+                ),
+            )
+            if requested_run_id == run_id
+            else None
+        ),
+    )
+
+    assert len(rounds) == 1
+    round_item = rounds[0]
+    intent_parts = cast(list[dict[str, object]], round_item["intent_parts"])
+    assert round_item["intent"] == "这个是什么图片\n\n[image: image.png]"
+    assert intent_parts[0] == {"kind": "text", "text": "这个是什么图片"}
+    assert intent_parts[1]["kind"] == "inline_media"
+    assert intent_parts[1]["name"] == "image.png"
+
+
+def test_build_session_rounds_projects_persisted_url_user_prompt_intent_parts() -> None:
+    session_id = "session-1"
+    run_id = "run-persisted-vision"
+    root_task = TaskRecord(
+        envelope=TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            objective="[image: stale-objective.png]",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        ),
+    )
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=cast(AgentInstanceRepository, cast(object, _FakeAgentRepo())),
+        task_repo=cast(TaskRepository, cast(object, _FakeTaskRepo((root_task,)))),
+        approval_tickets_by_run={},
+        run_runtime_repo=cast(
+            RunRuntimeRepository,
+            cast(object, _FakeRunRuntimeRepo()),
+        ),
+        get_session_messages=lambda _: [
+            {
+                "trace_id": run_id,
+                "role": "user",
+                "created_at": "2026-04-21T10:46:50+00:00",
+                "message": {
+                    "parts": [
+                        {
+                            "part_kind": "user-prompt",
+                            "content": [
+                                "这个是什么图片",
+                                {
+                                    "kind": "image-url",
+                                    "url": "https://cdn.example.com/assets/image.png",
+                                    "media_type": "image/png",
+                                },
+                            ],
+                        }
+                    ]
+                },
+            }
+        ],
+    )
+
+    assert len(rounds) == 1
+    round_item = rounds[0]
+    intent_parts = cast(list[dict[str, object]], round_item["intent_parts"])
+    assert round_item["intent"] == "这个是什么图片\n\n[image: image.png]"
+    assert intent_parts == [
+        {"kind": "text", "text": "这个是什么图片"},
+        {
+            "kind": "image-url",
+            "modality": "image",
+            "url": "https://cdn.example.com/assets/image.png",
+            "media_type": "image/png",
+            "label": "image.png",
+            "name": "image.png",
+        },
+    ]
+
+
+def test_build_session_rounds_projects_legacy_binary_user_prompt_intent_parts() -> None:
+    session_id = "session-1"
+    run_id = "run-persisted-binary"
+    root_task = TaskRecord(
+        envelope=TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            objective="[image: stale-objective.png]",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        ),
+    )
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=cast(AgentInstanceRepository, cast(object, _FakeAgentRepo())),
+        task_repo=cast(TaskRepository, cast(object, _FakeTaskRepo((root_task,)))),
+        approval_tickets_by_run={},
+        run_runtime_repo=cast(
+            RunRuntimeRepository,
+            cast(object, _FakeRunRuntimeRepo()),
+        ),
+        get_session_messages=lambda _: [
+            {
+                "trace_id": run_id,
+                "role": "user",
+                "created_at": "2026-04-21T10:46:50+00:00",
+                "message": {
+                    "parts": [
+                        {
+                            "part_kind": "user-prompt",
+                            "content": [
+                                "这个是什么图片",
+                                {
+                                    "kind": "binary",
+                                    "media_type": "image/png",
+                                    "data": "QUJD",
+                                    "name": "legacy-image.png",
+                                },
+                            ],
+                        }
+                    ]
+                },
+            }
+        ],
+    )
+
+    assert len(rounds) == 1
+    round_item = rounds[0]
+    intent_parts = cast(list[dict[str, object]], round_item["intent_parts"])
+    assert round_item["intent"] == "这个是什么图片\n\n[image: image]"
+    assert intent_parts == [
+        {"kind": "text", "text": "这个是什么图片"},
+        {
+            "kind": "binary",
+            "media_type": "image/png",
+            "data": "QUJD",
+            "name": "legacy-image.png",
+            "modality": "image",
+            "label": "legacy-image.png",
+        },
+    ]
 
 
 def test_build_session_rounds_only_keeps_active_retry_card() -> None:

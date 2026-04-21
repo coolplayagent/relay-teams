@@ -23,6 +23,11 @@ export async function fetchModelProfiles() {
             max_tokens: 512,
             context_window: 128000,
             connect_timeout_seconds: 15,
+            capabilities: {
+                input: { text: true, image: true, audio: false, video: false, pdf: false },
+                output: { text: true, image: false, audio: false, video: false, pdf: false },
+            },
+            input_modalities: ["image"],
         },
         "ui-regression-profile": {
             provider: "openai_compatible",
@@ -36,6 +41,11 @@ export async function fetchModelProfiles() {
             max_tokens: 512,
             context_window: 64000,
             connect_timeout_seconds: 15,
+            capabilities: {
+                input: { text: true, image: false, audio: false, video: false, pdf: false },
+                output: { text: true, image: false, audio: false, video: false, pdf: false },
+            },
+            input_modalities: [],
         },
     };
 }
@@ -74,6 +84,26 @@ export async function discoverModelCatalog(payload) {
         ok: true,
         latency_ms: 37,
         models: ["fake-chat-model", "reasoning-model"],
+        model_entries: [
+            {
+                model: "fake-chat-model",
+                context_window: 128000,
+                capabilities: {
+                    input: { text: true, image: true, audio: false, video: false, pdf: false },
+                    output: { text: true, image: false, audio: false, video: false, pdf: false },
+                },
+                input_modalities: ["image"],
+            },
+            {
+                model: "reasoning-model",
+                context_window: null,
+                capabilities: {
+                    input: { text: true, image: false, audio: false, video: false, pdf: false },
+                    output: { text: true, image: false, audio: false, video: false, pdf: false },
+                },
+                input_modalities: [],
+            },
+        ],
     };
 }
 
@@ -150,6 +180,31 @@ console.log(JSON.stringify({
     assert saved_profile_body["context_window"] == 128000
     assert saved_profile_body["fallback_policy_id"] is None
     assert saved_profile_body["fallback_priority"] == 0
+
+
+def test_profile_list_renders_input_capability_chip(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+console.log(JSON.stringify({
+    renderedHtml: document.getElementById("profiles-list").innerHTML,
+}));
+""".strip(),
+    )
+
+    rendered_html = cast(str, payload["renderedHtml"])
+    assert "Image input" in rendered_html
+    assert "Text only" in rendered_html
+    assert "profile-card-chip-capability-image" in rendered_html
 
 
 def test_saving_model_profile_includes_fallback_settings(tmp_path: Path) -> None:
@@ -277,6 +332,140 @@ console.log(JSON.stringify({
     assert 'data-model-name="fake-chat-model"' in cast(str, payload["modelMenuHtml"])
     assert 'data-model-name="reasoning-model"' in cast(str, payload["modelMenuHtml"])
     assert payload["discoveryStatusText"] == "Fetched 2 models in 37ms."
+
+
+def test_discover_models_menu_renders_input_capability_chip(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-base-url").value = "https://draft.test/v1";
+document.getElementById("profile-api-key").value = "draft-api-key";
+
+await document.getElementById("fetch-profile-models-btn").onclick();
+
+console.log(JSON.stringify({
+    modelMenuHtml: document.getElementById("profile-model-menu").innerHTML,
+}));
+""".strip(),
+    )
+
+    rendered_html = cast(str, payload["modelMenuHtml"])
+    assert "Image input" in rendered_html
+    assert "Text only" in rendered_html
+    assert "128,000 ctx" in rendered_html
+
+
+def test_saving_selected_discovered_model_persists_capabilities(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-name").value = "discovered-profile";
+document.getElementById("profile-base-url").value = "https://draft.test/v1";
+document.getElementById("profile-api-key").value = "draft-api-key";
+
+await document.getElementById("fetch-profile-models-btn").onclick();
+document.getElementById("profile-model").value = "fake-chat-model";
+
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    savedProfile: globalThis.__savedProfile,
+}));
+""".strip(),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    capabilities = cast(dict[str, JsonValue], saved_profile_body["capabilities"])
+    input_capabilities = cast(dict[str, JsonValue], capabilities["input"])
+    assert input_capabilities["image"] is None
+    assert input_capabilities["text"] is True
+
+
+def test_saving_manual_image_capability_override_persists_supported(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-name").value = "manual-image-profile";
+document.getElementById("profile-base-url").value = "https://draft.test/v1";
+document.getElementById("profile-api-key").value = "draft-api-key";
+
+await document.getElementById("fetch-profile-models-btn").onclick();
+document.getElementById("profile-model").value = "reasoning-model";
+document.getElementById("profile-image-capability").value = "supported";
+document.getElementById("profile-image-capability").onchange();
+
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    savedProfile: globalThis.__savedProfile,
+    dispatchedEvents: globalThis.__dispatchedEvents,
+}));
+""".strip(),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    capabilities = cast(dict[str, JsonValue], saved_profile_body["capabilities"])
+    input_capabilities = cast(dict[str, JsonValue], capabilities["input"])
+    dispatched_events = cast(list[str], payload["dispatchedEvents"])
+    assert input_capabilities["image"] is True
+    assert "agent-teams-model-profiles-updated" in dispatched_events
+
+
+def test_editing_profile_restores_manual_image_capability_override(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "ui-regression-profile").onclick();
+
+console.log(JSON.stringify({
+    imageCapabilityValue: document.getElementById("profile-image-capability").value,
+}));
+""".strip(),
+    )
+
+    assert payload["imageCapabilityValue"] == "unsupported"
 
 
 def test_discover_models_prefills_context_window_when_metadata_is_available(
@@ -1926,13 +2115,22 @@ const translations = {
     "settings.model.probe_no_models": "Connected in {latency_ms}ms, but the endpoint returned no models.",
     "settings.model.models_fetched": "Fetched {count} models in {latency_ms}ms.",
     "settings.model.usage_tokens": " · {tokens} tokens",
+    "settings.model.context_window_compact": "{count} ctx",
     "settings.model.show_models": "Show Models",
     "settings.model.no_models_loaded": "No Models Loaded",
+    "settings.model.capability_section": "Capabilities",
+    "settings.model.image_capability": "Image Input",
+    "settings.model.image_capability_follow": "Follow detection",
+    "settings.model.image_capability_supported": "Supports image input",
+    "settings.model.image_capability_unsupported": "Text only",
     "settings.model.show_api_key": "Show API key",
     "settings.model.hide_api_key": "Hide API key",
     "settings.model.show_password": "Show password",
     "settings.model.hide_password": "Hide password",
     "settings.model.default_badge": "Default",
+    "settings.model.capability_image_input": "Image input",
+    "settings.model.capability_text_only": "Text only",
+    "settings.model.capability_unknown": "Capability unknown",
     "settings.model.no_model": "No model",
     "settings.model.no_endpoint": "No endpoint",
     "settings.model.unknown": "Unknown",
@@ -2071,6 +2269,7 @@ function createElements() {{
             ["profile-context-window", createElement("block", "profile-context-window")],
             ["profile-connect-timeout", createElement("block", "profile-connect-timeout")],
             ["profile-ssl-verify", createElement("block", "profile-ssl-verify")],
+            ["profile-image-capability", createElement("block", "profile-image-capability")],
             ["profile-fallback-policy", createElement("block", "profile-fallback-policy")],
             ["profile-fallback-priority", createElement("block", "profile-fallback-priority")],
         ];
@@ -2125,9 +2324,19 @@ function installGlobals(elements, notifications) {{
         querySelectorAll(selector) {{
             return collectDocumentMatches(selector);
         }},
+        dispatchEvent(event) {{
+            globalThis.__dispatchedEvents.push(String(event?.type || ""));
+            return true;
+        }},
+    }};
+    globalThis.CustomEvent = class {{
+        constructor(type) {{
+            this.type = type;
+        }}
     }};
     globalThis.__feedbackNotifications = notifications;
     globalThis.__feedbackConfirms = [];
+    globalThis.__dispatchedEvents = [];
 }}
 
 {runner_source}

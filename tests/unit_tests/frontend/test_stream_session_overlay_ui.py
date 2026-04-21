@@ -167,6 +167,7 @@ function createContentEl() {
 }
 
 export function applyToolReturn() {}
+export function appendStructuredContentPart() { return null; }
 export function appendThinkingText() {}
 export function buildToolBlock() {
   return { dataset: {}, querySelector() { return null; } };
@@ -320,6 +321,7 @@ function createContentEl() {
 }
 
 export function applyToolReturn() {}
+export function appendStructuredContentPart() { return null; }
 export function appendThinkingText() {}
 export function buildToolBlock() {
   return { dataset: {}, querySelector() { return null; } };
@@ -425,6 +427,185 @@ console.log(JSON.stringify(globalThis.__appendCalls));
     assert payload == [{"text": "", "streaming": True}]
 
 
+def test_history_overlay_renders_media_refs_from_stream_overlay(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/history.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "history_overlay_media_ref"
+    temp_dir.mkdir()
+
+    (temp_dir / "history.js").write_text(
+        source.replace("../../core/state.js", "./mockState.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs")
+        .replace("./helpers.js", "./mockHelpers.mjs"),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        """
+export function isRunPrimaryRoleId(roleId, runId) {
+    return roleId === "external-role" && runId === "run-1";
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+export function formatMessage(key, values = {}) {
+    return `${key}:${JSON.stringify(values)}`;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockHelpers.mjs").write_text(
+        """
+function createContentEl() {
+  return {
+    children: [],
+    appendChild(child) {
+      this.children.push(child);
+    },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+}
+
+export function applyToolReturn() {}
+export function appendStructuredContentPart(contentEl, part) {
+  globalThis.__structuredCalls.push(part);
+  const block = {
+    type: "structured",
+    part,
+  };
+  contentEl.appendChild(block);
+  return block;
+}
+export function appendThinkingText() {}
+export function buildToolBlock() {
+  return { dataset: {}, querySelector() { return null; } };
+}
+export function decoratePendingApprovalBlock() {}
+export function findToolBlockInContainer() { return null; }
+export function indexPendingToolBlock() {}
+export function labelFromRole(_role, roleId, instanceId) {
+  return roleId || instanceId || "Agent";
+}
+export function parseApprovalArgsPreview() { return {}; }
+export function renderMessageBlock(container, _role, label, _parts = [], options = {}) {
+  const contentEl = createContentEl();
+  const wrapper = {
+    dataset: {
+      runId: String(options.runId || ""),
+      roleId: String(options.roleId || ""),
+      instanceId: String(options.instanceId || ""),
+      streamKey: String(options.streamKey || ""),
+    },
+    querySelector(selector) {
+      if (selector === ".msg-role") {
+        return { textContent: String(label || "").toUpperCase() };
+      }
+      if (selector === ".msg-content") {
+        return contentEl;
+      }
+      return null;
+    },
+  };
+  container.messages.push({ wrapper, contentEl });
+  return { wrapper, contentEl };
+}
+export function renderParts() {}
+export function resolvePendingToolBlock() { return null; }
+export function forceScrollBottom() {}
+export function setToolStatus() {}
+export function setToolValidationFailureState() {}
+export function appendMessageText(contentEl, text, options = {}) {
+  const block = {
+    type: "msg-text",
+    text,
+    streaming: options.streaming === true,
+  };
+  contentEl.appendChild(block);
+  return block;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner = """
+import { renderHistoricalMessageList } from "./history.js";
+
+globalThis.__structuredCalls = [];
+
+const container = {
+  dataset: {},
+  messages: [],
+  appendChild(child) {
+    this.messages.push(child);
+  },
+  querySelectorAll() {
+    return [];
+  },
+  querySelector() {
+    return null;
+  },
+};
+
+renderHistoricalMessageList(container, [], {
+  runId: "run-1",
+  pendingToolApprovals: [],
+  streamOverlayEntry: {
+    roleId: "external-role",
+    instanceId: "external-instance",
+    label: "External ACP",
+    parts: [
+      {
+        kind: "media_ref",
+        modality: "image",
+        mime_type: "image/png",
+        url: "data:image/png;base64,AAA",
+        name: "image.png",
+      },
+    ],
+    textStreaming: false,
+  },
+});
+
+console.log(JSON.stringify({
+  structuredCalls: globalThis.__structuredCalls,
+  wrapperCount: container.messages.length,
+}));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "structuredCalls": [
+            {
+                "kind": "media_ref",
+                "modality": "image",
+                "mime_type": "image/png",
+                "url": "data:image/png;base64,AAA",
+                "name": "image.png",
+            }
+        ],
+        "wrapperCount": 1,
+    }
+
+
 def test_history_overlay_can_render_as_separate_live_message(
     tmp_path: Path,
 ) -> None:
@@ -475,6 +656,7 @@ function createContentEl(wrapperId) {
 }
 
 export function applyToolReturn() {}
+export function appendStructuredContentPart() { return null; }
 export function appendThinkingText(contentEl, text, options = {}) {
   contentEl.children.push({
     type: "thinking",

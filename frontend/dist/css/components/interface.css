@@ -283,6 +283,26 @@
     opacity: 0;
 }
 
+.prompt-input-status {
+    margin-top: 0.55rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.45;
+}
+
+.prompt-input-status[hidden] {
+    display: none !important;
+}
+
+.prompt-input-status.is-danger {
+    border-color: color-mix(in srgb, var(--danger) 34%, var(--border-color));
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    color: color-mix(in srgb, var(--danger) 74%, var(--text-primary));
+}
+
 #send-btn,
 #stop-btn,
 #resume-run-btn {

@@ -41,6 +41,7 @@ let currentSelections = {
 let currentBoundAgentId = '';
 let currentExecutionSurface = 'api';
 let languageBound = false;
+let modelProfilesUpdatedBound = false;
 let roleActionPromise = null;
 let roleActionRequestId = 0;
 const DEFAULT_ROLE_TOOL = 'office_read_markdown';
@@ -66,6 +67,12 @@ export function bindRoleSettingsHandlers() {
             renderRolesList();
         });
         languageBound = true;
+    }
+    if (!modelProfilesUpdatedBound && typeof document.addEventListener === 'function') {
+        document.addEventListener('agent-teams-model-profiles-updated', () => {
+            void refreshRoleSettingsDependencies({ applyEditorState: true });
+        });
+        modelProfilesUpdatedBound = true;
     }
 }
 

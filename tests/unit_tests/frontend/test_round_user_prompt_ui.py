@@ -42,18 +42,41 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
     )
     assert "function appendUserPromptText(contentEl, text) {" in block_script
     assert "function updateUserPromptText(promptEl, text) {" in block_script
-    assert "bodyEl.textContent = normalized;" in block_script
+    assert "appendPromptContentBlock(contentEl, text, {" in block_script
+    assert "return updatePromptContentBlock(promptEl, text, {" in block_script
     assert ".user-prompt-block {" in components_css
     assert ".user-prompt-summary {" in components_css
     assert ".user-prompt-preview {" in components_css
     assert "-webkit-line-clamp: 2;" in components_css
     assert ".user-prompt-text {" in components_css
-    assert "function buildRoundIntentBlock(intentText) {" in timeline_script
-    assert "function normalizeRoundIntentText(intentText) {" in timeline_script
     assert (
-        "header.appendChild(buildRoundIntentBlock(round.intent || t('rounds.no_intent')));"
+        "function buildRoundIntentBlock(intentText, intentParts = null) {"
         in timeline_script
     )
+    assert "block.open = hasMedia;" not in timeline_script
+    assert "function normalizeRoundIntentText(intentText) {" in timeline_script
+    assert "function normalizeRoundIntentParts(promptPayload) {" in timeline_script
+    assert (
+        "function renderRoundIntentStructuredContent(bodyEl, parts) {"
+        in timeline_script
+    )
+    assert (
+        "header.appendChild(buildRoundIntentBlock(round.intent, round.intent_parts));"
+        in timeline_script
+    )
+    assert (
+        "section.appendChild(renderRoundHistoryDivider(round.compaction_marker_before));"
+        in timeline_script
+    )
+    assert (
+        "const promptBlock = buildRoundPromptBlock(round.intent, round.intent_parts);"
+        not in timeline_script
+    )
+    assert (
+        "intentEl.replaceWith(buildRoundIntentBlock(round.intent, round.intent_parts));"
+        in timeline_script
+    )
+    assert "patchRoundPromptBlock(section, round);" not in timeline_script
     assert "t('rounds.expand')" in timeline_script
     assert "t('rounds.collapse')" in timeline_script
     assert "'rounds.expand': 'Expand'," in i18n_script

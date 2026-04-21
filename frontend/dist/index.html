@@ -333,8 +333,12 @@
                     placeholder="What would you like the agents to do?"
                     data-i18n-placeholder="composer.placeholder"
                     rows="1"
-                    required
                   ></textarea>
+                  <div
+                    id="prompt-attachments"
+                    class="prompt-attachments"
+                    hidden
+                  ></div>
                   <div
                     id="prompt-mention-menu"
                     class="prompt-mention-menu"
@@ -401,6 +405,13 @@
                     Enter to send · Shift+Enter for new line
                   </div>
                 </div>
+                <div
+                  id="prompt-input-status"
+                  class="prompt-input-status"
+                  role="status"
+                  aria-live="polite"
+                  hidden
+                ></div>
               </form>
               <div class="input-controls">
                 <div

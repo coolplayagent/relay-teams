@@ -12,6 +12,11 @@ import {
     setToolValidationFailureState,
 } from './toolBlocks.js';
 import { appendStructuredContentPart, renderRichContent } from './content.js';
+import {
+    appendPromptContentBlock,
+    normalizePromptContentPart,
+    updatePromptContentBlock,
+} from './prompt.js';
 
 const STREAMING_CURSOR_CLASS = 'streaming-cursor';
 
@@ -77,17 +82,8 @@ export function renderParts(contentEl, parts, pendingToolBlocks, options = {}) {
         if (kind === 'text') {
             combinedText += (part.content || '') + '\n\n';
         } else if (kind === 'user-prompt') {
-            if (Array.isArray(part.content)) {
-                flushText();
-                part.content
-                    .map(userPromptItemToStructuredPart)
-                    .filter(Boolean)
-                    .forEach(structuredPart => {
-                        appendStructuredContentPart(contentEl, structuredPart);
-                    });
-                return;
-            }
-            combinedText += (part.content || '') + '\n\n';
+            flushText();
+            appendUserPromptText(contentEl, part.content);
         } else if (kind === 'thinking') {
             flushText();
             appendThinkingText(contentEl, part.content || '', { streaming: false });
@@ -136,44 +132,7 @@ export function renderParts(contentEl, parts, pendingToolBlocks, options = {}) {
 }
 
 function userPromptItemToStructuredPart(item) {
-    if (typeof item === 'string') {
-        return { kind: 'text', text: item };
-    }
-    if (!item || typeof item !== 'object') {
-        return null;
-    }
-    const kind = String(item.kind || '');
-    if (kind === 'image-url') {
-        return {
-            kind: 'media_ref',
-            modality: 'image',
-            mime_type: String(item.media_type || 'image/*'),
-            url: String(item.url || ''),
-            name: '',
-        };
-    }
-    if (kind === 'audio-url') {
-        return {
-            kind: 'media_ref',
-            modality: 'audio',
-            mime_type: String(item.media_type || 'audio/*'),
-            url: String(item.url || ''),
-            name: '',
-        };
-    }
-    if (kind === 'video-url') {
-        return {
-            kind: 'media_ref',
-            modality: 'video',
-            mime_type: String(item.media_type || 'video/*'),
-            url: String(item.url || ''),
-            name: '',
-        };
-    }
-    if (kind === 'binary') {
-        return binaryPayloadToStructuredPart(item);
-    }
-    return null;
+    return normalizePromptContentPart(item);
 }
 
 function binaryPayloadToStructuredPart(content) {
@@ -239,20 +198,10 @@ export function appendMessageText(contentEl, text, options = {}) {
 }
 
 export function appendUserPromptText(contentEl, text) {
-    const promptEl = document.createElement('details');
-    promptEl.className = 'user-prompt-block';
-    promptEl.innerHTML = `
-        <summary class="user-prompt-summary">
-            <span class="user-prompt-title"></span>
-            <span class="user-prompt-preview"></span>
-        </summary>
-        <div class="user-prompt-body">
-            <div class="user-prompt-text"></div>
-        </div>
-    `;
-    updateUserPromptText(promptEl, text);
-    contentEl.appendChild(promptEl);
-    return promptEl;
+    return appendPromptContentBlock(contentEl, text, {
+        className: 'user-prompt-block',
+        fallbackTitle: t('subagent.task_prompt'),
+    });
 }
 
 export function appendThinkingText(contentEl, text, options = {}) {
@@ -268,23 +217,9 @@ export function updateMessageText(textEl, text, options = {}) {
 }
 
 export function updateUserPromptText(promptEl, text) {
-    const normalized = String(text || '').replace(/\r\n?/g, '\n').trim();
-    const lines = normalized ? normalized.split('\n') : [];
-    const title = lines[0] || t('subagent.task_prompt');
-    const preview = lines.length > 1 ? lines.slice(1).join('\n') : title;
-    const titleEl = promptEl?.querySelector('.user-prompt-title');
-    const previewEl = promptEl?.querySelector('.user-prompt-preview');
-    const bodyEl = promptEl?.querySelector('.user-prompt-text');
-    if (titleEl) {
-        titleEl.textContent = title;
-    }
-    if (previewEl) {
-        previewEl.textContent = preview;
-    }
-    if (bodyEl) {
-        bodyEl.textContent = normalized;
-    }
-    return promptEl;
+    return updatePromptContentBlock(promptEl, text, {
+        fallbackTitle: t('subagent.task_prompt'),
+    });
 }
 
 export function updateThinkingText(textEl, text, options = {}) {
