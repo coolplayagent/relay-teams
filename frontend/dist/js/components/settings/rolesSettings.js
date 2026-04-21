@@ -19,6 +19,7 @@ import { errorToPayload, logError } from '../../utils/logger.js';
 
 let roleSummaries = [];
 let roleConfigOptions = {
+    tool_groups: [],
     tools: [],
     mcp_servers: [],
     skills: [],
@@ -38,6 +39,7 @@ let currentSelections = {
     mcp_servers: [],
     skills: [],
 };
+let toolGroupExpansionState = {};
 let currentBoundAgentId = '';
 let currentExecutionSurface = 'api';
 let languageBound = false;
@@ -45,6 +47,8 @@ let modelProfilesUpdatedBound = false;
 let roleActionPromise = null;
 let roleActionRequestId = 0;
 const DEFAULT_ROLE_TOOL = 'office_read_markdown';
+const OTHER_TOOL_GROUP_ID = '__other_tools__';
+const UNAVAILABLE_TOOL_GROUP_ID = '__unavailable_tools__';
 
 export function bindRoleSettingsHandlers() {
     bindActionButton('add-role-btn', handleAddRole);
@@ -128,6 +132,7 @@ function normalizeRoleConfigOptions(options) {
     return {
         coordinator_role_id: String(options?.coordinator_role_id || '').trim(),
         main_agent_role_id: String(options?.main_agent_role_id || '').trim(),
+        tool_groups: normalizeToolGroupOptions(options?.tool_groups),
         tools: normalizeOptionNames(options?.tools),
         mcp_servers: normalizeOptionNames(options?.mcp_servers),
         skills: normalizeSkillOptions(options?.skills),
@@ -187,6 +192,43 @@ function normalizeOptionName(value) {
         return value.name.trim();
     }
     return '';
+}
+
+function normalizeToolGroupOptions(values) {
+    if (!Array.isArray(values)) {
+        return [];
+    }
+    return values
+        .map(normalizeToolGroupOption)
+        .filter(option => option !== null);
+}
+
+function normalizeToolGroupOption(value) {
+    const id = typeof value?.id === 'string' ? value.id.trim() : '';
+    const name = typeof value?.name === 'string' ? value.name.trim() : '';
+    const tools = normalizeOptionNames(value?.tools);
+    if (!id || !name || tools.length === 0) {
+        return null;
+    }
+    return {
+        id,
+        name: getLocalizedToolGroupText(id, 'name', name),
+        description: getLocalizedToolGroupText(
+            id,
+            'description',
+            typeof value?.description === 'string' ? value.description.trim() : '',
+        ),
+        tools,
+    };
+}
+
+function getLocalizedToolGroupText(groupId, field, fallback) {
+    const key = `settings.roles.tool_group.${String(groupId || '').trim()}.${field}`;
+    const translated = t(key);
+    if (!translated || translated === key) {
+        return String(fallback || '').trim();
+    }
+    return translated;
 }
 
 function normalizeSkillOptions(values) {
@@ -374,10 +416,11 @@ function applyRoleRecord(record) {
     currentBoundAgentId = String(record.bound_agent_id || '').trim();
     currentExecutionSurface = String(record.execution_surface || 'api').trim() || 'api';
     currentSelections = {
-        tools: normalizeOptionNames(record.tools),
+        tools: orderToolSelections(normalizeOptionNames(record.tools)),
         mcp_servers: normalizeOptionNames(record.mcp_servers),
         skills: normalizeSkillSelections(record.skills),
     };
+    resetToolGroupExpansionState(currentSelections.tools);
 
     setInputValue('role-id-input', record.role_id || '');
     setInputValue('role-name-input', record.name || '');
@@ -496,8 +539,173 @@ function renderSkillOptionPicker(selectedValues, emptyMessage) {
     });
 }
 
+function renderToolGroupPicker(selectedTools, emptyMessage) {
+    const container = document.getElementById('role-tool-groups-picker');
+    if (!container) return;
+
+    const availableGroups = listRenderedToolGroups(selectedTools);
+    if (availableGroups.length === 0) {
+        container.innerHTML = `<div class="role-option-empty">${escapeHtml(emptyMessage)}</div>`;
+        return;
+    }
+    syncToolGroupExpansionState(availableGroups, selectedTools);
+
+    container.innerHTML = availableGroups.map(group => {
+        const selectionState = getToolGroupSelectionState(group, selectedTools);
+        const isExpanded = isToolGroupExpanded(group.id);
+        return `
+            <section class="role-tool-group${group.invalid === true ? ' role-tool-group-invalid' : ''}" data-group-id="${escapeHtml(group.id)}">
+                <div class="role-tool-group-header">
+                    <label class="role-tool-group-select">
+                        <input
+                            type="checkbox"
+                            data-option-value="${escapeHtml(group.id)}"
+                            data-group-id="${escapeHtml(group.id)}"
+                            ${selectionState === 'all' ? ' checked' : ''}
+                        >
+                        <span class="role-option-check" aria-hidden="true"></span>
+                        <span class="role-tool-group-copy">
+                            <span class="role-tool-group-title-row">
+                                <span class="role-tool-group-title">${escapeHtml(group.name)}</span>
+                                <span class="role-tool-group-count">${escapeHtml(formatToolCountLabel(group.tools.length))}</span>
+                            </span>
+                            ${group.description ? `<span class="role-tool-group-description">${escapeHtml(group.description)}</span>` : ''}
+                        </span>
+                    </label>
+                    <button
+                        class="role-tool-group-toggle"
+                        type="button"
+                        data-group-toggle-id="${escapeHtml(group.id)}"
+                        aria-label="${escapeHtml(isExpanded ? t('settings.roles.collapse_group') : t('settings.roles.expand_group'))}"
+                    >
+                        <span class="role-tool-group-toggle-label">${escapeHtml(isExpanded ? t('settings.roles.collapse') : t('settings.roles.expand'))}</span>
+                        <span class="role-tool-group-toggle-icon${isExpanded ? ' is-expanded' : ''}" aria-hidden="true"></span>
+                    </button>
+                </div>
+                <div class="role-tool-group-tools${isExpanded ? '' : ' role-tool-group-tools-collapsed'}">
+                    ${group.tools.map(toolName => renderToolGroupToolOption({
+            toolName,
+            isChecked: Array.isArray(selectedTools) && selectedTools.includes(toolName),
+            isInvalid: group.invalid === true,
+        })).join('')}
+                </div>
+            </section>
+        `;
+    }).join('');
+
+    container.querySelectorAll('input[type="checkbox"]').forEach(input => {
+        const groupId = String(input.dataset.groupId || '').trim();
+        const toolName = String(input.dataset.toolValue || '').trim();
+        if (groupId) {
+            const group = availableGroups.find(candidate => candidate.id === groupId);
+            input.indeterminate = getToolGroupSelectionState(group, selectedTools) === 'partial';
+            input.onchange = () => syncToolGroupSelection(groupId, input.checked);
+            return;
+        }
+        if (!toolName) {
+            return;
+        }
+        input.onchange = () => syncIndividualToolSelection(toolName, input.checked);
+    });
+    container.querySelectorAll('.role-tool-group-toggle').forEach(button => {
+        const groupId = String(button.dataset.groupToggleId || '').trim();
+        button.onclick = () => toggleToolGroupExpansion(groupId);
+    });
+}
+
+function renderToolGroupToolOption({ toolName, isChecked, isInvalid }) {
+    const unavailableSuffix = isInvalid === true
+        ? ` <em>${escapeHtml(t('settings.system.unavailable_state'))}</em>`
+        : '';
+    return `
+        <label class="role-option-item role-tool-option${isInvalid === true ? ' role-option-item-invalid' : ''}">
+            <input
+                type="checkbox"
+                data-option-value="${escapeHtml(toolName)}"
+                data-tool-value="${escapeHtml(toolName)}"
+                ${isChecked ? ' checked' : ''}
+            >
+            <span class="role-option-check" aria-hidden="true"></span>
+            <span class="role-option-label">${escapeHtml(toolName)}${unavailableSuffix}</span>
+        </label>
+    `;
+}
+
+function listRenderedToolGroups(selectedTools) {
+    const configuredGroups = Array.isArray(roleConfigOptions.tool_groups) ? roleConfigOptions.tool_groups : [];
+    const availableTools = Array.isArray(roleConfigOptions.tools) ? roleConfigOptions.tools : [];
+    const availableToolSet = new Set(availableTools);
+    const coveredTools = new Set();
+    const groups = configuredGroups
+        .map(group => {
+            const visibleTools = Array.isArray(group.tools)
+                ? group.tools.filter(toolName => availableToolSet.has(toolName))
+                : [];
+            visibleTools.forEach(toolName => coveredTools.add(toolName));
+            if (visibleTools.length === 0) {
+                return null;
+            }
+            return {
+                id: group.id,
+                name: group.name,
+                description: group.description,
+                tools: visibleTools,
+                invalid: false,
+            };
+        })
+        .filter(group => group !== null);
+    const otherTools = availableTools.filter(toolName => !coveredTools.has(toolName));
+    if (otherTools.length > 0) {
+        groups.push({
+            id: OTHER_TOOL_GROUP_ID,
+            name: t('settings.roles.other_tools'),
+            description: t('settings.roles.other_tools_description'),
+            tools: otherTools,
+            invalid: false,
+        });
+    }
+    const invalidTools = orderToolSelections(
+        Array.isArray(selectedTools)
+            ? selectedTools.filter(toolName => !availableToolSet.has(toolName))
+            : [],
+    );
+    if (invalidTools.length > 0) {
+        groups.push({
+            id: UNAVAILABLE_TOOL_GROUP_ID,
+            name: t('settings.roles.unavailable_tools'),
+            description: t('settings.roles.unavailable_tools_description'),
+            tools: invalidTools,
+            invalid: true,
+        });
+    }
+    return groups;
+}
+
+function formatToolCountLabel(count) {
+    const safeCount = Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0;
+    if (safeCount === 1) {
+        return t('settings.roles.tool_count_one');
+    }
+    return t('settings.roles.tool_count_many').replace('{count}', String(safeCount));
+}
+
+function getToolGroupSelectionState(group, selectedTools) {
+    if (!group || !Array.isArray(group.tools) || group.tools.length === 0) {
+        return 'none';
+    }
+    const selectedSet = new Set(Array.isArray(selectedTools) ? selectedTools : []);
+    const matchedTools = group.tools.filter(toolName => selectedSet.has(toolName));
+    if (matchedTools.length === 0) {
+        return 'none';
+    }
+    if (matchedTools.length === group.tools.length) {
+        return 'all';
+    }
+    return 'partial';
+}
+
 function renderRoleOptionPickers() {
-    renderOptionPicker('role-tools-picker', roleConfigOptions.tools, currentSelections.tools, t('settings.roles.no_tools'));
+    renderToolGroupPicker(currentSelections.tools, t('settings.roles.no_tool_groups'));
     renderOptionPicker('role-mcp-picker', roleConfigOptions.mcp_servers, currentSelections.mcp_servers, t('settings.roles.no_mcp'));
     renderSkillOptionPicker(currentSelections.skills, t('settings.roles.no_skills'));
     renderSkillsShellAdvisory();
@@ -592,8 +800,8 @@ function pickerHasInvalidOptions(container) {
 }
 
 function refreshOptionPicker(containerId) {
-    if (containerId === 'role-tools-picker') {
-        renderOptionPicker('role-tools-picker', roleConfigOptions.tools, currentSelections.tools, t('settings.roles.no_tools'));
+    if (containerId === 'role-tool-groups-picker') {
+        renderToolGroupPicker(currentSelections.tools, t('settings.roles.no_tool_groups'));
         return;
     }
     if (containerId === 'role-skills-picker') {
@@ -611,9 +819,7 @@ function syncOptionSelection(containerId) {
             nextValues.push(String(input.dataset.optionValue || '').trim());
         }
     });
-    if (containerId === 'role-tools-picker') {
-        currentSelections.tools = nextValues;
-    } else if (containerId === 'role-mcp-picker') {
+    if (containerId === 'role-mcp-picker') {
         currentSelections.mcp_servers = nextValues;
     } else if (containerId === 'role-skills-picker') {
         currentSelections.skills = nextValues;
@@ -621,9 +827,103 @@ function syncOptionSelection(containerId) {
     if (shouldRefreshPicker) {
         refreshOptionPicker(containerId);
     }
-    if (containerId === 'role-tools-picker' || containerId === 'role-skills-picker') {
+    if (containerId === 'role-skills-picker') {
         renderSkillsShellAdvisory();
     }
+}
+
+function syncToolGroupSelection(groupId, isChecked) {
+    const toolGroup = listRenderedToolGroups(currentSelections.tools).find(group => group.id === groupId) || null;
+    if (!toolGroup) {
+        return;
+    }
+    const selectedTools = new Set(Array.isArray(currentSelections.tools) ? currentSelections.tools : []);
+    toolGroup.tools.forEach(toolName => {
+        if (isChecked) {
+            selectedTools.add(toolName);
+            return;
+        }
+        selectedTools.delete(toolName);
+    });
+    currentSelections.tools = orderToolSelections(Array.from(selectedTools));
+    refreshOptionPicker('role-tool-groups-picker');
+    renderSkillsShellAdvisory();
+}
+
+function syncIndividualToolSelection(toolName, isChecked) {
+    const selectedTools = new Set(Array.isArray(currentSelections.tools) ? currentSelections.tools : []);
+    if (isChecked) {
+        selectedTools.add(toolName);
+    } else {
+        selectedTools.delete(toolName);
+    }
+    currentSelections.tools = orderToolSelections(Array.from(selectedTools));
+    refreshOptionPicker('role-tool-groups-picker');
+    renderSkillsShellAdvisory();
+}
+
+function resetToolGroupExpansionState(selectedTools) {
+    const nextState = {};
+    listRenderedToolGroups(selectedTools).forEach(group => {
+        nextState[group.id] = false;
+    });
+    toolGroupExpansionState = nextState;
+}
+
+function syncToolGroupExpansionState(groups, selectedTools) {
+    const nextState = { ...toolGroupExpansionState };
+    const activeGroupIds = new Set();
+    groups.forEach(group => {
+        activeGroupIds.add(group.id);
+        if (typeof nextState[group.id] === 'boolean') {
+            return;
+        }
+        nextState[group.id] = getToolGroupSelectionState(group, selectedTools) !== 'none';
+    });
+    Object.keys(nextState).forEach(groupId => {
+        if (!activeGroupIds.has(groupId)) {
+            delete nextState[groupId];
+        }
+    });
+    toolGroupExpansionState = nextState;
+}
+
+function isToolGroupExpanded(groupId) {
+    return toolGroupExpansionState[groupId] === true;
+}
+
+function toggleToolGroupExpansion(groupId) {
+    if (!groupId) {
+        return;
+    }
+    toolGroupExpansionState = {
+        ...toolGroupExpansionState,
+        [groupId]: !isToolGroupExpanded(groupId),
+    };
+    refreshOptionPicker('role-tool-groups-picker');
+}
+
+function orderToolSelections(values) {
+    const orderedSelections = [];
+    const seen = new Set();
+    const inputValues = Array.isArray(values) ? values : [];
+    const availableTools = Array.isArray(roleConfigOptions.tools) ? roleConfigOptions.tools : [];
+
+    availableTools.forEach(toolName => {
+        if (!inputValues.includes(toolName) || seen.has(toolName)) {
+            return;
+        }
+        seen.add(toolName);
+        orderedSelections.push(toolName);
+    });
+    inputValues.forEach(toolName => {
+        if (!toolName || seen.has(toolName)) {
+            return;
+        }
+        seen.add(toolName);
+        orderedSelections.push(toolName);
+    });
+    return orderedSelections;
 }
 
 function renderMemoryProfileSelects(memoryProfile) {

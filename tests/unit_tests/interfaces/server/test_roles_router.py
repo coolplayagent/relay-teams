@@ -31,6 +31,7 @@ from relay_teams.roles import (
     RoleMode,
     RoleRegistry,
     RoleSkillOption,
+    RoleToolGroupOption,
     SystemRolesUnavailableError,
     RoleValidationResult,
 )
@@ -425,6 +426,14 @@ def test_get_role_config_options() -> None:
                 model_profile="default",
                 model_name="gpt-4.1-mini",
                 input_modalities=(MediaModality.IMAGE,),
+            ),
+        ),
+        tool_groups=(
+            RoleToolGroupOption(
+                id="task",
+                name="Task",
+                description="Task orchestration and subagent coordination tools.",
+                tools=("create_tasks", "dispatch_task"),
             ),
         ),
         tools=("create_tasks", "dispatch_task"),

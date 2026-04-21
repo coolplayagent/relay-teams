@@ -161,6 +161,15 @@ class RoleSkillOption(BaseModel):
     scope: str = Field(pattern="^(builtin|app)$")
 
 
+class RoleToolGroupOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str = ""
+    tools: tuple[str, ...] = ()
+
+
 class RoleConfigOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -171,6 +180,7 @@ class RoleConfigOptions(BaseModel):
     normal_mode_roles: tuple[NormalModeRoleOption, ...] = ()
     subagent_roles: tuple[NormalModeRoleOption, ...] = ()
     role_modes: tuple[RoleMode, ...] = Field(default=tuple(mode for mode in RoleMode))
+    tool_groups: tuple[RoleToolGroupOption, ...] = ()
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[RoleSkillOption, ...] = ()
