@@ -16,6 +16,7 @@ from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.session_service import SessionService
+from relay_teams.sessions.session_models import SessionMode
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.sessions.runs.event_log import EventLog
@@ -51,6 +52,7 @@ from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.agents.tasks.enums import TaskStatus
 
 
 def _build_service(
@@ -1001,6 +1003,118 @@ def test_list_normal_mode_subagents_returns_instance_level_projection(
     assert subagents[0]["checkpoint_event_id"] == 7
     assert subagents[0]["stream_connected"] is False
     assert subagents[0]["title"] == "Inspect bug"
+
+
+def test_list_session_subagents_includes_orchestration_subagents(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_orchestration_subagent_projection.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(
+        session_id="session-1",
+        workspace_id="default",
+        session_mode=SessionMode.ORCHESTRATION,
+    )
+    task_repo = TaskRepository(db_path)
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root-subagent",
+            session_id="session-1",
+            parent_task_id=None,
+            trace_id="subagent_run_orch123",
+            role_id="Explorer",
+            title="Inspect weather",
+            objective="inspect weather sources",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="subagent_run_orch123",
+        trace_id="subagent_run_orch123",
+        session_id="session-1",
+        instance_id="inst-orch",
+        role_id="Explorer",
+        workspace_id="default",
+        conversation_id="conv_session_1_explorer_inst_orch",
+        status=InstanceStatus.RUNNING,
+    )
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="subagent_run_orch123",
+        session_id="session-1",
+        root_task_id="task-root-subagent",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.SUBAGENT_RUNNING,
+    )
+
+    subagents = service.list_session_subagents("session-1")
+
+    assert len(subagents) == 1
+    assert subagents[0]["run_id"] == "subagent_run_orch123"
+    assert subagents[0]["instance_id"] == "inst-orch"
+    assert subagents[0]["role_id"] == "Explorer"
+    assert subagents[0]["title"] == "Inspect weather"
+    assert subagents[0]["run_status"] == "running"
+    assert subagents[0]["run_phase"] == "running"
+
+
+def test_list_session_subagents_projects_task_backed_orchestration_workers(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_orchestration_task_backed_subagent.db"
+    service = _build_service(db_path)
+
+    _ = service.create_session(
+        session_id="session-1",
+        workspace_id="default",
+        session_mode=SessionMode.ORCHESTRATION,
+    )
+    task_repo = TaskRepository(db_path)
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root-main",
+            session_id="session-1",
+            parent_task_id=None,
+            trace_id="run-main",
+            role_id="Coordinator",
+            objective="main work",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    task_repo.update_status(
+        "task-root-main",
+        status=TaskStatus.RUNNING,
+    )
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-sub-1",
+            session_id="session-1",
+            parent_task_id="task-root-main",
+            trace_id="run-main",
+            role_id="Crafter",
+            title="Query weather",
+            objective="query weather",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    task_repo.update_status(
+        "task-sub-1",
+        status=TaskStatus.COMPLETED,
+        assigned_instance_id="inst-task-backed",
+    )
+
+    subagents = service.list_session_subagents("session-1")
+
+    assert len(subagents) == 1
+    assert subagents[0]["instance_id"] == "inst-task-backed"
+    assert subagents[0]["role_id"] == "Crafter"
+    assert subagents[0]["run_id"] == "run-main"
+    assert subagents[0]["status"] == "completed"
+    assert subagents[0]["run_status"] == "completed"
+    assert subagents[0]["run_phase"] == "completed"
+    assert subagents[0]["title"] == "Query weather"
 
 
 def test_build_session_rounds_excludes_synchronous_subagent_runs(

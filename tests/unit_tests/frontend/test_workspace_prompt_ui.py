@@ -137,8 +137,9 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "emphasizeRoundSection" in timeline_script
     assert "round-nav-toggle" in navigator_script
     assert "ROUND_NAV_COLLAPSED_KEY" in navigator_script
-    assert "let scheduledOffsetFrame = 0;" in navigator_script
-    assert "function scheduleOffsetApply(nav) {" in navigator_script
+    assert "round-nav-inline" in navigator_script
+    assert "getChatMessagesHost" in navigator_script
+    assert "scheduleOffsetApply" not in navigator_script
     assert "round.intent || t('rounds.no_intent')" in navigator_script
     assert "alert(" not in model_profiles_script
     assert "confirm(" not in model_profiles_script

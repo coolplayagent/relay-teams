@@ -67,6 +67,8 @@ from relay_teams.sessions.session_history_marker_models import (
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.models import TaskRecord
 from relay_teams.providers.token_usage_repo import (
     RunTokenUsage,
     SessionTokenUsage,
@@ -76,6 +78,7 @@ from relay_teams.workspace import (
     WorkspaceManager,
     WorkspaceService,
     build_conversation_id,
+    build_instance_conversation_id,
     build_instance_role_scope_id,
     build_instance_session_scope_id,
 )
@@ -739,32 +742,72 @@ class SessionService:
             if record.project_kind == project_kind and record.project_id == project_id
         )
 
-    def list_normal_mode_subagents(
-        self, session_id: str
-    ) -> tuple[dict[str, object], ...]:
+    def list_session_subagents(self, session_id: str) -> tuple[dict[str, object], ...]:
         session = self._session_repo.get(session_id)
-        if session.session_mode != SessionMode.NORMAL:
-            return ()
         root_tasks_by_run: dict[str, object] = {}
+        task_backed_records: dict[str, TaskRecord] = {}
         for task in self._task_repo.list_by_session(session_id):
             if task.envelope.parent_task_id is None:
                 root_tasks_by_run[task.envelope.trace_id] = task
-        records = [
-            record
+                continue
+            assigned_instance_id = str(task.assigned_instance_id or "").strip()
+            assigned_role_id = str(task.envelope.role_id or "").strip()
+            if (
+                not assigned_instance_id
+                or not assigned_role_id
+                or self._is_reserved_system_role(assigned_role_id)
+            ):
+                continue
+            existing_task = task_backed_records.get(assigned_instance_id)
+            if existing_task is None or (
+                task.updated_at,
+                task.created_at,
+            ) >= (
+                existing_task.updated_at,
+                existing_task.created_at,
+            ):
+                task_backed_records[assigned_instance_id] = task
+        agent_records_by_instance = {
+            record.instance_id: record
             for record in self._agent_repo.list_by_session(session_id)
-            if self._is_normal_mode_subagent_record(record, session=session)
+        }
+        projected_rows = [
+            self._task_backed_subagent_projection(
+                session=session,
+                task_record=task_record,
+                agent_record=agent_records_by_instance.get(instance_id),
+            )
+            for instance_id, task_record in task_backed_records.items()
         ]
-        records.sort(key=lambda item: (item.updated_at, item.created_at), reverse=True)
-        return tuple(
-            {
-                **self._normal_mode_subagent_projection(record),
-                "title": self._subagent_title_for_run(
-                    run_id=record.run_id,
-                    root_tasks_by_run=root_tasks_by_run,
-                ),
-            }
-            for record in records
+        for record in agent_records_by_instance.values():
+            if record.instance_id in task_backed_records:
+                continue
+            if not self._is_session_subagent_record(record):
+                continue
+            projected_rows.append(
+                {
+                    **self._session_subagent_projection(record),
+                    "title": self._subagent_title_for_run(
+                        run_id=record.run_id,
+                        root_tasks_by_run=root_tasks_by_run,
+                    ),
+                }
+            )
+        projected_rows.sort(
+            key=lambda item: (
+                self._session_subagent_sort_priority_for_projection(item),
+                str(item.get("updated_at") or ""),
+                str(item.get("created_at") or ""),
+            ),
+            reverse=True,
         )
+        return tuple(projected_rows)
+
+    def list_normal_mode_subagents(
+        self, session_id: str
+    ) -> tuple[dict[str, object], ...]:
+        _ = self._session_repo.get(session_id)
+        return self.list_session_subagents(session_id)
 
     def list_agents_in_session(self, session_id: str) -> tuple[dict[str, object], ...]:
         session = self._session_repo.get(session_id)
@@ -1327,7 +1370,7 @@ class SessionService:
             "reflection_updated_at": reflection["updated_at"],
         }
 
-    def _normal_mode_subagent_projection(
+    def _session_subagent_projection(
         self,
         record: AgentRuntimeRecord,
     ) -> dict[str, object]:
@@ -1492,9 +1535,126 @@ class SessionService:
         *,
         session: SessionRecord,
     ) -> bool:
-        return session.session_mode == SessionMode.NORMAL and str(
-            record.run_id
-        ).strip().startswith("subagent_run_")
+        return session.session_mode == SessionMode.NORMAL and (
+            SessionService._is_session_subagent_record(record)
+        )
+
+    @staticmethod
+    def _is_session_subagent_record(record: AgentRuntimeRecord) -> bool:
+        return str(record.run_id).strip().startswith("subagent_run_")
+
+    def _session_subagent_sort_priority(
+        self,
+        record: AgentRuntimeRecord,
+    ) -> int:
+        runtime = self._run_runtime_repo.get(record.run_id)
+        if runtime is None:
+            return 0
+        if runtime.status in {
+            RunRuntimeStatus.RUNNING,
+            RunRuntimeStatus.PAUSED,
+            RunRuntimeStatus.QUEUED,
+            RunRuntimeStatus.STOPPING,
+        }:
+            return 2
+        if runtime.status == RunRuntimeStatus.COMPLETED:
+            return 1
+        return 0
+
+    @staticmethod
+    def _session_subagent_sort_priority_for_projection(
+        projection: dict[str, object],
+    ) -> int:
+        run_status = str(projection.get("run_status") or "").strip().lower()
+        if run_status in {"running", "paused", "queued", "stopping", "assigned"}:
+            return 2
+        if run_status == "completed":
+            return 1
+        return 0
+
+    def _task_backed_subagent_projection(
+        self,
+        *,
+        session: SessionRecord,
+        task_record: TaskRecord,
+        agent_record: AgentRuntimeRecord | None,
+    ) -> dict[str, object]:
+        instance_id = str(task_record.assigned_instance_id or "").strip()
+        role_id = str(task_record.envelope.role_id or "").strip()
+        if agent_record is not None:
+            reflection = self._reflection_projection(agent_record)
+            runtime_system_prompt = agent_record.runtime_system_prompt
+            runtime_tools_json = agent_record.runtime_tools_json
+            conversation_id = (
+                agent_record.conversation_id
+                or build_instance_conversation_id(
+                    session.session_id,
+                    role_id,
+                    instance_id,
+                )
+            )
+            workspace_id = agent_record.workspace_id
+            created_at = agent_record.created_at.isoformat()
+            updated_at = agent_record.updated_at.isoformat()
+        else:
+            reflection = {
+                "preview": "",
+                "updated_at": None,
+            }
+            runtime_system_prompt = ""
+            runtime_tools_json = ""
+            conversation_id = build_instance_conversation_id(
+                session.session_id,
+                role_id,
+                instance_id,
+            )
+            workspace_id = session.workspace_id
+            created_at = task_record.created_at.isoformat()
+            updated_at = task_record.updated_at.isoformat()
+        title = str(task_record.envelope.title or "").strip()
+        if not title:
+            title = task_record.envelope.objective[:80]
+        task_status = task_record.status.value
+        return {
+            "run_id": str(
+                agent_record.run_id
+                if agent_record is not None
+                else task_record.envelope.trace_id
+            ),
+            "trace_id": str(
+                agent_record.trace_id
+                if agent_record is not None
+                else task_record.envelope.trace_id
+            ),
+            "session_id": session.session_id,
+            "instance_id": instance_id,
+            "role_id": role_id,
+            "workspace_id": workspace_id,
+            "conversation_id": conversation_id,
+            "status": task_status,
+            "runtime_system_prompt": runtime_system_prompt,
+            "runtime_tools_json": runtime_tools_json,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "reflection_summary_preview": reflection["preview"],
+            "reflection_updated_at": reflection["updated_at"],
+            "run_status": task_status,
+            "run_phase": self._task_backed_subagent_phase(task_record.status),
+            "last_event_id": 0,
+            "checkpoint_event_id": 0,
+            "stream_connected": False,
+            "title": title,
+        }
+
+    @staticmethod
+    def _task_backed_subagent_phase(status: TaskStatus) -> str:
+        if status in {TaskStatus.CREATED, TaskStatus.ASSIGNED, TaskStatus.RUNNING}:
+            return "running"
+        if status == TaskStatus.STOPPED:
+            return "stopped"
+        if status == TaskStatus.COMPLETED:
+            return "completed"
+        return "failed"
 
     def _shared_state_snapshot(
         self,

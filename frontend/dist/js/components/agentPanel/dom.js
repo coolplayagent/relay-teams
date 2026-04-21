@@ -3,7 +3,20 @@
  * DOM helpers for the session-level subagent panel.
  */
 export function getDrawer() {
-    return document.getElementById('agent-drawer');
+    const existing = document.getElementById('agent-drawer');
+    if (existing) {
+        return existing;
+    }
+    if (typeof document?.createElement !== 'function' || !document.body) {
+        return null;
+    }
+    const scratch = document.createElement('div');
+    scratch.id = 'agent-drawer';
+    scratch.hidden = true;
+    scratch.setAttribute('aria-hidden', 'true');
+    scratch.style.display = 'none';
+    document.body.appendChild(scratch);
+    return scratch;
 }
 
 export function getSubagentCard() {

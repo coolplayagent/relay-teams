@@ -606,6 +606,14 @@
     background: var(--bg-surface);
 }
 
+.round-nav-float.round-nav-inline {
+    right: auto;
+    top: auto;
+    width: auto;
+    max-height: none;
+    margin: 0 0 1rem;
+}
+
 .round-nav-item {
     border-radius: 8px;
 }

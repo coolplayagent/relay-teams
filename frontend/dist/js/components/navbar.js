@@ -7,6 +7,7 @@ import { els } from '../utils/dom.js';
 const RAIL_RESIZING_CLASS = 'is-resizing-rails';
 
 export function setupNavbarBindings() {
+    _removeLegacyRightRail();
     _initSidebarResize();
     _initRightRailResize();
 
@@ -58,6 +59,16 @@ export function setupNavbarBindings() {
             document.body.classList.add('light-theme');
         }
     }
+}
+
+function _removeLegacyRightRail() {
+    const toggleSubagentsBtn = document.getElementById('toggle-subagents');
+    const rightRailResizer = document.getElementById('right-rail-resizer');
+    const rightRail = document.getElementById('right-rail');
+
+    toggleSubagentsBtn?.remove?.();
+    rightRailResizer?.remove?.();
+    rightRail?.remove?.();
 }
 
 function _initSidebarResize() {
@@ -125,7 +136,7 @@ function _initSidebarResize() {
     els.sidebarResizer.addEventListener('mousedown', (e) => {
         if (els.sidebar.classList.contains('collapsed')) return;
         dragging = true;
-        dragRightRailWidth = getRailWidth(document.getElementById('right-rail'), 280);
+        dragRightRailWidth = getRailWidth(document.getElementById('right-rail'), 0);
         els.sidebarResizer.classList.add('dragging');
         setRailResizeDragging(true);
         window.addEventListener('mousemove', onMove);

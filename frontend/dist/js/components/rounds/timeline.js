@@ -39,7 +39,7 @@ export async function loadSessionRounds(sessionId, options = {}) {
         const page = await fetchInitialRoundsPage(sessionId);
         applyRoundPage(page, { prepend: false });
         syncExportedState();
-        if (options.render !== false && !shouldPreserveSubagentView(sessionId)) {
+        if (options.render !== false) {
             renderSessionTimeline(roundsState.currentRounds, { preserveScroll: false });
         }
     } catch (e) {
@@ -94,9 +94,7 @@ export function createLiveRound(runId, intentText, intentParts = null) {
         );
     }
     syncExportedState();
-    if (!shouldPreserveSubagentView(state.currentSessionId)) {
-        renderSessionTimeline(roundsState.currentRounds, { preserveScroll: false });
-    }
+    renderSessionTimeline(roundsState.currentRounds, { preserveScroll: false });
 
     const section = document.getElementById(roundSectionId(safeRunId));
     if (section) {
@@ -409,6 +407,7 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
 
     schedulePostLayoutRoundSync(container);
     syncRetryTimelineTimer();
+    void syncInlineSubagentSessionView();
 }
 
 function bindScrollSync() {
@@ -878,6 +877,20 @@ function pickDefinedRoundOverlay(overlay) {
         }
     });
     return next;
+}
+
+async function syncInlineSubagentSessionView() {
+    const active = state.activeSubagentSession;
+    if (!active || typeof active !== 'object') {
+        return;
+    }
+    if (String(active.sessionId || '').trim() !== String(state.currentSessionId || '').trim()) {
+        return;
+    }
+    const subagentSessions = await import('../subagentSessions.js');
+    if (typeof subagentSessions.renderActiveSubagentSession === 'function') {
+        await subagentSessions.renderActiveSubagentSession();
+    }
 }
 
 function patchRoundHeader(round, roundIndex) {

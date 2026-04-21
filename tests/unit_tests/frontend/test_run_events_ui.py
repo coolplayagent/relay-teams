@@ -27,6 +27,8 @@ console.log(JSON.stringify({
     rememberCalls: globalThis.__rememberLiveSubagentCalls,
     refreshCalls: globalThis.__refreshSubagentRailCalls,
     openCalls: globalThis.__openAgentPanelCalls,
+    openSessionCalls: globalThis.__openSubagentSessionCalls,
+    rememberSessionCalls: globalThis.__rememberSessionSubagentCalls,
     instanceRoleMap: state.instanceRoleMap,
     roleInstanceMap: state.roleInstanceMap,
     activeAgentRoleId: state.activeAgentRoleId,
@@ -42,7 +44,31 @@ console.log(JSON.stringify({
             "options": {"preserveSelection": True},
         }
     ]
-    assert payload["openCalls"] == [{"instanceId": "writer-1", "roleId": "writer"}]
+    assert payload["openCalls"] == []
+    assert payload["openSessionCalls"] == [
+        {
+            "sessionId": "session-1",
+            "record": {
+                "sessionId": "session-1",
+                "instanceId": "writer-1",
+                "roleId": "writer",
+                "runId": "",
+                "status": "running",
+            },
+        }
+    ]
+    assert payload["rememberSessionCalls"] == [
+        {
+            "sessionId": "session-1",
+            "record": {
+                "instance_id": "writer-1",
+                "role_id": "writer",
+                "run_id": "",
+                "status": "running",
+            },
+            "options": {"autoActivate": True},
+        }
+    ]
     assert payload["instanceRoleMap"] == {"writer-1": "writer"}
     assert payload["roleInstanceMap"] == {"writer": "writer-1"}
     assert payload["activeAgentRoleId"] == "writer"
@@ -70,7 +96,7 @@ console.log(JSON.stringify({
     rememberCalls: globalThis.__rememberLiveSubagentCalls,
     refreshCalls: globalThis.__refreshSubagentRailCalls,
     openCalls: globalThis.__openAgentPanelCalls,
-    rememberSessionCalls: globalThis.__rememberNormalModeSubagentSessionCalls,
+    rememberSessionCalls: globalThis.__rememberSessionSubagentCalls,
     activeAgentRoleId: state.activeAgentRoleId,
     activeAgentInstanceId: state.activeAgentInstanceId,
 }));
@@ -89,6 +115,7 @@ console.log(JSON.stringify({
                 "run_id": "subagent_run_deadbeef",
                 "status": "running",
             },
+            "options": {"autoActivate": False},
         }
     ]
     assert payload["activeAgentRoleId"] == "writer"
@@ -254,7 +281,7 @@ handleSubagentRunTerminal(
 
 console.log(JSON.stringify({
     finalizeCalls: globalThis.__finalizeStreamCalls,
-    statusCalls: globalThis.__updateNormalModeSubagentSessionStatusCalls,
+    statusCalls: globalThis.__updateSessionSubagentStatusCalls,
     settleCalls: globalThis.__settleActiveSubagentSessionAfterTerminalCalls,
 }));
 """.strip(),
@@ -371,7 +398,7 @@ handleModelStepFinished(
 
 console.log(JSON.stringify({
     finalizeCalls: globalThis.__finalizeStreamCalls,
-    statusCalls: globalThis.__updateNormalModeSubagentSessionStatusCalls,
+    statusCalls: globalThis.__updateSessionSubagentStatusCalls,
 }));
 """.strip(),
     )
@@ -529,8 +556,12 @@ export function getActiveSubagentSessionStreamContainer() {
     return globalThis.__activeSubagentSessionStreamContainer || null;
 }
 
-export function rememberNormalModeSubagentSession(sessionId, record) {
-    globalThis.__rememberNormalModeSubagentSessionCalls.push({ sessionId, record });
+export function openSubagentSession(sessionId, record) {
+    globalThis.__openSubagentSessionCalls.push({ sessionId, record });
+}
+
+export function rememberSessionSubagent(sessionId, record, options = {}) {
+    globalThis.__rememberSessionSubagentCalls.push({ sessionId, record, options });
 }
 
 export async function renderActiveSubagentSession() {
@@ -541,8 +572,8 @@ export function settleActiveSubagentSessionAfterTerminal(instanceId) {
     globalThis.__settleActiveSubagentSessionAfterTerminalCalls.push(instanceId);
 }
 
-export function updateNormalModeSubagentSessionStatus(sessionId, instanceId, status) {
-    globalThis.__updateNormalModeSubagentSessionStatusCalls.push({
+export function updateSessionSubagentStatus(sessionId, instanceId, status) {
+    globalThis.__updateSessionSubagentStatusCalls.push({
         sessionId,
         instanceId,
         status,
@@ -637,9 +668,10 @@ export function coordinatorContainerFor() {
 globalThis.__rememberLiveSubagentCalls = [];
 globalThis.__refreshSubagentRailCalls = [];
 globalThis.__openAgentPanelCalls = [];
-globalThis.__rememberNormalModeSubagentSessionCalls = [];
+globalThis.__openSubagentSessionCalls = [];
+globalThis.__rememberSessionSubagentCalls = [];
 globalThis.__renderActiveSubagentSessionCalls = [];
-globalThis.__updateNormalModeSubagentSessionStatusCalls = [];
+globalThis.__updateSessionSubagentStatusCalls = [];
 globalThis.__finalizeStreamCalls = [];
 globalThis.__settleActiveSubagentSessionAfterTerminalCalls = [];
 globalThis.__sysLogCalls = [];

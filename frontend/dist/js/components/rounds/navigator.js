@@ -1,6 +1,6 @@
 /**
  * components/rounds/navigator.js
- * Floating round navigator rendering and active-state sync.
+ * Inline round navigator rendered inside the chat flow.
  */
 import { esc, roundStateLabel, roundStateTone } from './utils.js';
 import { formatMessage, t } from '../../utils/i18n.js';
@@ -10,20 +10,8 @@ let navRounds = [];
 let navActiveRunId = null;
 let navOnSelectRound = null;
 const ROUND_NAV_COLLAPSED_KEY = 'agent_teams_round_nav_collapsed';
-const ROUND_NAV_POSITION_KEY = 'agent_teams_round_nav_position';
-const ROUND_NAV_WIDTH_KEY = 'agent_teams_round_nav_width';
 const collapsedTodoRunIds = new Set();
 const expandedTodoRunIds = new Set();
-const DEFAULT_NAV_WIDTH = 270;
-const COLLAPSED_NAV_WIDTH = 180;
-const MIN_NAV_WIDTH = 220;
-const MAX_NAV_WIDTH = 560;
-
-/** Persistent offset relative to chat container: { fromRight, fromTop }. */
-let currentOffset = null;
-let resizeObserver = null;
-let scheduledOffsetFrame = 0;
-let currentWidth = DEFAULT_NAV_WIDTH;
 
 export function renderRoundNavigator(rounds, onSelectRound, options = {}) {
     navRounds = Array.isArray(rounds) ? rounds : [];
@@ -32,73 +20,45 @@ export function renderRoundNavigator(rounds, onSelectRound, options = {}) {
         navActiveRunId = String(options.activeRunId || '').trim() || null;
     }
 
-    let nav = document.getElementById('round-nav-float');
-    if (!nav) {
-        nav = document.createElement('div');
-        nav.id = 'round-nav-float';
-        nav.className = 'round-nav-float';
-        document.body.appendChild(nav);
-        currentOffset = loadOffset();
-        currentWidth = loadWidth();
-        applyNavWidth(nav, currentWidth);
-        installDrag(nav);
-        installResize(nav);
-        installResizeWatch(nav);
-    }
-
-    if (navRounds.length === 0) {
-        nav.style.display = 'none';
-        nav.innerHTML = '';
+    const host = getChatMessagesHost();
+    if (!host) {
         return;
     }
 
-    const list = nav.querySelector('.round-nav-list');
-    const preservedScrollTop = list?.scrollTop || 0;
-    renderNavigatorDom(nav, { scrollTop: preservedScrollTop });
-    scheduleOffsetApply(nav);
+    let nav = host.querySelector('#round-nav-float');
+    if (navRounds.length === 0) {
+        nav?.remove();
+        return;
+    }
+    if (!nav) {
+        nav = document.createElement('section');
+        nav.id = 'round-nav-float';
+        nav.className = 'round-nav-float round-nav-inline';
+    }
+
+    renderNavigatorDom(nav);
+    if (host.firstElementChild !== nav) {
+        host.prepend(nav);
+    }
 }
 
 export function hideRoundNavigator() {
-    const nav = document.getElementById('round-nav-float');
-    if (!nav) {
-        return;
-    }
-    nav.style.display = 'none';
+    getChatMessagesHost()?.querySelector?.('#round-nav-float')?.remove?.();
 }
 
 export function setActiveRoundNav(runId) {
-    navActiveRunId = runId || null;
-    const nav = document.getElementById('round-nav-float');
-    if (!nav || navRounds.length === 0) return;
-    const list = nav.querySelector('.round-nav-list');
-    const preservedScrollTop = list?.scrollTop || 0;
-    renderNavigatorDom(nav, { scrollTop: preservedScrollTop });
-    scheduleOffsetApply(nav);
-    const active = nav.querySelector('.round-nav-item.active');
-    if (active) {
-        active.scrollIntoView({ block: 'nearest' });
+    navActiveRunId = String(runId || '').trim() || null;
+    const nav = getChatMessagesHost()?.querySelector?.('#round-nav-float');
+    if (!nav || navRounds.length === 0) {
+        return;
     }
+    renderNavigatorDom(nav);
+    nav.querySelector('.round-nav-item.active')?.scrollIntoView?.({ block: 'nearest' });
 }
 
-/* ---- Chat container bounds ---- */
-
-function getChatRect() {
-    const chat = document.querySelector('.chat-container');
-    if (chat) return chat.getBoundingClientRect();
-    return new DOMRect(0, 0, window.innerWidth, window.innerHeight);
-}
-
-/* ---- Rendering ---- */
-
-function renderNavigatorDom(nav, options = {}) {
+function renderNavigatorDom(nav) {
     const isCollapsed = loadCollapsedState();
-    nav.style.display = 'flex';
     nav.classList.toggle('collapsed', isCollapsed);
-    if (isCollapsed) {
-        applyCollapsedWidth(nav);
-    } else {
-        applyNavWidth(nav, currentWidth);
-    }
     nav.innerHTML = `
         <div class="round-nav-header">
             <div class="round-nav-title">Rounds</div>
@@ -107,30 +67,21 @@ function renderNavigatorDom(nav, options = {}) {
             </button>
         </div>
         <div class="round-nav-list"></div>
-        <div class="round-nav-resizer" aria-hidden="true"></div>
     `;
 
     const toggle = nav.querySelector('.round-nav-toggle');
     if (toggle) {
         toggle.onclick = () => {
-            // Record right edge before resize
-            const navRect = nav.getBoundingClientRect();
-            const chatRect = getChatRect();
-            const fromRight = chatRect.right - navRect.right;
-
-            const next = !loadCollapsedState();
-            saveCollapsedState(next);
+            saveCollapsedState(!loadCollapsedState());
             renderNavigatorDom(nav);
-
-            // Pin right edge: compute new fromRight keeping the right side anchored
-            currentOffset = { fromRight, fromTop: currentOffset ? currentOffset.fromTop : (navRect.top - chatRect.top) };
-            scheduleOffsetApply(nav);
-            persistOffset();
         };
     }
 
     const list = nav.querySelector('.round-nav-list');
-    if (!list) return;
+    if (!list) {
+        return;
+    }
+
     navRounds.forEach((round, idx) => {
         const node = document.createElement('div');
         node.className = 'round-nav-node';
@@ -163,7 +114,9 @@ function renderNavigatorDom(nav, options = {}) {
         item.onclick = () => {
             navActiveRunId = round.run_id;
             setActiveRoundNav(round.run_id);
-            if (navOnSelectRound) navOnSelectRound(round);
+            if (navOnSelectRound) {
+                navOnSelectRound(round);
+            }
         };
         node.appendChild(item);
 
@@ -172,13 +125,8 @@ function renderNavigatorDom(nav, options = {}) {
             node.classList.add('has-todo');
             node.appendChild(todoBranch);
         }
-
         list.appendChild(node);
     });
-
-    if (typeof options.scrollTop === 'number') {
-        list.scrollTop = options.scrollTop;
-    }
 }
 
 function buildRoundNavTodoBranch(round, { isCollapsed }) {
@@ -293,227 +241,9 @@ function resolveVisibleTodoRunId() {
     return String(latestTodoRound?.run_id || '').trim();
 }
 
-/* ---- Offset positioning ---- */
-
-const DEFAULT_FROM_RIGHT = 16;
-const DEFAULT_FROM_TOP = 12;
-
-/** Convert stored offset -> viewport left/top, clamped to chat bounds. */
-function applyOffset(nav) {
-    const chatRect = getChatRect();
-    const navW = loadCollapsedState() ? COLLAPSED_NAV_WIDTH : currentWidth;
-    const navH = nav.offsetHeight;
-
-    if (!currentOffset) {
-        currentOffset = { fromRight: DEFAULT_FROM_RIGHT, fromTop: DEFAULT_FROM_TOP };
-    }
-
-    // Compute desired left/top from offset
-    let left = chatRect.right - currentOffset.fromRight - navW;
-    let top = chatRect.top + currentOffset.fromTop;
-
-    // Clamp within chat container
-    left = Math.max(chatRect.left, Math.min(left, chatRect.right - navW));
-    top = Math.max(chatRect.top, Math.min(top, chatRect.bottom - navH));
-
-    nav.style.left = left + 'px';
-    nav.style.top = top + 'px';
-    nav.style.right = 'auto';
-}
-
-function clampNavWidth(width) {
-    const chatRect = getChatRect();
-    const maxWithinChat = Math.max(MIN_NAV_WIDTH, Math.floor(chatRect.width - 24));
-    return Math.max(MIN_NAV_WIDTH, Math.min(Math.min(MAX_NAV_WIDTH, maxWithinChat), Math.floor(width)));
-}
-
-function applyNavWidth(nav, width) {
-    const nextWidth = clampNavWidth(width);
-    currentWidth = nextWidth;
-    nav.style.width = `${nextWidth}px`;
-}
-
-function applyCollapsedWidth(nav) {
-    nav.style.width = `${COLLAPSED_NAV_WIDTH}px`;
-}
-
-function scheduleOffsetApply(nav) {
-    if (scheduledOffsetFrame) {
-        window.cancelAnimationFrame(scheduledOffsetFrame);
-    }
-    scheduledOffsetFrame = window.requestAnimationFrame(() => {
-        scheduledOffsetFrame = 0;
-        applyOffset(nav);
-    });
-}
-
-/** Derive offset from current viewport position. */
-function captureOffset(nav) {
-    const chatRect = getChatRect();
-    const navRect = nav.getBoundingClientRect();
-    currentOffset = {
-        fromRight: chatRect.right - navRect.right,
-        fromTop: navRect.top - chatRect.top,
-    };
-}
-
-/* ---- Drag support ---- */
-
-function installDrag(nav) {
-    let dragging = false;
-    let startX = 0;
-    let startY = 0;
-    let origX = 0;
-    let origY = 0;
-    const DRAG_THRESHOLD = 4;
-    let moved = false;
-
-    const header = () => nav.querySelector('.round-nav-header');
-
-    nav.addEventListener('pointerdown', (e) => {
-        const hdr = header();
-        if (!hdr || !hdr.contains(e.target)) return;
-        if (e.target.closest('.round-nav-toggle')) return;
-        if (e.target.closest('.round-nav-resizer')) return;
-
-        dragging = true;
-        moved = false;
-        startX = e.clientX;
-        startY = e.clientY;
-
-        const rect = nav.getBoundingClientRect();
-        origX = rect.left;
-        origY = rect.top;
-
-        nav.setPointerCapture(e.pointerId);
-        e.preventDefault();
-    });
-
-    nav.addEventListener('pointermove', (e) => {
-        if (!dragging) return;
-        const dx = e.clientX - startX;
-        const dy = e.clientY - startY;
-        if (!moved && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
-        moved = true;
-
-        nav.classList.add('dragging');
-
-        const chatRect = getChatRect();
-        let newLeft = origX + dx;
-        let newTop = origY + dy;
-
-        // Clamp within chat container
-        newLeft = Math.max(chatRect.left, Math.min(newLeft, chatRect.right - nav.offsetWidth));
-        newTop = Math.max(chatRect.top, Math.min(newTop, chatRect.bottom - nav.offsetHeight));
-
-        nav.style.left = newLeft + 'px';
-        nav.style.top = newTop + 'px';
-        nav.style.right = 'auto';
-    });
-
-    nav.addEventListener('pointerup', (e) => {
-        if (!dragging) return;
-        dragging = false;
-        nav.releasePointerCapture(e.pointerId);
-        nav.classList.remove('dragging');
-
-        if (moved) {
-            captureOffset(nav);
-            persistOffset();
-        }
-    });
-}
-
-function installResize(nav) {
-    let resizing = false;
-    let startX = 0;
-    let startWidth = currentWidth;
-
-    nav.addEventListener('pointerdown', (e) => {
-        if (!e.target.closest('.round-nav-resizer')) return;
-        resizing = true;
-        startX = e.clientX;
-        startWidth = currentWidth;
-        nav.classList.add('resizing');
-        nav.setPointerCapture(e.pointerId);
-        e.preventDefault();
-    });
-
-    nav.addEventListener('pointermove', (e) => {
-        if (!resizing) return;
-        const deltaX = e.clientX - startX;
-        applyNavWidth(nav, startWidth + deltaX);
-        scheduleOffsetApply(nav);
-    });
-
-    nav.addEventListener('pointerup', (e) => {
-        if (!resizing) return;
-        resizing = false;
-        nav.classList.remove('resizing');
-        nav.releasePointerCapture(e.pointerId);
-        persistWidth(currentWidth);
-    });
-}
-
-/* ---- Resize watch: re-clamp when chat container changes ---- */
-
-function installResizeWatch(nav) {
-    const chat = document.querySelector('.chat-container');
-    if (!chat) return;
-    resizeObserver = new ResizeObserver(() => {
-        if (nav.style.display === 'none') return;
-        if (loadCollapsedState()) {
-            applyCollapsedWidth(nav);
-        } else {
-            applyNavWidth(nav, currentWidth);
-        }
-        scheduleOffsetApply(nav);
-    });
-    resizeObserver.observe(chat);
-}
-
-/* ---- Persistence ---- */
-
-function loadOffset() {
-    try {
-        const raw = localStorage.getItem(ROUND_NAV_POSITION_KEY);
-        if (!raw) return null;
-        const o = JSON.parse(raw);
-        if (typeof o.fromRight === 'number' && typeof o.fromTop === 'number') return o;
-    } catch { /* ignore */ }
-    return null;
-}
-
-function loadWidth() {
-    try {
-        const raw = localStorage.getItem(ROUND_NAV_WIDTH_KEY);
-        if (!raw || !/^\d+$/.test(raw)) {
-            return DEFAULT_NAV_WIDTH;
-        }
-        return clampNavWidth(Number(raw));
-    } catch {
-        return DEFAULT_NAV_WIDTH;
-    }
-}
-
-function persistOffset() {
-    try {
-        if (!currentOffset) return;
-        localStorage.setItem(ROUND_NAV_POSITION_KEY, JSON.stringify(currentOffset));
-    } catch { /* ignore */ }
-}
-
-function persistWidth(width) {
-    try {
-        localStorage.setItem(ROUND_NAV_WIDTH_KEY, String(clampNavWidth(width)));
-    } catch { /* ignore */ }
-}
-
-/* ---- Collapse persistence ---- */
-
 function loadCollapsedState() {
     try {
-        return localStorage.getItem(ROUND_NAV_COLLAPSED_KEY) === '1';
+        return window.localStorage?.getItem(ROUND_NAV_COLLAPSED_KEY) === '1';
     } catch {
         return false;
     }
@@ -521,8 +251,19 @@ function loadCollapsedState() {
 
 function saveCollapsedState(collapsed) {
     try {
-        localStorage.setItem(ROUND_NAV_COLLAPSED_KEY, collapsed ? '1' : '0');
+        if (collapsed) {
+            window.localStorage?.setItem(ROUND_NAV_COLLAPSED_KEY, '1');
+            return;
+        }
+        window.localStorage?.removeItem(ROUND_NAV_COLLAPSED_KEY);
     } catch {
         return;
     }
+}
+
+function getChatMessagesHost() {
+    return document?.getElementById?.('chat-messages')
+        || document?.querySelector?.('#chat-messages')
+        || document?.body
+        || null;
 }

@@ -199,7 +199,7 @@ def list_session_subagents(
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     try:
-        return list(service.list_normal_mode_subagents(session_id))
+        return list(service.list_session_subagents(session_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 

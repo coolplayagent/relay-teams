@@ -2293,7 +2293,7 @@ def test_browser_round_todo_card_renders_and_collapses(
         re.compile(r".*\bactive\b.*"), timeout=_WAIT_TIMEOUT_MS
     )
     expect(round_nav.locator(".round-nav-resizer")).to_have_count(
-        1,
+        0,
         timeout=_WAIT_TIMEOUT_MS,
     )
     expect(todo_card).to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
@@ -2320,16 +2320,12 @@ def test_browser_round_todo_card_renders_and_collapses(
         timeout=_WAIT_TIMEOUT_MS,
     )
 
-    expanded_width = round_nav.evaluate(
-        "element => element.getBoundingClientRect().width"
-    )
     round_nav.locator(".round-nav-toggle").click()
-    collapsed_width = round_nav.evaluate(
-        "element => element.getBoundingClientRect().width"
-    )
-    assert collapsed_width < expanded_width
+    expect(round_nav).to_have_class(re.compile(r".*\bcollapsed\b.*"))
+    expect(round_nav.locator(".round-nav-list")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
 
     round_nav.locator(".round-nav-toggle").click()
+    expect(round_nav).not_to_have_class(re.compile(r".*\bcollapsed\b.*"))
     expect(todo_card).to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
 
     todo_card.locator(".round-todo-summary").click()

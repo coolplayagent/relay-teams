@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
-from typing import Any, cast
+from typing import cast
 
 
 def test_reflect_button_shows_loading_then_success_then_resets(tmp_path: Path) -> None:
@@ -152,67 +152,54 @@ console.log(JSON.stringify({
     assert payload["railCalls"] == 2
 
 
-def test_panel_tabs_are_deselected_by_default_and_activate_on_click(
+def test_panel_collapses_completed_cards_and_keeps_diagnostics_folded_by_default(
     tmp_path: Path,
 ) -> None:
     payload = _run_panel_factory_script(
         tmp_path=tmp_path,
         runner_source="""
-const { createPanel } = await import('./panelFactory.mjs');
+const { createPanel, setPanelExpandedState } = await import('./panelFactory.mjs');
 
 const panel = createPanel('inst-1', 'writer', () => undefined);
-const tabs = panel.panelEl.querySelectorAll('.agent-panel-tab[data-tab]');
-const panes = panel.panelEl.querySelectorAll('.agent-panel-tabpane[data-tab]');
+const toggle = panel.panelEl.querySelector('.agent-panel-toggle');
+const diagnostics = panel.panelEl.querySelector('.agent-panel-diagnostics');
+const content = panel.panelEl.querySelector('.agent-panel-content');
+const initial = {
+    expanded: panel.panelEl.dataset.expanded,
+    ariaExpanded: toggle.getAttribute('aria-expanded'),
+    contentHidden: content.hidden,
+    diagnosticsOpen: diagnostics.open,
+    diagnosticsLabel: panel.panelEl.querySelector('.agent-panel-diagnostics-toggle').textContent,
+};
 
-const initialTabState = tabs.map(t => ({
-    tab: t.dataset.tab,
-    selected: t.getAttribute('aria-selected'),
-}));
-const initialPaneState = panes.map(p => ({
-    tab: p.dataset.tab,
-    hidden: p.hidden,
-}));
+setPanelExpandedState(panel.panelEl, false);
 
-// click the first tab (prompt)
-tabs[0].onclick();
+const afterCollapse = {
+    expanded: panel.panelEl.dataset.expanded,
+    ariaExpanded: toggle.getAttribute('aria-expanded'),
+    contentHidden: content.hidden,
+};
 
-const afterClickTabState = tabs.map(t => ({
-    tab: t.dataset.tab,
-    selected: t.getAttribute('aria-selected'),
-}));
-const afterClickPaneState = panes.map(p => ({
-    tab: p.dataset.tab,
-    hidden: p.hidden,
-}));
+diagnostics.open = true;
+diagnostics.dispatch('toggle');
 
-console.log(JSON.stringify({ initialTabState, initialPaneState, afterClickTabState, afterClickPaneState }));
+console.log(JSON.stringify({ initial, afterCollapse, diagnosticsLabel: panel.panelEl.querySelector('.agent-panel-diagnostics-toggle').textContent }));
 """.strip(),
     )
 
-    initial_tabs = cast(list[dict[str, Any]], payload["initialTabState"])
-    initial_panes = cast(list[dict[str, Any]], payload["initialPaneState"])
-    after_tabs = cast(list[dict[str, Any]], payload["afterClickTabState"])
-    after_panes = cast(list[dict[str, Any]], payload["afterClickPaneState"])
-
-    # all tabs deselected initially
-    for tab_info in initial_tabs:
-        assert tab_info["selected"] == "false"
-    # all panes hidden initially
-    for pane_info in initial_panes:
-        assert pane_info["hidden"] is True
-
-    # after clicking prompt tab, only prompt is selected
-    for tab_info in after_tabs:
-        if tab_info["tab"] == "prompt":
-            assert tab_info["selected"] == "true"
-        else:
-            assert tab_info["selected"] == "false"
-    # after clicking prompt tab, only prompt pane is visible
-    for pane_info in after_panes:
-        if pane_info["tab"] == "prompt":
-            assert pane_info["hidden"] is False
-        else:
-            assert pane_info["hidden"] is True
+    assert payload["initial"] == {
+        "expanded": "true",
+        "ariaExpanded": "true",
+        "contentHidden": False,
+        "diagnosticsOpen": False,
+        "diagnosticsLabel": "rounds.expand",
+    }
+    assert payload["afterCollapse"] == {
+        "expanded": "false",
+        "ariaExpanded": "false",
+        "contentHidden": True,
+    }
+    assert payload["diagnosticsLabel"] == "rounds.collapse"
 
 
 def _run_panel_factory_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
@@ -340,6 +327,8 @@ const translations = {
     "composer.send_title": "Send (Enter)",
     "subagent.delete_reflection_confirm": "Delete reflection memory for this subagent role?",
     "subagent.reflection_placeholder": "Write long-term notes for this subagent role...",
+    "rounds.expand": "rounds.expand",
+    "rounds.collapse": "rounds.collapse",
 };
 
 export function t(key) {
@@ -461,8 +450,11 @@ class FakeElement {{
             '.agent-panel-refresh-reflection',
             '.agent-panel-reflection-edit',
             '.agent-panel-reflection-delete',
-            '.panel-inject-input',
-            '.panel-send-btn',
+            '.agent-panel-toggle',
+            '.agent-panel-preview',
+            '.agent-panel-content',
+            '.agent-panel-diagnostics',
+            '.agent-panel-diagnostics-toggle',
             '.agent-panel-scroll',
             '.agent-token-usage',
             '.agent-panel-runtime-prompt-meta',
@@ -481,24 +473,10 @@ class FakeElement {{
                 child.textContent = 'Reflect';
                 child.title = 'Refresh reflection memory';
             }}
+            if (selector === '.agent-panel-diagnostics') {{
+                child.open = false;
+            }}
             this._children.set(selector, child);
-        }}
-
-        // Register tab and pane elements for the tab bar
-        this._tabs = [];
-        this._panes = [];
-        for (const tabName of ['prompt', 'tools', 'memory', 'tasks']) {{
-            const tab = new FakeElement();
-            tab.dataset.tab = tabName;
-            tab.setAttribute('aria-selected', 'false');
-            tab.className = 'agent-panel-tab';
-            this._tabs.push(tab);
-
-            const pane = new FakeElement();
-            pane.dataset.tab = tabName;
-            pane.hidden = true;
-            pane.className = 'agent-panel-tabpane';
-            this._panes.push(pane);
         }}
     }}
 
@@ -518,13 +496,6 @@ class FakeElement {{
     }}
 
     querySelectorAll(selector) {{
-        // Tab/pane attribute selectors - return from registered arrays only
-        if (this._tabs && selector.includes('.agent-panel-tab[data-tab]')) {{
-            return [...this._tabs];
-        }}
-        if (this._panes && selector.includes('.agent-panel-tabpane[data-tab]')) {{
-            return [...this._panes];
-        }}
         const results = [];
         if (this._children.has(selector)) {{
             results.push(this._children.get(selector));
@@ -544,6 +515,13 @@ class FakeElement {{
 
     addEventListener(type, handler) {{
         this.listeners.set(type, handler);
+    }}
+
+    dispatch(type) {{
+        const handler = this.listeners.get(type);
+        if (typeof handler === 'function') {{
+            handler({{ target: this, currentTarget: this }});
+        }}
     }}
 
     setAttribute(name, value) {{

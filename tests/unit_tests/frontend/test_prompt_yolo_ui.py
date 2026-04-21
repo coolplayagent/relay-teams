@@ -215,12 +215,25 @@ export async function updateSessionTopology() {
         can_switch_mode: true,
     };
 }
+
+export async function injectSubagentMessage() {
+    globalThis.__injectCalls.push(Array.from(arguments));
+    return null;
+}
 """.strip(),
         encoding="utf-8",
     )
     (temp_dir / "mockRecovery.mjs").write_text(
         """
 export async function hydrateSessionView() {
+    return null;
+}
+
+export async function refreshSessionRecovery() {
+    return null;
+}
+
+export async function resumeRecoverableRun() {
     return null;
 }
 
@@ -239,6 +252,8 @@ export const state = {
     currentNormalRootRoleId: "MainAgent",
     currentOrchestrationPresetId: "preset-1",
     mainAgentRoleId: "MainAgent",
+    activeSubagentSession: null,
+    currentRecoverySnapshot: null,
     isGenerating: false,
     thinking: {
         enabled: false,
@@ -383,6 +398,7 @@ export const els = {
     orchestrationPresetSelect: createElement(),
     promptInput: createElement(),
     promptAttachments: createElement(),
+    promptInputHint: createElement(),
     sendBtn: createElement(),
     stopBtn: createElement(),
 };
@@ -608,12 +624,24 @@ export async function updateSessionTopology() {
         can_switch_mode: true,
     };
 }
+
+export async function injectSubagentMessage() {
+    return null;
+}
 """.strip(),
         encoding="utf-8",
     )
     (temp_dir / "mockRecovery.mjs").write_text(
         """
 export async function hydrateSessionView() {
+    return null;
+}
+
+export async function refreshSessionRecovery() {
+    return null;
+}
+
+export async function resumeRecoverableRun() {
     return null;
 }
 
@@ -631,6 +659,14 @@ export const state = {
     currentSessionCanSwitchMode: true,
     currentNormalRootRoleId: "MainAgent",
     currentOrchestrationPresetId: null,
+    activeSubagentSession: {
+        sessionId: "session-1",
+        instanceId: "inst-sub-1",
+        roleId: "writer",
+        runId: "subagent_run_1",
+        status: "completed",
+    },
+    currentRecoverySnapshot: null,
     pausedSubagent: null,
     isGenerating: false,
     yolo: true,
@@ -751,6 +787,7 @@ function createElement(initial = {}) {
 export const els = {
     promptInput: createElement({ value: "@Writer ship it" }),
     promptAttachments: createElement(),
+    promptInputHint: createElement(),
     sendBtn: createElement(),
     stopBtn: createElement({ style: { display: "none" } }),
     yoloToggle: createElement({ checked: true }),
@@ -798,6 +835,7 @@ import { state } from "./mockState.mjs";
 import { els } from "./mockDom.mjs";
 
 globalThis.__streamCalls = [];
+globalThis.__injectCalls = [];
 globalThis.__logs = [];
 globalThis.__liveRounds = [];
 globalThis.__roundMessages = [];
@@ -809,6 +847,7 @@ state.isGenerating = false;
 await handleSend();
 
 console.log(JSON.stringify({
+    injectCalls: globalThis.__injectCalls,
     streamCalls: globalThis.__streamCalls,
     liveRounds: globalThis.__liveRounds,
     roundMessages: globalThis.__roundMessages,
@@ -824,6 +863,7 @@ console.log(JSON.stringify({
     )
 
     payload = json.loads(result.stdout)
+    assert payload["injectCalls"] == []
     assert [call["text"] for call in payload["streamCalls"]] == ["ship it", "ship it"]
     assert [call["sessionId"] for call in payload["streamCalls"]] == [
         "session-1",
@@ -925,12 +965,24 @@ export async function updateSessionTopology() {
         can_switch_mode: true,
     };
 }
+
+export async function injectSubagentMessage() {
+    return null;
+}
 """.strip(),
         encoding="utf-8",
     )
     (temp_dir / "mockRecovery.mjs").write_text(
         """
 export async function hydrateSessionView() {
+    return null;
+}
+
+export async function refreshSessionRecovery() {
+    return null;
+}
+
+export async function resumeRecoverableRun() {
     return null;
 }
 
@@ -948,6 +1000,8 @@ export const state = {
     currentSessionCanSwitchMode: true,
     currentNormalRootRoleId: "MainAgent",
     currentOrchestrationPresetId: null,
+    activeSubagentSession: null,
+    currentRecoverySnapshot: null,
     pausedSubagent: null,
     isGenerating: false,
     yolo: true,
@@ -1092,6 +1146,7 @@ export const els = {
         hidden: false,
     }),
     promptAttachments: createElement({ hidden: false }),
+    promptInputHint: createElement({ hidden: false }),
     promptMentionMenu: createElement({ hidden: true }),
     sendBtn: createElement({ hidden: false }),
     stopBtn: createElement({ style: { display: "none" }, hidden: false }),
@@ -1610,12 +1665,24 @@ export async function updateSessionTopology() {
         can_switch_mode: true,
     };
 }
+
+export async function injectSubagentMessage() {
+    return null;
+}
 """.strip(),
         encoding="utf-8",
     )
     (temp_dir / "mockRecovery.mjs").write_text(
         """
 export async function hydrateSessionView() {
+    return null;
+}
+
+export async function refreshSessionRecovery() {
+    return null;
+}
+
+export async function resumeRecoverableRun() {
     return null;
 }
 
@@ -1633,6 +1700,8 @@ export const state = {{
     currentSessionCanSwitchMode: true,
     currentNormalRootRoleId: "MainAgent",
     currentOrchestrationPresetId: null,
+    activeSubagentSession: null,
+    currentRecoverySnapshot: null,
     pausedSubagent: null,
     isGenerating: false,
     yolo: true,
@@ -1778,6 +1847,7 @@ function createElement(initial = {}) {
 export const els = {
     promptInput: createElement({ value: "" }),
     promptAttachments: createElement(),
+    promptInputHint: createElement(),
     promptMentionMenu: createElement({ hidden: true }),
     promptInputStatus: createElement({ hidden: true }),
     sendBtn: createElement(),

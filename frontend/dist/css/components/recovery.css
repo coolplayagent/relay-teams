@@ -15,6 +15,17 @@
     z-index: 20;
 }
 
+.round-nav-float.round-nav-inline {
+    position: static;
+    right: auto;
+    top: auto;
+    width: auto;
+    max-height: none;
+    margin: 0 0 1rem;
+    background: var(--bg-surface);
+    z-index: auto;
+}
+
 .round-nav-header {
     display: flex;
     align-items: center;
@@ -67,6 +78,10 @@
     max-height: none;
 }
 
+.round-nav-float.round-nav-inline.collapsed {
+    width: auto;
+}
+
 .round-nav-float.collapsed .round-nav-header {
     padding: 0.4rem 0.5rem;
 }
@@ -80,6 +95,10 @@
 }
 
 .round-nav-float.collapsed .round-nav-resizer {
+    display: none;
+}
+
+.round-nav-float.round-nav-inline .round-nav-resizer {
     display: none;
 }
 

@@ -4,13 +4,10 @@
  */
 import {
     deleteAgentReflection,
-    injectSubagentMessage,
     refreshAgentReflection,
     stopRun,
     updateAgentReflection,
 } from '../../core/api.js';
-import { refreshSessionRecovery, resumeRecoverableRun } from '../../app/recovery.js';
-import { bindPanelContextIndicator, schedulePanelContextPreview } from '../contextIndicators.js';
 import { state } from '../../core/state.js';
 import { formatMessage, t } from '../../utils/i18n.js';
 import { sysLog } from '../../utils/logger.js';
@@ -19,86 +16,100 @@ import { loadAgentHistory } from './history.js';
 
 const REFLECTION_BUTTON_RESET_MS = 2400;
 
-export function createPanel(instanceId, roleId, onClose) {
-    const drawer = getDrawer();
-    if (!drawer) return null;
+export function createPanel(
+    instanceId,
+    roleId,
+    onClose,
+    { host = null, inline = false } = {},
+) {
+    const mountTarget = host || getDrawer();
+    if (!mountTarget) return null;
     void onClose;
 
     const panelEl = document.createElement('div');
-    panelEl.className = 'agent-panel';
+    panelEl.className = inline ? 'agent-panel is-inline' : 'agent-panel';
     panelEl.dataset.instanceId = instanceId;
     panelEl.style.display = 'none';
 
-    const friendlyRole = roleId
-        ? roleId.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
-        : instanceId.slice(0, 8);
-
     panelEl.innerHTML = `
-        <div class="agent-panel-controls" hidden>
-            <div class="agent-token-usage" data-instance-id="${instanceId}"></div>
+        <div class="agent-panel-topbar">
+            <button class="agent-panel-toggle" type="button" aria-expanded="true">
+                <div class="agent-panel-title">
+                    <div class="panel-role-stack">
+                        <span class="agent-panel-role-label panel-role"></span>
+                        <span class="agent-panel-instance-id panel-id"></span>
+                    </div>
+                    <div class="agent-panel-preview"></div>
+                </div>
+            </button>
+            <div class="agent-panel-topbar-meta">
+                <span class="agent-panel-top-status"></span>
+                <div class="agent-token-usage" data-instance-id="${instanceId}"></div>
+            </div>
+        </div>
+        <div class="agent-panel-content">
+            <div class="agent-panel-scroll"></div>
+            <details class="agent-panel-diagnostics">
+                <summary class="agent-panel-diagnostics-summary">
+                    <span class="agent-panel-diagnostics-title">${t('subagent.sections')}</span>
+                    <span class="agent-panel-diagnostics-toggle">${t('rounds.expand')}</span>
+                </summary>
+                <div class="agent-panel-diagnostics-body">
+                    <section class="agent-panel-diagnostic-section" data-section="prompt">
+                        <div class="agent-panel-tabpane-header">
+                            <span class="agent-panel-diagnostic-label">${t('subagent.prompt')}</span>
+                            <span class="agent-panel-runtime-prompt-meta agent-panel-section-meta"></span>
+                        </div>
+                        <div class="agent-panel-section-body agent-panel-runtime-prompt-body">${t('subagent.no_runtime_prompt')}</div>
+                    </section>
+                    <section class="agent-panel-diagnostic-section" data-section="tools">
+                        <div class="agent-panel-tabpane-header">
+                            <span class="agent-panel-diagnostic-label">${t('subagent.tools')}</span>
+                            <span class="agent-panel-runtime-tools-meta agent-panel-section-meta"></span>
+                        </div>
+                        <div class="agent-panel-section-body agent-panel-runtime-tools-body">${t('subagent.no_runtime_tools')}</div>
+                    </section>
+                    <section class="agent-panel-diagnostic-section" data-section="memory">
+                        <div class="agent-panel-tabpane-header">
+                            <span class="agent-panel-diagnostic-label">${t('subagent.memory')}</span>
+                            <span class="agent-panel-reflection-meta agent-panel-section-meta"></span>
+                            <div class="agent-panel-section-actions" aria-label="${t('subagent.reflection_actions')}">
+                                <button class="agent-panel-icon-btn agent-panel-reflection-edit" type="button" title="${t('subagent.edit_reflection')}" aria-label="${t('subagent.edit_reflection')}">
+                                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                        <path d="M16.5 3.5a2.12 2.12 0 113 3L7 19l-4 1 1-4 12.5-12.5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                                <button class="agent-panel-icon-btn agent-panel-reflection-delete" type="button" title="${t('subagent.delete_reflection')}" aria-label="${t('subagent.delete_reflection')}">
+                                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M3 6h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                        <path d="M8 6V4.5A1.5 1.5 0 019.5 3h5A1.5 1.5 0 0116 4.5V6" stroke="currentColor" stroke-width="1.8"/>
+                                        <path d="M6.5 6l1 13a1.5 1.5 0 001.5 1.4h6a1.5 1.5 0 001.5-1.4l1-13" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                                        <path d="M10 10.5v6M14 10.5v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="agent-panel-section-body agent-panel-reflection-body">${t('subagent.no_reflection_memory')}</div>
+                    </section>
+                    <section class="agent-panel-diagnostic-section" data-section="tasks">
+                        <div class="agent-panel-tabpane-header">
+                            <span class="agent-panel-diagnostic-label">${t('subagent.tasks')}</span>
+                            <span class="agent-panel-summary-meta agent-panel-section-meta">
+                                <span class="agent-panel-summary-status">${t('subagent.status_idle')}</span>
+                                <span class="agent-panel-summary-updated"></span>
+                            </span>
+                        </div>
+                        <div class="agent-panel-section-body agent-panel-summary-body">
+                            <div class="agent-panel-summary-tasks">${t('subagent.no_tasks')}</div>
+                        </div>
+                    </section>
+                </div>
+            </details>
+        </div>
+        <div class="agent-panel-bottom-actions">
             <button class="agent-panel-refresh-reflection" type="button" title="${t('subagent.reflect_title')}">${t('subagent.reflect')}</button>
             <button class="agent-panel-stop" type="button" title="${t('subagent.stop_title')}">${t('subagent.stop')}</button>
-        </div>
-        <div class="agent-panel-tabbar" role="tablist" aria-label="${t('subagent.sections')}">
-            <button class="agent-panel-tab" data-tab="prompt" role="tab" aria-selected="false">${t('subagent.prompt')}</button>
-            <button class="agent-panel-tab" data-tab="tools" role="tab" aria-selected="false">${t('subagent.tools')}</button>
-            <button class="agent-panel-tab" data-tab="memory" role="tab" aria-selected="false">${t('subagent.memory')}</button>
-            <button class="agent-panel-tab" data-tab="tasks" role="tab" aria-selected="false">${t('subagent.tasks')}</button>
-        </div>
-        <div class="agent-panel-tabpane" data-tab="prompt" role="tabpanel" hidden>
-            <div class="agent-panel-tabpane-header">
-                <span class="agent-panel-runtime-prompt-meta agent-panel-section-meta"></span>
-            </div>
-            <div class="agent-panel-section-body agent-panel-runtime-prompt-body">${t('subagent.no_runtime_prompt')}</div>
-        </div>
-        <div class="agent-panel-tabpane" data-tab="tools" role="tabpanel" hidden>
-            <div class="agent-panel-tabpane-header">
-                <span class="agent-panel-runtime-tools-meta agent-panel-section-meta"></span>
-            </div>
-            <div class="agent-panel-section-body agent-panel-runtime-tools-body">${t('subagent.no_runtime_tools')}</div>
-        </div>
-        <div class="agent-panel-tabpane" data-tab="memory" role="tabpanel" hidden>
-            <div class="agent-panel-tabpane-header">
-                <span class="agent-panel-reflection-meta agent-panel-section-meta"></span>
-                <div class="agent-panel-section-actions" aria-label="${t('subagent.reflection_actions')}">
-                    <button class="agent-panel-icon-btn agent-panel-reflection-edit" type="button" title="${t('subagent.edit_reflection')}" aria-label="${t('subagent.edit_reflection')}">
-                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                            <path d="M12 20h9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                            <path d="M16.5 3.5a2.12 2.12 0 113 3L7 19l-4 1 1-4 12.5-12.5z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-                        </svg>
-                    </button>
-                    <button class="agent-panel-icon-btn agent-panel-reflection-delete" type="button" title="${t('subagent.delete_reflection')}" aria-label="${t('subagent.delete_reflection')}">
-                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                            <path d="M3 6h18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                            <path d="M8 6V4.5A1.5 1.5 0 019.5 3h5A1.5 1.5 0 0116 4.5V6" stroke="currentColor" stroke-width="1.8"/>
-                            <path d="M6.5 6l1 13a1.5 1.5 0 001.5 1.4h6a1.5 1.5 0 001.5-1.4l1-13" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-                            <path d="M10 10.5v6M14 10.5v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                        </svg>
-                    </button>
-                </div>
-            </div>
-            <div class="agent-panel-section-body agent-panel-reflection-body">${t('subagent.no_reflection_memory')}</div>
-        </div>
-        <div class="agent-panel-tabpane" data-tab="tasks" role="tabpanel" hidden>
-            <div class="agent-panel-tabpane-header">
-                <span class="agent-panel-summary-meta agent-panel-section-meta">
-                    <span class="agent-panel-summary-status">${t('subagent.status_idle')}</span>
-                    <span class="agent-panel-summary-updated"></span>
-                </span>
-            </div>
-            <div class="agent-panel-section-body agent-panel-summary-body">
-                <div class="agent-panel-summary-tasks">${t('subagent.no_tasks')}</div>
-            </div>
-        </div>
-        <div class="agent-panel-scroll"></div>
-        <div class="agent-panel-input">
-            <div class="panel-input-wrapper">
-                <textarea class="panel-inject-input" placeholder="${t('subagent.inject_placeholder')}" rows="1"></textarea>
-                <div class="context-indicator panel-context-indicator" data-instance-id="${instanceId}" data-state="idle" title="${t('composer.context_title')}">-- / --</div>
-                <button class="panel-send-btn" type="button" title="${t('composer.send_title')}">
-                    <svg viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-                </button>
-            </div>
         </div>
     `;
 
@@ -166,85 +177,33 @@ export function createPanel(instanceId, roleId, onClose) {
         };
     }
 
-    bindTabBar(panelEl);
-
-    const textarea = panelEl.querySelector('.panel-inject-input');
-    const sendBtn = panelEl.querySelector('.panel-send-btn');
-    bindPanelContextIndicator(panelEl, instanceId);
-    async function sendInject() {
-        const text = textarea.value.trim();
-        if (!text || !state.activeRunId) return;
-        const shouldResume = !!(
-            state.currentRecoverySnapshot?.pausedSubagent
-            && state.currentRecoverySnapshot?.activeRun?.run_id === state.activeRunId
-        );
-        textarea.value = '';
-        textarea.style.height = 'auto';
-        try {
-            await injectSubagentMessage(state.activeRunId, instanceId, text);
-            if (state.pausedSubagent && state.pausedSubagent.instanceId === instanceId) {
-                state.pausedSubagent = null;
-            }
-            if (shouldResume) {
-                await resumeRecoverableRun(state.activeRunId, {
-                    sessionId: state.currentSessionId,
-                    reason: 'subagent follow-up',
-                    quiet: true,
-                });
-            } else if (state.currentSessionId) {
-                await refreshSessionRecovery(state.currentSessionId, { quiet: true });
-            }
-            schedulePanelContextPreview(instanceId, { immediate: true });
-        } catch (e) {
-            sysLog(formatMessage('subagent.error.message_failed', { error: e.message }), 'log-error');
-        }
+    const toggleBtn = panelEl.querySelector('.agent-panel-toggle');
+    if (toggleBtn) {
+        toggleBtn.onclick = () => {
+            const expanded = panelEl.dataset.expanded !== 'true';
+            setPanelExpandedState(panelEl, expanded, { manual: true });
+        };
     }
-    textarea.addEventListener('input', () => {
-        textarea.style.height = 'auto';
-        textarea.style.height = `${textarea.scrollHeight}px`;
-    });
-    sendBtn.onclick = sendInject;
-    textarea.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendInject();
-        }
-    });
+    const diagnostics = panelEl.querySelector('.agent-panel-diagnostics');
+    if (diagnostics) {
+        diagnostics.addEventListener('toggle', () => {
+            syncDiagnosticsToggleLabel(panelEl);
+        });
+    }
+    setPanelExpandedState(panelEl, true);
+    syncDiagnosticsToggleLabel(panelEl);
 
-    drawer.appendChild(panelEl);
+    mountTarget.appendChild(panelEl);
     return {
         panelEl,
         scrollEl: panelEl.querySelector('.agent-panel-scroll'),
         instanceId,
         roleId,
+        hostEl: mountTarget,
+        inline,
         loadedSessionId: '',
         loadedRunId: '',
     };
-}
-
-
-function bindTabBar(panelEl) {
-    const tabs = panelEl.querySelectorAll('.agent-panel-tab[data-tab]');
-    tabs.forEach(tab => {
-        tab.onclick = () => {
-            const tabName = tab.dataset.tab;
-            const isSelected = tab.getAttribute('aria-selected') === 'true';
-            if (isSelected) {
-                tab.setAttribute('aria-selected', 'false');
-                const paneEl = panelEl.querySelector(`.agent-panel-tabpane[data-tab="${tabName}"]`);
-                if (paneEl) paneEl.hidden = true;
-            } else {
-                activateTab(panelEl, tabName);
-            }
-        };
-    });
-}
-
-function activateTab(panelEl, tabName) {
-    const tabs = panelEl.querySelectorAll('.agent-panel-tab[data-tab]');
-    const panes = panelEl.querySelectorAll('.agent-panel-tabpane[data-tab]');
-    tabs.forEach(t => t.setAttribute('aria-selected', t.dataset.tab === tabName ? 'true' : 'false'));
-    panes.forEach(p => { p.hidden = p.dataset.tab !== tabName; });
 }
 
 async function syncReflectionState(instanceId, roleId, reflection, panelEl) {
@@ -271,8 +230,6 @@ function openReflectionEditor(panelEl, instanceId, roleId) {
     const bodyEl = panelEl.querySelector('.agent-panel-reflection-body');
     if (!bodyEl) return;
     const currentSummary = String(bodyEl.dataset.summary || '').trim();
-
-    activateTab(panelEl, 'memory');
     bodyEl.dataset.mode = 'editing';
     bodyEl.innerHTML = `
         <div class="agent-panel-reflection-editor">
@@ -398,4 +355,32 @@ function scheduleReflectionButtonReset(button) {
 function clearReflectionButtonTimer(timerId) {
     if (!timerId) return;
     window.clearTimeout(timerId);
+}
+
+export function setPanelExpandedState(panelEl, expanded, { manual = false } = {}) {
+    if (!panelEl) {
+        return;
+    }
+    const isExpanded = expanded === true;
+    panelEl.dataset.expanded = isExpanded ? 'true' : 'false';
+    if (manual) {
+        panelEl.dataset.expansionMode = 'manual';
+    }
+    const toggleBtn = panelEl.querySelector('.agent-panel-toggle');
+    const contentEl = panelEl.querySelector('.agent-panel-content');
+    if (toggleBtn) {
+        toggleBtn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+    }
+    if (contentEl) {
+        contentEl.hidden = !isExpanded;
+    }
+}
+
+function syncDiagnosticsToggleLabel(panelEl) {
+    const diagnostics = panelEl?.querySelector('.agent-panel-diagnostics');
+    const toggleEl = panelEl?.querySelector('.agent-panel-diagnostics-toggle');
+    if (!diagnostics || !toggleEl) {
+        return;
+    }
+    toggleEl.textContent = diagnostics.open ? t('rounds.collapse') : t('rounds.expand');
 }

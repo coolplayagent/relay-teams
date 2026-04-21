@@ -4,9 +4,7 @@
  */
 import { fetchSessionSubagents } from '../core/api.js';
 import { syncNormalModeSubagentStreams } from '../core/stream.js';
-import { clearAllPanels } from './agentPanel.js';
-import { renderInstanceHistoryInto } from './agentPanel/history.js';
-import { hideRoundNavigator } from './rounds/navigator.js';
+import { clearAllPanels, loadAgentHistory, openAgentPanel } from './agentPanel.js';
 import { getRoleDisplayName, state } from '../core/state.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
@@ -48,20 +46,13 @@ export function isActiveSubagentSession(sessionId, instanceId) {
 
 export function clearActiveSubagentSession() {
     cancelTerminalRefreshForInstance(getActiveSubagentSession()?.instanceId || '');
+    removeSubagentSessionInlineView();
     state.activeSubagentSession = null;
     state.activeView = 'main';
-    setMainComposerVisible(true);
-    if (!state.isGenerating) {
-        if (els.promptInput) {
-            els.promptInput.disabled = false;
-        }
-        if (els.sendBtn) {
-            els.sendBtn.disabled = false;
-        }
-    }
-    if (els.promptInputHint) {
-        els.promptInputHint.textContent = '';
-    }
+    state.activeAgentRoleId = null;
+    state.activeAgentInstanceId = null;
+    clearAllPanels();
+    syncPromptComposerHint();
 }
 
 export async function ensureSessionSubagents(
@@ -127,6 +118,14 @@ export function replaceSessionSubagents(
 }
 
 export function rememberNormalModeSubagentSession(sessionId, record) {
+    rememberSessionSubagent(sessionId, record);
+}
+
+export function rememberSessionSubagent(
+    sessionId,
+    record,
+    { autoActivate = false } = {},
+) {
     const safeSessionId = String(sessionId || '').trim();
     const normalized = normalizeSubagentSession(record, safeSessionId);
     if (!safeSessionId || normalized === null) {
@@ -135,9 +134,22 @@ export function rememberNormalModeSubagentSession(sessionId, record) {
     const current = getSessionSubagentSessions(safeSessionId);
     const next = upsertSubagentSessionRecord(current, normalized);
     applySessionSubagentRecords(safeSessionId, next);
+    if (
+        autoActivate
+        && String(state.currentSessionId || '').trim() === safeSessionId
+    ) {
+        void activatePreferredSubagentSession(safeSessionId, {
+            preferredInstanceId: normalized.instanceId,
+            preserveSelection: true,
+        });
+    }
 }
 
 export function updateNormalModeSubagentSessionStatus(sessionId, instanceId, status) {
+    updateSessionSubagentStatus(sessionId, instanceId, status);
+}
+
+export function updateSessionSubagentStatus(sessionId, instanceId, status) {
     const safeSessionId = String(sessionId || '').trim();
     const safeInstanceId = String(instanceId || '').trim();
     if (!safeSessionId || !safeInstanceId) {
@@ -199,23 +211,14 @@ export async function openSubagentSession(sessionId, record) {
         return;
     }
     state.activeSubagentSession = normalized;
-    state.activeView = 'subagent-session';
+    state.activeView = 'main';
     state.activeAgentRoleId = normalized.roleId;
     state.activeAgentInstanceId = normalized.instanceId;
+    syncPromptComposerHint();
     clearAllPanels();
-    hideRoundNavigator();
-    setMainComposerVisible(false);
-    if (els.promptInput) {
-        els.promptInput.disabled = true;
-    }
-    if (els.sendBtn) {
-        els.sendBtn.disabled = true;
-    }
-    if (els.promptInputHint) {
-        els.promptInputHint.textContent = t('subagent_session.read_only');
-    }
     cancelTerminalRefreshForInstance(normalized.instanceId);
     await renderActiveSubagentSession();
+    scrollActiveSubagentSessionIntoView(normalized.instanceId);
 }
 
 export async function renderActiveSubagentSession(options = {}) {
@@ -228,27 +231,25 @@ export async function renderActiveSubagentSession(options = {}) {
         return { rendered: false, deferred: false };
     }
     const requestId = ++activeSubagentRenderSequence;
-    hideRoundNavigator();
-    const body = ensureSubagentSessionView(active);
-    if (!body || typeof body !== 'object' || !('innerHTML' in body)) {
+    const host = ensureSubagentSessionInlineHost(active);
+    if (!host || typeof host !== 'object') {
         return { rendered: false, deferred: false };
     }
     try {
         if (!isStillActiveSubagentRender(active, requestId)) {
             return { rendered: false, deferred: false };
         }
-        const result = await renderInstanceHistoryInto(body, {
-            sessionId: active.sessionId,
-            instanceId: active.instanceId,
+        openAgentPanel(active.instanceId, active.roleId, {
+            host,
+            inline: true,
+            forceRefresh: true,
+            skipHistoryLoad: true,
+        });
+        const result = await loadAgentHistory(active.instanceId, active.roleId, {
             runId: active.runId,
-            roleId: active.roleId,
             status: active.status,
             runStatus: active.runStatus,
             runPhase: active.runPhase,
-            userRoleLabel: t('subagent.task_prompt'),
-            emptyLabel: t('subagent_session.empty'),
-            loadFailedLabel: t('subagent_session.load_failed'),
-            overlayMode: 'separate',
             requireToolBoundary: options.requireToolBoundary === true,
         });
         if (!isStillActiveSubagentRender(active, requestId)) {
@@ -279,7 +280,9 @@ export function getActiveSubagentSessionStreamContainer(instanceId) {
     if (!active || active.instanceId !== safeInstanceId) {
         return null;
     }
-    return els.chatMessages?.querySelector?.('.subagent-session-body') || null;
+    return els.chatMessages?.querySelector?.(
+        '.subagent-inline-panel-host .agent-panel-scroll',
+    ) || null;
 }
 
 export function buildSubagentSessionLabel(record) {
@@ -299,7 +302,8 @@ function syncActiveSubagentSessionFromCache(sessionId) {
     );
     if (current) {
         state.activeSubagentSession = current;
-        syncSubagentSessionViewChrome(current);
+        syncSubagentSessionInlineChrome(current);
+        syncPromptComposerHint();
     }
 }
 
@@ -314,6 +318,15 @@ function applySessionSubagentRecords(
     subagentSessionsBySessionId.set(sessionId, nextRows);
     syncNormalModeSubagentStreams(sessionId, getSessionSubagentSessions(sessionId));
     syncActiveSubagentSessionFromCache(sessionId);
+    reconcileActiveSubagentSession(sessionId, nextRows);
+    if (
+        String(state.currentSessionMode || '').trim() === 'orchestration'
+        && String(state.currentSessionId || '').trim() === String(sessionId || '').trim()
+        && nextRows.length > 0
+        && !getActiveSubagentSession()
+    ) {
+        void activatePreferredSubagentSession(sessionId, { preserveSelection: false });
+    }
     if (emitChange && changed) {
         emitSubagentSessionsChanged();
     }
@@ -335,7 +348,12 @@ function normalizeSubagentSession(record, sessionId) {
     const roleId = String(record.role_id || record.roleId || '').trim();
     const runId = String(record.run_id || record.runId || '').trim();
     const safeSessionId = String(sessionId || record.session_id || record.sessionId || '').trim();
-    if (!safeSessionId || !instanceId || !roleId || !runId || !runId.startsWith('subagent_run_')) {
+    if (
+        !safeSessionId
+        || !instanceId
+        || !roleId
+        || !runId
+    ) {
         return null;
     }
     return {
@@ -371,6 +389,34 @@ function upsertSubagentSessionRecord(current, nextRecord) {
     }
     next.sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
     return next;
+}
+
+async function activatePreferredSubagentSession(
+    sessionId,
+    {
+        preferredInstanceId = '',
+        preserveSelection = true,
+    } = {},
+) {
+    const rows = getSessionSubagentSessions(sessionId);
+    const next = choosePreferredSubagentSession(rows, {
+        preferredInstanceId,
+        preserveSelection,
+    });
+    if (!next) {
+        return;
+    }
+    const active = getActiveSubagentSession();
+    if (
+        active
+        && active.sessionId === sessionId
+        && active.instanceId === next.instanceId
+    ) {
+        state.activeSubagentSession = next;
+        await renderActiveSubagentSession();
+        return;
+    }
+    await openSubagentSession(sessionId, next);
 }
 
 function shortInstanceId(instanceId) {
@@ -427,68 +473,113 @@ function isStillActiveSubagentRender(active, requestId) {
     );
 }
 
-function setMainComposerVisible(visible) {
-    if (!els.inputContainer) {
-        return;
+function ensureSubagentSessionInlineHost(active) {
+    const targetSection = resolveSubagentSessionRoundSection(active);
+    if (!targetSection) {
+        return null;
     }
-    els.inputContainer.style.display = visible ? '' : 'none';
+    const safeInstanceId = String(active?.instanceId || '').trim();
+    const safeRunId = String(active?.runId || '').trim();
+    let mount = targetSection.querySelector?.('.round-subagent-inline-mount') || null;
+    let wrapper = mount?.querySelector?.('.subagent-inline-session') || null;
+    const wrapperMoved = !!(
+        wrapper
+        && (
+            String(wrapper.dataset.instanceId || '').trim() !== safeInstanceId
+            || String(wrapper.dataset.runId || '').trim() !== safeRunId
+        )
+    );
+    if (!wrapper || wrapperMoved) {
+        removeSubagentSessionInlineView();
+        mount = targetSection.querySelector?.('.round-subagent-inline-mount') || null;
+        if (!mount) {
+            mount = document.createElement('div');
+            mount.className = 'round-subagent-inline-mount';
+            targetSection.appendChild(mount);
+        }
+        wrapper = document.createElement('section');
+        wrapper.className = 'subagent-inline-session';
+        wrapper.dataset.instanceId = safeInstanceId;
+        wrapper.dataset.runId = safeRunId;
+        wrapper.innerHTML = `
+            <div class="subagent-inline-panel-host"></div>
+        `;
+        mount.appendChild(wrapper);
+    }
+    syncSubagentSessionInlineChrome(active, wrapper);
+    const host = wrapper.querySelector('.subagent-inline-panel-host');
+    if (host && typeof host === 'object' && host.dataset) {
+        host.dataset.instanceId = safeInstanceId;
+        host.dataset.roleId = String(active?.roleId || '').trim();
+        host.dataset.runId = String(active?.runId || '').trim();
+    }
+    return host;
 }
 
-function ensureSubagentSessionView(active) {
+function resolveSubagentSessionRoundSection(active) {
     const chatEl = els.chatMessages;
     if (!chatEl) {
         return null;
     }
-    let wrapper = chatEl.querySelector?.('.subagent-session-view') || null;
-    const safeInstanceId = String(active?.instanceId || '').trim();
-    if (!wrapper || String(wrapper.dataset.instanceId || '').trim() !== safeInstanceId) {
-        chatEl.innerHTML = '';
-        wrapper = document.createElement('section');
-        wrapper.className = 'subagent-session-view';
-        wrapper.dataset.instanceId = safeInstanceId;
-        wrapper.innerHTML = `
-            <header class="subagent-session-header">
-                <div class="subagent-session-title-row">
-                    <div class="subagent-session-title"></div>
-                    <div class="subagent-session-badge"></div>
-                </div>
-                <div class="subagent-session-meta"></div>
-            </header>
-            <div class="subagent-session-body"></div>
-        `;
-        chatEl.appendChild(wrapper);
+    const safeRunId = String(active?.runId || '').trim();
+    if (safeRunId) {
+        const exact = chatEl.querySelector?.(`.session-round-section[data-run-id="${safeRunId}"]`) || null;
+        if (exact) {
+            return exact;
+        }
     }
-    syncSubagentSessionViewChrome(active, wrapper);
-    const body = wrapper.querySelector('.subagent-session-body');
-    if (body && typeof body === 'object' && body.dataset) {
-        body.dataset.instanceId = safeInstanceId;
-        body.dataset.roleId = String(active?.roleId || '').trim();
-        body.dataset.runId = String(active?.runId || '').trim();
+    const sections = Array.from(chatEl.querySelectorAll?.('.session-round-section') || []);
+    if (sections.length > 0) {
+        return sections[sections.length - 1];
     }
-    return body;
+    return null;
 }
 
-function syncSubagentSessionViewChrome(active, wrapper = null) {
+function removeSubagentSessionInlineView() {
+    document?.querySelectorAll?.('.subagent-inline-session')?.forEach?.(node => node.remove());
+    document?.querySelectorAll?.('.round-subagent-inline-mount')?.forEach?.(node => {
+        if (node.childElementCount === 0) {
+            node.remove();
+        }
+    });
+}
+
+function scrollActiveSubagentSessionIntoView(instanceId) {
+    const safeInstanceId = String(instanceId || '').trim();
+    if (!safeInstanceId) {
+        return;
+    }
+    const wrapper = Array.from(
+        document?.querySelectorAll?.('.subagent-inline-session') || [],
+    ).find(node => String(node?.dataset?.instanceId || '').trim() === safeInstanceId);
+    wrapper?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+}
+
+function reconcileActiveSubagentSession(sessionId, rows) {
+    const active = getActiveSubagentSession();
+    if (!active || active.sessionId !== sessionId) {
+        return;
+    }
+    const replacement = rows.find(item => item.instanceId === active.instanceId) || null;
+    if (replacement) {
+        state.activeSubagentSession = replacement;
+        syncPromptComposerHint();
+        return;
+    }
+    if (rows.length === 0) {
+        clearActiveSubagentSession();
+    }
+}
+
+function syncSubagentSessionInlineChrome(active, wrapper = null) {
     const activeView = wrapper
-        || els.chatMessages?.querySelector?.('.subagent-session-view')
+        || els.chatMessages?.querySelector?.('.subagent-inline-session')
         || null;
     if (!activeView || String(activeView.dataset.instanceId || '').trim() !== String(active?.instanceId || '').trim()) {
         return;
     }
-    const titleEl = activeView.querySelector('.subagent-session-title');
-    const badgeEl = activeView.querySelector('.subagent-session-badge');
-    const metaEl = activeView.querySelector('.subagent-session-meta');
-    if (titleEl) {
-        titleEl.textContent = active?.title || buildSubagentSessionLabel(active);
-    }
-    if (badgeEl) {
-        const status = String(active?.status || 'idle');
-        badgeEl.className = `subagent-session-badge is-${escapeAttribute(status)}`;
-        badgeEl.textContent = status;
-    }
-    if (metaEl) {
-        metaEl.textContent = buildSubagentSessionLabel(active);
-    }
+    activeView.dataset.label = active?.title || buildSubagentSessionLabel(active);
+    activeView.dataset.status = String(active?.status || 'idle');
 }
 
 function emitSubagentSessionsChanged() {
@@ -498,17 +589,84 @@ function emitSubagentSessionsChanged() {
     document.dispatchEvent(new CustomEvent('agent-teams-subagent-sessions-changed'));
 }
 
-function escapeHtml(value) {
-    return String(value || '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
+function syncPromptComposerHint() {
+    if (!els.promptInputHint) {
+        return;
+    }
+    const active = resolveInjectableComposerSubagent();
+    if (!active) {
+        els.promptInputHint.textContent = t('composer.hint');
+        return;
+    }
+    const roleLabel = getRoleDisplayName(active.roleId, {
+        fallback: t('composer.target_subagent'),
+    });
+    const shortInstanceId = String(active.instanceId || '').trim().slice(0, 8);
+    const targetLabel = shortInstanceId ? `${roleLabel} · ${shortInstanceId}` : roleLabel;
+    const template = String(t('composer.hint_targeted') || '').trim();
+    els.promptInputHint.textContent = template
+        ? template.replace('{target}', targetLabel)
+        : targetLabel;
 }
 
-function escapeAttribute(value) {
-    return escapeHtml(value).replaceAll('`', '&#96;');
+function resolveInjectableComposerSubagent() {
+    const active = getActiveSubagentSession();
+    if (!active) {
+        return null;
+    }
+    const activeRunId = String(state.activeRunId || active.runId || '').trim();
+    const pausedSubagent = state.pausedSubagent;
+    if (
+        pausedSubagent
+        && typeof pausedSubagent === 'object'
+        && String(pausedSubagent.instanceId || '').trim() === active.instanceId
+        && String(pausedSubagent.runId || activeRunId).trim() === activeRunId
+    ) {
+        return active;
+    }
+    const recoveryPausedSubagent = state.currentRecoverySnapshot?.pausedSubagent;
+    const recoveryRunId = String(
+        state.currentRecoverySnapshot?.activeRun?.run_id || activeRunId,
+    ).trim();
+    if (
+        recoveryPausedSubagent
+        && typeof recoveryPausedSubagent === 'object'
+        && String(recoveryPausedSubagent.instanceId || '').trim() === active.instanceId
+        && recoveryRunId === activeRunId
+    ) {
+        return active;
+    }
+    return null;
+}
+
+function choosePreferredSubagentSession(
+    rows,
+    {
+        preferredInstanceId = '',
+        preserveSelection = true,
+    } = {},
+) {
+    const candidates = Array.isArray(rows) ? rows : [];
+    if (candidates.length === 0) {
+        return null;
+    }
+    const safePreferredInstanceId = String(preferredInstanceId || '').trim();
+    const active = preserveSelection ? getActiveSubagentSession() : null;
+    if (active) {
+        const matchingActive = candidates.find(item => item.instanceId === active.instanceId);
+        if (matchingActive) {
+            return matchingActive;
+        }
+    }
+    if (safePreferredInstanceId) {
+        const matchingPreferred = candidates.find(
+            item => item.instanceId === safePreferredInstanceId,
+        );
+        if (matchingPreferred) {
+            return matchingPreferred;
+        }
+    }
+    return candidates.find(item => item.status === 'running') || candidates[0] || null;
 }
 
 function areSubagentSessionRowsEqual(leftRows, rightRows) {

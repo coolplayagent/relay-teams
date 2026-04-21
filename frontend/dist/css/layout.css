@@ -539,6 +539,74 @@
   min-width: 0;
 }
 
+.agent-panel.is-inline {
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.agent-panel-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+}
+
+.agent-panel-topbar-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.agent-panel-role-label {
+  font-weight: 600;
+  font-size: 0.84rem;
+  color: var(--text-primary);
+}
+
+.agent-panel-instance-id {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.agent-panel-top-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.45rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  color: var(--text-secondary);
+  font-size: 0.69rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.agent-panel-top-status.is-running {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 38%, transparent);
+}
+
+.agent-panel-top-status.is-completed {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 34%, transparent);
+}
+
+.agent-panel-top-status.is-failed,
+.agent-panel-top-status.is-stopped {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+}
+
 .agent-panel-header {
   display: flex;
   align-items: center;
@@ -649,6 +717,16 @@
   border-top: 1px solid var(--border-color);
   flex-shrink: 0;
   background: var(--bg-base);
+}
+
+.agent-panel-bottom-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  padding: 0 0.75rem 0.75rem;
+  background: var(--bg-base);
+  flex-shrink: 0;
 }
 
 .panel-input-wrapper {
@@ -1637,46 +1715,27 @@ body.light-theme .sidebar,
 body.light-theme .sessions-list,
 body.light-theme .projects-list,
 body.light-theme .agent-panel-scroll,
-body.light-theme .agent-panel-input {
+body.light-theme .agent-panel-input,
+body.light-theme .agent-panel-bottom-actions {
   background: var(--bg-surface);
   box-shadow: none;
 }
 
-/* ---- Subagent rail header — single compact row ---- */
-.subagent-rail-header {
-  flex-direction: row;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.38rem 0.65rem;
+.subagent-inline-panel-host .agent-panel {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  height: auto !important;
+  min-height: 0;
+  width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  overflow: clip;
 }
 
-.subagent-rail-agent-name {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.subagent-rail-agent-id {
-  font-size: 0.68rem;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.subagent-rail-agent-id:not(:empty)::before {
-  content: "·";
-  margin-right: 0.2rem;
-  color: var(--text-secondary);
-}
-
-.subagent-rail-token-badge {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  margin-left: auto;
+.subagent-inline-panel-host .agent-panel-scroll,
+.subagent-inline-panel-host .agent-panel-input {
+  background: var(--bg-surface);
 }
 
 .subagent-role-select {
@@ -1689,10 +1748,20 @@ body.light-theme .agent-panel-input {
   flex-shrink: 0;
 }
 
+.agent-panel-topbar .agent-token-usage {
+  min-width: 0;
+}
+
+.agent-panel-bottom-actions .agent-panel-refresh-reflection,
+.agent-panel-bottom-actions .agent-panel-stop {
+  min-width: 3.8rem;
+}
+
 /* ---- Agent panel tab bar (1 row replacing 4 section rows) ---- */
 .agent-panel-tabbar {
   display: flex;
   flex-direction: row;
+  border-top: 1px solid var(--border-color);
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-surface-glass);
   flex-shrink: 0;
@@ -1756,4 +1825,153 @@ body.light-theme .agent-panel-input {
 
 .agent-panel-tabpane .agent-panel-section-body {
   padding: 0.45rem 0.75rem;
+}
+
+/* ---- Inline subagent panel refresh ---- */
+.agent-panel.is-inline {
+  height: auto !important;
+  overflow: clip;
+}
+
+.agent-panel-topbar {
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 0.9rem 1rem 0.8rem;
+}
+
+.agent-panel-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-panel-title {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.agent-panel-preview {
+  width: 100%;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.agent-panel-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-surface);
+}
+
+.agent-panel-content[hidden] {
+  display: none !important;
+}
+
+.agent-panel-scroll {
+  min-height: 0;
+  padding: 1rem 1rem 0.75rem;
+  background: var(--bg-surface);
+}
+
+.agent-panel-input,
+.panel-input-wrapper,
+.panel-send-btn,
+.panel-context-indicator,
+.panel-inject-input {
+  display: none !important;
+}
+
+.agent-panel-bottom-actions {
+  padding: 0.75rem 1rem 0.95rem;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-surface);
+}
+
+.agent-panel-diagnostics {
+  margin: 0 1rem 0.85rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-base);
+}
+
+.agent-panel-diagnostics-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.68rem 0.85rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.agent-panel-diagnostics-summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-panel-diagnostics-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.agent-panel-diagnostics-toggle {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.agent-panel-diagnostics-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.95rem;
+  padding: 0 0.85rem 0.85rem;
+}
+
+.agent-panel-diagnostic-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.42rem;
+}
+
+.agent-panel-diagnostic-label {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.agent-panel-diagnostic-section .agent-panel-section-body {
+  padding: 0;
+}
+
+.agent-panel-tabbar,
+.agent-panel-tab {
+  display: none !important;
+}
+
+.agent-panel-tabpane {
+  max-height: none;
+  overflow: visible;
+  border-bottom: none;
+  background: transparent;
+}
+
+.agent-panel-tabpane-header {
+  justify-content: flex-start;
+  padding: 0;
+  border-bottom: none;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+body.light-theme .agent-panel-diagnostics {
+  background: var(--bg-surface-muted);
 }

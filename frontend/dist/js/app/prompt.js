@@ -10,9 +10,15 @@ import { clearAllStreamState } from "../components/messageRenderer.js";
 import {
   fetchRoleConfigOptions,
   fetchOrchestrationConfig,
+  injectSubagentMessage,
   updateSessionTopology,
 } from "../core/api.js";
-import { hydrateSessionView, startSessionContinuity } from "./recovery.js";
+import {
+  hydrateSessionView,
+  refreshSessionRecovery,
+  resumeRecoverableRun,
+  startSessionContinuity,
+} from "./recovery.js";
 import {
   applyCurrentSessionRecord,
   getCoordinatorRoleId,
@@ -95,6 +101,7 @@ export async function initializeSessionTopologyControls() {
   await refreshOrchestrationConfig({ refreshControls: false });
   bindSessionTopologyControls();
   refreshSessionTopologyControls();
+  refreshPromptComposerHint();
 }
 
 export function refreshSessionTopologyControls() {
@@ -162,6 +169,7 @@ export function refreshSessionTopologyControls() {
       els.orchestrationPresetSelect.value = selectedPresetId;
     }
   }
+  refreshPromptComposerHint();
 }
 
 export async function refreshOrchestrationConfig({
@@ -220,6 +228,12 @@ export async function handleSend() {
       t("composer.error.no_active_session"),
       "log-error",
     );
+    return;
+  }
+  const activeSubagent = resolveInjectableComposerSubagent();
+  if (activeSubagent) {
+    dismissPromptMentionAutocomplete();
+    await sendPromptToActiveSubagent(rawText, activeSubagent);
     return;
   }
   if (state.pausedSubagent) {
@@ -302,6 +316,19 @@ export async function handleSend() {
       },
     },
   );
+}
+
+export function refreshPromptComposerHint() {
+  if (!els.promptInputHint) {
+    return;
+  }
+  const activeSubagent = resolveInjectableComposerSubagent();
+  const targetLabel = activeSubagent
+    ? buildSubagentTargetLabel(activeSubagent)
+    : t("composer.target_main");
+  els.promptInputHint.textContent = formatMessage("composer.hint_targeted", {
+    target: targetLabel,
+  });
 }
 
 export function initializePromptMentionAutocomplete() {
@@ -1376,6 +1403,115 @@ function getPromptMentionTrigger(value) {
 
 function startsWithPromptMention(value) {
   return getPromptMentionTrigger(value) !== "";
+}
+
+function resolveActiveComposerSubagent() {
+  const active = state.activeSubagentSession;
+  if (!active || typeof active !== "object") {
+    return null;
+  }
+  const sessionId = String(active.sessionId || "").trim();
+  const instanceId = String(active.instanceId || "").trim();
+  if (!sessionId || !instanceId) {
+    return null;
+  }
+  if (sessionId !== String(state.currentSessionId || "").trim()) {
+    return null;
+  }
+  return active;
+}
+
+function resolveInjectableComposerSubagent() {
+  const active = resolveActiveComposerSubagent();
+  if (!active) {
+    return null;
+  }
+  const activeRunId = String(state.activeRunId || active.runId || "").trim();
+  const pausedSubagent = state.pausedSubagent;
+  if (
+    pausedSubagent
+    && typeof pausedSubagent === "object"
+    && String(pausedSubagent.instanceId || "").trim() === active.instanceId
+    && String(pausedSubagent.runId || activeRunId).trim() === activeRunId
+  ) {
+    return active;
+  }
+  const recoveryPausedSubagent = state.currentRecoverySnapshot?.pausedSubagent;
+  const recoveryRunId = String(
+    state.currentRecoverySnapshot?.activeRun?.run_id || activeRunId,
+  ).trim();
+  if (
+    recoveryPausedSubagent
+    && typeof recoveryPausedSubagent === "object"
+    && String(recoveryPausedSubagent.instanceId || "").trim() === active.instanceId
+    && recoveryRunId === activeRunId
+  ) {
+    return active;
+  }
+  return null;
+}
+
+function buildSubagentTargetLabel(activeSubagent) {
+  const roleLabel = getRoleDisplayName(activeSubagent.roleId, {
+    fallback: t("composer.target_subagent"),
+  });
+  const shortInstanceId = String(activeSubagent.instanceId || "").trim().slice(0, 8);
+  return shortInstanceId ? `${roleLabel} · ${shortInstanceId}` : roleLabel;
+}
+
+async function sendPromptToActiveSubagent(rawText, activeSubagent) {
+  const safeRunId = String(state.activeRunId || activeSubagent.runId || "").trim();
+  const safeInstanceId = String(activeSubagent.instanceId || "").trim();
+  if (!safeRunId || !safeInstanceId) {
+    sysLog(t("composer.error.no_active_session"), "log-error");
+    return;
+  }
+
+  const shouldResume = !!(
+    state.currentRecoverySnapshot?.pausedSubagent
+    && state.currentRecoverySnapshot?.activeRun?.run_id === safeRunId
+  );
+  if (els.sendBtn) {
+    els.sendBtn.disabled = true;
+  }
+  if (els.promptInput) {
+    els.promptInput.disabled = true;
+  }
+  els.promptInput.value = "";
+  els.promptInput.style.height = "auto";
+  refreshVisibleContextIndicators({ immediate: true });
+
+  try {
+    await injectSubagentMessage(safeRunId, safeInstanceId, rawText);
+    if (state.pausedSubagent && state.pausedSubagent.instanceId === safeInstanceId) {
+      state.pausedSubagent = null;
+    }
+    if (shouldResume) {
+      await resumeRecoverableRun(safeRunId, {
+        sessionId: state.currentSessionId,
+        reason: "subagent follow-up",
+        quiet: true,
+      });
+    } else if (state.currentSessionId) {
+      await refreshSessionRecovery(state.currentSessionId, { quiet: true });
+    }
+  } catch (error) {
+    sysLog(
+      formatMessage("subagent.error.message_failed", {
+        error: error?.message || String(error || ""),
+      }),
+      "log-error",
+    );
+  } finally {
+    if (els.promptInput) {
+      els.promptInput.disabled = false;
+      els.promptInput.focus?.();
+    }
+    if (els.sendBtn) {
+      els.sendBtn.disabled = false;
+    }
+    refreshVisibleContextIndicators({ immediate: true });
+  }
 }
 
 function normalizePromptMentionSource(value) {

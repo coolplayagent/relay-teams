@@ -39,11 +39,9 @@ export function handleToolCall(payload, eventMeta, instanceId, roleId) {
     const primaryRoleId = getRunPrimaryRoleId(runId);
     const { container, isCoordinator } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
-    const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
-    if (!isPrimary && !getActiveInstanceId()) {
-        if (!normalModeSubagent) {
-            openAgentPanel(instanceId, roleId);
-        }
+    const sessionSubagent = isSessionSubagentRun(runId, roleId);
+    if (!isPrimary && !sessionSubagent && !getActiveInstanceId()) {
+        openAgentPanel(instanceId, roleId);
     }
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
     const label = isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent');
@@ -206,22 +204,24 @@ function resolveToolEventTarget(instanceId, roleId, eventMeta) {
     return {
         isCoordinator,
         container: isCoordinator
-            ? (state.activeSubagentSession ? null : coordinatorContainerFor(eventMeta))
+            ? coordinatorContainerFor(eventMeta)
             : (
-                isNormalModeSubagentRun(runId, roleId)
+                isSessionSubagentRun(runId, roleId)
                     ? getActiveSubagentSessionStreamContainer(instanceId)
                     : getPanelScrollContainer(instanceId, roleId)
             ),
     };
 }
 
-function isNormalModeSubagentRun(runId, roleId) {
+function isSessionSubagentRun(runId, roleId) {
     const safeRunId = String(runId || '').trim();
     const safeRoleId = String(roleId || '').trim();
     return !!(
-        state.currentSessionMode === 'normal'
-        && safeRunId.startsWith('subagent_run_')
-        && safeRoleId
+        safeRoleId
         && !isRunPrimaryRoleId(safeRoleId, safeRunId)
+        && (
+            safeRunId.startsWith('subagent_run_')
+            || state.currentSessionMode === 'orchestration'
+        )
     );
 }

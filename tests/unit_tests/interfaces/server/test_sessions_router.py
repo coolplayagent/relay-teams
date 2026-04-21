@@ -59,9 +59,7 @@ class _FakeSessionService:
     def list_sessions(self) -> tuple[SessionRecord, ...]:  # pragma: no cover
         raise AssertionError("not used")
 
-    def list_normal_mode_subagents(
-        self, session_id: str
-    ) -> tuple[dict[str, object], ...]:
+    def list_session_subagents(self, session_id: str) -> tuple[dict[str, object], ...]:
         if self.raise_missing_list_subagents:
             raise KeyError(session_id)
         return (

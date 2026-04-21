@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 
 
-def test_opening_subagent_session_hides_main_input_container(tmp_path: Path) -> None:
+def test_opening_subagent_session_renders_inline_inside_round(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
         repo_root / "frontend" / "dist" / "js" / "components" / "subagentSessions.js"
@@ -58,23 +58,33 @@ export function syncNormalModeSubagentStreams() {
 export function clearAllPanels() {
     globalThis.__clearAllPanelsCalls += 1;
 }
+
+export function openAgentPanel(instanceId, roleId, options = {}) {
+    globalThis.__openPanelCalls.push({
+        instanceId,
+        roleId,
+        hostInstanceId: options.host?.dataset?.instanceId || null,
+        inline: options.inline === true,
+        forceRefresh: options.forceRefresh === true,
+        skipHistoryLoad: options.skipHistoryLoad === true,
+    });
+}
+
+export async function loadAgentHistory(instanceId, roleId, options = {}) {
+    globalThis.__loadHistoryCalls.push({
+        instanceId,
+        roleId,
+        requireToolBoundary: options.requireToolBoundary === true,
+    });
+    return { deferred: false };
+}
 """.strip(),
         encoding="utf-8",
     )
     (tmp_path / "mockAgentPanelHistory.mjs").write_text(
         """
-export async function renderInstanceHistoryInto(body, options = {}) {
-    globalThis.__renderCalls.push({
-        sessionId: options.sessionId || null,
-        instanceId: options.instanceId || null,
-        runId: options.runId || null,
-        overlayMode: options.overlayMode || null,
-        status: options.status || null,
-        runStatus: options.runStatus || null,
-        runPhase: options.runPhase || null,
-    });
-    body.renderedMessages = [{ role: "assistant", text: "ok" }];
-    return { messages: body.renderedMessages, streamOverlayEntry: null };
+export async function renderInstanceHistoryInto() {
+    return { messages: [], streamOverlayEntry: null };
 }
 """.strip(),
         encoding="utf-8",
@@ -106,15 +116,18 @@ export function getRoleDisplayName(roleId, { fallback } = {}) {
     )
     (tmp_path / "mockDom.mjs").write_text(
         """
-function createBodyElement() {
+function createHostElement() {
     return {
-        innerHTML: "",
-        renderedMessages: [],
+        dataset: {},
+        appendChild(node) {
+            this.child = node;
+            return node;
+        },
     };
 }
 
 function createSectionElement() {
-    const body = createBodyElement();
+    const host = createHostElement();
     return {
         className: "",
         dataset: {},
@@ -125,25 +138,49 @@ function createSectionElement() {
         get innerHTML() {
             return this._innerHTML;
         },
+        appendChild(node) {
+            this.child = node;
+            return node;
+        },
         querySelector(selector) {
-            if (selector === ".subagent-session-body") {
-                return body;
+            if (selector === ".subagent-inline-panel-host") {
+                return host;
             }
             return null;
+        },
+        remove() {
+            this.removed = true;
         },
     };
 }
 
 function createChatMessages() {
-    return {
-        innerHTML: "",
-        children: [],
+    const roundSection = {
+        dataset: { runId: "subagent_run_1" },
+        mount: null,
         appendChild(node) {
-            this.children.push(node);
+            this.mount = node;
             return node;
         },
         querySelector(selector) {
-            return this.children[0]?.querySelector?.(selector) || null;
+            if (selector === ".round-subagent-inline-mount") {
+                return this.mount;
+            }
+            return this.mount?.querySelector?.(selector) || null;
+        },
+    };
+    return {
+        querySelector(selector) {
+            if (selector === '.session-round-section[data-run-id="subagent_run_1"]') {
+                return roundSection;
+            }
+            return roundSection.querySelector(selector);
+        },
+        querySelectorAll(selector) {
+            if (selector === ".session-round-section") {
+                return [roundSection];
+            }
+            return [];
         },
     };
 }
@@ -159,6 +196,9 @@ export const els = {
 globalThis.document = {
     createElement() {
         return createSectionElement();
+    },
+    querySelectorAll() {
+        return [];
     },
 };
 """.strip(),
@@ -194,6 +234,8 @@ globalThis.__renderCalls = [];
 globalThis.__clearAllPanelsCalls = 0;
 globalThis.__hideRoundNavigatorCalls = 0;
 globalThis.__syncNormalModeSubagentStreamsCalls = 0;
+globalThis.__openPanelCalls = [];
+globalThis.__loadHistoryCalls = [];
 
 const { els } = await import("./mockDom.mjs");
 const { state } = await import("./mockState.mjs");
@@ -227,7 +269,8 @@ console.log(JSON.stringify({
     hintAfterClear: els.promptInputHint.textContent,
     sendDisabledAfterClear: els.sendBtn.disabled,
     activeViewAfterClear: state.activeView,
-    renderCalls: globalThis.__renderCalls,
+    openPanelCalls: globalThis.__openPanelCalls,
+    loadHistoryCalls: globalThis.__loadHistoryCalls,
     clearAllPanelsCalls: globalThis.__clearAllPanelsCalls,
     hideRoundNavigatorCalls: globalThis.__hideRoundNavigatorCalls,
 }));
@@ -252,27 +295,33 @@ console.log(JSON.stringify({
 
     payload = json.loads(completed.stdout)
 
-    assert payload["hiddenWhileOpen"] == "none"
-    assert payload["hintWhileOpen"] == "Read-only subagent session"
-    assert payload["sendDisabledWhileOpen"] is True
-    assert payload["activeViewWhileOpen"] == "subagent-session"
+    assert payload["hiddenWhileOpen"] == ""
+    assert payload["hintWhileOpen"] == "composer.hint"
+    assert payload["sendDisabledWhileOpen"] is False
+    assert payload["activeViewWhileOpen"] == "main"
     assert payload["hiddenAfterClear"] == ""
-    assert payload["hintAfterClear"] == ""
+    assert payload["hintAfterClear"] == "composer.hint"
     assert payload["sendDisabledAfterClear"] is False
     assert payload["activeViewAfterClear"] == "main"
-    assert payload["renderCalls"] == [
+    assert payload["openPanelCalls"] == [
         {
-            "sessionId": "session-1",
             "instanceId": "inst-sub-1",
-            "runId": "subagent_run_1",
-            "overlayMode": "separate",
-            "status": "running",
-            "runStatus": None,
-            "runPhase": None,
+            "roleId": "Explorer",
+            "hostInstanceId": "inst-sub-1",
+            "inline": True,
+            "forceRefresh": True,
+            "skipHistoryLoad": True,
         }
     ]
-    assert payload["clearAllPanelsCalls"] == 1
-    assert payload["hideRoundNavigatorCalls"] == 2
+    assert payload["loadHistoryCalls"] == [
+        {
+            "instanceId": "inst-sub-1",
+            "roleId": "Explorer",
+            "requireToolBoundary": False,
+        }
+    ]
+    assert payload["clearAllPanelsCalls"] == 2
+    assert payload["hideRoundNavigatorCalls"] == 0
 
 
 def test_ensure_session_subagents_syncs_running_streams_for_current_session(
@@ -342,6 +391,14 @@ export function syncNormalModeSubagentStreams(sessionId, records) {
         """
 export function clearAllPanels() {
     return undefined;
+}
+
+export function openAgentPanel() {
+    return undefined;
+}
+
+export async function loadAgentHistory() {
+    return { deferred: false };
 }
 """.strip(),
         encoding="utf-8",
@@ -458,6 +515,176 @@ console.log(JSON.stringify({
     ]
 
 
+def test_ensure_session_subagents_keeps_orchestration_rows_while_normal_session_is_active(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "subagentSessions.js"
+    )
+    module_under_test_path = tmp_path / "subagentSessions.mjs"
+    runner_path = tmp_path / "runner_orchestration_rows.mjs"
+
+    source_text = (
+        source_path.read_text(encoding="utf-8")
+        .replace("../core/api.js", "./mockApi.mjs")
+        .replace("../core/stream.js", "./mockStream.mjs")
+        .replace("./agentPanel.js", "./mockAgentPanel.mjs")
+        .replace("./agentPanel/history.js", "./mockAgentPanelHistory.mjs")
+        .replace("./rounds/navigator.js", "./mockNavigator.mjs")
+        .replace("../core/state.js", "./mockState.mjs")
+        .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
+        .replace("../utils/logger.js", "./mockLogger.mjs")
+    )
+    module_under_test_path.write_text(source_text, encoding="utf-8")
+
+    (tmp_path / "mockApi.mjs").write_text(
+        """
+export async function fetchSessionSubagents() {
+    return [
+        {
+            session_id: "session-2",
+            instance_id: "inst-orch-1",
+            role_id: "Crafter",
+            run_id: "run-orch-1",
+            run_status: "running",
+            updated_at: "2026-04-21T10:00:00Z",
+        },
+    ];
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockStream.mjs").write_text(
+        """
+export function syncNormalModeSubagentStreams() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockAgentPanel.mjs").write_text(
+        """
+export function clearAllPanels() {
+    return undefined;
+}
+
+export function openAgentPanel() {
+    return undefined;
+}
+
+export async function loadAgentHistory() {
+    return { deferred: false };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockAgentPanelHistory.mjs").write_text(
+        """
+export async function renderInstanceHistoryInto() {
+    return { messages: [], streamOverlayEntry: null };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockNavigator.mjs").write_text(
+        """
+export function hideRoundNavigator() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockState.mjs").write_text(
+        """
+export const state = {
+    currentSessionId: "session-1",
+    currentSessionMode: "normal",
+    activeSubagentSession: null,
+    activeView: "main",
+    isGenerating: false,
+    activeAgentRoleId: null,
+    activeAgentInstanceId: null,
+};
+
+export function getRoleDisplayName(roleId, { fallback } = {}) {
+    return String(roleId || fallback || "Agent");
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockDom.mjs").write_text(
+        """
+export const els = {
+    promptInputHint: { textContent: "" },
+    chatMessages: null,
+};
+
+globalThis.document = {
+    dispatchEvent() {
+        return undefined;
+    },
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockI18n.mjs").write_text(
+        """
+export function t(key) {
+    return key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockLogger.mjs").write_text(
+        """
+export function sysLog() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner_path.write_text(
+        """
+const { ensureSessionSubagents } = await import("./subagentSessions.mjs");
+
+const rows = await ensureSessionSubagents("session-2", { force: true });
+
+console.log(JSON.stringify({
+    rowCount: rows.length,
+    runId: rows[0]?.runId || null,
+    instanceId: rows[0]?.instanceId || null,
+}));
+""".strip(),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=3,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node runner failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload == {
+        "rowCount": 1,
+        "runId": "run-orch-1",
+        "instanceId": "inst-orch-1",
+    }
+
+
 def test_terminal_settle_retries_until_history_is_safe(
     tmp_path: Path,
 ) -> None:
@@ -507,12 +734,12 @@ export function syncNormalModeSubagentStreams() {
 export function clearAllPanels() {
     return undefined;
 }
-""".strip(),
-        encoding="utf-8",
-    )
-    (tmp_path / "mockAgentPanelHistory.mjs").write_text(
-        """
-export async function renderInstanceHistoryInto(_body, options = {}) {
+
+export function openAgentPanel() {
+    return undefined;
+}
+
+export async function loadAgentHistory(_instanceId, _roleId, options = {}) {
     globalThis.__renderCalls.push({
         requireToolBoundary: options.requireToolBoundary === true,
     });
@@ -522,6 +749,14 @@ export async function renderInstanceHistoryInto(_body, options = {}) {
     ) {
         return { deferred: true };
     }
+    return { deferred: false };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockAgentPanelHistory.mjs").write_text(
+        """
+export async function renderInstanceHistoryInto() {
     return { deferred: false };
 }
 """.strip(),
@@ -554,15 +789,18 @@ export function getRoleDisplayName(roleId, { fallback } = {}) {
     )
     (tmp_path / "mockDom.mjs").write_text(
         """
-function createBodyElement() {
+function createHostElement() {
     return {
-        innerHTML: "",
         dataset: {},
+        appendChild(node) {
+            this.child = node;
+            return node;
+        },
     };
 }
 
 function createSectionElement() {
-    const body = createBodyElement();
+    const host = createHostElement();
     return {
         className: "",
         dataset: {},
@@ -573,29 +811,47 @@ function createSectionElement() {
         get innerHTML() {
             return this._innerHTML;
         },
+        appendChild(node) {
+            this.child = node;
+            return node;
+        },
         querySelector(selector) {
-            if (selector === ".subagent-session-title") return { textContent: "" };
-            if (selector === ".subagent-session-badge") return { className: "", textContent: "" };
-            if (selector === ".subagent-session-meta") return { textContent: "" };
-            if (selector === ".subagent-session-body") return body;
+            if (selector === ".subagent-inline-panel-host") return host;
             return null;
+        },
+        remove() {
+            this.removed = true;
         },
     };
 }
 
 function createChatMessages() {
-    return {
-        innerHTML: "",
-        children: [],
+    const roundSection = {
+        dataset: { runId: "subagent_run_1" },
+        mount: null,
         appendChild(node) {
-            this.children.push(node);
+            this.mount = node;
             return node;
         },
         querySelector(selector) {
-            if (selector === ".subagent-session-view") {
-                return this.children[0] || null;
+            if (selector === ".round-subagent-inline-mount") {
+                return this.mount;
             }
-            return this.children[0]?.querySelector?.(selector) || null;
+            return this.mount?.querySelector?.(selector) || null;
+        },
+    };
+    return {
+        querySelector(selector) {
+            if (selector === '.session-round-section[data-run-id="subagent_run_1"]') {
+                return roundSection;
+            }
+            return roundSection.querySelector(selector);
+        },
+        querySelectorAll(selector) {
+            if (selector === ".session-round-section") {
+                return [roundSection];
+            }
+            return [];
         },
     };
 }
@@ -611,6 +867,9 @@ export const els = {
 globalThis.document = {
     createElement() {
         return createSectionElement();
+    },
+    querySelectorAll() {
+        return [];
     },
     dispatchEvent() {
         return undefined;

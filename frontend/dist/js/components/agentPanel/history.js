@@ -11,7 +11,6 @@ import {
     renderHistoricalMessageList,
 } from '../messageRenderer.js';
 import {
-    getActiveInstanceId,
     getActiveRoundRunId,
     getPanel,
     getPendingApprovalsForPanel,
@@ -26,7 +25,7 @@ function formatMessage(key, values = {}) {
 
 function renderTokenBadge(panelEl, instanceId, runUsage) {
     const badgeEl = panelEl.querySelector(
-        `.agent-token-usage[data-instance-id="${instanceId}"]`
+        `.agent-panel-topbar .agent-token-usage[data-instance-id="${instanceId}"]`
     );
     if (!badgeEl) return;
     let html = '';
@@ -47,10 +46,6 @@ function renderTokenBadge(panelEl, instanceId, runUsage) {
         }
     }
     badgeEl.innerHTML = html;
-    if (getActiveInstanceId() === instanceId) {
-        const railBadge = document.getElementById('subagent-rail-token-badge');
-        if (railBadge) railBadge.innerHTML = html;
-    }
 }
 
 function getSessionAgent(instanceId, roleId) {
@@ -164,6 +159,32 @@ function renderPanelSummary(panelEl, instanceId, roleId) {
             </span>
         </div>
     `).join('');
+}
+
+function renderPanelIdentity(panelEl, instanceId, roleId) {
+    const roleEl = panelEl.querySelector('.agent-panel-role-label');
+    const idEl = panelEl.querySelector('.agent-panel-instance-id');
+    const statusEl = panelEl.querySelector('.agent-panel-top-status');
+    if (!roleEl || !idEl || !statusEl) return;
+
+    const sessionAgent = getSessionAgent(instanceId, roleId);
+    const fallbackRole = roleId
+        ? roleId.replace(/_/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase())
+        : instanceId.slice(0, 8);
+    const statusValue = String(
+        sessionAgent?.status
+        || (
+            state.activeSubagentSession?.instanceId === instanceId
+                ? state.activeSubagentSession?.status
+                : ''
+        )
+        || 'idle',
+    ).trim() || 'idle';
+
+    roleEl.textContent = fallbackRole;
+    idEl.textContent = String(instanceId || '').slice(0, 8);
+    statusEl.textContent = humanizeStatus(statusValue);
+    statusEl.className = `agent-panel-top-status is-${escapeAttribute(statusValue)}`;
 }
 
 function humanizeStatus(value) {
@@ -373,16 +394,28 @@ export function syncAgentPanelState(instanceId, roleId = null) {
     const panel = getPanel(instanceId);
     if (!panel) return;
     const sessionAgent = getSessionAgent(instanceId, roleId);
+    const fallbackStatus = String(
+        sessionAgent?.status
+        || (
+            state.activeSubagentSession?.instanceId === instanceId
+                ? state.activeSubagentSession?.status
+                : ''
+        )
+        || 'idle',
+    ).trim() || 'idle';
+    renderPanelIdentity(panel.panelEl, instanceId, roleId);
     renderRuntimePrompt(panel.panelEl, sessionAgent);
     renderRuntimeTools(panel.panelEl, sessionAgent);
     renderPanelSummary(panel.panelEl, instanceId, roleId);
+    syncPanelExpansion(panel.panelEl, fallbackStatus);
 }
 
-export async function loadAgentHistory(instanceId, roleId = null) {
+export async function loadAgentHistory(instanceId, roleId = null, options = {}) {
     const panel = getPanel(instanceId);
     if (!panel) return;
     const scrollEl = panel.scrollEl;
-    const runId = state.activeRunId || getActiveRoundRunId();
+    const runId = String(options.runId || state.activeRunId || getActiveRoundRunId() || '').trim();
+    const sessionAgent = getSessionAgent(instanceId, roleId);
     try {
         scrollEl.innerHTML = `<div class="panel-loading">${escapeHtml(t('agent_panel.history.loading'))}</div>`;
         const recoveryApprovals = (
@@ -403,6 +436,10 @@ export async function loadAgentHistory(instanceId, roleId = null) {
                 instanceId,
                 runId,
                 pendingToolApprovals,
+                requireToolBoundary: options.requireToolBoundary === true,
+                status: options.status || sessionAgent?.status || '',
+                runStatus: options.runStatus || sessionAgent?.run_status || sessionAgent?.runStatus || '',
+                runPhase: options.runPhase || sessionAgent?.run_phase || sessionAgent?.runPhase || '',
                 emptyLabel: t('agent_panel.history.empty'),
                 loadFailedLabel: t('agent_panel.history.load_failed'),
                 userRoleLabel: t('subagent.task_prompt'),
@@ -417,9 +454,67 @@ export async function loadAgentHistory(instanceId, roleId = null) {
         renderTokenBadge(panel.panelEl, instanceId, runUsage);
         syncAgentPanelState(instanceId, roleId);
         renderReflection(panel.panelEl, reflection);
-        void historyResult;
+        renderPanelPreview(panel.panelEl, scrollEl);
+        return historyResult || null;
     } catch (e) {
         scrollEl.innerHTML =
             `<div class="panel-empty" style="color:var(--danger)">${escapeHtml(t('agent_panel.history.load_failed'))}</div>`;
+        renderPanelPreview(panel.panelEl, scrollEl);
+        return null;
+    }
+}
+
+function syncPanelExpansion(panelEl, status) {
+    if (!panelEl) {
+        return;
+    }
+    const panelDataset = panelEl.dataset && typeof panelEl.dataset === 'object'
+        ? panelEl.dataset
+        : null;
+    if (String(panelDataset?.expansionMode || '') === 'manual') {
+        return;
+    }
+    applyPanelExpandedState(panelEl, !isTerminalStatus(status));
+}
+
+function isTerminalStatus(status) {
+    const safeStatus = String(status || '').trim().toLowerCase();
+    return safeStatus === 'completed'
+        || safeStatus === 'failed'
+        || safeStatus === 'stopped';
+}
+
+function renderPanelPreview(panelEl, scrollEl) {
+    const previewEl = panelEl?.querySelector('.agent-panel-preview');
+    if (!previewEl || !scrollEl) {
+        return;
+    }
+    const previewText = String(scrollEl.textContent || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!previewText) {
+        previewEl.textContent = t('agent_panel.history.empty');
+        return;
+    }
+    previewEl.textContent = previewText.length > 140
+        ? `${previewText.slice(0, 140).trimEnd()}...`
+        : previewText;
+}
+
+function applyPanelExpandedState(panelEl, expanded) {
+    if (!panelEl) {
+        return;
+    }
+    const isExpanded = expanded === true;
+    if (panelEl.dataset && typeof panelEl.dataset === 'object') {
+        panelEl.dataset.expanded = isExpanded ? 'true' : 'false';
+    }
+    const toggleBtn = panelEl.querySelector('.agent-panel-toggle');
+    const contentEl = panelEl.querySelector('.agent-panel-content');
+    if (toggleBtn && typeof toggleBtn.setAttribute === 'function') {
+        toggleBtn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+    }
+    if (contentEl) {
+        contentEl.hidden = !isExpanded;
     }
 }

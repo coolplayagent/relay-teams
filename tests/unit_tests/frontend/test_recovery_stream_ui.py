@@ -264,13 +264,9 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
         "export async function loadSessionRounds(sessionId, options = {}) {"
         in timeline_script
     )
-    assert (
-        "if (options.render !== false && !shouldPreserveSubagentView(sessionId)) {"
-        in timeline_script
-    )
-    assert (
-        "if (!shouldPreserveSubagentView(state.currentSessionId)) {" in timeline_script
-    )
+    assert "if (options.render !== false) {" in timeline_script
+    assert "async function syncInlineSubagentSessionView() {" in timeline_script
+    assert "void syncInlineSubagentSessionView();" in timeline_script
     assert "runStatus: round.run_status," in timeline_script
     assert "runPhase: round.run_phase," in timeline_script
     assert "isLatestRound," in timeline_script

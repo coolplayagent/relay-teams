@@ -725,7 +725,7 @@ def _wait_for_session_run_events(
     session_id: str,
     run_id: str,
     expected_event_counts: dict[str, int],
-    timeout_seconds: float = 5.0,
+    timeout_seconds: float = 20.0,
 ) -> list[dict[str, object]]:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:

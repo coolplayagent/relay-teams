@@ -327,6 +327,17 @@ class WorkspaceHandle(BaseModel):
             )
         return None
 
+    def _is_absolute_remote_workspace_path(self, normalized_path: str) -> bool:
+        if not normalized_path.startswith("/"):
+            return False
+        return any(
+            self._is_posix_path_within_root(
+                normalized_path,
+                remote_mount_root.remote_root.strip(),
+            )
+            for remote_mount_root in self.locations.remote_mount_roots
+        )
+
     def resolve_workspace_path(
         self,
         raw_path: str,
@@ -336,7 +347,9 @@ class WorkspaceHandle(BaseModel):
     ) -> ResolvedWorkspacePath:
         normalized_path = self._normalize_raw_path(raw_path)
         path_obj = Path(normalized_path)
-        if path_obj.is_absolute():
+        if path_obj.is_absolute() or self._is_absolute_remote_workspace_path(
+            normalized_path
+        ):
             resolved_absolute = self._resolve_absolute_local_workspace_path(
                 path_obj,
                 raw_path=raw_path,

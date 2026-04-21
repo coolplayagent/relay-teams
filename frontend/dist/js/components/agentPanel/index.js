@@ -4,7 +4,6 @@
  */
 import { resolveGate } from '../../core/api.js';
 import { state } from '../../core/state.js';
-import { t } from '../../utils/i18n.js';
 import { parseMarkdown } from '../../utils/markdown.js';
 import { closeDrawerUi, getDrawer, openDrawerUi } from './dom.js';
 import { schedulePanelContextPreview } from '../contextIndicators.js';
@@ -23,12 +22,27 @@ import {
 } from './state.js';
 import { getInstanceStreamOverlay } from '../messageRenderer.js';
 
-function ensurePanel(instanceId, roleId) {
+function ensurePanel(instanceId, roleId, { host = null, inline = false } = {}) {
     let panel = getPanel(instanceId);
+    const mountTarget = resolvePanelHost(instanceId, host);
+    if (!mountTarget) {
+        return null;
+    }
     if (!panel) {
-        panel = createPanel(instanceId, roleId, closeAgentPanel);
+        panel = createPanel(instanceId, roleId, closeAgentPanel, {
+            host: mountTarget,
+            inline,
+        });
         if (!panel) return null;
         setPanel(instanceId, panel);
+    } else if (panel.hostEl !== mountTarget) {
+        mountTarget.appendChild(panel.panelEl);
+        panel.hostEl = mountTarget;
+    }
+    panel.inline = inline === true;
+    panel.panelEl.classList.toggle('is-inline', panel.inline);
+    if (panel.panelEl.parentElement !== mountTarget) {
+        mountTarget.appendChild(panel.panelEl);
     }
     return panel;
 }
@@ -36,17 +50,20 @@ function ensurePanel(instanceId, roleId) {
 export function openAgentPanel(
     instanceId,
     roleId,
-    { reveal = false, forceRefresh = false } = {},
+    {
+        reveal = false,
+        forceRefresh = false,
+        host = null,
+        inline = false,
+        skipHistoryLoad = false,
+    } = {},
 ) {
-    const drawer = getDrawer();
-    if (!drawer) return;
-
     forEachPanel((panelRecord, currentId) => {
         panelRecord.panelEl.style.display = currentId === instanceId ? 'flex' : 'none';
     });
 
     const existing = getPanel(instanceId);
-    const panel = ensurePanel(instanceId, roleId);
+    const panel = ensurePanel(instanceId, roleId, { host, inline });
     if (!panel) return;
     const activeRunId = state.activeRunId || getActiveRoundRunId();
     syncAgentPanelState(instanceId, roleId);
@@ -60,7 +77,7 @@ export function openAgentPanel(
             || !state.isGenerating
         )
     );
-    if (shouldRefreshHistory) {
+    if (!skipHistoryLoad && shouldRefreshHistory) {
         void loadAgentHistory(instanceId, roleId);
     } else if (existing && state.currentSessionId) {
         const approvals = getPendingApprovalsForPanel(instanceId, roleId);
@@ -72,7 +89,6 @@ export function openAgentPanel(
 
     panel.panelEl.style.display = 'flex';
     setActiveInstanceId(instanceId);
-    _syncRailHeader(instanceId, roleId, panel);
     schedulePanelContextPreview(instanceId, { immediate: true });
     state.selectedRoleId = roleId || state.selectedRoleId;
     const roleSelect = document.getElementById('subagent-role-select');
@@ -90,52 +106,10 @@ export function closeAgentPanel() {
 }
 
 export function clearAllPanels() {
-    if (!getDrawer()) return;
     forEachPanel(panel => panel.panelEl.remove());
     clearPanels();
     setActiveRoundContext('', []);
     setActiveInstanceId(null);
-    _resetRailHeader();
-}
-
-function _syncRailHeader(instanceId, roleId, panel) {
-    const nameEl = document.getElementById('subagent-rail-agent-name');
-    const idEl = document.getElementById('subagent-rail-agent-id');
-    const railReflect = document.getElementById('subagent-rail-reflect');
-    const railStop = document.getElementById('subagent-rail-stop');
-
-    const friendlyRole = roleId
-        ? roleId.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
-        : instanceId.slice(0, 8);
-
-    if (nameEl) nameEl.textContent = friendlyRole;
-    if (idEl) idEl.textContent = instanceId.slice(0, 8);
-
-    const hiddenReflect = panel.panelEl.querySelector('.agent-panel-refresh-reflection');
-    const hiddenStop = panel.panelEl.querySelector('.agent-panel-stop');
-
-    if (railReflect) {
-        railReflect.hidden = false;
-        railReflect.onclick = hiddenReflect ? () => hiddenReflect.click() : null;
-    }
-    if (railStop) {
-        railStop.hidden = false;
-        railStop.onclick = hiddenStop ? () => hiddenStop.click() : null;
-    }
-}
-
-function _resetRailHeader() {
-    const nameEl = document.getElementById('subagent-rail-agent-name');
-    const idEl = document.getElementById('subagent-rail-agent-id');
-    const railTokenBadge = document.getElementById('subagent-rail-token-badge');
-    const railReflect = document.getElementById('subagent-rail-reflect');
-    const railStop = document.getElementById('subagent-rail-stop');
-
-    if (nameEl) nameEl.textContent = t('subagent.header');
-    if (idEl) idEl.textContent = '';
-    if (railTokenBadge) railTokenBadge.innerHTML = '';
-    if (railReflect) { railReflect.hidden = true; railReflect.onclick = null; }
-    if (railStop) { railStop.hidden = true; railStop.onclick = null; }
 }
 
 export function getPanelScrollContainer(instanceId, roleId) {
@@ -216,3 +190,17 @@ export function setRoundPendingApprovals(runId, pendingApprovals) {
 
 export { getActiveInstanceId, getActiveRoundRunId, getPanels } from './state.js';
 export { loadAgentHistory } from './history.js';
+
+function resolvePanelHost(instanceId, preferredHost) {
+    if (preferredHost && typeof preferredHost.appendChild === 'function') {
+        return preferredHost;
+    }
+    const safeInstanceId = String(instanceId || '').trim();
+    const activeInlineHost = Array.from(
+        document?.querySelectorAll?.('.subagent-inline-panel-host') || [],
+    ).find(host => String(host?.dataset?.instanceId || '').trim() === safeInstanceId);
+    if (activeInlineHost && typeof activeInlineHost.appendChild === 'function') {
+        return activeInlineHost;
+    }
+    return getDrawer();
+}

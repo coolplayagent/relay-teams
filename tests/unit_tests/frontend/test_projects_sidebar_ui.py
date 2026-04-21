@@ -495,7 +495,7 @@ export async function runAutomationProject() {
     ).read_text(encoding="utf-8")
 
     ensure_calls = cast(list[str], payload["ensureCalls"])
-    assert sorted(set(ensure_calls)) == ["session-1", "session-2"]
+    assert sorted(set(ensure_calls)) == ["session-1", "session-2", "session-3"]
     assert payload["toggleCount"] == 1
     assert payload["firstToggleSessionId"] == "session-1"
     assert (
