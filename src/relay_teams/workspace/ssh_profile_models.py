@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -70,6 +71,22 @@ class SshProfilePasswordRevealView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     password: str | None = None
+
+
+class SshProfileCommandResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    exit_code: int
+    stdout: str = ""
+    stderr: str = ""
+
+
+class SshProfilePreparedCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    argv: tuple[str, ...]
+    env: dict[str, str]
+    temp_root: Path
 
 
 class SshProfileConnectivityProbeRequest(BaseModel):

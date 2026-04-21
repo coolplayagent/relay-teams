@@ -9,7 +9,10 @@ from relay_teams.workspace import WorkspaceHandle
 from relay_teams.workspace.workspace_models import (
     WorkspaceLocations,
     WorkspaceMountProvider,
+    WorkspaceMountRecord,
     WorkspaceRef,
+    WorkspaceRemoteMountRoot,
+    WorkspaceSshMountConfig,
     build_local_workspace_mount,
 )
 
@@ -217,3 +220,63 @@ def test_resolve_workdir_routes_tmp_prefix_to_managed_tmp_root(tmp_path: Path) -
     )
 
     assert workspace.resolve_workdir("tmp") == (workspace_dir / "tmp").resolve()
+
+
+def test_resolve_ssh_mount_path_uses_materialized_local_root(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / ".agent-teams" / "workspaces" / "project"
+    remote_local_root = workspace_dir / "ssh_mounts" / "prod"
+    tmp_root = workspace_dir / "tmp"
+    remote_local_root.mkdir(parents=True)
+    tmp_root.mkdir(parents=True)
+    remote_file = remote_local_root / "src" / "app.py"
+    remote_file.parent.mkdir(parents=True)
+    remote_file.write_text("print('remote')\n", encoding="utf-8")
+    workspace = WorkspaceHandle(
+        ref=WorkspaceRef(
+            workspace_id="workspace",
+            session_id="session",
+            role_id="role",
+            conversation_id="conversation",
+            default_mount_name="prod",
+            mount_names=("prod",),
+        ),
+        mounts=(
+            WorkspaceMountRecord(
+                mount_name="prod",
+                provider=WorkspaceMountProvider.SSH,
+                provider_config=WorkspaceSshMountConfig(
+                    ssh_profile_id="prod",
+                    remote_root="/srv/app",
+                ),
+            ),
+        ),
+        locations=WorkspaceLocations(
+            workspace_dir=workspace_dir,
+            mount_name="prod",
+            provider=WorkspaceMountProvider.SSH,
+            scope_root=remote_local_root,
+            execution_root=remote_local_root,
+            tmp_root=tmp_root,
+            readable_roots=(remote_local_root, tmp_root),
+            writable_roots=(remote_local_root, tmp_root),
+            remote_mount_roots=(
+                WorkspaceRemoteMountRoot(
+                    mount_name="prod",
+                    local_root=remote_local_root,
+                    remote_root="/srv/app",
+                ),
+            ),
+        ),
+    )
+
+    resolved = workspace.resolve_workspace_path("src/app.py", write=False)
+
+    assert resolved.provider == WorkspaceMountProvider.SSH
+    assert resolved.local_path == remote_file.resolve()
+    assert resolved.remote_path == "/srv/app/src/app.py"
+    assert workspace.resolve_read_path("src/app.py") == remote_file.resolve()
+    assert workspace.resolve_read_path("/srv/app/src/app.py") == remote_file.resolve()
+    assert (
+        workspace.resolve_path("/srv/app/src/app.py", write=True)
+        == remote_file.resolve()
+    )

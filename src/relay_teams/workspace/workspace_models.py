@@ -240,6 +240,14 @@ class WorkspaceRef(BaseModel):
         return coerced
 
 
+class WorkspaceRemoteMountRoot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mount_name: RequiredIdentifierStr
+    local_root: Path
+    remote_root: str = Field(min_length=1)
+
+
 class WorkspaceLocations(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -251,6 +259,7 @@ class WorkspaceLocations(BaseModel):
     tmp_root: Path
     readable_roots: tuple[Path, ...]
     writable_roots: tuple[Path, ...]
+    remote_mount_roots: tuple[WorkspaceRemoteMountRoot, ...] = ()
     worktree_root: Path | None = None
     branch_name: str | None = None
 

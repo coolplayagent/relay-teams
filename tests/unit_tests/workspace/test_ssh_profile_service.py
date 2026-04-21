@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
@@ -223,6 +224,223 @@ def test_ssh_profile_service_probe_command_terminates_options_before_host(
         "-V",
         "echo relay-teams-ssh-probe",
     )
+
+
+def test_ssh_profile_service_runs_saved_profile_remote_command(
+    tmp_path: Path,
+) -> None:
+    captured_command: list[tuple[str, ...]] = []
+    captured_env: list[dict[str, str]] = []
+
+    def run_command(
+        command: Sequence[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        command_tuple = tuple(command)
+        captured_command.append(command_tuple)
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        captured_env.append({str(key): str(value) for key, value in env.items()})
+        return subprocess.CompletedProcess(
+            args=command_tuple,
+            returncode=0,
+            stdout="ok\n",
+            stderr="",
+        )
+
+    service = SshProfileService(
+        repository=SshProfileRepository(tmp_path / "workspace.db"),
+        config_dir=tmp_path,
+        secret_store=SshProfileSecretStore(secret_store=_FileOnlySecretStore()),
+        ssh_path_lookup=lambda _name: "/usr/bin/ssh",
+        process_runner=run_command,
+    )
+    _ = service.save_profile(
+        ssh_profile_id="prod",
+        config=SshProfileConfig(
+            host="prod-alias",
+            username="deploy",
+            password="secret",
+            port=2222,
+        ),
+    )
+
+    result = service.run_remote_command(
+        ssh_profile_id="prod",
+        command="printf ok",
+        timeout_seconds=3,
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "ok\n"
+    assert captured_env[0]["RELAY_TEAMS_SSH_PASSWORD"] == "secret"
+    assert captured_command[0][-3:] == ("--", "prod-alias", "printf ok")
+    assert "-p" in captured_command[0]
+    assert "2222" in captured_command[0]
+    assert "BatchMode=no" in captured_command[0]
+
+
+def test_ssh_profile_service_materializes_filesystem_mount(
+    tmp_path: Path,
+) -> None:
+    captured_command: list[tuple[str, ...]] = []
+    captured_env: list[dict[str, str]] = []
+
+    def run_command(
+        command: Sequence[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        command_tuple = tuple(command)
+        captured_command.append(command_tuple)
+        env = kwargs.get("env")
+        assert isinstance(env, dict)
+        captured_env.append({str(key): str(value) for key, value in env.items()})
+        return subprocess.CompletedProcess(
+            args=command_tuple,
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    service = SshProfileService(
+        repository=SshProfileRepository(tmp_path / "workspace.db"),
+        config_dir=tmp_path,
+        secret_store=SshProfileSecretStore(secret_store=_FileOnlySecretStore()),
+        ssh_path_lookup=lambda name: f"/usr/bin/{name}",
+        process_runner=run_command,
+    )
+    _ = service.save_profile(
+        ssh_profile_id="prod",
+        config=SshProfileConfig(
+            host="prod-alias",
+            username="deploy",
+            password="secret",
+            port=2222,
+        ),
+    )
+    local_root = tmp_path / "ssh_mount"
+
+    service.ensure_filesystem_mount(
+        ssh_profile_id="prod",
+        remote_root="/srv/app",
+        local_root=local_root,
+    )
+
+    assert local_root.is_dir()
+    assert captured_env[0]["RELAY_TEAMS_SSH_PASSWORD"] == "secret"
+    assert captured_command[0][0] == "/usr/bin/sshfs"
+    assert captured_command[0][1] == "deploy@prod-alias:/srv/app"
+    assert captured_command[0][2] == str(local_root.resolve())
+    assert "-p" in captured_command[0]
+    assert "2222" in captured_command[0]
+    assert "BatchMode=no" in captured_command[0]
+
+
+def test_ssh_profile_service_validates_existing_filesystem_mount_signature(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_command: list[tuple[str, ...]] = []
+
+    def run_command(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        command_tuple = tuple(command)
+        captured_command.append(command_tuple)
+        return subprocess.CompletedProcess(
+            args=command_tuple,
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+    service = SshProfileService(
+        repository=SshProfileRepository(tmp_path / "workspace.db"),
+        config_dir=tmp_path,
+        secret_store=SshProfileSecretStore(secret_store=_FileOnlySecretStore()),
+        ssh_path_lookup=lambda name: f"/usr/bin/{name}",
+        process_runner=run_command,
+    )
+    _ = service.save_profile(
+        ssh_profile_id="prod",
+        config=SshProfileConfig(host="prod-alias", username="deploy", port=2222),
+    )
+    local_root = tmp_path / "ssh_mount"
+    service.ensure_filesystem_mount(
+        ssh_profile_id="prod",
+        remote_root="/srv/app",
+        local_root=local_root,
+    )
+    signature_path = local_root.parent / ".ssh_mount.sshfs.json"
+    assert signature_path.is_file()
+
+    original_is_mount = Path.is_mount
+
+    def fake_is_mount(path: Path) -> bool:
+        if path == local_root.resolve():
+            return True
+        return original_is_mount(path)
+
+    monkeypatch.setattr(Path, "is_mount", fake_is_mount)
+
+    captured_command.clear()
+    service.ensure_filesystem_mount(
+        ssh_profile_id="prod",
+        remote_root="/srv/app",
+        local_root=local_root,
+    )
+    assert captured_command == []
+
+    _ = service.save_profile(
+        ssh_profile_id="prod",
+        config=SshProfileConfig(host="new-prod-alias", username="deploy", port=2222),
+    )
+    with pytest.raises(ValueError, match="cannot be reused"):
+        service.ensure_filesystem_mount(
+            ssh_profile_id="prod",
+            remote_root="/srv/app",
+            local_root=local_root,
+        )
+
+
+def test_ssh_profile_service_prepares_remote_process_command(
+    tmp_path: Path,
+) -> None:
+    service = SshProfileService(
+        repository=SshProfileRepository(tmp_path / "workspace.db"),
+        config_dir=tmp_path,
+        secret_store=SshProfileSecretStore(secret_store=_FileOnlySecretStore()),
+        ssh_path_lookup=lambda name: f"/usr/bin/{name}",
+    )
+    _ = service.save_profile(
+        ssh_profile_id="prod",
+        config=SshProfileConfig(
+            host="prod-alias",
+            username="deploy",
+            password="secret",
+            port=2222,
+            remote_shell="/bin/bash",
+        ),
+    )
+
+    prepared = service.prepare_remote_command(
+        ssh_profile_id="prod",
+        command='printf "$AGENT_TEAMS_CURRENT_ROLE_ID"',
+        cwd="/srv/app",
+        env={"AGENT_TEAMS_CURRENT_ROLE_ID": "writer", "1INVALID": "ignored"},
+        tty=True,
+    )
+
+    assert prepared.argv[:2] == ("/usr/bin/ssh", "-o")
+    assert "-tt" in prepared.argv
+    assert prepared.argv[-3:-1] == ("--", "prod-alias")
+    assert "cd /srv/app && env AGENT_TEAMS_CURRENT_ROLE_ID=writer" in prepared.argv[-1]
+    assert "/bin/bash -lc" in prepared.argv[-1]
+    assert "1INVALID" not in prepared.argv[-1]
+    assert prepared.env["RELAY_TEAMS_SSH_PASSWORD"] == "secret"
+    assert prepared.temp_root.is_dir()
+    shutil.rmtree(prepared.temp_root)
 
 
 def test_ssh_profile_service_windows_askpass_reads_password_from_environment(

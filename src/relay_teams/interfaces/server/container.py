@@ -313,6 +313,7 @@ class ServerContainer:
             project_root=Path.cwd(),
             app_config_dir=app_config_dir,
             workspace_repo=self.workspace_repo,
+            ssh_profile_service=self.ssh_profile_service,
             builtin_skills_dir=get_builtin_skills_dir(),
             app_skills_dir=app_config_dir / "skills",
         )
@@ -457,6 +458,7 @@ class ServerContainer:
             repository=self.background_task_repository,
             run_event_hub=self.run_event_hub,
             monitor_service=self.monitor_service,
+            ssh_profile_service=self.ssh_profile_service,
         )
         self.background_task_service = BackgroundTaskService(
             background_task_manager=self.background_task_manager,
