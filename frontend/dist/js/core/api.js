@@ -3,6 +3,7 @@
  * Backward-compatible facade. New implementation lives under ./api/.
  */
 export {
+    answerUserQuestion,
     fetchSessions,
     startNewSession,
     fetchSessionHistory,
@@ -21,6 +22,8 @@ export {
     sendUserPrompt,
     resolveGate,
     resolveToolApproval,
+    listUserQuestions,
+    dispatchHumanTask,
     injectMessage,
     injectSubagentMessage,
     resumeRun,

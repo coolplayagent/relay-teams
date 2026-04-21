@@ -820,11 +820,13 @@ Gets one round projection.
 
 ### `GET /sessions/{session_id}/recovery`
 
-Returns active run recovery state, pending tool approvals, managed background task state, paused subagent state, and round snapshot.
+Returns active run recovery state, pending tool approvals, pending user questions, managed background task state, paused subagent state, and round snapshot.
 
 `active_run` also includes:
 - `last_event_id`
 - `checkpoint_event_id`
+- `pending_tool_approval_count`
+- `pending_user_question_count`
 - `background_task_count`
 - `stream_connected`
 - `should_show_recover`
@@ -833,6 +835,38 @@ Returns active run recovery state, pending tool approvals, managed background ta
 For `running` or `queued` recoverable runs, the frontend uses these event ids to automatically reconnect the SSE stream without a manual "Connect Stream" action.
 `round_snapshot` mirrors the same round projection contract as `/sessions/{session_id}/rounds/{run_id}`, including `primary_role_id`.
 `round_snapshot.background_task_count` mirrors the current managed background task count for the active run.
+When a run is waiting for an `ask_question` answer, the public `active_run.phase` is `awaiting_manual_action`.
+
+`pending_user_questions[]` entries include:
+- `question_id`
+- `run_id`
+- `session_id`
+- `task_id`
+- `instance_id`
+- `role_id`
+- `tool_name`: currently always `ask_question`
+- `status`: `requested | answered | timed_out | completed`
+- `questions[]`
+  - `header`
+  - `question`
+  - `options[]`
+    - `label`
+    - `description`
+  - `multiple`
+  - `placeholder`
+- `answers[]`
+  - `selections[]`
+    - `label`
+    - `supplement`
+- `created_at`
+- `updated_at`
+- `resolved_at`
+
+Notes:
+- The `ask_question` tool uses one batched request per tool call, so `questions[]` may contain multiple prompts.
+- Each prompt must provide at least one caller-defined option in `options[]`.
+- Every question automatically includes a synthetic `None of the above` option in `options[]`.
+- `answers[]` follows the same validation rules as `POST /runs/{run_id}/questions/{question_id}:answer`.
 
 `background_tasks[]` entries include:
 - `background_task_id`
@@ -1090,6 +1124,9 @@ Retry events:
 - `llm_retry_exhausted`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `error_code`, and `error_message`.
 - `run_paused`: payload includes `task_id`, `instance_id`, `role_id`, `error_code`, `error_message`, `retries_used`, `total_attempts`, and `phase="awaiting_recovery"`. For `model_tool_args_invalid_json`, the payload also includes `auto_recovery_exhausted`, `attempt`, and `max_attempts`.
 - `run_resumed`: payload always includes `session_id` and `reason`. When the backend auto-recovers a malformed tool-arguments response, `reason="auto_recovery_invalid_tool_args_json"` and the payload also includes `attempt` and `max_attempts`.
+- User-question lifecycle events:
+  - `user_question_requested`: payload includes `question_id`, `instance_id`, `role_id`, and `questions[]`.
+  - `user_question_answered`: payload includes `question_id`, `instance_id`, `role_id`, and `answers[]`.
 - Background task lifecycle events:
   - `background_task_started`
   - `background_task_updated`
@@ -1110,6 +1147,7 @@ Frontend behavior:
 - If a model emits malformed tool arguments JSON after a safe checkpoint, the backend may emit `run_resumed` with `reason="auto_recovery_invalid_tool_args_json"` and continue the same stream without surfacing `run_paused`.
 - If the run still cannot continue safely after retries are exhausted, `llm_retry_exhausted` is followed by `run_paused` and the SSE stream closes for that turn.
 - `run_paused` represents a recoverable interruption, not a terminal failure. Public run phase becomes `awaiting_recovery`.
+- `user_question_requested` is a manual-interaction pause, not a failure. Public run phase becomes `awaiting_manual_action` until the question is answered or times out.
 - Background task events are operator/UI continuity signals only. They update recovery state and `/ps`-style UI surfaces, but do not become model-visible conversation messages.
 
 ### `POST /runs/{run_id}/inject`
@@ -1119,6 +1157,83 @@ Injects follow-up content to active agents in a run.
 ### `GET /runs/{run_id}/tool-approvals`
 
 Lists pending tool approvals.
+
+### `GET /runs/{run_id}/questions`
+
+Lists persisted `ask_question` requests for the run.
+
+Response fields:
+- `question_id`
+- `run_id`
+- `session_id`
+- `task_id`
+- `instance_id`
+- `role_id`
+- `tool_name`: currently always `ask_question`
+- `status`: `requested | answered | timed_out | completed`
+- `questions[]`
+  - `header`
+  - `question`
+  - `options[]`
+    - `label`
+    - `description`
+  - `multiple`
+  - `placeholder`
+- `answers[]`
+  - `selections[]`
+    - `label`
+    - `supplement`
+- `created_at`
+- `updated_at`
+- `resolved_at`
+
+Notes:
+- The endpoint returns all persisted question requests for the run, ordered by creation time.
+- Open requests are the rows with `status="requested"`.
+- The `ask_question` tool uses one batched request per tool call, so `questions[]` may contain multiple prompts.
+- Each prompt must provide at least one caller-defined option in `options[]`.
+- Every question automatically includes a synthetic `None of the above` option in `options[]`.
+- The tool has an internal default wait timeout of 20 minutes. Timed-out requests remain queryable with `status="timed_out"`.
+
+### `POST /runs/{run_id}/questions/{question_id}:answer`
+
+Answers one pending `ask_question` request.
+
+Request:
+
+```json
+{
+  "answers": [
+    {
+      "selections": [
+        {"label": "Backend"},
+        {"label": "CLI", "supplement": "Primary implementation surface"}
+      ]
+    },
+    {
+      "selections": [
+        {
+          "label": "__none_of_the_above__",
+          "supplement": "Use the opencode-style batched question format."
+        }
+      ]
+    }
+  ]
+}
+```
+
+Answer rules:
+- `answers[]` length must exactly match the original `questions[]` length.
+- Each answer must provide `selections[]`.
+- `selections[].label` values must match the original option `label` values exactly.
+- `selections[].supplement` is optional and applies only to that selected option.
+- For prompts with `multiple=false`, `selections[]` may contain at most one item.
+- `__none_of_the_above__` is always available and cannot be combined with any other option.
+
+Notes:
+- Successful answers are persisted first, then the in-flight waiting tool call is resumed when it is still open.
+- If the run is recoverable and currently paused or stopped, the backend may resume it automatically after accepting the answer.
+- Returns `409` when the run is stopping or the question is no longer pending.
 
 ### `GET /runs/{run_id}/background-tasks`
 
@@ -1405,7 +1520,7 @@ Resumes a recoverable run.
 
 Behavior:
 - Recoverable runs in `queued`, `paused`, or `stopped` may be resumed.
-- Runs paused for `awaiting_tool_approval` or `awaiting_subagent_followup` are not resumed by this endpoint; those flows still require their dedicated resolution action.
+- Runs paused for `awaiting_tool_approval`, `awaiting_manual_action`, or `awaiting_subagent_followup` are not resumed by this endpoint; those flows still require their dedicated resolution action.
 
 ### `POST /runs/{run_id}/subagents/{instance_id}/inject`
 

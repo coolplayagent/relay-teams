@@ -25,6 +25,7 @@ from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRepository,
     ApprovalTicketStatus,
+    ApprovalTicketStatusConflictError,
 )
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
@@ -400,6 +401,66 @@ def test_execute_tool_returns_timeout_error_when_approval_times_out() -> None:
     assert runtime_meta["approval_mode"] == "approval_flow"
     assert ticket is not None
     assert ticket.status == ApprovalTicketStatus.TIMED_OUT
+
+
+def test_execute_tool_honors_persisted_approval_when_timeout_loses_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(timeout=True),
+        policy=_FakePolicy(needs_approval=True, timeout_seconds=0.01),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-model-race"
+    original_resolve = deps.approval_ticket_repo.resolve
+
+    def resolve_with_approved_race(
+        *,
+        tool_call_id: str,
+        status: ApprovalTicketStatus,
+        feedback: str = "",
+        expected_status: ApprovalTicketStatus | None = None,
+    ):
+        if (
+            tool_call_id == "call-model-race"
+            and status == ApprovalTicketStatus.TIMED_OUT
+            and expected_status == ApprovalTicketStatus.REQUESTED
+        ):
+            _ = original_resolve(
+                tool_call_id=tool_call_id,
+                status=ApprovalTicketStatus.APPROVED,
+                feedback="approved elsewhere",
+            )
+            raise ApprovalTicketStatusConflictError(
+                tool_call_id=tool_call_id,
+                expected_status=ApprovalTicketStatus.REQUESTED,
+                actual_status=ApprovalTicketStatus.APPROVED,
+            )
+        return original_resolve(
+            tool_call_id=tool_call_id,
+            status=status,
+            feedback=feedback,
+            expected_status=expected_status,
+        )
+
+    monkeypatch.setattr(
+        deps.approval_ticket_repo, "resolve", resolve_with_approved_race
+    )
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="shell",
+            args_summary={"command": "echo hi"},
+            action=lambda: "executed",
+        )
+    )
+
+    ticket = deps.approval_ticket_repo.get("call-model-race")
+    assert result["ok"] is True
+    assert result["data"] == "executed"
+    assert ticket is not None
+    assert ticket.status == ApprovalTicketStatus.COMPLETED
 
 
 def test_execute_tool_preserves_custom_tool_error_details() -> None:

@@ -42,8 +42,11 @@ from relay_teams.sessions.runs.recoverable_pause import (
     RecoverableRunPausePayload,
 )
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
-from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketStatus
+from relay_teams.tools.runtime.approval_ticket_repo import (
+    ApprovalTicketRepository,
+    ApprovalTicketStatus,
+    ApprovalTicketStatusConflictError,
+)
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
@@ -51,6 +54,22 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
+)
+from relay_teams.sessions.runs.user_question_manager import (
+    UserQuestionClosedError,
+    UserQuestionManager,
+)
+from relay_teams.sessions.runs.user_question_models import (
+    UserQuestionAnswer,
+    UserQuestionAnswerSubmission,
+    UserQuestionOption,
+    UserQuestionPrompt,
+    UserQuestionRequestStatus,
+    UserQuestionSelection,
+)
+from relay_teams.sessions.runs.user_question_repository import (
+    UserQuestionRepository,
+    UserQuestionStatusConflictError,
 )
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 from relay_teams.sessions.session_models import SessionRecord
@@ -121,6 +140,7 @@ def _build_manager(
     run_state_repo = RunStateRepository(db_path)
     run_runtime_repo = RunRuntimeRepository(db_path)
     approval_ticket_repo = ApprovalTicketRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
     shell_approval_repo = ShellApprovalRepository(db_path)
     hub = RunEventHub(event_log=event_log, run_state_repo=run_state_repo)
     active_run_registry = ActiveSessionRunRegistry(run_runtime_repo=run_runtime_repo)
@@ -146,6 +166,7 @@ def _build_manager(
         agent_repo=agent_repo,
         message_repo=message_repo,
         approval_ticket_repo=approval_ticket_repo,
+        user_question_repo=user_question_repo,
         run_runtime_repo=run_runtime_repo,
         run_intent_repo=RunIntentRepository(db_path),
         run_state_repo=run_state_repo,
@@ -154,6 +175,7 @@ def _build_manager(
         monitor_service=monitor_service,
         notification_service=None,
         shell_approval_repo=shell_approval_repo,
+        user_question_manager=UserQuestionManager(),
     )
 
 
@@ -896,6 +918,128 @@ def test_create_run_blocks_when_tool_approval_pending(tmp_path: Path) -> None:
         )
 
 
+def test_create_run_blocks_when_subagent_question_is_pending_in_session(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_pending_subagent_question.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _upsert_coordinator(AgentInstanceRepository(db_path))
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.IDLE,
+    )
+    runtime_repo.ensure(
+        run_id="subagent-run",
+        session_id="session-1",
+        root_task_id="task-root-subagent",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="question-subagent",
+        run_id="subagent-run",
+        session_id="session-1",
+        task_id="task-root-subagent",
+        instance_id="inst-subagent",
+        role_id="Researcher",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Need a clarification",
+                options=(
+                    UserQuestionOption(
+                        label="Continue",
+                        description="Proceed with the current plan",
+                    ),
+                ),
+                multiple=False,
+            ),
+        ),
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+
+    with pytest.raises(RuntimeError, match="waiting for manual action"):
+        manager.create_run(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("continue"),
+            )
+        )
+
+
+def test_create_run_ignores_orphaned_pending_question_rows_in_session(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_orphaned_subagent_question.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _upsert_coordinator(AgentInstanceRepository(db_path))
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.IDLE,
+    )
+    user_question_repo.upsert_requested(
+        question_id="question-orphaned-subagent",
+        run_id="stale-subagent-run",
+        session_id="session-1",
+        task_id="task-root-subagent",
+        instance_id="inst-subagent",
+        role_id="Researcher",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Need a clarification",
+                options=(
+                    UserQuestionOption(
+                        label="Continue",
+                        description="Proceed with the current plan",
+                    ),
+                ),
+                multiple=False,
+            ),
+        ),
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-existing",
+    )
+
+    run_id, session_id = manager.create_run(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("continue"),
+        )
+    )
+
+    assert run_id == "run-existing"
+    assert session_id == "session-1"
+    assert "run-existing" in manager._resume_requested_runs
+
+
 def test_create_detached_run_preserves_default_root_instance_reuse(
     tmp_path: Path,
 ) -> None:
@@ -1092,6 +1236,135 @@ def test_resolve_tool_approval_requires_resume_for_stopped_run(
     assert ticket.status.value == "requested"
 
 
+def test_stop_subagent_does_not_complete_questions_when_stop_is_rejected(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_stop_subagent_rejected.db"
+    manager = _build_manager(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    _upsert_coordinator(AgentInstanceRepository(db_path))
+    user_question_repo.upsert_requested(
+        question_id="call-question-1",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+    question_manager = manager._user_question_manager
+    assert question_manager is not None
+    question_manager.open_question(
+        run_id="run-existing",
+        question_id="call-question-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+    )
+
+    with pytest.raises(
+        ValueError, match="Stopping coordinator via subagent API is not allowed"
+    ):
+        manager.stop_subagent("run-existing", "inst-1")
+
+    record = user_question_repo.get("call-question-1")
+    assert record is not None
+    assert record.status == UserQuestionRequestStatus.REQUESTED
+    assert (
+        question_manager.get_question(
+            run_id="run-existing",
+            question_id="call-question-1",
+        )
+        is not None
+    )
+
+
+def test_stop_subagent_completes_questions_and_emits_resolution_event(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_stop_subagent_question_event.db"
+    manager = _build_manager(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _create_root_task(task_repo)
+    run_runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    _upsert_coordinator(agent_repo)
+    _upsert_instance(
+        agent_repo,
+        instance_id="inst-2",
+        role_id="Writer",
+        status=InstanceStatus.RUNNING,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-2",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-2",
+        role_id="Writer",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+    question_manager = manager._user_question_manager
+    assert question_manager is not None
+    question_manager.open_question(
+        run_id="run-existing",
+        question_id="call-question-2",
+        instance_id="inst-2",
+        role_id="Writer",
+    )
+
+    result = manager.stop_subagent("run-existing", "inst-2")
+
+    assert result["instance_id"] == "inst-2"
+    record = user_question_repo.get("call-question-2")
+    assert record is not None
+    assert record.status == UserQuestionRequestStatus.COMPLETED
+    assert (
+        question_manager.get_question(
+            run_id="run-existing",
+            question_id="call-question-2",
+        )
+        is None
+    )
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    assert [event["event_type"] for event in events[-2:]] == [
+        RunEventType.SUBAGENT_STOPPED.value,
+        RunEventType.USER_QUESTION_ANSWERED.value,
+    ]
+    resolved_payload = json.loads(str(events[-1]["payload_json"]))
+    assert resolved_payload == {
+        "question_id": "call-question-2",
+        "status": UserQuestionRequestStatus.COMPLETED.value,
+        "instance_id": "inst-2",
+        "role_id": "Writer",
+    }
+
+
 def test_resume_run_allows_stopped_run_with_pending_tool_approval(
     tmp_path: Path,
 ) -> None:
@@ -1201,7 +1474,8 @@ def test_resolve_tool_approval_does_not_persist_shell_grant_from_resolved_ticket
         status=ApprovalTicketStatus.APPROVED,
     )
 
-    manager.resolve_tool_approval("run-existing", "call-shell-1", "approve_exact")
+    with pytest.raises(RuntimeError, match="already approved"):
+        manager.resolve_tool_approval("run-existing", "call-shell-1", "approve_exact")
 
     shell_repo = ShellApprovalRepository(db_path)
     assert (
@@ -1258,6 +1532,161 @@ def test_resolve_tool_approval_rejects_cross_run_ticket_for_shell_grant(
         )
         is None
     )
+
+
+def test_resolve_tool_approval_tolerates_publish_failure(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_approval_publish_failure.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
+    )
+    ApprovalTicketRepository(db_path).upsert_requested(
+        tool_call_id="call-1",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="create_tasks",
+        args_preview="{}",
+    )
+    manager._tool_approval_manager.open_approval(
+        run_id="run-existing",
+        tool_call_id="call-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="create_tasks",
+        args_preview="{}",
+    )
+
+    def raise_publish(event: RunEvent) -> None:
+        del event
+        raise RuntimeError("publish failed")
+
+    setattr(manager._run_event_hub, "publish", raise_publish)
+
+    manager.resolve_tool_approval("run-existing", "call-1", "approve")
+
+    ticket = ApprovalTicketRepository(db_path).get("call-1")
+    assert ticket is not None
+    assert ticket.status == ApprovalTicketStatus.APPROVED
+    assert manager.list_open_tool_approvals("run-existing") == []
+
+
+def test_resolve_tool_approval_returns_conflict_when_ticket_was_resolved_mid_submit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_approval_conflict.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    ticket_repo = ApprovalTicketRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
+    )
+    ticket_repo.upsert_requested(
+        tool_call_id="call-1",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="create_tasks",
+        args_preview="{}",
+    )
+    original_resolve = ticket_repo.resolve
+
+    def resolve_with_conflict(*, tool_call_id: str, **kwargs: object):
+        _ = kwargs
+        _ = original_resolve(
+            tool_call_id=tool_call_id,
+            status=ApprovalTicketStatus.DENIED,
+        )
+        raise ApprovalTicketStatusConflictError(
+            tool_call_id=tool_call_id,
+            expected_status=ApprovalTicketStatus.REQUESTED,
+            actual_status=ApprovalTicketStatus.DENIED,
+        )
+
+    monkeypatch.setattr(manager._approval_ticket_repo, "resolve", resolve_with_conflict)
+
+    with pytest.raises(RuntimeError, match="already denied"):
+        manager.resolve_tool_approval("run-existing", "call-1", "approve")
+
+    ticket = ticket_repo.get("call-1")
+    assert ticket is not None
+    assert ticket.status == ApprovalTicketStatus.DENIED
+
+
+def test_resolve_tool_approval_tolerates_missing_in_memory_entry_after_persist(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_approval_missing_in_memory.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    ticket_repo = ApprovalTicketRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
+    )
+    ticket_repo.upsert_requested(
+        tool_call_id="call-1",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="create_tasks",
+        args_preview="{}",
+    )
+    manager._tool_approval_manager.open_approval(
+        run_id="run-existing",
+        tool_call_id="call-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="create_tasks",
+        args_preview="{}",
+    )
+
+    def resolve_missing(**kwargs: object) -> None:
+        manager._tool_approval_manager.close_approval(
+            run_id="run-existing",
+            tool_call_id="call-1",
+        )
+        raise KeyError(str(kwargs))
+
+    monkeypatch.setattr(
+        manager._tool_approval_manager, "resolve_approval", resolve_missing
+    )
+
+    manager.resolve_tool_approval("run-existing", "call-1", "approve")
+
+    ticket = ticket_repo.get("call-1")
+    assert ticket is not None
+    assert ticket.status == ApprovalTicketStatus.APPROVED
+    assert manager.list_open_tool_approvals("run-existing") == []
 
 
 def test_resume_run_rejects_running_run(tmp_path: Path) -> None:
@@ -2350,3 +2779,972 @@ async def test_stream_run_events_does_not_start_pending_run_worker(
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+def test_answer_user_question_validates_payload_and_auto_resumes_stopped_run(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_answer_user_question.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-1",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick labels",
+                options=(
+                    UserQuestionOption(label="A", description="Option A"),
+                    UserQuestionOption(label="B", description="Option B"),
+                ),
+                multiple=True,
+            ),
+            UserQuestionPrompt(
+                question="Pick fallback",
+                options=(UserQuestionOption(label="Default", description="Default"),),
+                multiple=False,
+                placeholder="Add details",
+            ),
+        ),
+    )
+    ensured: list[str] = []
+    manager.ensure_run_started = lambda run_id: ensured.append(run_id)
+
+    result = manager.answer_user_question(
+        run_id="run-existing",
+        question_id="call-question-1",
+        answers=UserQuestionAnswerSubmission.model_validate(
+            {
+                "answers": [
+                    {
+                        "selections": [
+                            {"label": "A"},
+                            {"label": "B", "supplement": "Need both paths"},
+                        ]
+                    },
+                    {
+                        "selections": [
+                            {
+                                "label": "__none_of_the_above__",
+                                "supplement": "Need both paths",
+                            }
+                        ]
+                    },
+                ]
+            }
+        ),
+    )
+
+    assert result["status"] == "answered"
+    assert "run-existing" in manager._resume_requested_runs
+    assert ensured == ["run-existing"]
+    record = user_question_repo.get("call-question-1")
+    assert record is not None
+    assert record.status.value == "answered"
+
+
+def test_answer_user_question_skips_resume_when_session_has_other_pending_question(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_answer_user_question_pending_session.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-1",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-2",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick another",
+                options=(UserQuestionOption(label="Later", description="Later"),),
+                multiple=False,
+            ),
+        ),
+    )
+
+    resume_calls: list[str] = []
+    ensured: list[str] = []
+    manager.resume_run = lambda run_id: resume_calls.append(run_id) or "session-1"
+    manager.ensure_run_started = lambda run_id: ensured.append(run_id)
+
+    result = manager.answer_user_question(
+        run_id="run-existing",
+        question_id="call-question-1",
+        answers=UserQuestionAnswerSubmission.model_validate(
+            {
+                "answers": [
+                    {
+                        "selections": [
+                            {"label": "Only"},
+                        ]
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert result["status"] == "answered"
+    assert resume_calls == []
+    assert ensured == []
+    answered_record = user_question_repo.get("call-question-1")
+    assert answered_record is not None
+    assert answered_record.status.value == "answered"
+    pending_record = user_question_repo.get("call-question-2")
+    assert pending_record is not None
+    assert pending_record.status.value == "requested"
+
+
+def test_answer_user_question_ignores_orphaned_pending_session_question_for_resume(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_answer_user_question_orphaned_session.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-1",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-orphaned",
+        run_id="run-missing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-missing",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Missing run question",
+                options=(UserQuestionOption(label="Ignore", description="Ignore"),),
+                multiple=False,
+            ),
+        ),
+    )
+
+    ensured: list[str] = []
+    manager.ensure_run_started = lambda run_id: ensured.append(run_id)
+
+    result = manager.answer_user_question(
+        run_id="run-existing",
+        question_id="call-question-1",
+        answers=UserQuestionAnswerSubmission.model_validate(
+            {
+                "answers": [
+                    {
+                        "selections": [
+                            {"label": "Only"},
+                        ]
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert result["status"] == "answered"
+    assert "run-existing" in manager._resume_requested_runs
+    assert ensured == ["run-existing"]
+    answered_record = user_question_repo.get("call-question-1")
+    assert answered_record is not None
+    assert answered_record.status.value == "answered"
+    orphaned_record = user_question_repo.get("call-question-orphaned")
+    assert orphaned_record is not None
+    assert orphaned_record.status.value == "requested"
+
+
+def test_answer_user_question_skips_resume_when_run_becomes_running_during_submit(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_answer_user_question_running_race.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="subagent_run_sync123",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "subagent_run_sync123",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-race",
+        run_id="subagent_run_sync123",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-subagent",
+        role_id="Explorer",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+    original_runtime_for_run = manager._runtime_for_run
+    call_count = 0
+
+    def runtime_for_run(run_id: str):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 3:
+            runtime_repo.update(
+                "subagent_run_sync123",
+                status=RunRuntimeStatus.RUNNING,
+                phase=RunRuntimePhase.SUBAGENT_RUNNING,
+            )
+        return original_runtime_for_run(run_id)
+
+    setattr(manager, "_runtime_for_run", runtime_for_run)
+    ensured: list[str] = []
+    manager.ensure_run_started = lambda run_id: ensured.append(run_id)
+
+    result = manager.answer_user_question(
+        run_id="subagent_run_sync123",
+        question_id="call-question-race",
+        answers=UserQuestionAnswerSubmission.model_validate(
+            {
+                "answers": [
+                    {
+                        "selections": [
+                            {"label": "Only"},
+                        ]
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert result["status"] == "answered"
+    assert ensured == []
+    assert "subagent_run_sync123" not in manager._resume_requested_runs
+    record = user_question_repo.get("call-question-race")
+    assert record is not None
+    assert record.status.value == "answered"
+
+
+def test_answer_user_question_skips_resume_when_agent_is_still_running(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_answer_user_question_running_agent.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root-subagent",
+            session_id="session-1",
+            parent_task_id=None,
+            trace_id="subagent_run_sync123",
+            role_id="Explorer",
+            objective="subagent work",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    agent_repo.upsert_instance(
+        run_id="subagent_run_sync123",
+        trace_id="subagent_run_sync123",
+        session_id="session-1",
+        instance_id="inst-subagent",
+        role_id="Explorer",
+        workspace_id="default",
+        status=InstanceStatus.RUNNING,
+    )
+    runtime_repo.ensure(
+        run_id="subagent_run_sync123",
+        session_id="session-1",
+        root_task_id="task-root-subagent",
+    )
+    runtime_repo.update(
+        "subagent_run_sync123",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-running-agent",
+        run_id="subagent_run_sync123",
+        session_id="session-1",
+        task_id="task-root-subagent",
+        instance_id="inst-subagent",
+        role_id="Explorer",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+
+    resume_calls: list[str] = []
+    ensured: list[str] = []
+    manager.resume_run = lambda run_id: resume_calls.append(run_id) or "session-1"
+    manager.ensure_run_started = lambda run_id: ensured.append(run_id)
+
+    result = manager.answer_user_question(
+        run_id="subagent_run_sync123",
+        question_id="call-question-running-agent",
+        answers=UserQuestionAnswerSubmission.model_validate(
+            {
+                "answers": [
+                    {
+                        "selections": [
+                            {"label": "Only"},
+                        ]
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert result["status"] == "answered"
+    assert resume_calls == []
+    assert ensured == []
+    record = user_question_repo.get("call-question-running-agent")
+    assert record is not None
+    assert record.status.value == "answered"
+
+
+def test_answer_user_question_tolerates_publish_failure_and_still_resumes(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_answer_user_question_publish_failure.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-publish-failure",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+
+    def raise_publish(event: RunEvent) -> None:
+        del event
+        raise RuntimeError("publish failed")
+
+    setattr(manager._run_event_hub, "publish", raise_publish)
+    ensured: list[str] = []
+    manager.ensure_run_started = lambda run_id: ensured.append(run_id)
+
+    result = manager.answer_user_question(
+        run_id="run-existing",
+        question_id="call-question-publish-failure",
+        answers=UserQuestionAnswerSubmission.model_validate(
+            {
+                "answers": [
+                    {
+                        "selections": [
+                            {"label": "Only"},
+                        ]
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert result["status"] == "answered"
+    assert "run-existing" in manager._resume_requested_runs
+    assert ensured == ["run-existing"]
+    record = user_question_repo.get("call-question-publish-failure")
+    assert record is not None
+    assert record.status.value == "answered"
+
+
+def test_answer_user_question_tolerates_closed_manager_entry_after_persist(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_answer_user_question_closed_manager.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-closed-manager",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+    question_manager = manager._user_question_manager
+    assert question_manager is not None
+    question_manager.open_question(
+        run_id="run-existing",
+        question_id="call-question-closed-manager",
+        instance_id="inst-1",
+        role_id="Coordinator",
+    )
+
+    def resolve_missing(**kwargs: object) -> None:
+        question_manager.close_question(
+            run_id="run-existing",
+            question_id="call-question-closed-manager",
+            reason="stopped",
+        )
+        raise UserQuestionClosedError(str(kwargs))
+
+    monkeypatch.setattr(question_manager, "resolve_question", resolve_missing)
+    ensured: list[str] = []
+    manager.ensure_run_started = lambda run_id: ensured.append(run_id)
+
+    result = manager.answer_user_question(
+        run_id="run-existing",
+        question_id="call-question-closed-manager",
+        answers=UserQuestionAnswerSubmission.model_validate(
+            {
+                "answers": [
+                    {
+                        "selections": [
+                            {"label": "Only"},
+                        ]
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert result["status"] == "answered"
+    assert "run-existing" in manager._resume_requested_runs
+    assert ensured == ["run-existing"]
+    record = user_question_repo.get("call-question-closed-manager")
+    assert record is not None
+    assert record.status == UserQuestionRequestStatus.ANSWERED
+
+
+def test_answer_user_question_returns_conflict_when_question_was_completed_mid_submit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_answer_user_question_completed_race.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-completed-race",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+    original_resolve = user_question_repo.resolve
+
+    def resolve_with_conflict(*, question_id: str, **kwargs: object):
+        _ = kwargs
+        _ = original_resolve(
+            question_id=question_id,
+            status=UserQuestionRequestStatus.COMPLETED,
+        )
+        raise UserQuestionStatusConflictError(
+            question_id=question_id,
+            expected_status=UserQuestionRequestStatus.REQUESTED,
+            actual_status=UserQuestionRequestStatus.COMPLETED,
+        )
+
+    manager_repo = manager._user_question_repo
+    assert manager_repo is not None
+    monkeypatch.setattr(manager_repo, "resolve", resolve_with_conflict)
+    ensured: list[str] = []
+    manager.ensure_run_started = lambda run_id: ensured.append(run_id)
+
+    with pytest.raises(RuntimeError, match="was already completed"):
+        manager.answer_user_question(
+            run_id="run-existing",
+            question_id="call-question-completed-race",
+            answers=UserQuestionAnswerSubmission.model_validate(
+                {
+                    "answers": [
+                        {
+                            "selections": [
+                                {"label": "Only"},
+                            ]
+                        }
+                    ]
+                }
+            ),
+        )
+
+    assert ensured == []
+    assert "run-existing" not in manager._resume_requested_runs
+    record = user_question_repo.get("call-question-completed-race")
+    assert record is not None
+    assert record.status == UserQuestionRequestStatus.COMPLETED
+
+
+def test_answer_user_question_rejects_invalid_multiple_choice(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_answer_user_question_invalid.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-2",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only option"),),
+                multiple=False,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="does not allow multiple choices"):
+        manager.answer_user_question(
+            run_id="run-existing",
+            question_id="call-question-2",
+            answers=UserQuestionAnswerSubmission.model_validate(
+                {
+                    "answers": [
+                        {
+                            "selections": [
+                                {"label": "Only"},
+                                {"label": "Extra"},
+                            ]
+                        }
+                    ]
+                }
+            ),
+        )
+
+
+def test_answer_user_question_rejects_none_of_the_above_with_other_options(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_answer_user_question_none_conflict.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-3",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only option"),),
+                multiple=True,
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="cannot combine None of the above"):
+        manager.answer_user_question(
+            run_id="run-existing",
+            question_id="call-question-3",
+            answers=UserQuestionAnswerSubmission.model_validate(
+                {
+                    "answers": [
+                        {
+                            "selections": [
+                                {"label": "Only"},
+                                {"label": "__none_of_the_above__"},
+                            ]
+                        }
+                    ]
+                }
+            ),
+        )
+
+
+def test_stop_run_completes_pending_user_questions_and_closes_manager_entries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_stop_user_questions.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-stop",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+    question_manager = manager._user_question_manager
+    assert question_manager is not None
+    question_manager.open_question(
+        run_id="run-existing",
+        question_id="call-question-stop",
+        instance_id="inst-1",
+        role_id="Coordinator",
+    )
+    manager._running_run_ids.add("run-existing")
+    monkeypatch.setattr(
+        manager._run_control_manager, "request_run_stop", lambda _run_id: True
+    )
+
+    manager.stop_run("run-existing")
+
+    record = user_question_repo.get("call-question-stop")
+    assert record is not None
+    assert record.status == UserQuestionRequestStatus.COMPLETED
+    assert (
+        question_manager.get_question(
+            run_id="run-existing",
+            question_id="call-question-stop",
+        )
+        is None
+    )
+    assert user_question_repo.list_by_run("run-existing") == ()
+
+
+def test_stop_run_does_not_complete_questions_when_stop_request_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_stop_user_questions_request_failed.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-stop-failed",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+    question_manager = manager._user_question_manager
+    assert question_manager is not None
+    question_manager.open_question(
+        run_id="run-existing",
+        question_id="call-question-stop-failed",
+        instance_id="inst-1",
+        role_id="Coordinator",
+    )
+    monkeypatch.setattr(
+        manager._run_control_manager, "request_run_stop", lambda _run_id: False
+    )
+
+    with pytest.raises(KeyError, match="Run run-existing not found"):
+        manager.stop_run("run-existing")
+
+    record = user_question_repo.get("call-question-stop-failed")
+    assert record is not None
+    assert record.status == UserQuestionRequestStatus.REQUESTED
+    assert (
+        question_manager.get_question(
+            run_id="run-existing",
+            question_id="call-question-stop-failed",
+        )
+        is not None
+    )
+
+
+def test_complete_pending_user_questions_does_not_overwrite_answered_race(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_stop_user_questions_answered_race.db"
+    manager = _build_manager(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    user_question_repo.upsert_requested(
+        question_id="call-question-stop-race",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+    question_manager = manager._user_question_manager
+    assert question_manager is not None
+    question_manager.open_question(
+        run_id="run-existing",
+        question_id="call-question-stop-race",
+        instance_id="inst-1",
+        role_id="Coordinator",
+    )
+    original_resolve = user_question_repo.resolve
+
+    def resolve_with_answered_race(
+        *,
+        question_id: str,
+        status: UserQuestionRequestStatus,
+        answers: tuple[UserQuestionAnswer, ...] = (),
+        expected_status: UserQuestionRequestStatus | None = None,
+    ):
+        if (
+            question_id == "call-question-stop-race"
+            and status == UserQuestionRequestStatus.COMPLETED
+        ):
+            _ = original_resolve(
+                question_id=question_id,
+                status=UserQuestionRequestStatus.ANSWERED,
+                answers=(
+                    UserQuestionAnswer(
+                        selections=(UserQuestionSelection(label="Only"),),
+                    ),
+                ),
+            )
+            raise UserQuestionStatusConflictError(
+                question_id=question_id,
+                expected_status=UserQuestionRequestStatus.REQUESTED,
+                actual_status=UserQuestionRequestStatus.ANSWERED,
+            )
+        return original_resolve(
+            question_id=question_id,
+            status=status,
+            answers=answers,
+            expected_status=expected_status,
+        )
+
+    manager_repo = manager._user_question_repo
+    assert manager_repo is not None
+    monkeypatch.setattr(manager_repo, "resolve", resolve_with_answered_race)
+
+    manager._complete_pending_user_questions(
+        run_id="run-existing",
+        reason="run_stopped",
+    )
+
+    record = user_question_repo.get("call-question-stop-race")
+    assert record is not None
+    assert record.status == UserQuestionRequestStatus.ANSWERED
+    assert (
+        question_manager.get_question(
+            run_id="run-existing",
+            question_id="call-question-stop-race",
+        )
+        is None
+    )

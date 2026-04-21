@@ -139,6 +139,48 @@ console.log(JSON.stringify({
     ]
 
 
+def test_route_event_refreshes_recovery_for_subagent_user_question_events(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.activeRunId = 'run-parent';
+
+routeEvent(
+    'user_question_requested',
+    { question_id: 'question-1' },
+    { run_id: 'subagent_run_deadbeef', trace_id: 'subagent_run_deadbeef' },
+);
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    activeRunId: state.activeRunId,
+    recoveryCalls: globalThis.__scheduleRecoveryContinuityRefreshCalls,
+    tokenUsageCalls: globalThis.__scheduleSessionTokenUsageRefreshCalls,
+    runEventCalls: globalThis.__runEventCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["activeRunId"] == "run-parent"
+    assert payload["recoveryCalls"] == [
+        {
+            "sessionId": "session-1",
+            "delayMs": 0,
+            "includeRounds": False,
+            "quiet": True,
+            "reason": "user_question_requested",
+        }
+    ]
+    assert payload["tokenUsageCalls"] == []
+    assert payload["runEventCalls"] == []
+
+
 def test_route_event_routes_fallback_events(tmp_path: Path) -> None:
     payload = _run_event_router_script(
         tmp_path=tmp_path,

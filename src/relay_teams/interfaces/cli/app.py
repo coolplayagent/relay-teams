@@ -19,6 +19,7 @@ from relay_teams.gateway.gateway_cli import build_gateway_app
 from relay_teams.interfaces.cli.approvals_cli import build_approvals_app
 from relay_teams.interfaces.cli.metrics_cli import build_metrics_app
 from relay_teams.interfaces.cli.hooks_cli import build_hooks_app
+from relay_teams.interfaces.cli.questions_cli import build_questions_app
 from relay_teams.interfaces.cli.run_prompt_cli import (
     execute_prompt as _execute_prompt_impl,
     root_command as _root_command_impl,
@@ -218,6 +219,11 @@ approvals_app = build_approvals_app(
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
 )
+questions_app = build_questions_app(
+    request_json=_module_request_json,
+    auto_start_if_needed=_module_auto_start,
+    default_base_url=DEFAULT_BASE_URL,
+)
 gateway_app = build_gateway_app(
     request_json=_module_request_json,
     auto_start_if_needed=_module_auto_start,
@@ -360,6 +366,7 @@ app.add_typer(server_app, name="server")
 app.add_typer(roles_app, name="roles")
 app.add_typer(agents_app, name="agents")
 app.add_typer(approvals_app, name="approvals")
+app.add_typer(questions_app, name="questions")
 app.add_typer(env_app, name="env")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(skills_app, name="skills")

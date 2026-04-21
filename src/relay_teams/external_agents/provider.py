@@ -76,6 +76,10 @@ if TYPE_CHECKING:
     from relay_teams.sessions.runs.run_control_manager import RunControlManager
     from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
     from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+    from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
+    from relay_teams.sessions.runs.user_question_repository import (
+        UserQuestionRepository,
+    )
     from relay_teams.skills.skill_registry import SkillRegistry
     from relay_teams.gateway.im import ImToolService
     from relay_teams.tools.registry import ToolRegistry
@@ -141,6 +145,7 @@ class ExternalAcpSessionManager:
         injection_manager: RunInjectionManager,
         agent_repo: AgentInstanceRepository,
         approval_ticket_repo: ApprovalTicketRepository,
+        user_question_repo: UserQuestionRepository | None,
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         background_task_service: BackgroundTaskService | None,
@@ -154,6 +159,7 @@ class ExternalAcpSessionManager:
         get_task_service: Callable[[], TaskOrchestrationService],
         run_control_manager: RunControlManager,
         tool_approval_manager: ToolApprovalManager,
+        user_question_manager: UserQuestionManager | None,
         tool_approval_policy: ToolApprovalPolicy,
         get_notification_service: Callable[[], NotificationService | None],
         shell_approval_repo: ShellApprovalRepository | None = None,
@@ -178,6 +184,7 @@ class ExternalAcpSessionManager:
         self._injection_manager = injection_manager
         self._agent_repo = agent_repo
         self._approval_ticket_repo = approval_ticket_repo
+        self._user_question_repo = user_question_repo
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._background_task_service = background_task_service
@@ -191,6 +198,7 @@ class ExternalAcpSessionManager:
         self._get_task_service = get_task_service
         self._run_control_manager = run_control_manager
         self._tool_approval_manager = tool_approval_manager
+        self._user_question_manager = user_question_manager
         self._tool_approval_policy = tool_approval_policy
         self._shell_approval_repo = shell_approval_repo
         self._get_notification_service = get_notification_service
@@ -933,6 +941,7 @@ class ExternalAcpSessionManager:
             run_event_hub=self._run_event_hub,
             agent_repo=self._agent_repo,
             approval_ticket_repo=self._approval_ticket_repo,
+            user_question_repo=self._user_question_repo,
             run_runtime_repo=self._run_runtime_repo,
             run_intent_repo=self._run_intent_repo,
             background_task_service=self._background_task_service,
@@ -949,6 +958,7 @@ class ExternalAcpSessionManager:
             get_task_service=self._get_task_service,
             run_control_manager=self._run_control_manager,
             tool_approval_manager=self._tool_approval_manager,
+            user_question_manager=self._user_question_manager,
             tool_approval_policy=self._tool_approval_policy,
             shell_approval_repo=self._shell_approval_repo,
             get_notification_service=self._get_notification_service,

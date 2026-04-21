@@ -171,3 +171,144 @@ def test_run_completed_event_with_failed_payload_is_projected_as_failed() -> Non
     assert projected.status == RunStateStatus.FAILED
     assert projected.phase == RunStatePhase.TERMINAL
     assert projected.recoverable is False
+
+
+def test_user_question_events_project_run_to_awaiting_manual_action() -> None:
+    requested = apply_run_event_to_state(
+        None,
+        event=_build_event(
+            RunEventType.USER_QUESTION_REQUESTED,
+            occurred_at=datetime(2026, 3, 6, 0, 1, tzinfo=UTC),
+            payload_json=(
+                '{"question_id":"call-1","questions":[{"question":"Pick one",'
+                '"options":[{"label":"A","description":"Option A"}]}]}'
+            ),
+        ),
+        event_id=1,
+    )
+
+    assert requested.status == RunStateStatus.PAUSED
+    assert requested.phase == RunStatePhase.AWAITING_MANUAL_ACTION
+    assert len(requested.pending_user_questions) == 1
+    assert requested.pending_user_questions[0].question_id == "call-1"
+
+    answered = apply_run_event_to_state(
+        requested,
+        event=_build_event(
+            RunEventType.USER_QUESTION_ANSWERED,
+            occurred_at=datetime(2026, 3, 6, 0, 2, tzinfo=UTC),
+            payload_json='{"question_id":"call-1"}',
+        ),
+        event_id=2,
+    )
+
+    assert answered.status == RunStateStatus.RUNNING
+    assert answered.phase == RunStatePhase.STREAMING
+    assert answered.pending_user_questions == ()
+
+
+def test_completed_user_question_keeps_subagent_followup_phase() -> None:
+    requested = apply_run_event_to_state(
+        None,
+        event=_build_event(
+            RunEventType.USER_QUESTION_REQUESTED,
+            occurred_at=datetime(2026, 3, 6, 0, 1, tzinfo=UTC),
+            payload_json=(
+                '{"question_id":"call-1","questions":[{"question":"Pick one",'
+                '"options":[{"label":"A","description":"Option A"}]}]}'
+            ),
+        ),
+        event_id=1,
+    )
+
+    paused = apply_run_event_to_state(
+        requested,
+        event=_build_event(
+            RunEventType.SUBAGENT_STOPPED,
+            occurred_at=datetime(2026, 3, 6, 0, 2, tzinfo=UTC),
+            payload_json='{"instance_id":"inst-2","role_id":"Writer"}',
+        ),
+        event_id=2,
+    )
+
+    completed = apply_run_event_to_state(
+        paused,
+        event=_build_event(
+            RunEventType.USER_QUESTION_ANSWERED,
+            occurred_at=datetime(2026, 3, 6, 0, 3, tzinfo=UTC),
+            payload_json='{"question_id":"call-1","status":"completed"}',
+        ),
+        event_id=3,
+    )
+
+    assert completed.status == RunStateStatus.PAUSED
+    assert completed.phase == RunStatePhase.AWAITING_SUBAGENT_FOLLOWUP
+    assert completed.pending_user_questions == ()
+    assert completed.paused_subagent is not None
+    assert completed.paused_subagent.instance_id == "inst-2"
+
+
+def test_run_stopped_clears_pending_user_questions() -> None:
+    requested = apply_run_event_to_state(
+        None,
+        event=_build_event(
+            RunEventType.USER_QUESTION_REQUESTED,
+            occurred_at=datetime(2026, 3, 6, 0, 1, tzinfo=UTC),
+            payload_json=(
+                '{"question_id":"call-1","questions":[{"question":"Pick one",'
+                '"options":[{"label":"A","description":"Option A"}]}]}'
+            ),
+        ),
+        event_id=1,
+    )
+
+    stopped = apply_run_event_to_state(
+        requested,
+        event=_build_event(
+            RunEventType.RUN_STOPPED,
+            occurred_at=datetime(2026, 3, 6, 0, 2, tzinfo=UTC),
+            payload_json='{"reason":"stopped_by_user"}',
+        ),
+        event_id=2,
+    )
+
+    assert stopped.status == RunStateStatus.STOPPED
+    assert stopped.phase == RunStatePhase.TERMINAL
+    assert stopped.pending_user_questions == ()
+
+
+def test_run_resumed_after_stop_does_not_restore_stale_pending_user_questions() -> None:
+    requested = apply_run_event_to_state(
+        None,
+        event=_build_event(
+            RunEventType.USER_QUESTION_REQUESTED,
+            occurred_at=datetime(2026, 3, 6, 0, 1, tzinfo=UTC),
+            payload_json=(
+                '{"question_id":"call-1","questions":[{"question":"Pick one",'
+                '"options":[{"label":"A","description":"Option A"}]}]}'
+            ),
+        ),
+        event_id=1,
+    )
+    stopped = apply_run_event_to_state(
+        requested,
+        event=_build_event(
+            RunEventType.RUN_STOPPED,
+            occurred_at=datetime(2026, 3, 6, 0, 2, tzinfo=UTC),
+            payload_json='{"reason":"stopped_by_user"}',
+        ),
+        event_id=2,
+    )
+
+    resumed = apply_run_event_to_state(
+        stopped,
+        event=_build_event(
+            RunEventType.RUN_RESUMED,
+            occurred_at=datetime(2026, 3, 6, 0, 3, tzinfo=UTC),
+        ),
+        event_id=3,
+    )
+
+    assert resumed.status == RunStateStatus.RUNNING
+    assert resumed.phase == RunStatePhase.STREAMING
+    assert resumed.pending_user_questions == ()

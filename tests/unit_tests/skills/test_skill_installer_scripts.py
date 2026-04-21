@@ -21,6 +21,102 @@ from relay_teams.env.clawhub_cli import clear_clawhub_path_cache
 from relay_teams.skills import installer_support
 
 
+def _write_fake_clawhub(
+    *,
+    bin_dir: Path,
+    search_lines: tuple[str, ...] = (),
+    install_runtime_name: str | None = None,
+    install_description: str = "",
+) -> Path:
+    if os.name == "nt":
+        stub_path = bin_dir / "clawhub_stub.py"
+        stub_path.write_text(
+            "\n".join(
+                (
+                    "from __future__ import annotations",
+                    "",
+                    "import sys",
+                    "from pathlib import Path",
+                    f"SEARCH_LINES = {search_lines!r}",
+                    f"INSTALL_RUNTIME_NAME = {install_runtime_name!r}",
+                    f"INSTALL_DESCRIPTION = {install_description!r}",
+                    "",
+                    "args = sys.argv[1:]",
+                    "if args and args[0] == 'search':",
+                    "    for line in SEARCH_LINES:",
+                    "        print(line)",
+                    "    raise SystemExit(0)",
+                    "if len(args) >= 5 and args[0] == '--workdir' and args[2] == '--no-input' and args[3] == 'install':",
+                    "    workdir = Path(args[1])",
+                    "    slug = args[4]",
+                    "    skill_dir = workdir / 'skills' / slug",
+                    "    skill_dir.mkdir(parents=True, exist_ok=True)",
+                    "    runtime_name = INSTALL_RUNTIME_NAME or slug",
+                    "    skill_dir.joinpath('SKILL.md').write_text(",
+                    "        '---\\n'",
+                    "        f'name: {runtime_name}\\n'",
+                    "        f'description: {INSTALL_DESCRIPTION}\\n'",
+                    "        '---\\n'",
+                    "        'Use this skill.\\n',",
+                    "        encoding='utf-8',",
+                    "    )",
+                    "    raise SystemExit(0)",
+                    "print('unexpected clawhub command', file=sys.stderr)",
+                    "raise SystemExit(1)",
+                )
+            ),
+            encoding="utf-8",
+        )
+        wrapper_path = bin_dir / "clawhub.cmd"
+        wrapper_path.write_text(
+            "\n".join(
+                (
+                    "@echo off",
+                    f'"{sys.executable}" "{stub_path}" %*',
+                )
+            ),
+            encoding="utf-8",
+        )
+        return wrapper_path
+
+    script_path = bin_dir / "clawhub"
+    lines = ["#!/bin/sh"]
+    if search_lines:
+        lines.extend(
+            [
+                'if [ "$1" = "search" ]; then',
+                *[f"  echo '{line}'" for line in search_lines],
+                "  exit 0",
+                "fi",
+            ]
+        )
+    if install_runtime_name is not None:
+        lines.extend(
+            [
+                'if [ "$1" = "--workdir" ] && [ "$3" = "--no-input" ] && [ "$4" = "install" ]; then',
+                '  mkdir -p "$2/skills/$5"',
+                "  cat > \"$2/skills/$5/SKILL.md\" <<'EOF'",
+                "---",
+                f"name: {install_runtime_name}",
+                f"description: {install_description}",
+                "---",
+                "Use this skill.",
+                "EOF",
+                "  exit 0",
+                "fi",
+            ]
+        )
+    lines.extend(
+        [
+            "echo 'unexpected clawhub command' >&2",
+            "exit 1",
+        ]
+    )
+    script_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    script_path.chmod(0o755)
+    return script_path
+
+
 def test_resolve_source_from_marketplace_page(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         installer_support,
@@ -164,19 +260,13 @@ def test_list_skills_script_reports_installed_annotations(tmp_path: Path) -> Non
 def test_search_clawhub_skills_script_reports_search_results(tmp_path: Path) -> None:
     clawhub_bin_dir = tmp_path / "bin"
     clawhub_bin_dir.mkdir(parents=True)
-    clawhub_path = clawhub_bin_dir / "clawhub"
-    clawhub_path.write_text(
-        "#!/bin/sh\n"
-        'if [ "$1" = "search" ]; then\n'
-        "  echo 'skill-creator  Skill Creator  (3.389)'\n"
-        "  echo 'skill-creator-agent v0.1.0  Skill Creator Agent  (3.200)'\n"
-        "  exit 0\n"
-        "fi\n"
-        "echo 'unexpected clawhub command' >&2\n"
-        "exit 1\n",
-        encoding="utf-8",
+    _ = _write_fake_clawhub(
+        bin_dir=clawhub_bin_dir,
+        search_lines=(
+            "skill-creator  Skill Creator  (3.389)",
+            "skill-creator-agent v0.1.0  Skill Creator Agent  (3.200)",
+        ),
     )
-    clawhub_path.chmod(0o755)
 
     result = _run_script(
         script_name="search-clawhub-skills.py",
@@ -220,25 +310,11 @@ def test_install_clawhub_skill_script_reports_runtime_identity(
 ) -> None:
     clawhub_bin_dir = tmp_path / "bin"
     clawhub_bin_dir.mkdir(parents=True)
-    clawhub_path = clawhub_bin_dir / "clawhub"
-    clawhub_path.write_text(
-        "#!/bin/sh\n"
-        'if [ "$1" = "--workdir" ] && [ "$3" = "--no-input" ] && [ "$4" = "install" ]; then\n'
-        '  mkdir -p "$2/skills/$5"\n'
-        "  cat > \"$2/skills/$5/SKILL.md\" <<'EOF'\n"
-        "---\n"
-        "name: skill-creator\n"
-        "description: Skill creator runtime.\n"
-        "---\n"
-        "Use skill creator.\n"
-        "EOF\n"
-        "  exit 0\n"
-        "fi\n"
-        "echo 'unexpected clawhub command' >&2\n"
-        "exit 1\n",
-        encoding="utf-8",
+    _ = _write_fake_clawhub(
+        bin_dir=clawhub_bin_dir,
+        install_runtime_name="skill-creator",
+        install_description="Skill creator runtime.",
     )
-    clawhub_path.chmod(0o755)
 
     result = _run_script(
         script_name="install-clawhub-skill.py",
@@ -268,29 +344,14 @@ def test_search_and_install_clawhub_skill_script_runs_both_steps(
 ) -> None:
     clawhub_bin_dir = tmp_path / "bin"
     clawhub_bin_dir.mkdir(parents=True)
-    clawhub_path = clawhub_bin_dir / "clawhub"
-    clawhub_path.write_text(
-        "#!/bin/sh\n"
-        'if [ "$1" = "search" ]; then\n'
-        "  echo 'best-practice-skill-creator  Best Practice Skill Creator  (56.406)'\n"
-        "  exit 0\n"
-        "fi\n"
-        'if [ "$1" = "--workdir" ] && [ "$3" = "--no-input" ] && [ "$4" = "install" ]; then\n'
-        '  mkdir -p "$2/skills/$5"\n'
-        "  cat > \"$2/skills/$5/SKILL.md\" <<'EOF'\n"
-        "---\n"
-        "name: best-practice-skill-creator\n"
-        "description: Best practice installer.\n"
-        "---\n"
-        "Use this skill.\n"
-        "EOF\n"
-        "  exit 0\n"
-        "fi\n"
-        "echo 'unexpected clawhub command' >&2\n"
-        "exit 1\n",
-        encoding="utf-8",
+    _ = _write_fake_clawhub(
+        bin_dir=clawhub_bin_dir,
+        search_lines=(
+            "best-practice-skill-creator  Best Practice Skill Creator  (56.406)",
+        ),
+        install_runtime_name="best-practice-skill-creator",
+        install_description="Best practice installer.",
     )
-    clawhub_path.chmod(0o755)
 
     result = _run_script(
         script_name="search-and-install-clawhub-skill.py",

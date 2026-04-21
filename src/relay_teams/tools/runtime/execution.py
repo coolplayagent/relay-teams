@@ -25,7 +25,11 @@ from relay_teams.agents.tasks.task_status_sanitizer import (
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.run_models import RunEvent
 
-from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketStatus
+from relay_teams.tools.runtime.approval_ticket_repo import (
+    ApprovalTicketRecord,
+    ApprovalTicketStatus,
+    ApprovalTicketStatusConflictError,
+)
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimePhase, RunRuntimeStatus
 from relay_teams.trace import trace_span
 from relay_teams.tools.runtime.context import ToolContext
@@ -1317,30 +1321,55 @@ async def _wait_for_ticket_resolution(
             run_id=ctx.deps.run_id,
             tool_call_id=ticket_id,
         )
-        ctx.deps.approval_ticket_repo.resolve(
-            tool_call_id=ticket_id,
-            status=ApprovalTicketStatus.TIMED_OUT,
+        try:
+            resolved_ticket = ctx.deps.approval_ticket_repo.resolve(
+                tool_call_id=ticket_id,
+                status=ApprovalTicketStatus.TIMED_OUT,
+                expected_status=ApprovalTicketStatus.REQUESTED,
+            )
+        except ApprovalTicketStatusConflictError:
+            resolved_ticket = ctx.deps.approval_ticket_repo.get(ticket_id)
+            if resolved_ticket is None:
+                raise KeyError(f"Unknown approval ticket: {ticket_id}") from None
+        resolved_action, resolved_error = _approval_resolution_from_ticket(
+            ticket=resolved_ticket,
+            meta=meta,
         )
-        ctx.deps.run_runtime_repo.update(
-            ctx.deps.run_id,
-            status=RunRuntimeStatus.PAUSED,
-            phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
-            active_instance_id=ctx.deps.instance_id,
-            active_task_id=ctx.deps.task_id,
-            active_role_id=ctx.deps.role_id,
-            active_subagent_instance_id=None,
-            last_error="Tool approval timed out",
-        )
-        meta["approval_status"] = "timeout"
+        if resolved_action == "timeout":
+            ctx.deps.run_runtime_repo.update(
+                ctx.deps.run_id,
+                status=RunRuntimeStatus.PAUSED,
+                phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
+                active_instance_id=ctx.deps.instance_id,
+                active_task_id=ctx.deps.task_id,
+                active_role_id=ctx.deps.role_id,
+                active_subagent_instance_id=None,
+                last_error="Tool approval timed out",
+            )
+        elif resolved_action == "deny":
+            ctx.deps.run_runtime_repo.update(
+                ctx.deps.run_id,
+                status=RunRuntimeStatus.PAUSED,
+                phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
+                active_instance_id=ctx.deps.instance_id,
+                active_task_id=ctx.deps.task_id,
+                active_role_id=ctx.deps.role_id,
+                active_subagent_instance_id=None,
+                last_error="Tool call was denied by user.",
+            )
         log_event(
             LOGGER,
-            logging.WARNING,
+            logging.INFO if resolved_action == "approve" else logging.WARNING,
             event="tool.approval.resolved",
-            message="Tool approval timed out",
+            message=(
+                "Tool approval resolved"
+                if resolved_action != "timeout"
+                else "Tool approval timed out"
+            ),
             payload={
                 "tool_name": tool_name,
                 "tool_call_id": ticket_id,
-                "action": "timeout",
+                "action": resolved_action,
             },
         )
         _publish_tool_approval_event(
@@ -1349,16 +1378,13 @@ async def _wait_for_ticket_resolution(
             payload={
                 "tool_call_id": ticket_id,
                 "tool_name": tool_name,
-                "action": "timeout",
+                "action": resolved_action,
+                "feedback": resolved_ticket.feedback,
                 "instance_id": ctx.deps.instance_id,
                 "role_id": ctx.deps.role_id,
             },
         )
-        return ticket_id, ToolError(
-            type="approval_timeout",
-            message="Tool approval timed out.",
-            retryable=True,
-        )
+        return ticket_id, resolved_error
 
     ctx.deps.tool_approval_manager.close_approval(
         run_id=ctx.deps.run_id,
@@ -1369,23 +1395,30 @@ async def _wait_for_ticket_resolution(
         if _approval_action_is_approved(action)
         else ApprovalTicketStatus.DENIED
     )
-    ctx.deps.approval_ticket_repo.resolve(
-        tool_call_id=ticket_id,
-        status=resolved_status,
-        feedback=feedback,
+    try:
+        resolved_ticket = ctx.deps.approval_ticket_repo.resolve(
+            tool_call_id=ticket_id,
+            status=resolved_status,
+            feedback=feedback,
+            expected_status=ApprovalTicketStatus.REQUESTED,
+        )
+    except ApprovalTicketStatusConflictError:
+        resolved_ticket = ctx.deps.approval_ticket_repo.get(ticket_id)
+        if resolved_ticket is None:
+            raise KeyError(f"Unknown approval ticket: {ticket_id}") from None
+    resolved_action, resolved_error = _approval_resolution_from_ticket(
+        ticket=resolved_ticket,
+        meta=meta,
     )
-    meta["approval_status"] = action
-    if feedback:
-        meta["approval_feedback"] = feedback
     log_event(
         LOGGER,
-        logging.INFO if _approval_action_is_approved(action) else logging.WARNING,
+        logging.INFO if resolved_action == "approve" else logging.WARNING,
         event="tool.approval.resolved",
         message="Tool approval resolved",
         payload={
             "tool_name": tool_name,
             "tool_call_id": ticket_id,
-            "action": action,
+            "action": resolved_action,
         },
     )
     _publish_tool_approval_event(
@@ -1394,13 +1427,13 @@ async def _wait_for_ticket_resolution(
         payload={
             "tool_call_id": ticket_id,
             "tool_name": tool_name,
-            "action": action,
-            "feedback": feedback,
+            "action": resolved_action,
+            "feedback": resolved_ticket.feedback,
             "instance_id": ctx.deps.instance_id,
             "role_id": ctx.deps.role_id,
         },
     )
-    if action == "deny":
+    if resolved_action == "deny":
         ctx.deps.run_runtime_repo.update(
             ctx.deps.run_id,
             status=RunRuntimeStatus.PAUSED,
@@ -1411,17 +1444,53 @@ async def _wait_for_ticket_resolution(
             active_subagent_instance_id=None,
             last_error="Tool call was denied by user.",
         )
-        return ticket_id, ToolError(
-            type="approval_denied",
-            message="Tool call was denied by user.",
-            retryable=True,
+        return ticket_id, resolved_error
+    if resolved_action == "timeout":
+        ctx.deps.run_runtime_repo.update(
+            ctx.deps.run_id,
+            status=RunRuntimeStatus.PAUSED,
+            phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
+            active_instance_id=ctx.deps.instance_id,
+            active_task_id=ctx.deps.task_id,
+            active_role_id=ctx.deps.role_id,
+            active_subagent_instance_id=None,
+            last_error="Tool approval timed out",
         )
+        return ticket_id, resolved_error
 
     return ticket_id, None
 
 
 def _approval_action_is_approved(action: str) -> bool:
     return action in {"approve", "approve_once", "approve_exact", "approve_prefix"}
+
+
+def _approval_resolution_from_ticket(
+    *,
+    ticket: ApprovalTicketRecord,
+    meta: dict[str, JsonValue],
+) -> tuple[str, ToolError | None]:
+    if ticket.feedback:
+        meta["approval_feedback"] = ticket.feedback
+    if ticket.status in {
+        ApprovalTicketStatus.APPROVED,
+        ApprovalTicketStatus.COMPLETED,
+    }:
+        meta["approval_status"] = "approve"
+        return "approve", None
+    if ticket.status == ApprovalTicketStatus.DENIED:
+        meta["approval_status"] = "deny"
+        return "deny", ToolError(
+            type="approval_denied",
+            message="Tool call was denied by user.",
+            retryable=True,
+        )
+    meta["approval_status"] = "timeout"
+    return "timeout", ToolError(
+        type="approval_timeout",
+        message="Tool approval timed out.",
+        retryable=True,
+    )
 
 
 def _publish_tool_approval_notification(

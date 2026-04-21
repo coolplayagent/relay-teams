@@ -32,7 +32,7 @@ def test_run_clawhub_install_reports_runtime_identity(
         command = cast(list[str], args[0])
         env = kwargs.get("env")
         assert command == [
-            "/usr/bin/clawhub",
+            str(Path("/usr/bin/clawhub")),
             "--workdir",
             str(config_dir.resolve()),
             "--no-input",

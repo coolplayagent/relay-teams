@@ -39,6 +39,10 @@ def register_shell(agent: Agent[ToolDeps, str]) -> None:
     _register_workspace_tools(agent, ("shell",))
 
 
+def register_ask_question(agent: Agent[ToolDeps, str]) -> None:
+    _register_workspace_tools(agent, ("ask_question",))
+
+
 def register_list_background_tasks(agent: Agent[ToolDeps, str]) -> None:
     _register_workspace_tools(agent, ("list_background_tasks",))
 
@@ -133,6 +137,10 @@ def _register_single_tool(agent: Agent[ToolDeps, str], tool_name: str) -> None:
         )
     elif tool_name == "shell":
         from relay_teams.tools.workspace_tools.shell import register as register_impl
+    elif tool_name == "ask_question":
+        from relay_teams.tools.workspace_tools.ask_question import (
+            register as register_impl,
+        )
     elif tool_name == "list_background_tasks":
         from relay_teams.tools.workspace_tools.list_background_tasks import (
             register as register_impl,
@@ -176,6 +184,7 @@ TOOLS = {
     "write": register_write,
     "write_tmp": register_write_tmp,
     "shell": register_shell,
+    "ask_question": register_ask_question,
     "spawn_subagent": register_spawn_subagent,
     "list_background_tasks": register_list_background_tasks,
     "wait_background_task": register_wait_background_task,
@@ -188,6 +197,7 @@ TOOLS = {
 __all__ = [
     "TOOLS",
     "register_background_tasks",
+    "register_ask_question",
     "register_create_monitor",
     "register_edit",
     "register_glob",

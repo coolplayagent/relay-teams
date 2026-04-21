@@ -51,7 +51,7 @@ def test_ensure_clawhub_cli_login_uses_token_login_and_returns_runtime_env(
         command = args[0]
         assert isinstance(command, list)
         assert command == [
-            "/usr/bin/clawhub",
+            str(Path("/usr/bin/clawhub")),
             "login",
             "--token",
             "ch_secret",

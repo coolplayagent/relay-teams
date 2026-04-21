@@ -23,10 +23,13 @@ export {
 } from './sessions.js';
 
 export {
+    answerUserQuestion,
+    dispatchHumanTask,
     fetchRunBackgroundTask,
     fetchRunBackgroundTasks,
     injectMessage,
     injectSubagentMessage,
+    listUserQuestions,
     resolveGate,
     resolveToolApproval,
     resumeRun,

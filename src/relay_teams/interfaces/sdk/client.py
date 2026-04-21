@@ -349,6 +349,25 @@ class AgentTeamsClient:
             {"action": action, "feedback": feedback},
         )
 
+    def list_user_questions(self, run_id: str) -> list[dict[str, JsonValue]]:
+        data = self._request_json("GET", f"/api/runs/{run_id}/questions")
+        items = data.get("data", data)
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+        return []
+
+    def answer_user_question(
+        self,
+        run_id: str,
+        question_id: str,
+        answers: list[dict[str, JsonValue]],
+    ) -> dict[str, JsonValue]:
+        return self._request_json(
+            "POST",
+            f"/api/runs/{run_id}/questions/{question_id}:answer",
+            {"answers": answers},
+        )
+
     def create_tasks(
         self,
         run_id: str,

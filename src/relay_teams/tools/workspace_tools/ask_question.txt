@@ -1,0 +1,17 @@
+Ask the user one or more questions and wait for answers before continuing.
+
+Use this when the task is blocked on user input you cannot safely infer.
+
+Input rules:
+- Send all related questions in one call using the `questions` array.
+- Each item supports `header`, `question`, `options`, `multiple`, and `placeholder`.
+- Every question must include at least one explicit option in `options`.
+- Set `multiple=true` to allow multiple option selections.
+- Do not ask one question per tool call if you already know the full batch.
+
+Answer behavior:
+- Every question automatically includes a `None of the above` fallback option.
+- The user answers by selecting one or more options.
+- Each selected option may include an optional supplement text.
+- The tool returns a structured result with `status`, `question_id`, and `answers`.
+- If nobody answers within the built-in timeout, it returns `status="timed_out"`.

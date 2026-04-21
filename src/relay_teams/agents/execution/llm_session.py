@@ -100,6 +100,8 @@ from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
+from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.agents.orchestration.task_orchestration_service import (
@@ -436,6 +438,9 @@ def _model_step_payload(
 
 
 class AgentLlmSession:
+    _user_question_repo: UserQuestionRepository | None = None
+    _user_question_manager: UserQuestionManager | None = None
+
     def __init__(
         self,
         config: ModelEndpointConfig,
@@ -448,6 +453,7 @@ class AgentLlmSession:
         run_event_hub: RunEventHub,
         agent_repo: AgentInstanceRepository,
         approval_ticket_repo: ApprovalTicketRepository,
+        user_question_repo: UserQuestionRepository | None,
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         background_task_service: BackgroundTaskService | None,
@@ -470,6 +476,7 @@ class AgentLlmSession:
         task_service: TaskOrchestrationService,
         run_control_manager: RunControlManager,
         tool_approval_manager: ToolApprovalManager,
+        user_question_manager: UserQuestionManager | None = None,
         tool_approval_policy: ToolApprovalPolicy,
         notification_service: NotificationService | None = None,
         token_usage_repo: TokenUsageRepository | None = None,
@@ -496,6 +503,7 @@ class AgentLlmSession:
         self._run_event_hub = run_event_hub
         self._agent_repo = agent_repo
         self._approval_ticket_repo = approval_ticket_repo
+        self._user_question_repo = user_question_repo
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._background_task_service = background_task_service
@@ -518,6 +526,7 @@ class AgentLlmSession:
         self._run_control_manager = run_control_manager
         self._message_repo = message_repo
         self._tool_approval_manager = tool_approval_manager
+        self._user_question_manager = user_question_manager
         self._tool_approval_policy = tool_approval_policy
         self._notification_service = notification_service
         self._token_usage_repo = token_usage_repo
@@ -623,6 +632,7 @@ class AgentLlmSession:
                 event_bus=self._event_bus,
                 message_repo=self._message_repo,
                 approval_ticket_repo=self._approval_ticket_repo,
+                user_question_repo=self._user_question_repo,
                 run_runtime_repo=self._run_runtime_repo,
                 injection_manager=self._injection_manager,
                 run_event_hub=self._run_event_hub,
@@ -656,6 +666,7 @@ class AgentLlmSession:
                 task_execution_service=self._task_execution_service,
                 run_control_manager=self._run_control_manager,
                 tool_approval_manager=self._tool_approval_manager,
+                user_question_manager=self._user_question_manager,
                 tool_approval_policy=self._resolve_tool_approval_policy(request.run_id),
                 shell_approval_repo=self._shell_approval_repo,
                 metric_recorder=self._metric_recorder,
@@ -1931,6 +1942,7 @@ class AgentLlmSession:
             run_event_hub=self._run_event_hub,
             agent_repo=self._agent_repo,
             approval_ticket_repo=self._approval_ticket_repo,
+            user_question_repo=self._user_question_repo,
             run_runtime_repo=self._run_runtime_repo,
             run_intent_repo=self._run_intent_repo,
             background_task_service=self._background_task_service,
@@ -1967,6 +1979,7 @@ class AgentLlmSession:
             task_service=self._task_service,
             run_control_manager=self._run_control_manager,
             tool_approval_manager=self._tool_approval_manager,
+            user_question_manager=self._user_question_manager,
             tool_approval_policy=self._tool_approval_policy,
             notification_service=self._notification_service,
             token_usage_repo=self._token_usage_repo,

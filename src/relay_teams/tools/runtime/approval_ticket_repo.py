@@ -31,6 +31,24 @@ class ApprovalTicketStatus(str, Enum):
     COMPLETED = "completed"
 
 
+class ApprovalTicketStatusConflictError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        tool_call_id: str,
+        expected_status: ApprovalTicketStatus,
+        actual_status: ApprovalTicketStatus,
+    ) -> None:
+        super().__init__(
+            "Approval ticket status conflict: "
+            f"tool_call_id={tool_call_id} "
+            f"expected={expected_status.value} actual={actual_status.value}"
+        )
+        self.tool_call_id = tool_call_id
+        self.expected_status = expected_status
+        self.actual_status = actual_status
+
+
 class ApprovalTicketRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -238,19 +256,20 @@ class ApprovalTicketRepository:
         tool_call_id: str,
         status: ApprovalTicketStatus,
         feedback: str = "",
+        expected_status: ApprovalTicketStatus | None = None,
     ) -> ApprovalTicketRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
         resolved_at = now if status != ApprovalTicketStatus.REQUESTED else None
-        run_sqlite_write_with_retry(
+        rowcount = run_sqlite_write_with_retry(
             conn=self._conn,
             db_path=self._db_path,
-            operation=lambda: self._conn.execute(
-                """
-                UPDATE approval_tickets
-                SET status=?, feedback=?, updated_at=?, resolved_at=?
-                WHERE tool_call_id=?
-                """,
-                (status.value, feedback, now, resolved_at, tool_call_id),
+            operation=lambda: self._resolve_row(
+                tool_call_id=tool_call_id,
+                status=status,
+                feedback=feedback,
+                updated_at=now,
+                resolved_at=resolved_at,
+                expected_status=expected_status,
             ),
             lock=self._lock,
             repository_name="ApprovalTicketRepository",
@@ -259,6 +278,12 @@ class ApprovalTicketRepository:
         record = self.get(tool_call_id)
         if record is None:
             raise KeyError(f"Unknown approval ticket: {tool_call_id}")
+        if rowcount == 0 and expected_status is not None:
+            raise ApprovalTicketStatusConflictError(
+                tool_call_id=tool_call_id,
+                expected_status=expected_status,
+                actual_status=record.status,
+            )
         return record
 
     def mark_completed(self, tool_call_id: str) -> ApprovalTicketRecord | None:
@@ -370,6 +395,43 @@ class ApprovalTicketRepository:
             repository_name="ApprovalTicketRepository",
             operation_name="delete_by_run",
         )
+
+    def _resolve_row(
+        self,
+        *,
+        tool_call_id: str,
+        status: ApprovalTicketStatus,
+        feedback: str,
+        updated_at: str,
+        resolved_at: str | None,
+        expected_status: ApprovalTicketStatus | None,
+    ) -> int:
+        if expected_status is None:
+            cursor = self._conn.execute(
+                """
+                UPDATE approval_tickets
+                SET status=?, feedback=?, updated_at=?, resolved_at=?
+                WHERE tool_call_id=?
+                """,
+                (status.value, feedback, updated_at, resolved_at, tool_call_id),
+            )
+            return int(cursor.rowcount or 0)
+        cursor = self._conn.execute(
+            """
+            UPDATE approval_tickets
+            SET status=?, feedback=?, updated_at=?, resolved_at=?
+            WHERE tool_call_id=? AND status=?
+            """,
+            (
+                status.value,
+                feedback,
+                updated_at,
+                resolved_at,
+                tool_call_id,
+                expected_status.value,
+            ),
+        )
+        return int(cursor.rowcount or 0)
 
     def _to_record(
         self,
