@@ -41,10 +41,10 @@ import {
 } from './projectView.js';
 import {
     buildSubagentSessionLabel,
-    ensureSessionSubagents,
     getActiveSubagentSession,
     removeSessionSubagent,
     getSessionSubagentSessions,
+    hasLoadedSessionSubagents,
     isSubagentSessionListExpanded,
     isSubagentSessionListLoading,
     toggleSubagentSessionList,
@@ -235,7 +235,13 @@ function renderSubagentToggle(session) {
         return '';
     }
     const children = getSessionSubagentSessions(sessionId);
-    if (children.length === 0) {
+    const loading = isSubagentSessionListLoading(sessionId);
+    const loaded = hasLoadedSessionSubagents(sessionId);
+    const summaryCount = normalizeSubagentSessionCount(
+        session?.subagent_session_count,
+    );
+    const childCount = loaded ? children.length : summaryCount;
+    if (!loading && childCount === 0) {
         return '';
     }
     const expanded = isSubagentSessionListExpanded(sessionId);
@@ -250,7 +256,7 @@ function renderSubagentToggle(session) {
             aria-label="${escapeHtml(t('sidebar.subagent_sessions_toggle'))}"
         >
             <span class="session-subagents-toggle-icon" aria-hidden="true">${icon}</span>
-            <span class="session-subagents-toggle-count">${escapeHtml(String(children.length))}</span>
+            <span class="session-subagents-toggle-count">${escapeHtml(String(childCount))}</span>
         </button>
     `;
 }
@@ -347,6 +353,14 @@ function formatRelativeTime(value) {
     const diffMonths = Math.round(diffDays / 30);
     if (diffMonths < 12) return `${diffMonths}${t('time.month_short')}`;
     return `${Math.round(diffDays / 365)}${t('time.year_short')}`;
+}
+
+function normalizeSubagentSessionCount(value) {
+    const parsed = Number(value || 0);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return 0;
+    }
+    return Math.floor(parsed);
 }
 
 function formatWorkspaceLabel(workspace) {
@@ -1041,39 +1055,6 @@ function renderProjectCard(group) {
     return card;
 }
 
-function prefetchVisibleSubagentSessions(groups) {
-    const sessionIds = new Set();
-    const currentSessionId = String(state.currentSessionId || '').trim();
-    groups.forEach(group => {
-        const sessionsExpanded = expandedProjectSessionIds.has(group.key);
-        const visibleSessions = visibleSessionsForGroup(group, {
-            sessionsExpanded,
-        });
-        visibleSessions.forEach(session => {
-            const sessionId = String(session?.session_id || '').trim();
-            if (sessionId && shouldRenderSubagentChildren(session)) {
-                sessionIds.add(sessionId);
-            }
-        });
-        if (!currentSessionId) {
-            return;
-        }
-        const currentSession = group.sessions.find(session => String(session?.session_id || '').trim() === currentSessionId);
-        if (currentSession && shouldRenderSubagentChildren(currentSession)) {
-            sessionIds.add(currentSessionId);
-        }
-    });
-    sessionIds.forEach(sessionId => {
-        if (isSubagentSessionListLoading(sessionId)) {
-            return;
-        }
-        void ensureSessionSubagents(sessionId, {
-            force: false,
-            emitLoadingEvents: false,
-        });
-    });
-}
-
 function visibleSessionsForGroup(group, { sessionsExpanded = false } = {}) {
     if (sessionsExpanded) {
         return group.sessions;
@@ -1149,14 +1130,12 @@ export async function loadProjects() {
         groups.forEach(group => nextNodes.push(renderProjectCard(group)));
         const nextSignature = nextNodes.map(renderNodeSignature).join('\n');
         if (nextSignature === lastProjectsRenderSignature) {
-            prefetchVisibleSubagentSessions(groups);
             return;
         }
         lastProjectsRenderSignature = nextSignature;
         els.projectsList.innerHTML = '';
         nextNodes.forEach(node => els.projectsList.appendChild(node));
         syncProjectSortButton();
-        prefetchVisibleSubagentSessions(groups);
         playPendingSessionAnimation();
     } catch (error) {
         if (requestId !== loadProjectsRequestId) {

@@ -748,6 +748,7 @@ Response fields also include:
 - `orchestration_preset_id`
 - `started_at`
 - `can_switch_mode`
+- `subagent_session_count`: summary count of normal-mode child-session subagents so the UI can render expand affordances without fetching `GET /sessions/{session_id}/subagents` for every listed session
 
 ### `PATCH /sessions/{session_id}`
 

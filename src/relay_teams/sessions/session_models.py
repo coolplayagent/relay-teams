@@ -253,6 +253,7 @@ class SessionRecord(BaseModel):
     active_run_status: str | None = None
     active_run_phase: str | None = None
     pending_tool_approval_count: int = 0
+    subagent_session_count: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 

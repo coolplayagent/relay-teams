@@ -701,11 +701,26 @@ class SessionService:
 
     def list_sessions(self) -> tuple[SessionRecord, ...]:
         sessions = self._session_repo.list_all()
+        normal_session_ids = tuple(
+            record.session_id
+            for record in sessions
+            if record.session_mode == SessionMode.NORMAL
+        )
+        subagent_counts = self._agent_repo.count_normal_mode_subagents_by_session_ids(
+            normal_session_ids
+        )
         enriched: list[SessionRecord] = []
         for record in sessions:
             selected = self._select_active_run(record.session_id)
+            subagent_session_count = subagent_counts.get(record.session_id, 0)
             if selected is None:
-                enriched.append(record)
+                enriched.append(
+                    record.model_copy(
+                        update={
+                            "subagent_session_count": subagent_session_count,
+                        }
+                    )
+                )
                 continue
             run_id, runtime = selected
             approval_count = len(self._approval_ticket_repo.list_open_by_run(run_id))
@@ -722,6 +737,7 @@ class SessionService:
                             question_count,
                         ),
                         "pending_tool_approval_count": approval_count,
+                        "subagent_session_count": subagent_session_count,
                     }
                 )
             )
