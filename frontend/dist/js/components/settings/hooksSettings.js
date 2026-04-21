@@ -118,7 +118,7 @@ function renderHookCard(hook) {
                     <div class="mcp-status-card-name">${escapeHtml(resolveHookName(hook))}</div>
                 </div>
             </div>
-            <div class="hooks-runtime-detail-list">
+            <div class="hooks-runtime-detail-list status-list">
                 ${detailRows.join('')}
             </div>
         </section>
@@ -130,7 +130,7 @@ function buildDetailRows(items) {
     const rows = [];
     for (let index = 0; index < normalizedItems.length; index += 2) {
         rows.push(`
-            <div class="hooks-runtime-detail-row">
+            <div class="hooks-runtime-detail-row status-list-row">
                 ${normalizedItems[index]}
                 ${normalizedItems[index + 1] || ''}
             </div>
@@ -141,9 +141,9 @@ function buildDetailRows(items) {
 
 function renderDetailItem(label, value) {
     return `
-        <div class="hooks-runtime-detail-item">
-            <div class="hooks-runtime-detail-label">${escapeHtml(label)}</div>
-            <div class="hooks-runtime-detail-value">${escapeHtml(value || t('settings.hooks.all'))}</div>
+        <div class="hooks-runtime-detail-item status-list-copy">
+            <div class="hooks-runtime-detail-label status-list-name">${escapeHtml(label)}</div>
+            <div class="hooks-runtime-detail-value status-list-description">${escapeHtml(value || t('settings.hooks.all'))}</div>
         </div>
     `;
 }

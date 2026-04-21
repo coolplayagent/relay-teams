@@ -55,11 +55,11 @@ def test_hooks_settings_panel_renders_loaded_hooks(tmp_path: Path) -> None:
     assert "foreground" in html
     assert "/workspace/.relay-teams/hooks.json" not in html
     assert "mcp-status-card hooks-runtime-card" in html
-    assert "hooks-runtime-detail-list" in html
-    assert "hooks-runtime-detail-row" in html
-    assert "hooks-runtime-detail-item" in html
-    assert "hooks-runtime-detail-label" in html
-    assert "hooks-runtime-detail-value" in html
+    assert "hooks-runtime-detail-list status-list" in html
+    assert "hooks-runtime-detail-row status-list-row" in html
+    assert "hooks-runtime-detail-item status-list-copy" in html
+    assert "hooks-runtime-detail-label status-list-name" in html
+    assert "hooks-runtime-detail-value status-list-description" in html
     assert "hooks-runtime-overview-table" not in html
 
 
