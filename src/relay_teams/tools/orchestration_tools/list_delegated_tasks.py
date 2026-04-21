@@ -12,7 +12,7 @@ DESCRIPTION = load_tool_description(__file__)
 
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
-    async def list_delegated_tasks(
+    async def orch_list_delegated_tasks(
         ctx: ToolContext,
         include_root: bool = False,
     ) -> dict[str, JsonValue]:
@@ -26,7 +26,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
 
         return await execute_tool(
             ctx,
-            tool_name="list_delegated_tasks",
+            tool_name="orch_list_delegated_tasks",
             args_summary={"include_root": include_root},
             action=_action,
         )

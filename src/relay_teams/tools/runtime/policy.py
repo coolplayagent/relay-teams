@@ -9,9 +9,9 @@ from relay_teams.tools.runtime.models import ToolApprovalDecision, ToolApprovalR
 
 DEFAULT_APPROVAL_REQUIRED_TOOLS = frozenset(
     {
-        "create_tasks",
-        "dispatch_task",
-        "update_task",
+        "orch_create_tasks",
+        "orch_dispatch_task",
+        "orch_update_task",
         "shell",
         "edit",
         "write",

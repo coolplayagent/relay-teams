@@ -1525,7 +1525,7 @@ async def test_generate_reserves_context_for_registered_tools_and_skills(
     provider, _message_repo = _build_provider(
         tmp_path / "tool_budget.db",
         fake_hub,
-        allowed_tools=("dispatch_task",),
+        allowed_tools=("orch_dispatch_task",),
         allowed_skills=("time",),
     )
     updated_config = provider._config.model_copy(
@@ -1572,7 +1572,7 @@ async def test_generate_reserves_context_for_registered_tools_and_skills(
         history=[],
         system_prompt="system",
         reserve_user_prompt_tokens=True,
-        allowed_tools=("dispatch_task",),
+        allowed_tools=("orch_dispatch_task",),
         allowed_mcp_servers=(),
         allowed_skills=("time",),
     )
@@ -1863,7 +1863,7 @@ async def test_generate_uses_prepared_system_prompt(
     provider, _ = _build_provider(
         tmp_path / "prompt_aug.db",
         fake_hub,
-        allowed_tools=("dispatch_task",),
+        allowed_tools=("orch_dispatch_task",),
         allowed_skills=("time",),
         skill_registry=fake_skill_registry,
     )

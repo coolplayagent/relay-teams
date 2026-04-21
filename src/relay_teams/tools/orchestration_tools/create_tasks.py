@@ -15,7 +15,7 @@ DESCRIPTION = load_tool_description(__file__)
 
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
-    async def create_tasks(
+    async def orch_create_tasks(
         ctx: ToolContext,
         tasks: list[TaskDraft],
     ) -> dict[str, JsonValue]:
@@ -29,7 +29,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
 
         return await execute_tool_call(
             ctx,
-            tool_name="create_tasks",
+            tool_name="orch_create_tasks",
             args_summary={
                 "task_count": len(tasks),
             },

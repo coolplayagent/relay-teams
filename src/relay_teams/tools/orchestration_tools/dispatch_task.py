@@ -13,7 +13,7 @@ DESCRIPTION = load_tool_description(__file__)
 
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
-    async def dispatch_task(
+    async def orch_dispatch_task(
         ctx: ToolContext,
         task_id: str,
         role_id: str,
@@ -23,7 +23,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
 
         return await execute_tool_call(
             ctx,
-            tool_name="dispatch_task",
+            tool_name="orch_dispatch_task",
             args_summary={
                 "task_id": task_id,
                 "role_id": role_id,

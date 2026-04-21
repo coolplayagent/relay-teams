@@ -31,7 +31,7 @@ class CreateTemporaryRoleInput(BaseModel):
 
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
-    async def create_temporary_role(
+    async def orch_create_temporary_role(
         ctx: ToolContext,
         role_id: str,
         name: str,
@@ -96,7 +96,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
 
         return await execute_tool(
             ctx,
-            tool_name="create_temporary_role",
+            tool_name="orch_create_temporary_role",
             args_summary=payload.model_dump(mode="json"),
             action=_action,
         )

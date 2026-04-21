@@ -161,7 +161,7 @@ def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
             ModelResponse(
                 parts=[
                     ToolCallPart(
-                        tool_name="list_available_roles",
+                        tool_name="orch_list_available_roles",
                         args={},
                         tool_call_id="call-1",
                     ),
@@ -171,7 +171,7 @@ def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
             ModelRequest(
                 parts=[
                     ToolReturnPart(
-                        tool_name="list_available_roles",
+                        tool_name="orch_list_available_roles",
                         tool_call_id="call-1",
                         content={"ok": True, "data": {"roles": ["time"]}},
                     )
@@ -180,8 +180,8 @@ def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
             ModelRequest(
                 parts=[
                     RetryPromptPart(
-                        content="Invalid arguments for tool dispatch_task",
-                        tool_name="dispatch_task",
+                        content="Invalid arguments for tool orch_dispatch_task",
+                        tool_name="orch_dispatch_task",
                         tool_call_id="call-2",
                     )
                 ]

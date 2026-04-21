@@ -1427,12 +1427,12 @@ def test_restore_pending_tool_results_from_state_backfills_completed_dispatch_re
 
     persisted_state = PersistedToolCallState(
         tool_call_id="call-dispatch-1",
-        tool_name="dispatch_task",
+        tool_name="orch_dispatch_task",
         instance_id="inst-1",
         role_id="writer",
         execution_status=ToolExecutionStatus.COMPLETED,
         result_envelope={
-            "tool": "dispatch_task",
+            "tool": "orch_dispatch_task",
             "visible_result": {
                 "ok": True,
                 "data": {
@@ -1462,7 +1462,7 @@ def test_restore_pending_tool_results_from_state_backfills_completed_dispatch_re
                 ModelResponse(
                     parts=[
                         ToolCallPart(
-                            tool_name="dispatch_task",
+                            tool_name="orch_dispatch_task",
                             args='{"task_id":"task-child-1","role_id":"Crafter"}',
                             tool_call_id="call-dispatch-1",
                         )
@@ -1479,7 +1479,7 @@ def test_restore_pending_tool_results_from_state_backfills_completed_dispatch_re
     assert len(synthetic_request.parts) == 1
     recovered_part = synthetic_request.parts[0]
     assert isinstance(recovered_part, ToolReturnPart)
-    assert recovered_part.tool_name == "dispatch_task"
+    assert recovered_part.tool_name == "orch_dispatch_task"
     assert recovered_part.tool_call_id == "call-dispatch-1"
     assert recovered_part.content == {
         "ok": True,
@@ -1508,7 +1508,7 @@ def test_publish_committed_tool_outcome_events_skips_visible_only_recovered_resu
 
     persisted_state = PersistedToolCallState(
         tool_call_id="call-dispatch-1",
-        tool_name="dispatch_task",
+        tool_name="orch_dispatch_task",
         instance_id="inst-1",
         role_id="writer",
         execution_status=ToolExecutionStatus.COMPLETED,
@@ -1532,7 +1532,7 @@ def test_publish_committed_tool_outcome_events_skips_visible_only_recovered_resu
             ModelRequest(
                 parts=[
                     ToolReturnPart(
-                        tool_name="dispatch_task",
+                        tool_name="orch_dispatch_task",
                         tool_call_id="call-dispatch-1",
                         content={
                             "ok": True,
@@ -1563,7 +1563,7 @@ async def test_resume_after_tool_outcomes_commits_backfilled_tool_results(
 
     persisted_state = PersistedToolCallState(
         tool_call_id="call-dispatch-1",
-        tool_name="dispatch_task",
+        tool_name="orch_dispatch_task",
         instance_id="inst-1",
         role_id="writer",
         execution_status=ToolExecutionStatus.COMPLETED,
@@ -1621,7 +1621,7 @@ async def test_resume_after_tool_outcomes_commits_backfilled_tool_results(
             ModelResponse(
                 parts=[
                     ToolCallPart(
-                        tool_name="dispatch_task",
+                        tool_name="orch_dispatch_task",
                         args='{"task_id":"task-child-1","role_id":"Crafter"}',
                         tool_call_id="call-dispatch-1",
                     )

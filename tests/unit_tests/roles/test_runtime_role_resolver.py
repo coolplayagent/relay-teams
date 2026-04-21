@@ -19,7 +19,7 @@ def _base_registry() -> RoleRegistry:
             name="Coordinator",
             description="system",
             version="1",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
             system_prompt="coord",
         )
     )
@@ -126,9 +126,9 @@ def test_runtime_role_resolver_does_not_add_office_tool_to_coordinator_like_role
             name="Dispatch Lead",
             description="temporary coordinator",
             system_prompt="coordinate",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
         ),
     )
 
     role = resolver.get_effective_role(run_id="run-1", role_id="dispatch_lead")
-    assert role.tools == ("create_tasks", "update_task", "dispatch_task")
+    assert role.tools == ("orch_create_tasks", "orch_update_task", "orch_dispatch_task")

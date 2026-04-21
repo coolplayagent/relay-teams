@@ -94,12 +94,12 @@ def _role(role_id: str) -> RoleDefinition:
     tools = ()
     if role_id.casefold() == "coordinator":
         tools = (
-            "create_tasks",
-            "create_temporary_role",
-            "update_task",
-            "list_available_roles",
-            "list_delegated_tasks",
-            "dispatch_task",
+            "orch_create_tasks",
+            "orch_create_temporary_role",
+            "orch_update_task",
+            "orch_list_available_roles",
+            "orch_list_delegated_tasks",
+            "orch_dispatch_task",
         )
     return RoleDefinition(
         role_id=role_id,
@@ -214,12 +214,12 @@ def _coordinator_registry() -> RoleRegistry:
             description="Coordinates delegated work.",
             version="1",
             tools=(
-                "create_tasks",
-                "create_temporary_role",
-                "update_task",
-                "list_available_roles",
-                "list_delegated_tasks",
-                "dispatch_task",
+                "orch_create_tasks",
+                "orch_create_temporary_role",
+                "orch_update_task",
+                "orch_list_available_roles",
+                "orch_list_delegated_tasks",
+                "orch_dispatch_task",
             ),
             mcp_servers=(),
             skills=(),
@@ -280,18 +280,18 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
         in prompt
     )
     assert (
-        "Inspect the current worker pool with `list_available_roles` when selecting or reusing a dispatch target."
+        "Inspect the current worker pool with `orch_list_available_roles` when selecting or reusing a dispatch target."
         in prompt
     )
     assert (
-        "If no existing role is a good fit, create a run-scoped role with `create_temporary_role` before dispatch."
+        "If no existing role is a good fit, create a run-scoped role with `orch_create_temporary_role` before dispatch."
         in prompt
     )
     assert (
         "Prefer `template_role_id` when creating a temporary role so it inherits the closest existing capabilities."
         in prompt
     )
-    assert "Choose the executing role in `dispatch_task`." in prompt
+    assert "Choose the executing role in `orch_dispatch_task`." in prompt
     assert (
         "Use the dispatch prompt to pass stage-specific instructions and upstream context."
         in prompt
@@ -313,7 +313,7 @@ def test_runtime_system_prompt_ignores_unknown_mcp_servers_in_available_roles() 
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
             mcp_servers=(),
             skills=(),
             model_profile="default",
@@ -859,7 +859,7 @@ def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> 
     assert "## Orchestration Rules" in prompt
     assert "Orchestration Prompt" in prompt
     assert "Choose roles by their Description, Tools, MCP Tools, and Skills." in prompt
-    assert "list_available_roles" in prompt
+    assert "orch_list_available_roles" in prompt
 
 
 def test_runtime_system_prompt_for_main_agent_uses_base_role_prompt_only() -> None:

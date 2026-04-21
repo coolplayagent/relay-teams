@@ -81,14 +81,14 @@ class _FakeClient:
         yield {
             "event_type": "tool_call",
             "payload_json": (
-                '{"tool_name": "dispatch_task", "tool_call_id": "abc123456789", '
+                '{"tool_name": "orch_dispatch_task", "tool_call_id": "abc123456789", '
                 '"role_id": "crafter", "instance_id": "subagent_01"}'
             ),
         }
         yield {
             "event_type": "tool_result",
             "payload_json": (
-                '{"tool_name": "dispatch_task", "tool_call_id": "abc123456789", '
+                '{"tool_name": "orch_dispatch_task", "tool_call_id": "abc123456789", '
                 '"result": {"message": "Task dispatched successfully"}, '
                 '"error": false}'
             ),
@@ -244,11 +244,11 @@ def test_agent_teams_backend_emits_detailed_runtime_logs(monkeypatch, capsys) ->
         in out
     )
     assert (
-        "[event #4] tool_call: tool=dispatch_task id=abc12345 "
+        "[event #4] tool_call: tool=orch_dispatch_task id=abc12345 "
         "role=crafter instance=subagent_01" in out
     )
     assert (
-        "[event #5] tool_result: tool=dispatch_task id=abc12345 "
+        "[event #5] tool_result: tool=orch_dispatch_task id=abc12345 "
         "status=ok summary=Task dispatched successfully" in out
     )
     assert (

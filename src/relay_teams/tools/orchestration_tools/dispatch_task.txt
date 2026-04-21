@@ -1,4 +1,4 @@
-Dispatch a task contract to a role for execution.
+Dispatch a task contract to a role for execution during orchestration.
 
 Usage:
 - `task_id` must be a task created in the current run.

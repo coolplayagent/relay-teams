@@ -29,7 +29,7 @@ def test_roles_prompt_builds_preview_payload(monkeypatch) -> None:
         return {
             "role_id": "Coordinator",
             "objective": "Draft release note",
-            "tools": ["dispatch_task"],
+            "tools": ["orch_dispatch_task"],
             "skills": ["time"],
             "runtime_system_prompt": "runtime",
             "provider_system_prompt": "provider",
@@ -49,7 +49,7 @@ def test_roles_prompt_builds_preview_payload(monkeypatch) -> None:
             "--objective",
             "Draft release note",
             "--tool",
-            "dispatch_task",
+            "orch_dispatch_task",
             "--skill",
             "time",
             "--shared-state-json",
@@ -69,7 +69,7 @@ def test_roles_prompt_builds_preview_payload(monkeypatch) -> None:
             "role_id": "Coordinator",
             "objective": "Draft release note",
             "shared_state": {"lang": "zh-CN"},
-            "tools": ["dispatch_task"],
+            "tools": ["orch_dispatch_task"],
             "skills": ["time"],
         },
     }
@@ -123,7 +123,7 @@ def test_roles_prompt_default_output_prints_full_prompt(monkeypatch) -> None:
         return {
             "role_id": "Coordinator",
             "objective": "Draft release note",
-            "tools": ["dispatch_task"],
+            "tools": ["orch_dispatch_task"],
             "skills": ["time"],
             "runtime_system_prompt": "runtime line",
             "provider_system_prompt": "provider line",
