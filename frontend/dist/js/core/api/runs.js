@@ -54,6 +54,12 @@ export async function resolveToolApproval(runId, toolCallId, action, feedback = 
     );
 }
 
+export async function dispatchHumanTask(_sessionId, _runId, _taskId) {
+    throw new Error(
+        'dispatchHumanTask is deprecated. Reload the page to fetch the current frontend assets.',
+    );
+}
+
 export async function injectMessage(runId, content) {
     return requestJson(
         `/api/runs/${runId}/inject`,

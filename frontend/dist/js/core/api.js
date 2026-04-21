@@ -19,6 +19,7 @@ export {
     deleteAgentReflection,
     updateSession,
     sendUserPrompt,
+    dispatchHumanTask,
     resolveGate,
     resolveToolApproval,
     injectMessage,

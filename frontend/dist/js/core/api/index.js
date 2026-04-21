@@ -23,6 +23,7 @@ export {
 } from './sessions.js';
 
 export {
+    dispatchHumanTask,
     fetchRunBackgroundTask,
     fetchRunBackgroundTasks,
     injectMessage,
