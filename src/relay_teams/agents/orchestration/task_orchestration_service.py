@@ -13,6 +13,7 @@ from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.ids import new_task_id
@@ -20,6 +21,12 @@ from relay_teams.agents.tasks.models import (
     TaskEnvelope,
     TaskRecord,
     VerificationPlan,
+)
+from relay_teams.hooks import (
+    HookDecisionType,
+    HookEventName,
+    HookService,
+    TaskCreatedInput,
 )
 
 
@@ -54,6 +61,8 @@ class TaskOrchestrationService:
         message_repo: MessageRepository,
         session_repo: SessionRepository | None = None,
         runtime_role_resolver: RuntimeRoleResolver | None = None,
+        hook_service: HookService | None = None,
+        run_event_hub: RunEventHub | None = None,
     ) -> None:
         self._task_repo = task_repo
         self._role_registry = role_registry
@@ -62,6 +71,8 @@ class TaskOrchestrationService:
         self._message_repo = message_repo
         self._session_repo = session_repo
         self._runtime_role_resolver = runtime_role_resolver
+        self._hook_service = hook_service
+        self._run_event_hub = run_event_hub
 
     async def create_tasks(
         self,
@@ -74,23 +85,44 @@ class TaskOrchestrationService:
 
         root = self._get_root_task(run_id)
         created_records: list[TaskRecord] = []
+        pending_tasks: list[TaskEnvelope] = []
+        creator_role_id = root.envelope.role_id
         for draft in tasks:
-            created_records.append(
-                self._task_repo.create(
-                    TaskEnvelope(
-                        task_id=new_task_id().value,
-                        session_id=root.envelope.session_id,
-                        parent_task_id=root.envelope.task_id,
-                        trace_id=root.envelope.trace_id,
-                        role_id=None,
-                        title=_resolved_title(draft.title, draft.objective),
-                        objective=draft.objective,
-                        verification=VerificationPlan(
-                            checklist=("non_empty_response",)
-                        ),
-                    )
+            pending_tasks.append(
+                TaskEnvelope(
+                    task_id=new_task_id().value,
+                    session_id=root.envelope.session_id,
+                    parent_task_id=root.envelope.task_id,
+                    trace_id=root.envelope.trace_id,
+                    role_id=None,
+                    title=_resolved_title(draft.title, draft.objective),
+                    objective=draft.objective,
+                    verification=VerificationPlan(checklist=("non_empty_response",)),
                 )
             )
+        for pending in pending_tasks:
+            if self._hook_service is not None:
+                bundle = await self._hook_service.execute(
+                    event_input=TaskCreatedInput(
+                        event_name=HookEventName.TASK_CREATED,
+                        session_id=pending.session_id,
+                        run_id=pending.trace_id,
+                        trace_id=pending.trace_id,
+                        task_id=pending.task_id,
+                        instance_id=None,
+                        role_id=creator_role_id,
+                        parent_task_id=pending.parent_task_id,
+                        task_title=pending.title or "",
+                        task_objective=pending.objective,
+                    ),
+                    run_event_hub=self._run_event_hub,
+                )
+                if bundle.decision == HookDecisionType.DENY:
+                    raise ValueError(
+                        bundle.reason or "Task creation denied by runtime hook"
+                    )
+        for pending in pending_tasks:
+            created_records.append(self._task_repo.create(pending))
 
         response: dict[str, JsonValue] = {
             "created_count": len(created_records),

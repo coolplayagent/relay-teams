@@ -3,17 +3,25 @@ from __future__ import annotations
 from relay_teams.hooks.hook_event_models import (
     HookEventInput,
     PermissionRequestInput,
+    PostCompactInput,
     PostToolUseFailureInput,
     PostToolUseInput,
+    PreCompactInput,
     PreToolUseInput,
     SessionEndInput,
     SessionStartInput,
     StopFailureInput,
     StopInput,
+    SubagentStartInput,
+    SubagentStopInput,
+    TaskCompletedInput,
+    TaskCreatedInput,
     UserPromptSubmitInput,
 )
 from relay_teams.hooks.hook_loader import HookLoader
 from relay_teams.hooks.hook_models import (
+    event_allows_decision,
+    event_allows_handler_type,
     HookRuntimeView,
     HookDecision,
     HookDecisionBundle,
@@ -30,6 +38,8 @@ from relay_teams.hooks.hook_runtime_state import HookRuntimeState
 from relay_teams.hooks.hook_service import HookService
 
 __all__ = [
+    "event_allows_decision",
+    "event_allows_handler_type",
     "HookDecision",
     "HookDecisionBundle",
     "HookDecisionType",
@@ -46,12 +56,18 @@ __all__ = [
     "HooksConfig",
     "LoadedHookRuntimeView",
     "PermissionRequestInput",
+    "PostCompactInput",
     "PostToolUseFailureInput",
     "PostToolUseInput",
+    "PreCompactInput",
     "PreToolUseInput",
     "SessionEndInput",
     "SessionStartInput",
     "StopFailureInput",
     "StopInput",
+    "SubagentStartInput",
+    "SubagentStopInput",
+    "TaskCompletedInput",
+    "TaskCreatedInput",
     "UserPromptSubmitInput",
 ]

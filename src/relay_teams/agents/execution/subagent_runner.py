@@ -33,6 +33,8 @@ class SubAgentRequest(BaseModel):
     input: tuple[ContentPart, ...] = ()
     run_kind: RunKind = RunKind.CONVERSATION
     thinking: RunThinkingConfig = RunThinkingConfig()
+    runtime_hooks_enabled: bool = True
+    persist_messages: bool = True
 
     @property
     def prompt_text(self) -> str:

@@ -4,7 +4,7 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class SkillScope(str, Enum):
@@ -55,6 +55,7 @@ class SkillMetadata(BaseModel):
     instructions: str
     resources: dict[str, SkillResource] = Field(default_factory=dict)
     scripts: dict[str, SkillScript] = Field(default_factory=dict)
+    hooks: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class Skill(BaseModel):

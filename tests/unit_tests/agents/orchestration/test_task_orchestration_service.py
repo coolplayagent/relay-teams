@@ -6,6 +6,8 @@ from pydantic import JsonValue
 from pathlib import Path
 from typing import cast
 
+from relay_teams.hooks import HookService
+
 import pytest
 
 from relay_teams.agents.orchestration.task_orchestration_service import (
@@ -21,8 +23,38 @@ from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventName
+from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+
+
+class _CapturingHookService:
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(event_input)
+        return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+
+
+class _DenyingHookService:
+    def __init__(self, reason: str) -> None:
+        self._reason = reason
+        self.events: list[object] = []
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(event_input)
+        return HookDecisionBundle(
+            decision=HookDecisionType.DENY,
+            reason=self._reason,
+        )
 
 
 class _FakeTaskExecutionService:
@@ -499,3 +531,131 @@ def test_list_run_tasks_omits_inner_ok(tmp_path: Path) -> None:
     assert "ok" not in payload
     tasks = cast(list[JsonValue], payload["tasks"])
     assert len(tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_emits_task_created_hook(tmp_path: Path) -> None:
+    task_repo = TaskRepository(tmp_path / "task_orchestration_hooks.db")
+    agent_repo = AgentInstanceRepository(tmp_path / "task_orchestration_hooks.db")
+    message_repo = MessageRepository(tmp_path / "task_orchestration_hooks.db")
+    session_repo = SessionRepository(tmp_path / "task_orchestration_hooks.db")
+    execution_service = _FakeTaskExecutionService(task_repo)
+    hook_service = _CapturingHookService()
+    _seed_root_task(task_repo)
+    _ = session_repo.create(session_id="session-1", workspace_id="default")
+    service = TaskOrchestrationService(
+        task_repo=task_repo,
+        role_registry=_build_role_registry(),
+        agent_repo=agent_repo,
+        task_execution_service=cast(TaskExecutionService, execution_service),
+        message_repo=message_repo,
+        session_repo=session_repo,
+        hook_service=cast(HookService, hook_service),
+        run_event_hub=cast(RunEventHub, object()),
+    )
+
+    payload = await service.create_tasks(
+        run_id="run-1",
+        tasks=[TaskDraft(objective="Review the failing test output")],
+    )
+
+    created_task = cast(
+        dict[str, JsonValue], cast(list[JsonValue], payload["tasks"])[0]
+    )
+    event = hook_service.events[0]
+    assert getattr(event, "event_name") == HookEventName.TASK_CREATED
+    assert getattr(event, "task_id") == str(created_task["task_id"])
+    assert getattr(event, "task_objective") == "Review the failing test output"
+    assert getattr(event, "role_id") == "Coordinator"
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_denied_by_hook_does_not_persist_tasks(
+    tmp_path: Path,
+) -> None:
+    task_repo = TaskRepository(tmp_path / "task_orchestration_hooks_deny.db")
+    agent_repo = AgentInstanceRepository(tmp_path / "task_orchestration_hooks_deny.db")
+    message_repo = MessageRepository(tmp_path / "task_orchestration_hooks_deny.db")
+    session_repo = SessionRepository(tmp_path / "task_orchestration_hooks_deny.db")
+    execution_service = _FakeTaskExecutionService(task_repo)
+    hook_service = _DenyingHookService("Task contract rejected")
+    _seed_root_task(task_repo)
+    _ = session_repo.create(session_id="session-1", workspace_id="default")
+    service = TaskOrchestrationService(
+        task_repo=task_repo,
+        role_registry=_build_role_registry(),
+        agent_repo=agent_repo,
+        task_execution_service=cast(TaskExecutionService, execution_service),
+        message_repo=message_repo,
+        session_repo=session_repo,
+        hook_service=cast(HookService, hook_service),
+        run_event_hub=cast(RunEventHub, object()),
+    )
+
+    with pytest.raises(ValueError, match="Task contract rejected"):
+        await service.create_tasks(
+            run_id="run-1",
+            tasks=[TaskDraft(objective="Review the failing test output")],
+        )
+
+    records = task_repo.list_by_trace("run-1")
+    assert [record.envelope.task_id for record in records] == ["task-root"]
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_batch_denial_does_not_partially_persist_tasks(
+    tmp_path: Path,
+) -> None:
+    task_repo = TaskRepository(tmp_path / "task_orchestration_hooks_batch_deny.db")
+    agent_repo = AgentInstanceRepository(
+        tmp_path / "task_orchestration_hooks_batch_deny.db"
+    )
+    message_repo = MessageRepository(
+        tmp_path / "task_orchestration_hooks_batch_deny.db"
+    )
+    session_repo = SessionRepository(
+        tmp_path / "task_orchestration_hooks_batch_deny.db"
+    )
+    execution_service = _FakeTaskExecutionService(task_repo)
+
+    class _DenySecondHookService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def execute(
+            self, *, event_input: object, run_event_hub: object
+        ) -> HookDecisionBundle:
+            _ = (event_input, run_event_hub)
+            self.calls += 1
+            if self.calls == 2:
+                return HookDecisionBundle(
+                    decision=HookDecisionType.DENY,
+                    reason="Second task rejected",
+                )
+            return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+
+    hook_service = _DenySecondHookService()
+    _seed_root_task(task_repo)
+    _ = session_repo.create(session_id="session-1", workspace_id="default")
+    service = TaskOrchestrationService(
+        task_repo=task_repo,
+        role_registry=_build_role_registry(),
+        agent_repo=agent_repo,
+        task_execution_service=cast(TaskExecutionService, execution_service),
+        message_repo=message_repo,
+        session_repo=session_repo,
+        hook_service=cast(HookService, hook_service),
+        run_event_hub=cast(RunEventHub, object()),
+    )
+
+    with pytest.raises(ValueError, match="Second task rejected"):
+        await service.create_tasks(
+            run_id="run-1",
+            tasks=[
+                TaskDraft(objective="First"),
+                TaskDraft(objective="Second"),
+            ],
+        )
+
+    records = task_repo.list_by_trace("run-1")
+    assert [record.envelope.task_id for record in records] == ["task-root"]

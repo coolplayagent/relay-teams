@@ -52,6 +52,14 @@ from relay_teams.agents.tasks.models import (
     VerificationResult,
 )
 from relay_teams.sessions.session_models import SessionMode
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookService,
+    TaskCompletedInput,
+    TaskCreatedInput,
+)
 
 MAX_ORCHESTRATION_CYCLES = 8
 LOGGER = get_logger(__name__)
@@ -84,6 +92,7 @@ class CoordinatorGraph(BaseModel):
     session_repo: SessionRepository | None = None
     gate_manager: GateManager = Field(default_factory=GateManager)
     run_event_hub: RunEventHub | None = None
+    hook_service: HookService | None = None
 
     async def run(
         self,
@@ -119,6 +128,7 @@ class CoordinatorGraph(BaseModel):
             objective=intent.intent,
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
+        await self._execute_task_created_hook(task=root_task)
         _ = self.task_repo.create(root_task)
         self.event_bus.emit(
             EventEnvelope(
@@ -133,11 +143,9 @@ class CoordinatorGraph(BaseModel):
         mode = intent.execution_mode
         root_instance_id: str | None = None
         if mode == ExecutionMode.MANUAL:
-            result = TaskExecutionResult(
-                output=self._initialize_manual_mode(
-                    trace_id=trace_id, root_task=root_task
-                ),
-                completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+            result = await self._initialize_manual_mode(
+                trace_id=trace_id,
+                root_task=root_task,
             )
         elif mode == ExecutionMode.AI:
             root_instance_id = self._ensure_root_instance(
@@ -177,7 +185,7 @@ class CoordinatorGraph(BaseModel):
             verification = verify_task(
                 self.task_repo, self.event_bus, root_task.task_id
             )
-            verification_result = self._terminal_status_from_verification(
+            verification_result = await self._terminal_status_from_verification(
                 trace_id=trace_id,
                 root_task=root_task,
                 verification=verification,
@@ -244,7 +252,7 @@ class CoordinatorGraph(BaseModel):
             verification = verify_task(
                 self.task_repo, self.event_bus, root_task.task_id
             )
-            verification_result = self._terminal_status_from_verification(
+            verification_result = await self._terminal_status_from_verification(
                 trace_id=trace_id,
                 root_task=root_task,
                 verification=verification,
@@ -288,7 +296,7 @@ class CoordinatorGraph(BaseModel):
                 error_message=result.error_message,
             )
         verification = verify_task(self.task_repo, self.event_bus, root_task.task_id)
-        verification_result = self._terminal_status_from_verification(
+        verification_result = await self._terminal_status_from_verification(
             trace_id=trace_id,
             root_task=root_task,
             verification=verification,
@@ -305,12 +313,33 @@ class CoordinatorGraph(BaseModel):
             error_message=verification_result.error_message,
         )
 
-    def _initialize_manual_mode(self, *, trace_id: str, root_task: TaskEnvelope) -> str:
+    async def _initialize_manual_mode(
+        self, *, trace_id: str, root_task: TaskEnvelope
+    ) -> TaskExecutionResult:
         result = (
             "Manual orchestration initialized. Use task APIs or task tools to create, update, "
             "list, and dispatch delegated tasks."
         )
         session_id = root_task.session_id
+        completion_bundle = await self._execute_task_completed_hook(
+            task=root_task,
+            instance_id=None,
+            role_id=root_task.role_id,
+            status=TaskStatus.COMPLETED,
+            output_text=result,
+            error_message="",
+        )
+        if completion_bundle.decision == HookDecisionType.DENY:
+            denial_reason = (
+                completion_bundle.reason or "Task completion denied by runtime hook"
+            )
+            return self._build_task_completion_denied_result(
+                trace_id=trace_id,
+                root_task=root_task,
+                assigned_instance_id=None,
+                role_id=root_task.role_id,
+                denial_reason=denial_reason,
+            )
         self.task_repo.update_status(
             root_task.task_id, TaskStatus.COMPLETED, result=result
         )
@@ -333,7 +362,126 @@ class CoordinatorGraph(BaseModel):
             event_type=RunEventType.AWAITING_MANUAL_ACTION,
             payload={"root_task_id": root_task.task_id},
         )
-        return result
+        return TaskExecutionResult(output=result)
+
+    async def _execute_task_created_hook(self, *, task: TaskEnvelope) -> None:
+        if self.hook_service is None:
+            return
+        bundle = await self.hook_service.execute(
+            event_input=TaskCreatedInput(
+                event_name=HookEventName.TASK_CREATED,
+                session_id=task.session_id,
+                run_id=task.trace_id,
+                trace_id=task.trace_id,
+                task_id=task.task_id,
+                instance_id=None,
+                role_id=task.role_id,
+                parent_task_id=task.parent_task_id,
+                task_title=task.title or "",
+                task_objective=task.objective,
+            ),
+            run_event_hub=self.run_event_hub,
+        )
+        if bundle.decision == HookDecisionType.DENY:
+            raise ValueError(bundle.reason or "Task creation denied by runtime hook")
+
+    async def _execute_task_completed_hook(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str | None,
+        role_id: str | None,
+        status: TaskStatus,
+        output_text: str,
+        error_message: str,
+    ) -> HookDecisionBundle:
+        if self.hook_service is None:
+            return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+        return await self.hook_service.execute(
+            event_input=TaskCompletedInput(
+                event_name=HookEventName.TASK_COMPLETED,
+                session_id=task.session_id,
+                run_id=task.trace_id,
+                trace_id=task.trace_id,
+                task_id=task.task_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                parent_task_id=task.parent_task_id,
+                task_title=task.title or "",
+                task_objective=task.objective,
+                status=status.value,
+                output_text=output_text,
+                error_message=error_message,
+            ),
+            run_event_hub=self.run_event_hub,
+        )
+
+    def _build_task_completion_denied_result(
+        self,
+        *,
+        trace_id: str,
+        root_task: TaskEnvelope,
+        assigned_instance_id: str | None,
+        role_id: str | None,
+        denial_reason: str,
+    ) -> TaskExecutionResult:
+        assistant_message = build_assistant_error_message(
+            error_code="task_completion_denied",
+            error_message=denial_reason,
+        )
+        self.task_repo.update_status(
+            root_task.task_id,
+            TaskStatus.FAILED,
+            assigned_instance_id=assigned_instance_id,
+            result=assistant_message,
+            error_message=denial_reason,
+        )
+        self.event_bus.emit(
+            EventEnvelope(
+                event_type=EventType.TASK_FAILED,
+                trace_id=trace_id,
+                session_id=root_task.session_id,
+                task_id=root_task.task_id,
+                instance_id=assigned_instance_id,
+                payload_json="{}",
+            )
+        )
+        if assigned_instance_id is not None and role_id is not None:
+            instance = self.agent_repo.get_instance(assigned_instance_id)
+            self.task_execution_service.message_repo.prune_conversation_history_to_safe_boundary(
+                instance.conversation_id
+            )
+            self.task_execution_service.message_repo.append(
+                session_id=root_task.session_id,
+                workspace_id=instance.workspace_id,
+                conversation_id=instance.conversation_id,
+                agent_role_id=role_id,
+                instance_id=assigned_instance_id,
+                task_id=root_task.task_id,
+                trace_id=trace_id,
+                messages=[ModelResponse(parts=[TextPart(content=assistant_message)])],
+            )
+            if self.run_event_hub is not None:
+                self._publish_run_event(
+                    session_id=root_task.session_id,
+                    run_id=trace_id,
+                    trace_id=trace_id,
+                    task_id=root_task.task_id,
+                    instance_id=assigned_instance_id,
+                    role_id=role_id,
+                    event_type=RunEventType.TEXT_DELTA,
+                    payload={
+                        "text": assistant_message,
+                        "role_id": role_id,
+                        "instance_id": assigned_instance_id,
+                    },
+                )
+        return TaskExecutionResult(
+            output=assistant_message,
+            completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+            error_code="task_completion_denied",
+            error_message=denial_reason,
+        )
 
     async def _run_ai_mode(
         self,
@@ -714,7 +862,7 @@ class CoordinatorGraph(BaseModel):
             )
         )
 
-    def _terminal_status_from_verification(
+    async def _terminal_status_from_verification(
         self,
         *,
         trace_id: str,
@@ -741,6 +889,25 @@ class CoordinatorGraph(BaseModel):
             error_code="verification_failed",
             error_message=failure_message,
         )
+        completion_bundle = await self._execute_task_completed_hook(
+            task=root_task,
+            instance_id=root_instance_id,
+            role_id=root_role_id,
+            status=TaskStatus.COMPLETED,
+            output_text=assistant_message,
+            error_message=failure_message,
+        )
+        if completion_bundle.decision == HookDecisionType.DENY:
+            denial_reason = (
+                completion_bundle.reason or "Task completion denied by runtime hook"
+            )
+            return self._build_task_completion_denied_result(
+                trace_id=trace_id,
+                root_task=root_task,
+                assigned_instance_id=root_instance_id,
+                role_id=root_role_id,
+                denial_reason=denial_reason,
+            )
         self.task_repo.update_status(
             root_task.task_id,
             TaskStatus.COMPLETED,

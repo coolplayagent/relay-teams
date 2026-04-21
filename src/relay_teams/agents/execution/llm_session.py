@@ -155,6 +155,8 @@ from relay_teams.hooks import (
     HookDecisionType,
     HookEventName,
     HookService,
+    PostCompactInput,
+    PreCompactInput,
     UserPromptSubmitInput,
 )
 
@@ -567,7 +569,11 @@ class AgentLlmSession:
         )
         total_attempts = total_attempts or (self._retry_config.max_retries + 1)
         agent_system_prompt = request.system_prompt
-        hook_service = getattr(self, "_hook_service", None)
+        hook_service = (
+            getattr(self, "_hook_service", None)
+            if request.runtime_hooks_enabled
+            else None
+        )
         hook_runtime_env = (
             hook_service.get_run_env(request.run_id) if hook_service is not None else {}
         )
@@ -951,16 +957,17 @@ class AgentLlmSession:
                                             payload_json=msg.model_dump_json(),
                                         )
                                     )
-                                    self._message_repo.append_user_prompt_if_missing(
-                                        session_id=request.session_id,
-                                        workspace_id=resolved_workspace_id,
-                                        conversation_id=resolved_conversation_id,
-                                        agent_role_id=request.role_id,
-                                        instance_id=request.instance_id,
-                                        task_id=request.task_id,
-                                        trace_id=request.trace_id,
-                                        content=msg.content,
-                                    )
+                                    if request.persist_messages:
+                                        self._message_repo.append_user_prompt_if_missing(
+                                            session_id=request.session_id,
+                                            workspace_id=resolved_workspace_id,
+                                            conversation_id=resolved_conversation_id,
+                                            agent_role_id=request.role_id,
+                                            instance_id=request.instance_id,
+                                            task_id=request.task_id,
+                                            trace_id=request.trace_id,
+                                            content=msg.content,
+                                        )
                                 attempt_messages_committed = True
                                 # Restart iter() with injected messages appended to committed history
                                 (
@@ -2025,20 +2032,21 @@ class AgentLlmSession:
             error_code=error_code,
             error_message=error_message,
         )
-        self._message_repo.prune_conversation_history_to_safe_boundary(
-            self._conversation_id(request)
-        )
-        self._message_repo.append(
-            session_id=request.session_id,
-            workspace_id=self._workspace_id(request),
-            conversation_id=self._conversation_id(request),
-            agent_role_id=request.role_id,
-            instance_id=request.instance_id,
-            task_id=request.task_id,
-            trace_id=request.trace_id,
-            messages=[build_assistant_error_response(assistant_message)],
-        )
-        self._publish_text_delta_event(request=request, text=assistant_message)
+        if request.persist_messages:
+            self._message_repo.prune_conversation_history_to_safe_boundary(
+                self._conversation_id(request)
+            )
+            self._message_repo.append(
+                session_id=request.session_id,
+                workspace_id=self._workspace_id(request),
+                conversation_id=self._conversation_id(request),
+                agent_role_id=request.role_id,
+                instance_id=request.instance_id,
+                task_id=request.task_id,
+                trace_id=request.trace_id,
+                messages=[build_assistant_error_response(assistant_message)],
+            )
+            self._publish_text_delta_event(request=request, text=assistant_message)
         raise AssistantRunError(
             AssistantRunErrorPayload(
                 trace_id=request.trace_id,
@@ -3347,7 +3355,11 @@ class AgentLlmSession:
             allowed_mcp_servers=allowed_mcp_servers,
             allowed_skills=allowed_skills,
         )
-        hook_service = getattr(self, "_hook_service", None)
+        hook_service = (
+            getattr(self, "_hook_service", None)
+            if request.runtime_hooks_enabled
+            else None
+        )
         agent = cast(
             _CoordinationAgent,
             build_coordination_agent(
@@ -3772,7 +3784,38 @@ class AgentLlmSession:
     ) -> list[ModelRequest | ModelResponse]:
         if self._conversation_compaction_service is None:
             return history
-        return await self._conversation_compaction_service.maybe_compact(
+        hook_service = (
+            getattr(self, "_hook_service", None)
+            if request.runtime_hooks_enabled
+            else None
+        )
+        run_event_hub = getattr(self, "_run_event_hub", None)
+        if hook_service is not None:
+            bundle = await hook_service.execute(
+                event_input=PreCompactInput(
+                    event_name=HookEventName.PRE_COMPACT,
+                    session_id=request.session_id,
+                    run_id=request.run_id,
+                    trace_id=request.trace_id,
+                    task_id=request.task_id,
+                    instance_id=request.instance_id,
+                    role_id=request.role_id,
+                    workspace_id=request.workspace_id,
+                    conversation_id=conversation_id,
+                    run_kind=request.run_kind.value,
+                    message_count=len(history),
+                    estimated_tokens_before=(estimated_tokens_before_microcompact or 0),
+                    estimated_tokens_after_microcompact=(
+                        estimated_tokens_after_microcompact or 0
+                    ),
+                    history_trigger_tokens=budget.history_trigger_tokens,
+                    history_target_tokens=budget.history_target_tokens,
+                ),
+                run_event_hub=run_event_hub,
+            )
+            if bundle.decision == HookDecisionType.DENY:
+                return history
+        compacted_history = await self._conversation_compaction_service.maybe_compact(
             session_id=request.session_id,
             role_id=request.role_id,
             conversation_id=conversation_id,
@@ -3782,6 +3825,29 @@ class AgentLlmSession:
             estimated_tokens_before_microcompact=estimated_tokens_before_microcompact,
             estimated_tokens_after_microcompact=estimated_tokens_after_microcompact,
         )
+        if hook_service is not None:
+            await hook_service.execute(
+                event_input=PostCompactInput(
+                    event_name=HookEventName.POST_COMPACT,
+                    session_id=request.session_id,
+                    run_id=request.run_id,
+                    trace_id=request.trace_id,
+                    task_id=request.task_id,
+                    instance_id=request.instance_id,
+                    role_id=request.role_id,
+                    workspace_id=request.workspace_id,
+                    conversation_id=conversation_id,
+                    run_kind=request.run_kind.value,
+                    message_count_before=len(history),
+                    message_count_after=len(compacted_history),
+                    compacted_message_count=max(
+                        0, len(history) - len(compacted_history)
+                    ),
+                    applied=compacted_history != history,
+                ),
+                run_event_hub=self._run_event_hub,
+            )
+        return compacted_history
 
     def _inject_compaction_summary(
         self,
@@ -3804,6 +3870,8 @@ class AgentLlmSession:
         self,
         request: LLMRequest,
     ) -> tuple[LLMRequest, tuple[str, ...]]:
+        if not request.runtime_hooks_enabled:
+            return request, ()
         hook_service = getattr(self, "_hook_service", None)
         if hook_service is None:
             return request, ()
@@ -3819,6 +3887,8 @@ class AgentLlmSession:
                 task_id=request.task_id,
                 instance_id=request.instance_id,
                 role_id=request.role_id,
+                workspace_id=request.workspace_id,
+                conversation_id=self._conversation_id(request),
                 user_prompt=prompt_text,
                 input_parts=tuple(
                     part.model_dump(mode="json") for part in request.input
@@ -3873,6 +3943,8 @@ class AgentLlmSession:
         request: LLMRequest,
         contexts: tuple[str, ...],
     ) -> None:
+        if not request.persist_messages:
+            return
         conversation_id = self._conversation_id(request)
         for context in contexts:
             text = str(context).strip()
@@ -3901,6 +3973,11 @@ class AgentLlmSession:
             return history, False
         if self._history_ends_with_user_prompt(history, prompt):
             return history, False
+        prompt_message = ModelRequest(parts=[UserPromptPart(content=prompt)])
+        if not request.persist_messages:
+            next_history = list(history)
+            next_history.append(prompt_message)
+            return next_history, False
         self._message_repo.prune_conversation_history_to_safe_boundary(
             self._conversation_id(request)
         )
@@ -3914,7 +3991,6 @@ class AgentLlmSession:
             trace_id=request.trace_id,
             content=prompt,
         )
-        prompt_message = ModelRequest(parts=[UserPromptPart(content=prompt)])
         if replaced:
             return (
                 self._filter_model_messages(
@@ -4021,6 +4097,13 @@ class AgentLlmSession:
             raw_ready
         )
         ready = self._normalize_committable_messages(raw_ready)
+        if not request.persist_messages:
+            return (
+                [*history, *ready],
+                pending_messages[safe_index:],
+                self._has_tool_side_effect_messages(ready),
+                committed_tool_validation_failures,
+            )
         self._message_repo.append(
             session_id=request.session_id,
             workspace_id=self._workspace_id(request),

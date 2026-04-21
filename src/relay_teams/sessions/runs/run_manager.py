@@ -131,6 +131,8 @@ from relay_teams.hooks import (
     SessionStartInput,
     StopFailureInput,
     StopInput,
+    TaskCreatedInput,
+    TaskCompletedInput,
 )
 
 if TYPE_CHECKING:
@@ -426,24 +428,52 @@ class RunManager:
         run_id: str,
         session_id: str,
         intent: IntentInput,
+        source: str,
     ) -> None:
         if self._hook_service is None:
             return
         session = self._session_repo.get(session_id)
+        agent_type = self._session_start_agent_type(intent)
+        model = self._session_start_model(agent_type)
         _ = await self._hook_service.execute(
             event_input=SessionStartInput(
                 event_name=HookEventName.SESSION_START,
                 session_id=session_id,
                 run_id=run_id,
                 trace_id=run_id,
+                workspace_id=session.workspace_id,
                 session_mode=(
                     intent.session_mode.value if intent.session_mode is not None else ""
                 ),
                 run_kind=intent.run_kind.value,
-                workspace_id=session.workspace_id,
+                source=source,
+                model=model,
+                agent_type=agent_type,
             ),
             run_event_hub=self._run_event_hub,
         )
+
+    def _session_start_agent_type(self, intent: IntentInput) -> str | None:
+        role_hint = str(intent.target_role_id or "").strip()
+        if role_hint:
+            return role_hint
+        if intent.run_kind != RunKind.CONVERSATION:
+            try:
+                return self._resolve_generation_role_id(intent)
+            except Exception:
+                return None
+        topology = intent.topology
+        if topology is not None and topology.normal_root_role_id.strip():
+            return topology.normal_root_role_id.strip()
+        return None
+
+    def _session_start_model(self, agent_type: str | None) -> str:
+        if not agent_type or self._role_registry is None:
+            return ""
+        try:
+            return self._role_registry.get(agent_type).model_profile
+        except KeyError:
+            return ""
 
     async def _execute_session_end_hooks(
         self,
@@ -525,6 +555,69 @@ class RunManager:
                 completion_reason=completion_reason,
                 error_code=error_code,
                 error_message=error_message,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+
+    async def _execute_task_completed_hooks(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        task_id: str,
+        instance_id: str | None,
+        role_id: str | None,
+        status: TaskStatus,
+        output_text: str,
+        error_message: str,
+    ) -> HookDecisionBundle:
+        if self._hook_service is None:
+            return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+        return await self._hook_service.execute(
+            event_input=TaskCompletedInput(
+                event_name=HookEventName.TASK_COMPLETED,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=task_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                workspace_id=self._session_repo.get(session_id).workspace_id,
+                conversation_id=(
+                    build_conversation_id(session_id, role_id)
+                    if role_id is not None
+                    else ""
+                ),
+                status=status.value,
+                output_text=output_text,
+                error_message=error_message,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+
+    async def _execute_task_created_hooks(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        task: TaskEnvelope,
+        instance_id: str | None,
+        role_id: str | None,
+    ) -> HookDecisionBundle:
+        if self._hook_service is None:
+            return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+        return await self._hook_service.execute(
+            event_input=TaskCreatedInput(
+                event_name=HookEventName.TASK_CREATED,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=task.task_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                parent_task_id=task.parent_task_id,
+                task_title=task.title or "",
+                task_objective=task.objective,
             ),
             run_event_hub=self._run_event_hub,
         )
@@ -669,6 +762,7 @@ class RunManager:
                     run_id=run_id,
                     session_id=session_id,
                     intent=intent,
+                    source="startup",
                 )
                 result = await self._run_result_through_stop_hooks(
                     run_id=run_id,
@@ -1158,6 +1252,28 @@ class RunManager:
         )
         agent_repo = self._require_agent_repo()
         task_repo = self._require_task_repo()
+        created_bundle = await self._execute_task_created_hooks(
+            run_id=run_id,
+            session_id=intent.session_id,
+            task=root_task,
+            instance_id=instance.instance_id,
+            role_id=role_id,
+        )
+        if created_bundle.decision == HookDecisionType.DENY:
+            denial_reason = (
+                created_bundle.reason or "Task creation denied by runtime hook"
+            )
+            return self._build_completed_error_run_result(
+                run_id=run_id,
+                session_id=intent.session_id,
+                root_task_id=root_task.task_id,
+                instance_id=instance.instance_id,
+                role_id=role_id,
+                conversation_id=conversation_id,
+                workspace_id=session.workspace_id,
+                error_code="task_creation_denied",
+                error_message=denial_reason,
+            )
         agent_repo.upsert_instance(
             run_id=run_id,
             trace_id=run_id,
@@ -1280,6 +1396,73 @@ class RunManager:
                 ),
                 failure_event="run.event.publish_failed",
             )
+            completion_bundle = await self._execute_task_completed_hooks(
+                run_id=run_id,
+                session_id=intent.session_id,
+                task_id=root_task.task_id,
+                instance_id=instance.instance_id,
+                role_id=role_id,
+                status=TaskStatus.COMPLETED,
+                output_text=content_parts_to_text(output),
+                error_message="",
+            )
+            if completion_bundle.decision == HookDecisionType.DENY:
+                denial_reason = (
+                    completion_bundle.reason or "Task completion denied by runtime hook"
+                )
+                try:
+                    result = self._build_completed_error_run_result(
+                        run_id=run_id,
+                        session_id=intent.session_id,
+                        root_task_id=root_task.task_id,
+                        instance_id=instance.instance_id,
+                        role_id=role_id,
+                        conversation_id=conversation_id,
+                        workspace_id=session.workspace_id,
+                        error_code="task_completion_denied",
+                        error_message=denial_reason,
+                    )
+                    task_repo.update_status(
+                        root_task.task_id,
+                        TaskStatus.FAILED,
+                        assigned_instance_id=instance.instance_id,
+                        result=result.output_text,
+                        error_message=result.error_message,
+                    )
+                    agent_repo.mark_status(instance.instance_id, InstanceStatus.FAILED)
+                except Exception as exc:
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        event="run.media_generation.completion_deny_finalize_failed",
+                        message=(
+                            "Task completion denial fell back after result finalization failed"
+                        ),
+                        payload={"run_id": run_id, "task_id": root_task.task_id},
+                        exc_info=exc,
+                    )
+                    assistant_message = build_assistant_error_message(
+                        error_code="task_completion_denied",
+                        error_message=denial_reason,
+                    )
+                    task_repo.update_status(
+                        root_task.task_id,
+                        TaskStatus.FAILED,
+                        assigned_instance_id=instance.instance_id,
+                        result=assistant_message,
+                        error_message=denial_reason,
+                    )
+                    agent_repo.mark_status(instance.instance_id, InstanceStatus.FAILED)
+                    result = RunResult(
+                        trace_id=run_id,
+                        root_task_id=root_task.task_id,
+                        status="failed",
+                        completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+                        error_code="task_completion_denied",
+                        error_message=denial_reason,
+                        output=content_parts_from_text(assistant_message),
+                    )
+                return result
             task_repo.update_status(
                 root_task.task_id,
                 TaskStatus.COMPLETED,
@@ -1308,12 +1491,12 @@ class RunManager:
             )
             task_repo.update_status(
                 root_task.task_id,
-                TaskStatus.COMPLETED,
+                TaskStatus.FAILED,
                 assigned_instance_id=instance.instance_id,
                 result=result.output_text,
                 error_message=result.error_message,
             )
-            agent_repo.mark_status(instance.instance_id, InstanceStatus.COMPLETED)
+            agent_repo.mark_status(instance.instance_id, InstanceStatus.FAILED)
             self._publish_generation_progress(
                 run_id=run_id,
                 session_id=intent.session_id,
@@ -1390,6 +1573,7 @@ class RunManager:
                     run_id=run_id,
                     session_id=session_id,
                     intent=runtime_intent,
+                    source="resume",
                 )
             result = await self._run_result_through_stop_hooks(
                 run_id=run_id,

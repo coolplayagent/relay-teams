@@ -4,8 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 import re
 from threading import RLock
+from typing import cast
 
 import yaml
+from pydantic import JsonValue
 
 from relay_teams.builtin import get_builtin_skills_dir
 from relay_teams.logger import get_logger
@@ -192,6 +194,10 @@ class SkillsDirectory:
             if not name:
                 return None
 
+            hooks = _as_object_mapping(data.get("hooks"))
+            if hooks is None:
+                hooks = {}
+
             resources: dict[str, SkillResource] = {}
             resource_entries = _as_object_mapping(data.get("resources"))
             if resource_entries is not None:
@@ -252,6 +258,9 @@ class SkillsDirectory:
                 instructions=body.strip(),
                 resources=resources,
                 scripts=scripts,
+                hooks={
+                    str(key): cast(JsonValue, value) for key, value in hooks.items()
+                },
             )
             return Skill(
                 ref=build_skill_ref(scope=scope, name=name),

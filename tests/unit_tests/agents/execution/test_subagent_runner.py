@@ -79,6 +79,8 @@ async def test_subagent_runner_builds_runtime_request() -> None:
         role_id="researcher",
         system_prompt="role=researcher;task=task-1;shared=context",
         user_prompt=None,
+        runtime_hooks_enabled=True,
+        persist_messages=True,
     )
 
 
@@ -119,3 +121,5 @@ async def test_subagent_runner_passes_user_prompt_when_provided() -> None:
     assert provider.request is not None
     assert provider.request.user_prompt == "rewritten from hook"
     assert provider.request.prompt_text == "rewritten from hook"
+    assert provider.request.runtime_hooks_enabled is True
+    assert provider.request.persist_messages is True

@@ -189,8 +189,10 @@ from relay_teams.gateway.wechat import (
     get_wechat_secret_store,
 )
 from relay_teams.hooks import HookLoader, HookRuntimeState, HookService
+from relay_teams.hooks.executors.agent_executor import AgentHookExecutor
 from relay_teams.hooks.executors.command_executor import CommandHookExecutor
 from relay_teams.hooks.executors.http_executor import HttpHookExecutor
+from relay_teams.hooks.executors.prompt_executor import PromptHookExecutor
 from relay_teams.workspace import (
     SshProfileRepository,
     SshProfileService,
@@ -242,11 +244,25 @@ class ServerContainer:
             on_proxy_reloaded=self._on_proxy_reloaded,
         )
         self.hook_service = HookService(
-            loader=HookLoader(app_config_dir=app_config_dir, project_root=Path.cwd()),
+            loader=HookLoader(
+                app_config_dir=app_config_dir,
+                project_root=Path.cwd(),
+                get_role_registry=lambda: self.role_registry,
+                get_skill_registry=lambda: self.skill_registry,
+            ),
             runtime_state=HookRuntimeState(),
             command_executor=CommandHookExecutor(),
             http_executor=HttpHookExecutor(
                 get_proxy_config=self.proxy_config_service.get_proxy_config
+            ),
+            prompt_executor=PromptHookExecutor(
+                get_role_registry=lambda: self.role_registry,
+                get_provider_factory=lambda: self._provider_factory,
+            ),
+            agent_executor=AgentHookExecutor(
+                get_role_registry=lambda: self.role_registry,
+                get_provider_factory=lambda: self._provider_factory,
+                get_session_repo=lambda: self.session_repo,
             ),
         )
         self.web_config_service: WebConfigService = WebConfigService(
@@ -459,6 +475,7 @@ class ServerContainer:
             background_task_manager=self.background_task_manager,
             repository=self.background_task_repository,
             run_event_hub=self.run_event_hub,
+            hook_service=self.hook_service,
         )
         self.feishu_client = FeishuClient()
         self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
@@ -596,6 +613,7 @@ class ServerContainer:
             session_repo=self.session_repo,
             gate_manager=self.gate_manager,
             run_event_hub=self.run_event_hub,
+            hook_service=self.hook_service,
         )
         self.meta_agent: MetaAgent = MetaAgent(coordinator=coordinator)
         self.run_service: RunManager = RunManager(
@@ -905,6 +923,7 @@ class ServerContainer:
             message_repo=self.message_repo,
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
+            run_event_hub=self.run_event_hub,
             run_intent_repo=self.run_intent_repo,
             workspace_manager=self.workspace_manager,
             media_asset_service=self.media_asset_service,
@@ -919,6 +938,7 @@ class ServerContainer:
             run_control_manager=self.run_control_manager,
             role_memory_service=self.role_memory_service,
             runtime_role_resolver=self.runtime_role_resolver,
+            hook_service=self.hook_service,
         )
         self.task_service = TaskOrchestrationService(
             task_repo=self.task_repo,
@@ -928,6 +948,7 @@ class ServerContainer:
             message_repo=self.message_repo,
             session_repo=self.session_repo,
             runtime_role_resolver=self.runtime_role_resolver,
+            hook_service=self.hook_service,
         )
 
     def _resolve_reflection_model_config(self) -> ModelEndpointConfig | None:

@@ -3,11 +3,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, cast
 
 import pytest
 
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookService,
+    TaskCreatedInput,
+    TaskCompletedInput,
+)
 from relay_teams.agents.orchestration.meta_agent import MetaAgent
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.media import content_parts_from_text
@@ -76,6 +85,8 @@ from relay_teams.sessions.session_models import SessionRecord
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.providers import LLMProvider
+from relay_teams.roles import RoleDefinition, RoleRegistry
 from relay_teams.tools.runtime import ToolApprovalManager
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
@@ -83,6 +94,7 @@ from relay_teams.tools.workspace_tools.shell_approval_repo import (
 )
 from relay_teams.tools.workspace_tools.shell_policy import ShellRuntimeFamily
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.sessions.runs.run_models import RunKind
 
 
 class _MetaAgent:
@@ -130,6 +142,9 @@ def _build_manager(
     background_task_manager: BackgroundTaskManager | None = None,
     background_task_service: BackgroundTaskService | None = None,
     monitor_service: MonitorService | None = None,
+    provider_factory: Callable[[RoleDefinition, str | None], LLMProvider] | None = None,
+    role_registry: RoleRegistry | None = None,
+    hook_service: HookService | None = None,
 ) -> RunManager:
     control = RunControlManager()
     injection = RunInjectionManager()
@@ -155,6 +170,8 @@ def _build_manager(
     )
     return RunManager(
         meta_agent=cast(MetaAgent, meta_agent or cast(object, _MetaAgent())),
+        provider_factory=provider_factory,
+        role_registry=role_registry,
         injection_manager=injection,
         run_event_hub=hub,
         run_control_manager=control,
@@ -176,7 +193,117 @@ def _build_manager(
         notification_service=None,
         shell_approval_repo=shell_approval_repo,
         user_question_manager=UserQuestionManager(),
+        hook_service=hook_service,
     )
+
+
+class _FakeImageProvider(LLMProvider):
+    def __init__(self, *, fail_with: Exception | None = None) -> None:
+        self._fail_with = fail_with
+
+    async def generate_image(self, request):
+        _ = request
+        if self._fail_with is not None:
+            raise self._fail_with
+        return content_parts_from_text("generated image")
+
+
+class _DenyingTaskCompletedHookService:
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        self.events: list[object] = []
+
+    def snapshot_run(self, run_id: str) -> None:
+        _ = run_id
+
+    def clear_run(self, run_id: str) -> None:
+        _ = run_id
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(event_input)
+        if not isinstance(event_input, TaskCompletedInput):
+            return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+        return HookDecisionBundle(
+            decision=HookDecisionType.DENY,
+            reason=self.reason,
+        )
+
+
+class _AllowingTaskCompletedHookService:
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
+    def snapshot_run(self, run_id: str) -> None:
+        _ = run_id
+
+    def clear_run(self, run_id: str) -> None:
+        _ = run_id
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(event_input)
+        return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+
+
+class _AllowingTaskLifecycleHookService:
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
+    def snapshot_run(self, run_id: str) -> None:
+        _ = run_id
+
+    def clear_run(self, run_id: str) -> None:
+        _ = run_id
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(event_input)
+        return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+
+
+class _DenyingTaskCreatedHookService:
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        self.events: list[object] = []
+
+    def snapshot_run(self, run_id: str) -> None:
+        _ = run_id
+
+    def clear_run(self, run_id: str) -> None:
+        _ = run_id
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(event_input)
+        if isinstance(event_input, TaskCreatedInput):
+            return HookDecisionBundle(
+                decision=HookDecisionType.DENY,
+                reason=self.reason,
+            )
+        return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+
+
+def _build_generation_role_registry() -> RoleRegistry:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Generator",
+            name="Generator",
+            description="Generates media.",
+            version="1",
+            system_prompt="Generate media.",
+        )
+    )
+    return registry
 
 
 def _upsert_coordinator(agent_repo: AgentInstanceRepository) -> None:
@@ -3748,3 +3875,192 @@ def test_complete_pending_user_questions_does_not_overwrite_answered_race(
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_run_media_generation_denied_task_completed_marks_failure(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_media_generation_denied_task_completed.db"
+    hook_service = _DenyingTaskCompletedHookService("Media closeout blocked")
+    manager = _build_manager(
+        db_path,
+        provider_factory=lambda _role, _session_id: _FakeImageProvider(),
+        role_registry=_build_generation_role_registry(),
+        hook_service=cast(HookService, hook_service),
+    )
+    manager._append_media_output_message = lambda *, request, output: None
+
+    result = await manager._run_media_generation(
+        run_id="run-existing",
+        intent=IntentInput(
+            session_id="session-1",
+            run_kind=RunKind.GENERATE_IMAGE,
+            input=content_parts_from_text("draw a diagram"),
+            target_role_id="Generator",
+        ),
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "task_completion_denied"
+    record = TaskRepository(db_path).get(result.root_task_id)
+    assert record.status == TaskStatus.FAILED
+    assert record.assigned_instance_id is not None
+    instance = AgentInstanceRepository(db_path).get_instance(
+        record.assigned_instance_id
+    )
+    assert instance.status == InstanceStatus.FAILED
+    assert len(hook_service.events) == 2
+    assert cast(TaskCreatedInput, hook_service.events[0]).event_name == (
+        HookEventName.TASK_CREATED
+    )
+    assert cast(TaskCompletedInput, hook_service.events[1]).event_name == (
+        HookEventName.TASK_COMPLETED
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_media_generation_emits_task_created_hook_before_completion(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_media_generation_task_created.db"
+    hook_service = _AllowingTaskLifecycleHookService()
+    manager = _build_manager(
+        db_path,
+        provider_factory=lambda _role, _session_id: _FakeImageProvider(),
+        role_registry=_build_generation_role_registry(),
+        hook_service=cast(HookService, hook_service),
+    )
+    manager._append_media_output_message = lambda *, request, output: None
+
+    result = await manager._run_media_generation(
+        run_id="run-existing",
+        intent=IntentInput(
+            session_id="session-1",
+            run_kind=RunKind.GENERATE_IMAGE,
+            input=content_parts_from_text("draw a diagram"),
+            target_role_id="Generator",
+        ),
+    )
+
+    assert result.status == "completed"
+    assert len(hook_service.events) == 2
+    assert cast(TaskCreatedInput, hook_service.events[0]).event_name == (
+        HookEventName.TASK_CREATED
+    )
+    assert cast(TaskCompletedInput, hook_service.events[1]).event_name == (
+        HookEventName.TASK_COMPLETED
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_media_generation_denied_task_created_returns_failure_without_task_row(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_media_generation_denied_task_created.db"
+    hook_service = _DenyingTaskCreatedHookService("Media creation blocked")
+    manager = _build_manager(
+        db_path,
+        provider_factory=lambda _role, _session_id: _FakeImageProvider(),
+        role_registry=_build_generation_role_registry(),
+        hook_service=cast(HookService, hook_service),
+    )
+    manager._append_media_output_message = lambda *, request, output: None
+
+    result = await manager._run_media_generation(
+        run_id="run-existing",
+        intent=IntentInput(
+            session_id="session-1",
+            run_kind=RunKind.GENERATE_IMAGE,
+            input=content_parts_from_text("draw a diagram"),
+            target_role_id="Generator",
+        ),
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "task_creation_denied"
+    assert result.error_message == "Media creation blocked"
+    assert len(hook_service.events) == 1
+    assert cast(TaskCreatedInput, hook_service.events[0]).event_name == (
+        HookEventName.TASK_CREATED
+    )
+    with pytest.raises(KeyError):
+        TaskRepository(db_path).get(result.root_task_id)
+
+
+@pytest.mark.asyncio
+async def test_run_media_generation_failure_does_not_emit_task_completed_hook(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_media_generation_failed_task_completed.db"
+    hook_service = _AllowingTaskCompletedHookService()
+    manager = _build_manager(
+        db_path,
+        provider_factory=lambda _role, _session_id: _FakeImageProvider(
+            fail_with=RuntimeError("image provider crashed")
+        ),
+        role_registry=_build_generation_role_registry(),
+        hook_service=cast(HookService, hook_service),
+    )
+    manager._append_media_output_message = lambda *, request, output: None
+
+    result = await manager._run_media_generation(
+        run_id="run-existing",
+        intent=IntentInput(
+            session_id="session-1",
+            run_kind=RunKind.GENERATE_IMAGE,
+            input=content_parts_from_text("draw a diagram"),
+            target_role_id="Generator",
+        ),
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "native_generation_failed"
+    record = TaskRepository(db_path).get(result.root_task_id)
+    assert record.status == TaskStatus.FAILED
+    assert record.assigned_instance_id is not None
+    instance = AgentInstanceRepository(db_path).get_instance(
+        record.assigned_instance_id
+    )
+    assert instance.status == InstanceStatus.FAILED
+    assert hook_service.events == []
+
+
+@pytest.mark.asyncio
+async def test_run_media_generation_failure_ignores_denied_task_completed_hook_service(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_media_generation_failed_denied_task_completed.db"
+    hook_service = _DenyingTaskCompletedHookService("Failure closeout blocked")
+    manager = _build_manager(
+        db_path,
+        provider_factory=lambda _role, _session_id: _FakeImageProvider(
+            fail_with=RuntimeError("image provider crashed")
+        ),
+        role_registry=_build_generation_role_registry(),
+        hook_service=cast(HookService, hook_service),
+    )
+    manager._append_media_output_message = lambda *, request, output: None
+
+    result = await manager._run_media_generation(
+        run_id="run-existing",
+        intent=IntentInput(
+            session_id="session-1",
+            run_kind=RunKind.GENERATE_IMAGE,
+            input=content_parts_from_text("draw a diagram"),
+            target_role_id="Generator",
+        ),
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "native_generation_failed"
+    assert result.error_message == "image provider crashed"
+    record = TaskRepository(db_path).get(result.root_task_id)
+    assert record.status == TaskStatus.FAILED
+    assert record.error_message == "image provider crashed"
+    assert record.assigned_instance_id is not None
+    instance = AgentInstanceRepository(db_path).get_instance(
+        record.assigned_instance_id
+    )
+    assert instance.status == InstanceStatus.FAILED
+    assert hook_service.events == []

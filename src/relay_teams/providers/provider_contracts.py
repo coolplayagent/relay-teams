@@ -39,6 +39,8 @@ class LLMRequest(BaseModel):
     run_kind: RunKind = RunKind.CONVERSATION
     generation_config: MediaGenerationConfig | None = None
     thinking: RunThinkingConfig = RunThinkingConfig()
+    runtime_hooks_enabled: bool = True
+    persist_messages: bool = True
 
     @property
     def prompt_text(self) -> str:

@@ -48,6 +48,7 @@ from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
@@ -77,6 +78,13 @@ if TYPE_CHECKING:
     from relay_teams.tools.registry import ToolRegistry
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookService,
+    TaskCompletedInput,
+)
 from relay_teams.workspace import WorkspaceManager
 
 LOGGER = get_logger(__name__)
@@ -116,6 +124,8 @@ class TaskExecutionService(BaseModel):
     runtime_role_resolver: RuntimeRoleResolver | None = None
     run_intent_repo: RunIntentRepository | None = None
     media_asset_service: MediaAssetService | None = None
+    hook_service: HookService | None = None
+    run_event_hub: RunEventHub | None = None
 
     async def execute(
         self,
@@ -288,6 +298,34 @@ class TaskExecutionService(BaseModel):
                 system_prompt_override=provider_system_prompt,
                 user_prompt=None,
             )
+            completion_bundle = await self._execute_task_completed_hook(
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+                workspace_id=workspace.ref.workspace_id,
+                conversation_id=workspace.ref.conversation_id,
+                status=TaskStatus.COMPLETED,
+                output_text=result,
+                error_message="",
+            )
+            if completion_bundle.decision == HookDecisionType.DENY:
+                denial_reason = (
+                    completion_bundle.reason or "Task completion denied by runtime hook"
+                )
+                return await self._complete_with_assistant_error(
+                    task=task,
+                    instance_id=instance_id,
+                    role_id=role_id,
+                    conversation_id=workspace.ref.conversation_id,
+                    workspace_id=workspace.ref.workspace_id,
+                    assistant_message=build_assistant_error_message(
+                        error_code="task_completion_denied",
+                        error_message=denial_reason,
+                    ),
+                    error_code="task_completion_denied",
+                    error_message=denial_reason,
+                    append_message=False,
+                )
             self.task_repo.update_status(
                 task.task_id, TaskStatus.COMPLETED, result=result
             )
@@ -312,6 +350,7 @@ class TaskExecutionService(BaseModel):
                     payload_json="{}",
                 )
             )
+            _ = completion_bundle
             self._record_memory_if_needed(
                 role_id=role_id,
                 workspace_id=workspace.ref.workspace_id,
@@ -403,7 +442,7 @@ class TaskExecutionService(BaseModel):
             )
             raise
         except AssistantRunError as exc:
-            return self._complete_with_assistant_error(
+            return await self._complete_with_assistant_error(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -459,7 +498,7 @@ class TaskExecutionService(BaseModel):
             )
             raise
         except TimeoutError:
-            return self._complete_with_assistant_error(
+            return await self._complete_with_assistant_error(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -473,7 +512,7 @@ class TaskExecutionService(BaseModel):
                 error_message="Task timeout",
             )
         except Exception as exc:
-            return self._complete_with_assistant_error(
+            return await self._complete_with_assistant_error(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -495,7 +534,42 @@ class TaskExecutionService(BaseModel):
         except KeyError:
             return RunThinkingConfig()
 
-    def _complete_with_assistant_error(
+    async def _execute_task_completed_hook(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        status: TaskStatus,
+        output_text: str,
+        error_message: str,
+    ) -> HookDecisionBundle:
+        if self.hook_service is None:
+            return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+        return await self.hook_service.execute(
+            event_input=TaskCompletedInput(
+                event_name=HookEventName.TASK_COMPLETED,
+                session_id=task.session_id,
+                run_id=task.trace_id,
+                trace_id=task.trace_id,
+                task_id=task.task_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                workspace_id=workspace_id,
+                conversation_id=conversation_id,
+                parent_task_id=task.parent_task_id,
+                task_title=task.title or "",
+                task_objective=task.objective,
+                status=status.value,
+                output_text=output_text,
+                error_message=error_message,
+            ),
+            run_event_hub=self.run_event_hub,
+        )
+
+    async def _complete_with_assistant_error(
         self,
         *,
         task: TaskEnvelope,

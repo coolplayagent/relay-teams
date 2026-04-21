@@ -6,12 +6,16 @@ from json import dumps
 
 from pydantic import JsonValue
 
+from relay_teams.hooks.executors.agent_executor import AgentHookExecutor
 from relay_teams.hooks.executors.command_executor import CommandHookExecutor
 from relay_teams.hooks.executors.http_executor import HttpHookExecutor
+from relay_teams.hooks.executors.prompt_executor import PromptHookExecutor
 from relay_teams.hooks.hook_event_models import HookEventInput, PreToolUseInput
 from relay_teams.hooks.hook_loader import HookLoader
 from relay_teams.hooks.hook_matcher import hook_matches_event
 from relay_teams.hooks.hook_models import (
+    event_allows_decision,
+    HookDecision,
     HookDecisionBundle,
     HookDecisionType,
     HookEventName,
@@ -42,11 +46,15 @@ class HookService:
         runtime_state: HookRuntimeState,
         command_executor: CommandHookExecutor,
         http_executor: HttpHookExecutor,
+        prompt_executor: PromptHookExecutor | None = None,
+        agent_executor: AgentHookExecutor | None = None,
     ) -> None:
         self._loader = loader
         self._runtime_state = runtime_state
         self._command_executor = command_executor
         self._http_executor = http_executor
+        self._prompt_executor = prompt_executor
+        self._agent_executor = agent_executor
 
     def get_user_config(self) -> HooksConfig:
         return self._loader.get_user_config()
@@ -62,12 +70,7 @@ class HookService:
                 for handler in resolved.group.hooks:
                     loaded_hooks.append(
                         LoadedHookRuntimeView(
-                            name=(
-                                handler.name
-                                or handler.command
-                                or handler.url
-                                or handler.type.value
-                            ),
+                            name=_resolve_handler_name(handler),
                             handler_type=handler.type,
                             event_name=event_name,
                             matcher=resolved.group.matcher,
@@ -79,6 +82,8 @@ class HookService:
                             timeout_seconds=handler.timeout_seconds,
                             run_async=handler.run_async,
                             on_error=handler.on_error,
+                            role_id=handler.role_id,
+                            model_profile=handler.model_profile,
                             source=resolved.source,
                         )
                     )
@@ -173,22 +178,14 @@ class HookService:
         run_event_hub: RunEventHub | None,
     ) -> HookExecutionResult:
         started = time.perf_counter()
-        handler_name = (
-            handler.name
-            or (
-                handler.command
-                if handler.type == HookHandlerType.COMMAND
-                else handler.url
-            )
-            or handler.type.value
-        )
+        handler_name = _resolve_handler_name(handler)
         _publish_hook_event(
             run_event_hub=run_event_hub,
             event_input=event_input,
             event_type=RunEventType.HOOK_STARTED,
             payload={
                 "hook_event": event_input.event_name.value,
-                "hook_source": getattr(source, "scope").value,
+                "hook_source": source.scope.value,
                 "hook_name": handler_name,
                 "hook_handler_type": handler.type.value,
             },
@@ -199,8 +196,22 @@ class HookService:
                     handler=handler,
                     event_input=event_input,
                 )
-            else:
+            elif handler.type == HookHandlerType.HTTP:
                 decision = await self._http_executor.execute(
+                    handler=handler,
+                    event_input=event_input,
+                )
+            elif handler.type == HookHandlerType.PROMPT:
+                if self._prompt_executor is None:
+                    raise RuntimeError("Prompt hook executor is not configured")
+                decision = await self._prompt_executor.execute(
+                    handler=handler,
+                    event_input=event_input,
+                )
+            else:
+                if self._agent_executor is None:
+                    raise RuntimeError("Agent hook executor is not configured")
+                decision = await self._agent_executor.execute(
                     handler=handler,
                     event_input=event_input,
                 )
@@ -270,7 +281,25 @@ def _merge_decisions(
     event_name: HookEventName,
     executions: list[HookExecutionResult],
 ) -> HookDecisionBundle:
-    decisions = [item.decision for item in executions if item.decision is not None]
+    decisions: list[HookDecision] = []
+    for item in executions:
+        if item.decision is None:
+            continue
+        if not event_allows_decision(event_name, item.decision.decision):
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="hooks.execution.invalid_decision",
+                message="Ignoring unsupported hook decision for event",
+                payload={
+                    "hook_event": event_name.value,
+                    "decision": item.decision.decision.value,
+                    "handler_name": item.handler_name,
+                    "handler_type": item.handler_type.value,
+                },
+            )
+            continue
+        decisions.append(item.decision)
     if not decisions:
         return HookDecisionBundle(
             decision=_default_decision(event_name),
@@ -321,14 +350,26 @@ def _merge_decisions(
 
 
 def _default_decision(event_name: HookEventName) -> HookDecisionType:
-    if event_name in {
-        HookEventName.POST_TOOL_USE,
-        HookEventName.POST_TOOL_USE_FAILURE,
-    }:
+    if event_name in {HookEventName.POST_TOOL_USE, HookEventName.POST_TOOL_USE_FAILURE}:
         return HookDecisionType.CONTINUE
-    if event_name == HookEventName.SESSION_END:
+    if event_name in {
+        HookEventName.SESSION_END,
+        HookEventName.STOP_FAILURE,
+        HookEventName.POST_COMPACT,
+    }:
         return HookDecisionType.OBSERVE
     return HookDecisionType.ALLOW
+
+
+def _resolve_handler_name(handler: HookHandlerConfig) -> str:
+    return (
+        handler.name
+        or handler.command
+        or handler.url
+        or handler.role_id
+        or handler.prompt
+        or handler.type.value
+    )
 
 
 def _publish_hook_event(

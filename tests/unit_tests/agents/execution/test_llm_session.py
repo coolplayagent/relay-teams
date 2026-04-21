@@ -18,6 +18,7 @@ from relay_teams.agents.execution.llm_session import (
     _FallbackAttemptStatus,
 )
 from relay_teams.agents.execution.conversation_compaction import (
+    ConversationCompactionBudget,
     ConversationCompactionService,
 )
 from relay_teams.agents.execution.conversation_microcompact import (
@@ -612,6 +613,34 @@ def test_persist_user_prompt_keeps_microcompacted_history_in_memory() -> None:
     assert appended_part.content == "new prompt"
 
 
+def test_persist_user_prompt_keeps_ephemeral_prompt_in_memory_when_not_persisted() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    history: list[ModelRequest | ModelResponse] = []
+    message_repo = _FakeMessageRepo(history=[])
+    session._message_repo = cast(MessageRepository, message_repo)
+
+    next_history, rebuild_context = AgentLlmSession._persist_user_prompt_if_needed(
+        session,
+        request=_build_request(user_prompt="ephemeral prompt").model_copy(
+            update={"persist_messages": False}
+        ),
+        history=history,
+        content="ephemeral prompt",
+    )
+
+    assert rebuild_context is False
+    assert message_repo.pruned_conversation_ids == []
+    assert message_repo.append_calls == []
+    assert len(next_history) == 1
+    appended_message = next_history[0]
+    assert isinstance(appended_message, ModelRequest)
+    appended_part = appended_message.parts[0]
+    assert isinstance(appended_part, UserPromptPart)
+    assert appended_part.content == "ephemeral prompt"
+
+
 def test_apply_streamed_text_fallback_repairs_truncated_final_message() -> None:
     session = object.__new__(AgentLlmSession)
     messages: list[ModelRequest | ModelResponse] = [
@@ -920,6 +949,52 @@ async def test_apply_user_prompt_hooks_raises_when_prompt_denied() -> None:
 
     assert exc_info.value.payload.error_code == "prompt_denied"
     assert exc_info.value.payload.error_message == "Prompt blocked by policy."
+
+
+@pytest.mark.asyncio
+async def test_apply_user_prompt_hooks_skips_when_runtime_hooks_disabled() -> None:
+    session = object.__new__(AgentLlmSession)
+    hook_service = _FakePromptHookService(
+        HookDecisionBundle(
+            decision=HookDecisionType.UPDATED_INPUT,
+            updated_input="Rewritten prompt",
+        )
+    )
+    setattr(session, "_hook_service", cast(Any, hook_service))
+    setattr(session, "_run_event_hub", cast(Any, None))
+
+    request, context = await AgentLlmSession._apply_user_prompt_hooks(
+        session,
+        _build_request(user_prompt="Original prompt").model_copy(
+            update={"runtime_hooks_enabled": False}
+        ),
+    )
+
+    assert request.user_prompt == "Original prompt"
+    assert context == ()
+    assert hook_service.events == []
+
+
+def test_persist_user_prompt_if_needed_skips_when_message_persistence_disabled() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    message_repo = _FakeMessageRepo([])
+    setattr(session, "_message_repo", cast(MessageRepository, message_repo))
+
+    history: list[ModelRequest | ModelResponse] = [
+        ModelResponse(parts=[TextPart(content="Existing output")])
+    ]
+    next_history, rebuild_context = AgentLlmSession._persist_user_prompt_if_needed(
+        session,
+        request=_build_request().model_copy(update={"persist_messages": False}),
+        history=history,
+        content="Ephemeral prompt",
+    )
+
+    assert next_history == history
+    assert rebuild_context is False
+    assert message_repo.append_calls == []
 
 
 @pytest.mark.asyncio
@@ -1855,3 +1930,126 @@ async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhau
     assert len(fallback_exhausted_calls) == 1
     assert retry_scheduled_calls == []
     assert retry_exhausted_calls == []
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_history_skips_compaction_when_precompact_hook_denies() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    history: list[ModelRequest | ModelResponse] = [
+        ModelRequest(parts=[UserPromptPart(content="Investigate the failure")])
+    ]
+    compaction_service = _FakeCompactionService()
+    hook_service = _FakePromptHookService(
+        HookDecisionBundle(decision=HookDecisionType.DENY, reason="Skip compaction")
+    )
+    session._conversation_compaction_service = cast(
+        ConversationCompactionService,
+        compaction_service,
+    )
+    session.__dict__["_hook_service"] = cast(object, hook_service)
+    session.__dict__["_run_event_hub"] = cast(object, None)
+
+    compacted = await AgentLlmSession._maybe_compact_history(
+        session,
+        request=_build_request(),
+        history=history,
+        source_history=history,
+        conversation_id="conv-1",
+        budget=ConversationCompactionBudget(
+            history_trigger_tokens=200,
+            history_target_tokens=100,
+            estimated_system_prompt_tokens=0,
+            estimated_user_prompt_tokens=0,
+            estimated_tool_context_tokens=0,
+            estimated_output_reserve_tokens=1,
+        ),
+        estimated_tokens_before_microcompact=220,
+        estimated_tokens_after_microcompact=180,
+    )
+
+    assert compacted == history
+    assert compaction_service.calls == []
+    assert hook_service.events == [HookEventName.PRE_COMPACT]
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_history_emits_postcompact_hook_after_compaction() -> None:
+    session = object.__new__(AgentLlmSession)
+    history: list[ModelRequest | ModelResponse] = [
+        ModelRequest(parts=[UserPromptPart(content="Investigate the failure")])
+    ]
+    compaction_service = _FakeCompactionService()
+    hook_service = _FakePromptHookService(
+        HookDecisionBundle(decision=HookDecisionType.ALLOW)
+    )
+    session._conversation_compaction_service = cast(
+        ConversationCompactionService,
+        compaction_service,
+    )
+    session.__dict__["_hook_service"] = cast(object, hook_service)
+    session.__dict__["_run_event_hub"] = cast(object, None)
+
+    _ = await AgentLlmSession._maybe_compact_history(
+        session,
+        request=_build_request(),
+        history=history,
+        source_history=history,
+        conversation_id="conv-1",
+        budget=ConversationCompactionBudget(
+            history_trigger_tokens=200,
+            history_target_tokens=100,
+            estimated_system_prompt_tokens=0,
+            estimated_user_prompt_tokens=0,
+            estimated_tool_context_tokens=0,
+            estimated_output_reserve_tokens=1,
+        ),
+        estimated_tokens_before_microcompact=220,
+        estimated_tokens_after_microcompact=180,
+    )
+
+    assert compaction_service.calls
+    assert hook_service.events == [
+        HookEventName.PRE_COMPACT,
+        HookEventName.POST_COMPACT,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_history_skips_hooks_when_runtime_hooks_disabled() -> None:
+    session = object.__new__(AgentLlmSession)
+    history: list[ModelRequest | ModelResponse] = [
+        ModelRequest(parts=[UserPromptPart(content="Investigate the failure")])
+    ]
+    compaction_service = _FakeCompactionService()
+    hook_service = _FakePromptHookService(
+        HookDecisionBundle(decision=HookDecisionType.ALLOW)
+    )
+    session._conversation_compaction_service = cast(
+        ConversationCompactionService,
+        compaction_service,
+    )
+    session.__dict__["_hook_service"] = cast(object, hook_service)
+    session.__dict__["_run_event_hub"] = cast(object, None)
+
+    _ = await AgentLlmSession._maybe_compact_history(
+        session,
+        request=_build_request().model_copy(update={"runtime_hooks_enabled": False}),
+        history=history,
+        source_history=history,
+        conversation_id="conv-1",
+        budget=ConversationCompactionBudget(
+            history_trigger_tokens=200,
+            history_target_tokens=100,
+            estimated_system_prompt_tokens=0,
+            estimated_user_prompt_tokens=0,
+            estimated_tool_context_tokens=0,
+            estimated_output_reserve_tokens=1,
+        ),
+        estimated_tokens_before_microcompact=220,
+        estimated_tokens_after_microcompact=180,
+    )
+
+    assert compaction_service.calls
+    assert hook_service.events == []

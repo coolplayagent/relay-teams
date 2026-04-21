@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import Path
 
 from relay_teams.computer import ExecutionSurface
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from relay_teams.roles.memory_models import MemoryProfile, default_memory_profile
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
@@ -31,12 +32,14 @@ class RoleDefinition(BaseModel):
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
+    hooks: dict[str, JsonValue] = Field(default_factory=dict)
     model_profile: str = Field(default="default")
     bound_agent_id: OptionalIdentifierStr = None
     execution_surface: ExecutionSurface = ExecutionSurface.API
     mode: RoleMode = RoleMode.PRIMARY
     memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
+    source_path: Path | None = None
 
 
 class RoleDocumentSummary(BaseModel):

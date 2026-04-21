@@ -51,6 +51,15 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.workspace import WorkspaceHandle
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookService,
+    SubagentStartInput,
+    SubagentStopInput,
+    TaskCreatedInput,
+)
 from relay_teams.tools.runtime.hook_runtime_env import merge_tool_hook_runtime_env
 
 LOGGER = get_logger(__name__)
@@ -200,6 +209,7 @@ class BackgroundTaskService:
         run_intent_repo: _BackgroundTaskIntentRepository | None = None,
         run_control_manager: _BackgroundTaskRunController | None = None,
         run_runtime_repo: _BackgroundTaskRunRuntimeRepository | None = None,
+        hook_service: HookService | None = None,
     ) -> None:
         self._background_task_manager = background_task_manager
         self._repository = repository
@@ -210,6 +220,7 @@ class BackgroundTaskService:
         self._run_intent_repo = run_intent_repo
         self._run_control_manager = run_control_manager
         self._run_runtime_repo = run_runtime_repo
+        self._hook_service = hook_service
         self._completion_sink: BackgroundTaskCompletionSink | None = None
         self._completion_retry_tasks: dict[str, asyncio.Task[None]] = {}
         self._subagent_runtimes: dict[str, _ManagedSubagentTaskRuntime] = {}
@@ -325,7 +336,7 @@ class BackgroundTaskService:
         task_execution_service = self._require_task_execution_service()
         run_control_manager = self._require_run_control_manager()
         background_task_id = f"background_task_{uuid4().hex[:12]}"
-        prepared = self._prepare_subagent_launch(
+        prepared = await self._prepare_subagent_launch(
             run_id=run_id,
             session_id=session_id,
             workspace_id=workspace_id,
@@ -355,6 +366,12 @@ class BackgroundTaskService:
                 subagent_task_id=prepared.subagent_task.task_id,
                 subagent_instance_id=prepared.subagent_instance.instance_id,
             )
+        )
+        await self._emit_subagent_start_hook(
+            parent_run_id=run_id,
+            parent_instance_id=instance_id,
+            parent_role_id=role_id,
+            prepared=prepared,
         )
 
         async def run_worker() -> None:
@@ -424,7 +441,7 @@ class BackgroundTaskService:
     ) -> SynchronousSubagentResult:
         task_execution_service = self._require_task_execution_service()
         run_control_manager = self._require_run_control_manager()
-        prepared = self._prepare_subagent_launch(
+        prepared = await self._prepare_subagent_launch(
             run_id=run_id,
             session_id=session_id,
             workspace_id=workspace_id,
@@ -434,6 +451,13 @@ class BackgroundTaskService:
         )
 
         result_holder: dict[str, SynchronousSubagentResult] = {}
+
+        await self._emit_subagent_start_hook(
+            parent_run_id=run_id,
+            parent_instance_id=None,
+            parent_role_id=None,
+            prepared=prepared,
+        )
 
         async def run_worker() -> None:
             try:
@@ -447,27 +471,51 @@ class BackgroundTaskService:
                 stopped = run_control_manager.is_run_stop_requested(
                     prepared.subagent_run_id
                 )
+                status = (
+                    BackgroundTaskStatus.STOPPED
+                    if stopped
+                    else BackgroundTaskStatus.FAILED
+                )
+                (
+                    status,
+                    output,
+                ) = await self._apply_synchronous_subagent_stop_hook_decision(
+                    prepared=prepared,
+                    parent_run_id=run_id,
+                    status=status,
+                    output_text="Task cancelled",
+                )
                 self._finalize_subagent_run_runtime(
                     subagent_run_id=prepared.subagent_run_id,
-                    status=(
-                        BackgroundTaskStatus.STOPPED
-                        if stopped
-                        else BackgroundTaskStatus.FAILED
-                    ),
-                    output="Task cancelled",
+                    status=status,
+                    output=output,
                 )
                 raise
             except Exception as exc:
-                output = str(exc)
+                (
+                    status,
+                    output,
+                ) = await self._apply_synchronous_subagent_stop_hook_decision(
+                    prepared=prepared,
+                    parent_run_id=run_id,
+                    status=BackgroundTaskStatus.FAILED,
+                    output_text=str(exc),
+                )
                 self._finalize_subagent_run_runtime(
                     subagent_run_id=prepared.subagent_run_id,
-                    status=BackgroundTaskStatus.FAILED,
+                    status=status,
                     output=output,
                 )
                 raise RuntimeError(output) from exc
 
             status, _ = _status_from_execution_result(result)
             output = result.output.strip()
+            status, output = await self._apply_synchronous_subagent_stop_hook_decision(
+                prepared=prepared,
+                parent_run_id=run_id,
+                status=status,
+                output_text=output,
+            )
             self._finalize_subagent_run_runtime(
                 subagent_run_id=prepared.subagent_run_id,
                 status=status,
@@ -610,12 +658,26 @@ class BackgroundTaskService:
         if current is None:
             raise KeyError(f"Unknown background task: {background_task_id}")
         completed_at = datetime.now(tz=timezone.utc)
-        summarized_output = output.strip()
+        final_status, final_output = await self._apply_subagent_stop_hook_decision(
+            record=current,
+            status=status,
+            output_text=output.strip(),
+        )
+        summarized_output = final_output.strip()
         record = self._repository.upsert(
             current.model_copy(
                 update={
-                    "status": status,
-                    "exit_code": exit_code,
+                    "status": final_status,
+                    "exit_code": (
+                        None
+                        if final_status == BackgroundTaskStatus.STOPPED
+                        else (
+                            1
+                            if final_status != status
+                            and final_status == BackgroundTaskStatus.FAILED
+                            else exit_code
+                        )
+                    ),
                     "recent_output": _recent_output_lines(summarized_output),
                     "output_excerpt": summarized_output,
                     "updated_at": completed_at,
@@ -627,7 +689,7 @@ class BackgroundTaskService:
         if runtime is not None:
             self._finalize_subagent_run_runtime(
                 subagent_run_id=runtime.subagent_run_id,
-                status=status,
+                status=final_status,
                 output=summarized_output,
             )
             self._require_run_control_manager().unregister_run_task(
@@ -636,12 +698,12 @@ class BackgroundTaskService:
         self._publish_background_task_event(
             event_type=(
                 RunEventType.BACKGROUND_TASK_STOPPED
-                if status == BackgroundTaskStatus.STOPPED
+                if final_status == BackgroundTaskStatus.STOPPED
                 else RunEventType.BACKGROUND_TASK_COMPLETED
             ),
             record=record,
         )
-        if status != BackgroundTaskStatus.STOPPED:
+        if final_status != BackgroundTaskStatus.STOPPED:
             await self._handle_background_task_completion(record)
         return record
 
@@ -782,6 +844,149 @@ class BackgroundTaskService:
             )
         )
 
+    async def _emit_subagent_start_hook(
+        self,
+        *,
+        parent_run_id: str,
+        parent_instance_id: str | None,
+        parent_role_id: str | None,
+        prepared: _PreparedSubagentLaunch,
+    ) -> None:
+        if self._hook_service is None:
+            return
+        await self._hook_service.execute(
+            event_input=SubagentStartInput(
+                event_name=HookEventName.SUBAGENT_START,
+                session_id=prepared.subagent_task.session_id,
+                run_id=prepared.subagent_run_id,
+                trace_id=prepared.subagent_run_id,
+                task_id=prepared.subagent_task.task_id,
+                instance_id=prepared.subagent_instance.instance_id,
+                role_id=prepared.subagent_role_id,
+                parent_run_id=parent_run_id,
+                subagent_title=prepared.normalized_title,
+                objective=prepared.normalized_prompt,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+
+    async def _emit_subagent_stop_hook(
+        self,
+        *,
+        record: BackgroundTaskRecord,
+        status: BackgroundTaskStatus,
+        output_text: str,
+    ) -> HookDecisionBundle:
+        if self._hook_service is None or record.kind != BackgroundTaskKind.SUBAGENT:
+            return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+        subagent_run_id = record.subagent_run_id or record.run_id
+        return await self._hook_service.execute(
+            event_input=SubagentStopInput(
+                event_name=HookEventName.SUBAGENT_STOP,
+                session_id=record.session_id,
+                run_id=subagent_run_id,
+                trace_id=subagent_run_id,
+                task_id=record.subagent_task_id,
+                instance_id=record.subagent_instance_id,
+                role_id=record.subagent_role_id,
+                parent_run_id=record.run_id,
+                subagent_title=record.title,
+                status=status.value,
+                output_text=output_text,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+
+    async def _emit_synchronous_subagent_stop_hook(
+        self,
+        *,
+        prepared: _PreparedSubagentLaunch,
+        parent_run_id: str,
+        status: BackgroundTaskStatus,
+        output_text: str,
+    ) -> HookDecisionBundle:
+        if self._hook_service is None:
+            return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+        return await self._hook_service.execute(
+            event_input=SubagentStopInput(
+                event_name=HookEventName.SUBAGENT_STOP,
+                session_id=prepared.subagent_task.session_id,
+                run_id=prepared.subagent_run_id,
+                trace_id=prepared.subagent_run_id,
+                task_id=prepared.subagent_task.task_id,
+                instance_id=prepared.subagent_instance.instance_id,
+                role_id=prepared.subagent_role_id,
+                parent_run_id=parent_run_id,
+                subagent_title=prepared.normalized_title,
+                status=status.value,
+                output_text=output_text,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+
+    async def _apply_subagent_stop_hook_decision(
+        self,
+        *,
+        record: BackgroundTaskRecord,
+        status: BackgroundTaskStatus,
+        output_text: str,
+    ) -> tuple[BackgroundTaskStatus, str]:
+        bundle = await self._emit_subagent_stop_hook(
+            record=record,
+            status=status,
+            output_text=output_text,
+        )
+        if bundle.decision != HookDecisionType.DENY:
+            return status, output_text
+        denial_reason = bundle.reason or "Subagent stop denied by runtime hook"
+        return BackgroundTaskStatus.FAILED, denial_reason
+
+    async def _apply_synchronous_subagent_stop_hook_decision(
+        self,
+        *,
+        prepared: _PreparedSubagentLaunch,
+        parent_run_id: str,
+        status: BackgroundTaskStatus,
+        output_text: str,
+    ) -> tuple[BackgroundTaskStatus, str]:
+        bundle = await self._emit_synchronous_subagent_stop_hook(
+            prepared=prepared,
+            parent_run_id=parent_run_id,
+            status=status,
+            output_text=output_text,
+        )
+        if bundle.decision != HookDecisionType.DENY:
+            return status, output_text
+        denial_reason = bundle.reason or "Subagent stop denied by runtime hook"
+        return BackgroundTaskStatus.FAILED, denial_reason
+
+    async def _emit_subagent_task_created_hook(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+    ) -> None:
+        if self._hook_service is None:
+            return
+        bundle = await self._hook_service.execute(
+            event_input=TaskCreatedInput(
+                event_name=HookEventName.TASK_CREATED,
+                session_id=task.session_id,
+                run_id=task.trace_id,
+                trace_id=task.trace_id,
+                task_id=task.task_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                parent_task_id=task.parent_task_id,
+                task_title=task.title or "",
+                task_objective=task.objective,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+        if bundle.decision == HookDecisionType.DENY:
+            raise ValueError(bundle.reason or "Task creation denied by runtime hook")
+
     def _upsert_subagent_intent(
         self,
         *,
@@ -820,7 +1025,7 @@ class BackgroundTaskService:
             ),
         )
 
-    def _prepare_subagent_launch(
+    async def _prepare_subagent_launch(
         self,
         *,
         run_id: str,
@@ -867,6 +1072,11 @@ class BackgroundTaskService:
             title=normalized_title,
             objective=normalized_prompt,
             verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+        await self._emit_subagent_task_created_hook(
+            task=subagent_task,
+            instance_id=subagent_instance.instance_id,
+            role_id=subagent_role_id,
         )
         agent_repo.upsert_instance(
             run_id=subagent_run_id,

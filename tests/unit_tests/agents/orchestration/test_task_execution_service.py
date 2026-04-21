@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic_ai.messages import ModelRequest, UserPromptPart
@@ -54,6 +55,12 @@ from relay_teams.workspace import (
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookService,
+)
 
 
 class _CapturingProvider:
@@ -106,9 +113,38 @@ class _RecoverablePauseProvider:
         )
 
 
+class _CapturingHookService(HookService):
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(event_input)
+        return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+
+
+class _DenyingHookService(HookService):
+    def __init__(self, reason: str) -> None:
+        self._reason = reason
+        self.events: list[object] = []
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(event_input)
+        return HookDecisionBundle(
+            decision=HookDecisionType.DENY,
+            reason=self._reason,
+        )
+
+
 def _build_service(
     db_path: Path,
     provider: object,
+    hook_service: HookService | None = None,
 ) -> tuple[
     TaskExecutionService,
     TaskRepository,
@@ -152,6 +188,8 @@ def _build_service(
         skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
         mcp_registry=McpRegistry(),
         run_intent_repo=RunIntentRepository(db_path),
+        hook_service=hook_service,
+        run_event_hub=RunEventHub(),
     )
     return service, task_repo, agent_repo, message_repo
 
@@ -168,6 +206,7 @@ def _write_skill(app_config_dir: Path, *, name: str, description: str) -> None:
 def _build_service_with_control(
     db_path: Path,
     provider: object,
+    hook_service: HookService | None = None,
 ) -> tuple[
     TaskExecutionService,
     TaskRepository,
@@ -226,6 +265,8 @@ def _build_service_with_control(
         mcp_registry=McpRegistry(),
         run_control_manager=run_control_manager,
         run_intent_repo=RunIntentRepository(db_path),
+        hook_service=hook_service,
+        run_event_hub=RunEventHub(),
     )
     return (
         service,
@@ -989,6 +1030,199 @@ async def test_execute_marks_assistant_error_path_as_failed(
     assert runtime.last_error == "boom"
     events = EventLog(db_path).list_by_session("session-1")
     assert str(events[-1]["event_type"]) == EventType.TASK_FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_emit_task_completed_hook_captures_payload(tmp_path: Path) -> None:
+    hook_service = _CapturingHookService()
+    service, task_repo, agent_repo, message_repo = _build_service(
+        tmp_path / "task_execution_service_task_completed_hook.db",
+        _CapturingProvider(),
+        cast(HookService, hook_service),
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    bundle = await service._execute_task_completed_hook(
+        task=task,
+        instance_id=instance_id,
+        role_id="time",
+        workspace_id="default",
+        conversation_id=build_conversation_id("session-1", "time"),
+        status=TaskStatus.COMPLETED,
+        output_text="ok",
+        error_message="",
+    )
+
+    assert bundle.decision == HookDecisionType.ALLOW
+    assert len(hook_service.events) == 1
+    event = hook_service.events[0]
+    assert getattr(event, "event_name") == HookEventName.TASK_COMPLETED
+    assert getattr(event, "status") == TaskStatus.COMPLETED.value
+    assert getattr(event, "output_text") == "ok"
+    assert getattr(event, "error_message") == ""
+    assert getattr(event, "task_objective") == "query time"
+
+
+@pytest.mark.asyncio
+async def test_complete_with_assistant_error_does_not_emit_task_completed_hook(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "task_execution_service_failed_error_hook.db"
+    hook_service = _CapturingHookService()
+    service, task_repo, agent_repo, message_repo = _build_service(
+        db_path,
+        _CapturingProvider(),
+        cast(HookService, hook_service),
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+    service.run_runtime_repo.ensure(
+        run_id=task.trace_id,
+        session_id=task.session_id,
+        root_task_id=task.parent_task_id or task.task_id,
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.SUBAGENT_RUNNING,
+    )
+
+    result = await service._complete_with_assistant_error(
+        task=task,
+        instance_id=instance_id,
+        role_id="time",
+        conversation_id=build_conversation_id("session-1", "time"),
+        workspace_id="default",
+        assistant_message="assistant failed",
+        error_code="internal_execution_error",
+        error_message="boom",
+    )
+
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert hook_service.events == []
+
+
+@pytest.mark.asyncio
+async def test_complete_with_assistant_error_timeout_does_not_emit_task_completed_hook(
+    tmp_path: Path,
+) -> None:
+    hook_service = _CapturingHookService()
+    service, task_repo, agent_repo, message_repo = _build_service(
+        tmp_path / "task_execution_service_timeout_error_hook.db",
+        _CapturingProvider(),
+        cast(HookService, hook_service),
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+    service.run_runtime_repo.ensure(
+        run_id=task.trace_id,
+        session_id=task.session_id,
+        root_task_id=task.parent_task_id or task.task_id,
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.SUBAGENT_RUNNING,
+    )
+
+    result = await service._complete_with_assistant_error(
+        task=task,
+        instance_id=instance_id,
+        role_id="time",
+        conversation_id=build_conversation_id("session-1", "time"),
+        workspace_id="default",
+        assistant_message="task timed out",
+        error_code="task_timeout",
+        error_message="Task timeout",
+    )
+
+    assert result.error_code == "task_timeout"
+    assert hook_service.events == []
+
+
+@pytest.mark.asyncio
+async def test_complete_with_assistant_error_ignores_denied_task_completed_hook_service(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "task_execution_service_denied_failed_error_hook.db"
+    hook_service = _DenyingHookService("Closeout blocked")
+    service, task_repo, agent_repo, message_repo = _build_service(
+        db_path,
+        _CapturingProvider(),
+        cast(HookService, hook_service),
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+    service.run_runtime_repo.ensure(
+        run_id=task.trace_id,
+        session_id=task.session_id,
+        root_task_id=task.parent_task_id or task.task_id,
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.SUBAGENT_RUNNING,
+    )
+
+    result = await service._complete_with_assistant_error(
+        task=task,
+        instance_id=instance_id,
+        role_id="time",
+        conversation_id=build_conversation_id("session-1", "time"),
+        workspace_id="default",
+        assistant_message="assistant failed",
+        error_code="internal_execution_error",
+        error_message="boom",
+    )
+
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert result.error_code == "internal_execution_error"
+    assert result.error_message == "boom"
+    record = task_repo.get(task.task_id)
+    assert record.status == TaskStatus.FAILED
+    assert record.result is not None
+    assert "assistant failed" in record.result
+    assert record.error_message == "boom"
+    runtime = service.run_runtime_repo.get(task.trace_id)
+    assert runtime is not None
+    assert runtime.last_error == "boom"
+    assert hook_service.events == []
+
+
+@pytest.mark.asyncio
+async def test_execute_task_completed_hook_captures_denial_reason(
+    tmp_path: Path,
+) -> None:
+    hook_service = _DenyingHookService("Completion policy failed")
+    service, task_repo, agent_repo, message_repo = _build_service(
+        tmp_path / "task_execution_service_denied_task_completed_hook.db",
+        _CapturingProvider(),
+        cast(HookService, hook_service),
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    bundle = await service._execute_task_completed_hook(
+        task=task,
+        instance_id=instance_id,
+        role_id="time",
+        workspace_id="default",
+        conversation_id=build_conversation_id("session-1", "time"),
+        status=TaskStatus.COMPLETED,
+        output_text="ok",
+        error_message="",
+    )
+
+    assert bundle.decision == HookDecisionType.DENY
+    assert bundle.reason == "Completion policy failed"
+    assert len(hook_service.events) == 1
 
 
 @pytest.mark.asyncio

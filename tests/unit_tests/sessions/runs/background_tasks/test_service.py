@@ -9,6 +9,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Literal, cast
 
+from relay_teams.hooks import HookService
+
 import pytest
 
 from relay_teams.agents.tasks.models import TaskEnvelope
@@ -29,6 +31,7 @@ from relay_teams.sessions.runs.background_tasks.models import (
 from relay_teams.sessions.runs.background_tasks.projection import (
     build_background_task_result_payload,
 )
+from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventName
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
 from relay_teams.sessions.runs.enums import ExecutionMode
 from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
@@ -182,6 +185,53 @@ class _FailingThenCapturingCompletionSink:
         if self.attempts <= self._failures_before_success:
             raise RuntimeError("transient sink failure")
         self.calls.append((record, message))
+
+
+class _CapturingHookService:
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(event_input)
+        return HookDecisionBundle(decision=HookDecisionType.ALLOW)
+
+
+class _DenyingHookService:
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        self.events: list[object] = []
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(event_input)
+        return HookDecisionBundle(
+            decision=HookDecisionType.DENY,
+            reason=self.reason,
+        )
+
+
+class _SelectiveDenyingHookService:
+    def __init__(self, *, event_name: HookEventName, reason: str) -> None:
+        self._event_name = event_name
+        self._reason = reason
+        self.events: list[object] = []
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(event_input)
+        if getattr(event_input, "event_name") == self._event_name:
+            return HookDecisionBundle(
+                decision=HookDecisionType.DENY,
+                reason=self._reason,
+            )
+        return HookDecisionBundle(decision=HookDecisionType.ALLOW)
 
 
 class _FakeTaskExecutionService:
@@ -836,3 +886,254 @@ async def test_background_task_service_stop_for_run_stops_subagent(
     assert runtime is not None
     assert runtime.status == RunRuntimeStatus.STOPPED
     assert runtime.phase == RunRuntimePhase.IDLE
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_emits_subagent_start_and_stop_hooks(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-hook-events.db")
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-hook-events.db"
+    )
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    hook_service = _CapturingHookService()
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+        hook_service=cast(HookService, hook_service),
+    )
+
+    started = await service.start_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="MainAgent",
+        tool_call_id="call-1",
+        workspace_id="workspace-1",
+        cwd=Path("C:/workspace"),
+        subagent_role_id="Crafter",
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+    await service.wait_for_run(
+        run_id="run-1", background_task_id=started.background_task_id
+    )
+
+    assert [getattr(event, "event_name") for event in hook_service.events] == [
+        HookEventName.TASK_CREATED,
+        HookEventName.SUBAGENT_START,
+        HookEventName.SUBAGENT_STOP,
+    ]
+    assert (
+        getattr(hook_service.events[1], "objective")
+        == "Inspect the failing tests and summarize the cause."
+    )
+    assert (
+        getattr(hook_service.events[2], "status")
+        == BackgroundTaskStatus.COMPLETED.value
+    )
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_run_subagent_emits_stop_hook(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-sync-hooks.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-sync-hooks.db"
+    )
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    hook_service = _CapturingHookService()
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+        hook_service=cast(HookService, hook_service),
+    )
+
+    _ = await service.run_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        workspace_id="workspace-1",
+        subagent_role_id="Crafter",
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+
+    assert [getattr(event, "event_name") for event in hook_service.events] == [
+        HookEventName.TASK_CREATED,
+        HookEventName.SUBAGENT_START,
+        HookEventName.SUBAGENT_STOP,
+    ]
+    assert (
+        getattr(hook_service.events[2], "status")
+        == BackgroundTaskStatus.COMPLETED.value
+    )
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_denied_task_created_hook_rolls_back_launch(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-task-created-denied.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-task-created-denied.db"
+    )
+    agent_repo = _FakeAgentRepo()
+    task_repo = _FakeTaskRepo()
+    hook_service = _DenyingHookService("Task creation denied")
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=_FakeTaskExecutionService(
+            result=TaskExecutionResult(output="unused")
+        ),
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+        hook_service=cast(HookService, hook_service),
+    )
+
+    with pytest.raises(ValueError, match="Task creation denied"):
+        await service.run_subagent(
+            run_id="run-1",
+            session_id="session-1",
+            workspace_id="workspace-1",
+            subagent_role_id="Crafter",
+            title="Investigate failures",
+            prompt="Inspect the failing tests and summarize the cause.",
+        )
+
+    assert len(hook_service.events) == 1
+    assert agent_repo.calls == []
+    assert task_repo.created == []
+    assert task_repo.status_updates == []
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_subagent_stop_denial_marks_background_failure(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "background-task-service-subagent-stop-denied.db"
+    repo = BackgroundTaskRepository(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    hook_service = _SelectiveDenyingHookService(
+        event_name=HookEventName.SUBAGENT_STOP,
+        reason="Subagent must keep working",
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+        hook_service=cast(HookService, hook_service),
+    )
+
+    started = await service.start_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="MainAgent",
+        tool_call_id="call-1",
+        workspace_id="workspace-1",
+        cwd=Path("C:/workspace"),
+        subagent_role_id="Crafter",
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+    record, completed = await service.wait_for_run(
+        run_id="run-1",
+        background_task_id=started.background_task_id,
+    )
+
+    assert completed is True
+    assert record.status == BackgroundTaskStatus.FAILED
+    assert record.output_excerpt == "Subagent must keep working"
+    assert [getattr(event, "event_name") for event in hook_service.events] == [
+        HookEventName.TASK_CREATED,
+        HookEventName.SUBAGENT_START,
+        HookEventName.SUBAGENT_STOP,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_subagent_stop_denial_blocks_sync_result(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "background-task-service-subagent-sync-stop-denied.db"
+    runtime_repo = RunRuntimeRepository(db_path)
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    hook_service = _SelectiveDenyingHookService(
+        event_name=HookEventName.SUBAGENT_STOP,
+        reason="Subagent must keep working",
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=BackgroundTaskRepository(db_path),
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+        hook_service=cast(HookService, hook_service),
+    )
+
+    with pytest.raises(RuntimeError, match="Subagent must keep working"):
+        await service.run_subagent(
+            run_id="run-1",
+            session_id="session-1",
+            workspace_id="workspace-1",
+            subagent_role_id="Crafter",
+            title="Investigate failures",
+            prompt="Inspect the failing tests and summarize the cause.",
+        )
+
+    assert [getattr(event, "event_name") for event in hook_service.events] == [
+        HookEventName.TASK_CREATED,
+        HookEventName.SUBAGENT_START,
+        HookEventName.SUBAGENT_STOP,
+    ]

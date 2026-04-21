@@ -238,9 +238,15 @@ class RoleLoader:
 
     def load_one(self, path: Path) -> RoleDefinition:
         raw = path.read_text(encoding="utf-8")
-        return self.load_from_text(raw, source_name=str(path))
+        return self.load_from_text(raw, source_name=str(path), source_path=path)
 
-    def load_from_text(self, content: str, *, source_name: str) -> RoleDefinition:
+    def load_from_text(
+        self,
+        content: str,
+        *,
+        source_name: str,
+        source_path: Path | None = None,
+    ) -> RoleDefinition:
         front_matter, body = self._split_front_matter(content)
         parsed = yaml.safe_load(front_matter)
         if not isinstance(parsed, dict):
@@ -270,6 +276,12 @@ class RoleLoader:
         if not isinstance(skills, list):
             raise ValueError(f"skills must be a list in {source_name}")
 
+        hooks = parsed.get("hooks", {})
+        if hooks is None:
+            hooks = {}
+        if not isinstance(hooks, dict):
+            raise ValueError(f"hooks must be an object in {source_name}")
+
         memory_profile_raw = parsed.get("memory_profile")
         memory_profile = default_memory_profile()
         if memory_profile_raw is not None:
@@ -289,6 +301,7 @@ class RoleLoader:
             ),
             mcp_servers=tuple(str(item) for item in mcp_servers),
             skills=tuple(str(item) for item in skills),
+            hooks={str(key): value for key, value in hooks.items()},
             model_profile=str(parsed.get("model_profile", "default")),
             bound_agent_id=(
                 str(parsed["bound_agent_id"]).strip()
@@ -301,6 +314,7 @@ class RoleLoader:
             mode=RoleMode(str(parsed.get("mode", RoleMode.PRIMARY.value))),
             memory_profile=memory_profile,
             system_prompt=body.strip(),
+            source_path=source_path,
         )
 
     def _split_front_matter(self, content: str) -> tuple[str, str]:

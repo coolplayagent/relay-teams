@@ -21,12 +21,14 @@ from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.tools.registry import ToolRegistry
+from relay_teams.hooks import HookService
 from relay_teams.workspace import WorkspaceManager
 
 
@@ -40,6 +42,7 @@ def create_task_execution_service(
     message_repo: MessageRepository,
     approval_ticket_repo: ApprovalTicketRepository,
     run_runtime_repo: RunRuntimeRepository,
+    run_event_hub: RunEventHub | None,
     run_intent_repo: RunIntentRepository,
     workspace_manager: WorkspaceManager,
     media_asset_service: MediaAssetService | None,
@@ -54,6 +57,7 @@ def create_task_execution_service(
     run_control_manager: RunControlManager,
     role_memory_service: RoleMemoryService | None = None,
     runtime_role_resolver: RuntimeRoleResolver | None = None,
+    hook_service: HookService | None = None,
 ) -> TaskExecutionService:
     return TaskExecutionService(
         role_registry=role_registry,
@@ -64,6 +68,7 @@ def create_task_execution_service(
         message_repo=message_repo,
         approval_ticket_repo=approval_ticket_repo,
         run_runtime_repo=run_runtime_repo,
+        run_event_hub=run_event_hub,
         workspace_manager=workspace_manager,
         prompt_builder=RuntimePromptBuilder(
             role_registry=role_registry,
@@ -85,4 +90,5 @@ def create_task_execution_service(
         runtime_role_resolver=runtime_role_resolver,
         run_intent_repo=run_intent_repo,
         media_asset_service=media_asset_service,
+        hook_service=hook_service,
     )

@@ -40,6 +40,7 @@ from relay_teams.workspace import (
     build_conversation_id,
     build_instance_conversation_id,
 )
+from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookService
 
 
 class _RecordingTaskExecutionService:
@@ -60,6 +61,26 @@ class _RecordingTaskExecutionService:
             result=result,
         )
         return TaskExecutionResult(output=result)
+
+
+class _CapturingHookService(HookService):
+    def __init__(self, decision: HookDecisionType = HookDecisionType.ALLOW) -> None:
+        self.events: list[object] = []
+        self._decision = decision
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.events.append(event_input)
+        return HookDecisionBundle(
+            decision=self._decision,
+            reason=(
+                "Verification completion denied"
+                if self._decision == HookDecisionType.DENY
+                else ""
+            ),
+        )
 
 
 def _build_coordinator(
@@ -141,7 +162,8 @@ def _build_coordinator(
     )
 
 
-def test_terminal_status_from_verification_completes_with_assistant_error(
+@pytest.mark.asyncio
+async def test_terminal_status_from_verification_completes_with_assistant_error(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "coordinator_terminal_status.db"
@@ -161,12 +183,15 @@ def test_terminal_status_from_verification_completes_with_assistant_error(
         TaskStatus.ASSIGNED,
         assigned_instance_id="inst-1",
     )
+    hook_service = _CapturingHookService()
     coordinator = CoordinatorGraph.model_construct(
         task_repo=task_repo,
         event_bus=event_log,
+        hook_service=hook_service,
+        run_event_hub=RunEventHub(),
     )
 
-    result = coordinator._terminal_status_from_verification(
+    result = await coordinator._terminal_status_from_verification(
         trace_id="run-1",
         root_task=root_task,
         verification=VerificationResult(
@@ -187,9 +212,96 @@ def test_terminal_status_from_verification_completes_with_assistant_error(
     assert record.assigned_instance_id == "inst-1"
     assert record.error_message == "Task not completed yet"
     assert "Task not completed yet" in (record.result or "")
+    assert len(hook_service.events) == 1
 
     events = event_log.list_by_session("session-1")
     assert events == ()
+
+
+@pytest.mark.asyncio
+async def test_terminal_status_from_verification_respects_task_completed_deny(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "coordinator_terminal_status_deny.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        objective="do work",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    task_repo.update_status(
+        root_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id="inst-1",
+    )
+    coordinator = CoordinatorGraph.model_construct(
+        task_repo=task_repo,
+        event_bus=event_log,
+        hook_service=_CapturingHookService(HookDecisionType.DENY),
+        run_event_hub=RunEventHub(),
+    )
+
+    result = await coordinator._terminal_status_from_verification(
+        trace_id="run-1",
+        root_task=root_task,
+        verification=VerificationResult(
+            task_id=root_task.task_id,
+            passed=False,
+            details=("Task not completed yet",),
+        ),
+        output="",
+        root_instance_id=None,
+        root_role_id="Coordinator",
+    )
+
+    record = task_repo.get(root_task.task_id)
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert result.error_code == "task_completion_denied"
+    assert result.error_message == "Verification completion denied"
+    assert record.status == TaskStatus.FAILED
+    assert record.error_message == "Verification completion denied"
+
+
+@pytest.mark.asyncio
+async def test_initialize_manual_mode_denied_completion_marks_task_failed(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "coordinator_manual_mode_deny.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="do work",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator = CoordinatorGraph.model_construct(
+        task_repo=task_repo,
+        event_bus=event_log,
+        hook_service=_CapturingHookService(HookDecisionType.DENY),
+        run_event_hub=RunEventHub(),
+    )
+
+    result = await coordinator._initialize_manual_mode(
+        trace_id="run-1",
+        root_task=root_task,
+    )
+
+    record = task_repo.get(root_task.task_id)
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert result.error_code == "task_completion_denied"
+    assert result.error_message == "Verification completion denied"
+    assert record.status == TaskStatus.FAILED
+    assert record.error_message == "Verification completion denied"
 
 
 @pytest.mark.asyncio
