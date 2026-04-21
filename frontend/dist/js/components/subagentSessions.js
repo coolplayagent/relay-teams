@@ -23,6 +23,10 @@ export function getSessionSubagentSessions(sessionId) {
     return [...(subagentSessionsBySessionId.get(String(sessionId || '').trim()) || [])];
 }
 
+export function hasLoadedSessionSubagents(sessionId) {
+    return subagentSessionsBySessionId.has(String(sessionId || '').trim());
+}
+
 export function isSubagentSessionListExpanded(sessionId) {
     return expandedParentSessionIds.has(String(sessionId || '').trim());
 }

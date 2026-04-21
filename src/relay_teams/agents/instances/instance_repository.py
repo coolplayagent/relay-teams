@@ -11,6 +11,8 @@ from relay_teams.agents.instances.models import AgentRuntimeRecord
 from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from relay_teams.workspace import build_conversation_id
 
+_SQLITE_SAFE_VARIABLE_LIMIT = 900
+
 
 class AgentInstanceRepository:
     def __init__(self, db_path: Path) -> None:
@@ -240,6 +242,33 @@ class AgentInstanceRepository:
                 (session_id,),
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
+
+    def count_normal_mode_subagents_by_session_ids(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, int]:
+        if len(session_ids) == 0:
+            return {}
+        subagent_counts: dict[str, int] = {}
+        with self._lock:
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = self._conn.execute(
+                    f"""
+                    SELECT session_id, COUNT(*) AS subagent_count
+                    FROM agent_instances
+                    WHERE session_id IN ({placeholders})
+                      AND run_id GLOB 'subagent_run_*'
+                    GROUP BY session_id
+                    """,
+                    session_id_chunk,
+                ).fetchall()
+                for row in rows:
+                    subagent_counts[str(row["session_id"])] = int(row["subagent_count"])
+        return subagent_counts
 
     def list_session_role_instances(
         self, session_id: str
