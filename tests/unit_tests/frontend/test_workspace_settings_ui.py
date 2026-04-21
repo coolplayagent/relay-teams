@@ -156,6 +156,166 @@ console.log(JSON.stringify({
     ]
 
 
+def test_workspace_settings_panel_tests_saved_and_draft_profiles(
+    tmp_path: Path,
+) -> None:
+    payload = _run_workspace_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    bindWorkspaceSettingsHandlers,
+    loadWorkspaceSettingsPanel,
+} from "./workspaceSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+globalThis.__mockProfiles = [
+    {
+        ssh_profile_id: "prod",
+        host: "prod-alias",
+        username: "deploy",
+        port: 22,
+        remote_shell: "/bin/bash",
+        connect_timeout_seconds: 12,
+        has_password: false,
+        has_private_key: false,
+        private_key_name: null,
+    },
+];
+globalThis.__mockProbeResponse = {
+    ok: true,
+    latency_ms: 64,
+    diagnostics: {
+        binary_available: true,
+        host_reachable: true,
+        used_password: false,
+        used_private_key: false,
+        used_system_config: true,
+        exit_code: 0,
+    },
+};
+
+bindWorkspaceSettingsHandlers();
+await loadWorkspaceSettingsPanel();
+
+const testButton = document.getElementById("workspace-ssh-profile-list")
+    .querySelectorAll("[data-workspace-ssh-profile-test]")[0];
+await testButton?.onclick?.();
+const savedProbePayload = globalThis.__probeSshProfilePayload;
+const savedListHtml = document.getElementById("workspace-ssh-profile-list").innerHTML;
+
+document.getElementById("add-ssh-profile-btn").onclick();
+document.getElementById("workspace-ssh-profile-id").value = "staging";
+document.getElementById("workspace-ssh-profile-host").value = "staging-alias";
+document.getElementById("workspace-ssh-profile-username").value = "ops";
+document.getElementById("workspace-ssh-profile-port").value = "2222";
+document.getElementById("workspace-ssh-profile-shell").value = "/bin/bash";
+document.getElementById("workspace-ssh-profile-timeout").value = "9";
+document.getElementById("workspace-ssh-profile-password").value = "secret";
+document.getElementById("workspace-ssh-profile-private-key-name").value = "id_ed25519";
+document.getElementById("workspace-ssh-profile-private-key").value = "-----BEGIN KEY-----\\ncontent\\n-----END KEY-----";
+
+await document.getElementById("test-ssh-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    savedProbePayload,
+    savedListHtml,
+    draftProbePayload: globalThis.__probeSshProfilePayload,
+    draftStatusText: document.getElementById("workspace-ssh-profile-probe-status").textContent,
+    draftStatusDisplay: document.getElementById("workspace-ssh-profile-probe-status").style.display,
+    draftStatusClass: document.getElementById("workspace-ssh-profile-probe-status").className,
+    draftButtonText: document.getElementById("test-ssh-profile-btn").textContent,
+}));
+""".strip(),
+    )
+
+    assert payload["savedProbePayload"] == {
+        "ssh_profile_id": "prod",
+        "timeout_ms": 12000,
+    }
+    assert "Connected in 64ms" in str(payload["savedListHtml"])
+    assert payload["draftProbePayload"] == {
+        "override": {
+            "host": "staging-alias",
+            "username": "ops",
+            "port": 2222,
+            "remote_shell": "/bin/bash",
+            "connect_timeout_seconds": 9,
+            "password": "secret",
+            "private_key": "-----BEGIN KEY-----\ncontent\n-----END KEY-----",
+            "private_key_name": "id_ed25519",
+        },
+        "timeout_ms": 9000,
+    }
+    assert payload["draftStatusText"] == "Connected in 64ms"
+    assert payload["draftStatusDisplay"] == "block"
+    assert payload["draftStatusClass"] == (
+        "profile-probe-status probe-status probe-status-success"
+    )
+    assert payload["draftButtonText"] == "Test"
+
+
+def test_workspace_settings_panel_tests_existing_draft_with_saved_profile_id(
+    tmp_path: Path,
+) -> None:
+    payload = _run_workspace_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    bindWorkspaceSettingsHandlers,
+    loadWorkspaceSettingsPanel,
+} from "./workspaceSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+globalThis.__mockProfiles = [
+    {
+        ssh_profile_id: "prod",
+        host: "prod-alias",
+        username: "deploy",
+        port: 22,
+        remote_shell: "/bin/bash",
+        connect_timeout_seconds: 12,
+        has_password: true,
+        has_private_key: true,
+        private_key_name: "id_ed25519",
+    },
+];
+
+bindWorkspaceSettingsHandlers();
+await loadWorkspaceSettingsPanel();
+
+const editButton = document.getElementById("workspace-ssh-profile-list")
+    .querySelectorAll("[data-workspace-ssh-profile-edit]")[0];
+editButton?.onclick?.();
+
+document.getElementById("workspace-ssh-profile-id").value = "renamed-prod";
+document.getElementById("workspace-ssh-profile-host").value = "prod-edited";
+await document.getElementById("test-ssh-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    draftProbePayload: globalThis.__probeSshProfilePayload,
+    draftStatusText: document.getElementById("workspace-ssh-profile-probe-status").textContent,
+}));
+""".strip(),
+    )
+
+    assert payload["draftProbePayload"] == {
+        "ssh_profile_id": "prod",
+        "override": {
+            "host": "prod-edited",
+            "username": "deploy",
+            "port": 22,
+            "remote_shell": "/bin/bash",
+            "connect_timeout_seconds": 12,
+        },
+        "timeout_ms": 12000,
+    }
+    assert payload["draftStatusText"] == "Connected in 42ms"
+
+
 def test_workspace_password_toggle_reveals_saved_password_and_preserves_on_save(
     tmp_path: Path,
 ) -> None:
@@ -312,6 +472,22 @@ export async function revealSshProfilePassword(sshProfileId) {
     };
 }
 
+export async function probeSshProfileConnection(payload) {
+    globalThis.__probeSshProfilePayload = payload;
+    return globalThis.__mockProbeResponse || {
+        ok: true,
+        latency_ms: 42,
+        diagnostics: {
+            binary_available: true,
+            host_reachable: true,
+            used_password: false,
+            used_private_key: false,
+            used_system_config: true,
+            exit_code: 0,
+        },
+    };
+}
+
 export async function deleteSshProfile(sshProfileId) {
     globalThis.__deleteSshProfileId = sshProfileId;
     globalThis.__mockProfiles = (globalThis.__mockProfiles || []).filter(
@@ -338,6 +514,7 @@ export function showToast(payload = {}) {
         """
 const translations = {
     "settings.action.edit": "Edit",
+    "settings.action.test": "Test",
     "settings.action.delete": "Delete",
     "settings.action.cancel": "Cancel",
     "settings.workspace.empty_title": "No SSH profiles configured",
@@ -386,6 +563,11 @@ const translations = {
     "settings.workspace.validation_failed_title": "Validation Failed",
     "settings.workspace.profile_id_required": "Profile ID is required.",
     "settings.workspace.host_required": "Host is required.",
+    "settings.workspace.testing": "Testing connection...",
+    "settings.workspace.probe_success": "Connected in {latency_ms}ms",
+    "settings.workspace.connection_failed": "Connection failed: {reason}",
+    "settings.workspace.probe_failed": "Probe failed: {error}",
+    "settings.workspace.unknown": "Unknown error",
     "settings.proxy.show_password": "Show password",
     "settings.proxy.hide_password": "Hide password",
 };
@@ -474,6 +656,12 @@ function createHtmlElement() {{
                 }}
                 return cache.get(selector);
             }}
+            if (selector === "[data-workspace-ssh-profile-test]") {{
+                if (!cache.has(selector)) {{
+                    cache.set(selector, parseButtons(html, "data-workspace-ssh-profile-test"));
+                }}
+                return cache.get(selector);
+            }}
             return [];
         }},
     }};
@@ -511,6 +699,7 @@ function createElements() {{
         ["workspace-ssh-profile-editor", createHtmlElement()],
         ["workspace-ssh-profile-editor-title", {{ textContent: "", style: {{}} }}],
         ["workspace-ssh-profile-auth-state", {{ textContent: "", style: {{}} }}],
+        ["workspace-ssh-profile-probe-status", {{ textContent: "", className: "", style: {{}} }}],
         ["workspace-ssh-profile-id", createInput()],
         ["workspace-ssh-profile-host", createInput()],
         ["workspace-ssh-profile-username", createInput()],
@@ -522,6 +711,7 @@ function createElements() {{
         ["workspace-ssh-profile-private-key", createInput()],
         ["workspace-ssh-profile-private-key-file", createFileInput()],
         ["add-ssh-profile-btn", {{ onclick: null, style: {{}} }}],
+        ["test-ssh-profile-btn", {{ onclick: null, style: {{}}, textContent: "", disabled: false }}],
         ["save-ssh-profile-btn", {{ onclick: null, style: {{}} }}],
         ["cancel-ssh-profile-btn", {{ onclick: null, style: {{}} }}],
         ["delete-ssh-profile-btn", {{ onclick: null, style: {{}} }}],

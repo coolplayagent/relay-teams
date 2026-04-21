@@ -36,6 +36,18 @@ export async function revealSshProfilePassword(sshProfileId) {
     );
 }
 
+export async function probeSshProfileConnection(payload) {
+    return requestJson(
+        '/api/system/configs/workspace/ssh-profiles:probe',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to test SSH profile',
+    );
+}
+
 export async function deleteSshProfile(sshProfileId) {
     return requestJson(
         `/api/system/configs/workspace/ssh-profiles/${encodeURIComponent(sshProfileId)}`,

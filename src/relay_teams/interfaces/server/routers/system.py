@@ -114,6 +114,8 @@ from relay_teams.hooks import HookRuntimeView, HookService, HooksConfig
 from relay_teams.validation import RequiredIdentifierStr
 from relay_teams.workspace import (
     SshProfileConfig,
+    SshProfileConnectivityProbeRequest,
+    SshProfileConnectivityProbeResult,
     SshProfilePasswordRevealView,
     SshProfileRecord,
     SshProfileService,
@@ -228,6 +230,22 @@ def reveal_ssh_profile_password(
 ) -> SshProfilePasswordRevealView:
     try:
         return service.reveal_password(ssh_profile_id)
+    except Exception as exc:
+        _raise_system_http_error(
+            exc,
+            key_error_status=404,
+            key_error_detail="SSH profile not found",
+            value_error_status=400,
+        )
+
+
+@router.post("/configs/workspace/ssh-profiles:probe")
+def probe_ssh_profile_connectivity(
+    req: SshProfileConnectivityProbeRequest,
+    service: SshProfileService = Depends(get_ssh_profile_service),
+) -> SshProfileConnectivityProbeResult:
+    try:
+        return service.probe_connectivity(req)
     except Exception as exc:
         _raise_system_http_error(
             exc,

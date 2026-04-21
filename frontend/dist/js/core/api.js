@@ -68,6 +68,7 @@ export {
     fetchGitHubWebhookTunnelStatus,
     fetchWebConfig,
     probeModelConnection,
+    probeSshProfileConnection,
     discoverModelCatalog,
     probeClawHubConnectivity,
     probeGitHubConnectivity,
