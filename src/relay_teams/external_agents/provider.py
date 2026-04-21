@@ -80,6 +80,7 @@ if TYPE_CHECKING:
     from relay_teams.sessions.runs.user_question_repository import (
         UserQuestionRepository,
     )
+    from relay_teams.sessions.runs.todo_service import TodoService
     from relay_teams.skills.skill_registry import SkillRegistry
     from relay_teams.gateway.im import ImToolService
     from relay_teams.tools.registry import ToolRegistry
@@ -149,6 +150,7 @@ class ExternalAcpSessionManager:
         run_runtime_repo: RunRuntimeRepository,
         run_intent_repo: RunIntentRepository,
         background_task_service: BackgroundTaskService | None,
+        todo_service: TodoService | None = None,
         monitor_service: MonitorService | None = None,
         role_memory_service: RoleMemoryService | None,
         tool_registry: ToolRegistry,
@@ -188,6 +190,7 @@ class ExternalAcpSessionManager:
         self._run_runtime_repo = run_runtime_repo
         self._run_intent_repo = run_intent_repo
         self._background_task_service = background_task_service
+        self._todo_service = todo_service
         self._monitor_service = monitor_service
         self._role_memory_service = role_memory_service
         self._tool_registry = tool_registry
@@ -945,6 +948,7 @@ class ExternalAcpSessionManager:
             run_runtime_repo=self._run_runtime_repo,
             run_intent_repo=self._run_intent_repo,
             background_task_service=self._background_task_service,
+            todo_service=self._todo_service,
             monitor_service=self._monitor_service,
             workspace_manager=self._workspace_manager,
             media_asset_service=self._media_asset_service,

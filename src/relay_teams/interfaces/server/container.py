@@ -158,6 +158,8 @@ from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
 from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
+from relay_teams.sessions.runs.todo_repository import TodoRepository
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
@@ -351,6 +353,7 @@ class ServerContainer:
         self.background_task_repository: BackgroundTaskRepository = (
             BackgroundTaskRepository(runtime.paths.db_path)
         )
+        self.todo_repository: TodoRepository = TodoRepository(runtime.paths.db_path)
         self.run_state_repo: RunStateRepository = RunStateRepository(
             runtime.paths.db_path
         )
@@ -460,6 +463,10 @@ class ServerContainer:
             repository=self.background_task_repository,
             run_event_hub=self.run_event_hub,
         )
+        self.todo_service = TodoService(
+            repository=self.todo_repository,
+            run_event_hub=self.run_event_hub,
+        )
         self.feishu_client = FeishuClient()
         self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
         self.wechat_inbound_queue_repo = WeChatInboundQueueRepository(
@@ -533,6 +540,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             background_task_service=self.background_task_service,
+            todo_service=self.todo_service,
             monitor_service=self.monitor_service,
             role_memory_service=self.role_memory_service,
             tool_registry=self.tool_registry,
@@ -619,6 +627,7 @@ class ServerContainer:
             run_state_repo=self.run_state_repo,
             background_task_manager=self.background_task_manager,
             background_task_service=self.background_task_service,
+            todo_service=self.todo_service,
             monitor_service=self.monitor_service,
             notification_service=self.notification_service,
             orchestration_settings_service=self.orchestration_settings_service,
@@ -640,6 +649,7 @@ class ServerContainer:
             token_usage_repo=self.token_usage_repo,
             monitor_repository=self.monitor_repository,
             background_task_repository=self.background_task_repository,
+            todo_service=self.todo_service,
             run_state_repo=self.run_state_repo,
             run_event_hub=self.run_event_hub,
             active_run_registry=self.active_run_registry,
@@ -869,6 +879,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             run_intent_repo=self.run_intent_repo,
             background_task_service=self.background_task_service,
+            todo_service=self.todo_service,
             monitor_service=self.monitor_service,
             workspace_manager=self.workspace_manager,
             media_asset_service=self.media_asset_service,

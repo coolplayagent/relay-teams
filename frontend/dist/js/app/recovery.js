@@ -8,6 +8,7 @@ import { clearRunStreamState } from '../components/messageRenderer.js';
 import {
     loadSessionRounds,
     overlayRoundRecoveryState,
+    syncRoundTodoVisibility,
 } from '../components/rounds.js';
 import { scheduleSessionsRefresh } from '../components/sidebar.js';
 import {
@@ -193,6 +194,7 @@ export function clearSessionRecovery() {
         scheduleSessionsRefresh();
         renderRecoveryBanner();
     }
+    syncRoundTodoVisibility();
     syncSessionContinuity();
 }
 
@@ -214,6 +216,7 @@ export function applyRecoverySnapshot(snapshot) {
             state.activeRunId = null;
         }
         syncRecoveryRoundOverlay();
+        syncRoundTodoVisibility();
         renderRecoveryBanner();
         syncSessionContinuity();
         refreshVisibleContextIndicators({ immediate: true });
@@ -232,6 +235,7 @@ export function applyRecoverySnapshot(snapshot) {
     }
     scheduleSessionsRefresh();
     syncRecoveryRoundOverlay();
+    syncRoundTodoVisibility();
     renderRecoveryBanner();
     syncSessionContinuity();
     refreshVisibleContextIndicators({ immediate: true });

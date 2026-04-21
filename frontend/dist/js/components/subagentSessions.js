@@ -90,8 +90,10 @@ export async function ensureSessionSubagents(
         sysLog(`Failed to load subagent sessions: ${error.message || error}`, 'log-error');
         return getSessionSubagentSessions(safeSessionId);
     } finally {
-        loadingSessionIds.delete(safeSessionId);
-        emitSubagentSessionsChanged();
+        const wasLoading = loadingSessionIds.delete(safeSessionId);
+        if (emitLoadingEvents && wasLoading) {
+            emitSubagentSessionsChanged();
+        }
     }
 }
 
@@ -143,15 +145,26 @@ export function updateNormalModeSubagentSessionStatus(sessionId, instanceId, sta
     }
     const current = getSessionSubagentSessions(safeSessionId);
     const nowIso = new Date().toISOString();
+    let changed = false;
     const next = current.map(item => (
         item.instanceId === safeInstanceId
-            ? {
-                ...item,
-                status: String(status || item.status || 'idle'),
-                updatedAt: nowIso,
-            }
+            ? (() => {
+                const nextStatus = String(status || item.status || 'idle');
+                if (item.status === nextStatus) {
+                    return item;
+                }
+                changed = true;
+                return {
+                    ...item,
+                    status: nextStatus,
+                    updatedAt: nowIso,
+                };
+            })()
             : item
     ));
+    if (!changed) {
+        return;
+    }
     applySessionSubagentRecords(safeSessionId, next);
 }
 
@@ -295,10 +308,13 @@ function applySessionSubagentRecords(
     rows,
     { emitChange = true } = {},
 ) {
-    subagentSessionsBySessionId.set(sessionId, Array.isArray(rows) ? rows : []);
+    const nextRows = Array.isArray(rows) ? rows : [];
+    const previousRows = getSessionSubagentSessions(sessionId);
+    const changed = !areSubagentSessionRowsEqual(previousRows, nextRows);
+    subagentSessionsBySessionId.set(sessionId, nextRows);
     syncNormalModeSubagentStreams(sessionId, getSessionSubagentSessions(sessionId));
     syncActiveSubagentSessionFromCache(sessionId);
-    if (emitChange) {
+    if (emitChange && changed) {
         emitSubagentSessionsChanged();
     }
 }
@@ -493,4 +509,31 @@ function escapeHtml(value) {
 
 function escapeAttribute(value) {
     return escapeHtml(value).replaceAll('`', '&#96;');
+}
+
+function areSubagentSessionRowsEqual(leftRows, rightRows) {
+    if (leftRows.length !== rightRows.length) {
+        return false;
+    }
+    return leftRows.every((left, index) => areSubagentSessionRecordsEqual(left, rightRows[index]));
+}
+
+function areSubagentSessionRecordsEqual(left, right) {
+    return !!(
+        right
+        && left.sessionId === right.sessionId
+        && left.instanceId === right.instanceId
+        && left.roleId === right.roleId
+        && left.runId === right.runId
+        && left.title === right.title
+        && left.status === right.status
+        && left.runStatus === right.runStatus
+        && left.runPhase === right.runPhase
+        && left.lastEventId === right.lastEventId
+        && left.checkpointEventId === right.checkpointEventId
+        && left.streamConnected === right.streamConnected
+        && left.createdAt === right.createdAt
+        && left.updatedAt === right.updatedAt
+        && left.conversationId === right.conversationId
+    );
 }

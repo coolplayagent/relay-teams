@@ -11,7 +11,7 @@
 
 - SQLite tables do not currently enforce identifier-text `CHECK` constraints. The application layer rejects identifier and reference inputs that are blank, whitespace-only, or the explicit strings `"None"` and `"null"`.
 - Optional identifier fields still allow real `NULL` at the API and model layer.
-- Repository read paths tolerate previously persisted dirty rows for identifier-heavy tables such as `sessions`, `workspaces`, `external_session_bindings`, `session_history_markers`, `run_runtime`, `background_tasks`, `monitor_subscriptions`, `monitor_triggers`, `approval_tickets`, `gateway_sessions`, `feishu_gateway_accounts`, and `wechat_accounts`.
+- Repository read paths tolerate previously persisted dirty rows for identifier-heavy tables such as `sessions`, `workspaces`, `external_session_bindings`, `session_history_markers`, `run_runtime`, `background_tasks`, `run_todos`, `monitor_subscriptions`, `monitor_triggers`, `approval_tickets`, `gateway_sessions`, `feishu_gateway_accounts`, and `wechat_accounts`.
 - When those readers encounter invalid persisted identifiers or timestamps, they log a warning and skip the bad row or treat the row as missing instead of failing the whole `/api/*` request.
 
 ---
@@ -612,8 +612,8 @@ Notes:
 ## 3. Relationship Keys
 
 Primary query keys used by repositories:
-- `session_id`: session-level retrieval across `sessions`, `external_agent_sessions`, `tasks`, `agent_instances`, `events`, `messages`, `session_history_markers`, `token_usage`, `background_tasks`.
-- `trace_id` (`run_id`): run-level retrieval across `tasks`, `events`, `messages`, `token_usage`, `background_tasks`.
+- `session_id`: session-level retrieval across `sessions`, `external_agent_sessions`, `tasks`, `agent_instances`, `events`, `messages`, `session_history_markers`, `token_usage`, `background_tasks`, `run_todos`.
+- `trace_id` (`run_id`): run-level retrieval across `tasks`, `events`, `messages`, `token_usage`, `background_tasks`, `run_todos`.
 - `task_id`: task-level retrieval and task assignment tracking.
 - `instance_id`: agent-level retrieval and message history.
 - `trigger_id`: Feishu-account scoped retrieval across `external_session_bindings`, `feishu_message_pool`.
@@ -633,7 +633,7 @@ Primary query keys used by repositories:
 - `relay_teams.sessions`: `sessions`, `external_session_bindings`, `session_history_markers`.
 - `relay_teams.external_agents`: `external_agent_sessions`.
 - `relay_teams.workspace`: `workspaces`.
-- `relay_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`, `background_tasks`.
+- `relay_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`, `background_tasks`, `run_todos`.
 - `relay_teams.monitors`: `monitor_subscriptions`, `monitor_triggers`.
 - `relay_teams.agents`: `agent_instances`.
 - `relay_teams.agents.tasks`: `tasks`.
@@ -757,7 +757,35 @@ Notes:
 
 ---
 
-### 2.9.1.1 `monitor_subscriptions`
+### 2.9.1.1 `run_todos`
+
+```sql
+CREATE TABLE IF NOT EXISTS run_todos (
+    run_id                 TEXT PRIMARY KEY,
+    session_id             TEXT NOT NULL,
+    items_json             TEXT NOT NULL,
+    version                INTEGER NOT NULL,
+    updated_at             TEXT NOT NULL,
+    updated_by_role_id     TEXT,
+    updated_by_instance_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_todos_session
+    ON run_todos(session_id, updated_at DESC);
+```
+
+Purpose: latest persisted run-scoped todo snapshot for one run.
+
+Notes:
+- `items_json` stores the full ordered todo table, not incremental patches.
+- Each item includes `content` plus `status = pending | in_progress | completed`.
+- The application layer enforces at most one `in_progress` row and rejects oversized payloads.
+- `version` increments on every successful full-table write, including clears.
+- The runtime returns a synthetic empty snapshot when no `run_todos` row exists yet, but persistence only occurs after the first successful `todo_write`.
+
+---
+
+### 2.9.1.2 `monitor_subscriptions`
 
 ```sql
 CREATE TABLE IF NOT EXISTS monitor_subscriptions (

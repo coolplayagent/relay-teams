@@ -480,8 +480,24 @@ def build_runtime_tools_prompt(runtime_tools: RuntimeToolsSnapshot | None) -> st
     lines.append(
         "- Skill Tools: " + _format_names(_tool_names(runtime_tools.skill_tools))
     )
+    lines.extend(_build_todo_guidance(runtime_tools))
     lines.extend(_format_mcp_tool_lines(runtime_tools))
     return "\n".join(lines)
+
+
+def _build_todo_guidance(runtime_tools: RuntimeToolsSnapshot) -> list[str]:
+    local_tool_names = set(_tool_names(runtime_tools.local_tools))
+    if "todo_write" not in local_tool_names:
+        return []
+    lines = [
+        "- Use `todo_write` to maintain a concise run-scoped plan when the task has multiple concrete steps.",
+        "- `todo_write` always replaces the full todo table. Keep at most one item `in_progress`.",
+    ]
+    if "todo_read" in local_tool_names:
+        lines.append(
+            "- Use `todo_read` before updating if you need to inspect the latest persisted todo snapshot."
+        )
+    return lines
 
 
 def compose_system_prompt(data: SystemPromptSectionsInput) -> str:

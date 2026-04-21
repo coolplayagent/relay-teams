@@ -285,6 +285,7 @@ class RoleLoader:
             tools=apply_default_role_tools(
                 role_id=str(parsed["role_id"]),
                 role_name=str(parsed["name"]),
+                mode=str(parsed.get("mode", RoleMode.PRIMARY.value)),
                 tools=tuple(str(item) for item in parsed["tools"]),
             ),
             mcp_servers=tuple(str(item) for item in mcp_servers),

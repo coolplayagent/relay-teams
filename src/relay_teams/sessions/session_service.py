@@ -33,6 +33,7 @@ from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
 from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskKind
 from relay_teams.sessions.runs.background_tasks.repository import (
@@ -134,6 +135,7 @@ class SessionService:
         session_history_marker_repo: SessionHistoryMarkerRepository | None = None,
         run_state_repo: RunStateRepository | None = None,
         background_task_repository: BackgroundTaskRepository | None = None,
+        todo_service: TodoService | None = None,
         run_event_hub: RunEventHub | None = None,
         active_run_registry: ActiveSessionRunRegistry | None = None,
         event_log: EventLog | None = None,
@@ -163,6 +165,7 @@ class SessionService:
         self._session_history_marker_repo = session_history_marker_repo
         self._run_state_repo = run_state_repo
         self._background_task_repository = background_task_repository
+        self._todo_service = todo_service
         self._run_event_hub = run_event_hub
         self._active_run_registry = active_run_registry
         self._event_log = event_log
@@ -518,6 +521,8 @@ class SessionService:
             background_task_records=background_task_records,
         )
         self._run_runtime_repo.delete_by_session(session_id)
+        if self._todo_service is not None:
+            self._todo_service.delete_for_session(session_id)
         if self._monitor_repository is not None:
             self._monitor_repository.delete_by_session(session_id)
         self._task_repo.delete_by_session(session_id)
@@ -629,6 +634,8 @@ class SessionService:
             background_task_records=background_task_records,
         )
         self._run_runtime_repo.delete(agent.run_id)
+        if self._todo_service is not None:
+            self._todo_service.delete_for_run(agent.run_id)
         for task_id in task_ids:
             self._task_repo.delete(task_id)
         self._agent_repo.delete_instance(agent.instance_id)
@@ -899,6 +906,14 @@ class SessionService:
 
     def build_session_rounds(self, session_id: str) -> list[dict[str, object]]:
         excluded_run_ids = self._subagent_run_ids(session_id)
+        todos_by_run_id = (
+            {
+                snapshot.run_id: snapshot.model_dump(mode="json")
+                for snapshot in self._todo_service.list_for_session(session_id)
+            }
+            if self._todo_service is not None
+            else {}
+        )
         rounds = build_session_rounds(
             session_id=session_id,
             agent_repo=self._agent_repo,
@@ -935,6 +950,9 @@ class SessionService:
             round_item["is_recoverable"] = self._is_runtime_publicly_recoverable(
                 runtime
             )
+            todo = todos_by_run_id.get(str(round_item.get("run_id") or ""))
+            if todo is not None:
+                round_item["todo"] = todo
         return rounds
 
     def get_session_rounds(

@@ -55,7 +55,12 @@ def test_role_loader_adds_office_markdown_tool_to_non_coordinator_roles(
 
     role = RoleLoader().load_one(role_file)
 
-    assert role.tools == ("dispatch_task", "office_read_markdown")
+    assert role.tools == (
+        "dispatch_task",
+        "office_read_markdown",
+        "todo_write",
+        "todo_read",
+    )
 
 
 def test_role_loader_keeps_coordinator_tools_unchanged(tmp_path: Path) -> None:

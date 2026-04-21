@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.temporary_role_models import (
     TemporaryRoleRecord,
@@ -99,6 +99,7 @@ class RuntimeRoleResolver:
             else role.model_profile,
             bound_agent_id=role.bound_agent_id or template.bound_agent_id,
             execution_surface=role.execution_surface,
+            mode=RoleMode.SUBAGENT,
             memory_profile=role.memory_profile,
             system_prompt=role.system_prompt,
             template_role_id=role.template_role_id,

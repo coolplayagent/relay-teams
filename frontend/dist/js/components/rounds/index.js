@@ -14,4 +14,6 @@ export {
     loadSessionRounds,
     overlayRoundRecoveryState,
     selectRound,
+    syncRoundTodoVisibility,
+    updateRoundTodo,
 } from './timeline.js';
