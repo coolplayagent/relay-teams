@@ -12,6 +12,8 @@ from relay_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
     RuntimePromptBuildInput,
     SystemPromptSectionsInput,
+    WorkspaceSshProfilePromptMetadata,
+    build_workspace_ssh_profile_prompt_metadata,
     build_runtime_system_prompt,
     build_runtime_system_prompt_result,
     compose_system_prompt,
@@ -24,6 +26,7 @@ from relay_teams.agents.execution.user_prompts import (
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.secrets import AppSecretStore
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
@@ -31,6 +34,20 @@ from relay_teams.roles.temporary_role_models import TemporaryRoleSpec
 from relay_teams.roles.temporary_role_repository import TemporaryRoleRepository
 from relay_teams.sessions.runs.run_models import RunTopologySnapshot
 from relay_teams.sessions.session_models import SessionMode
+from relay_teams.workspace import (
+    SshProfileConfig,
+    SshProfileRepository,
+    SshProfileSecretStore,
+    SshProfileService,
+    WorkspaceHandle,
+    WorkspaceLocations,
+    WorkspaceMountProvider,
+    WorkspaceMountRecord,
+    WorkspaceRef,
+    WorkspaceRemoteMountRoot,
+    WorkspaceSshMountConfig,
+    build_local_workspace_mount,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -105,6 +122,68 @@ def _task() -> TaskEnvelope:
         trace_id="trace-1",
         objective="Deliver weekly summary",
         verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+
+
+class _FileOnlySecretStore(AppSecretStore):
+    def has_usable_keyring_backend(self) -> bool:
+        return False
+
+
+def _mixed_workspace_handle(tmp_path: Path) -> WorkspaceHandle:
+    workspace_dir = tmp_path / ".relay-teams" / "workspaces" / "mixed"
+    local_root = tmp_path / "project"
+    ssh_local_root = workspace_dir / "ssh_mounts" / "prod"
+    tmp_root = workspace_dir / "tmp"
+    (local_root / "src").mkdir(parents=True)
+    ssh_local_root.mkdir(parents=True)
+    tmp_root.mkdir(parents=True)
+    return WorkspaceHandle(
+        ref=WorkspaceRef(
+            workspace_id="mixed",
+            session_id="session-1",
+            role_id="writer_agent",
+            conversation_id="conversation-1",
+            default_mount_name="app",
+            mount_names=("app", "prod"),
+        ),
+        mounts=(
+            build_local_workspace_mount(
+                mount_name="app",
+                root_path=local_root,
+                working_directory="src",
+                readable_paths=(".", "shared"),
+                writable_paths=("src",),
+            ),
+            WorkspaceMountRecord(
+                mount_name="prod",
+                provider=WorkspaceMountProvider.SSH,
+                provider_config=WorkspaceSshMountConfig(
+                    ssh_profile_id="prod-profile",
+                    remote_root="/srv/app",
+                ),
+                working_directory=".",
+                readable_paths=(".",),
+                writable_paths=("config",),
+            ),
+        ),
+        locations=WorkspaceLocations(
+            workspace_dir=workspace_dir,
+            mount_name="app",
+            provider=WorkspaceMountProvider.LOCAL,
+            scope_root=local_root,
+            execution_root=local_root / "src",
+            tmp_root=tmp_root,
+            readable_roots=(local_root, tmp_root),
+            writable_roots=(local_root / "src", tmp_root),
+            remote_mount_roots=(
+                WorkspaceRemoteMountRoot(
+                    mount_name="prod",
+                    local_root=ssh_local_root,
+                    remote_root="/srv/app",
+                ),
+            ),
+        ),
     )
 
 
@@ -352,6 +431,139 @@ def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
     assert (
         "Do not trust your internal knowledge for the current date or time." in prompt
     )
+
+
+def test_runtime_system_prompt_includes_workspace_environments(
+    tmp_path: Path,
+) -> None:
+    workspace = _mixed_workspace_handle(tmp_path)
+
+    result = asyncio.run(
+        build_runtime_system_prompt_result(
+            RuntimePromptBuildInput(
+                role=_role("writer_agent"),
+                task=_task(),
+                shared_state_snapshot=(),
+                working_directory=workspace.resolve_workdir(),
+                worktree_root=workspace.scope_root,
+                workspace=workspace,
+                ssh_profile_metadata=(
+                    WorkspaceSshProfilePromptMetadata(
+                        ssh_profile_id="prod-profile",
+                        host="prod.example.com",
+                        username="deploy",
+                        port=2222,
+                        remote_shell="zsh",
+                    ),
+                ),
+            )
+        )
+    )
+
+    assert result.workspace_context.index(
+        "## Runtime Environment Information"
+    ) < result.workspace_context.index("## Workspace Environments")
+    assert result.workspace_context.index("## Workspace Environments") < (
+        result.workspace_context.index("## Execution Surface")
+    )
+    assert "- Workspace ID: mixed" in result.workspace_context
+    assert "- Default Mount: app" in result.workspace_context
+    assert "- Active Execution Mount: app" in result.workspace_context
+    assert "use `<mount_name>:/path` for non-default mounts" in result.workspace_context
+    assert "### Mount: app (default)" in result.workspace_context
+    assert "- Provider: local" in result.workspace_context
+    assert "- Working Directory: src" in result.workspace_context
+    assert "- Readable Paths: ., shared" in result.workspace_context
+    assert "- Writable Paths: src" in result.workspace_context
+    assert "### Mount: prod" in result.workspace_context
+    assert "- Provider: ssh" in result.workspace_context
+    assert "- SSH Profile ID: prod-profile" in result.workspace_context
+    assert "- SSH Host: prod.example.com" in result.workspace_context
+    assert "- SSH Username: deploy" in result.workspace_context
+    assert "- SSH Port: 2222" in result.workspace_context
+    assert "- SSH Remote Shell: zsh" in result.workspace_context
+    assert "- Remote Root: /srv/app" in result.workspace_context
+    assert "Materialized Local Root:" in result.workspace_context
+
+
+def test_workspace_ssh_profile_prompt_metadata_excludes_secret_fields(
+    tmp_path: Path,
+) -> None:
+    workspace = _mixed_workspace_handle(tmp_path)
+    service = SshProfileService(
+        repository=SshProfileRepository(tmp_path / "ssh_profiles.db"),
+        config_dir=tmp_path,
+        secret_store=SshProfileSecretStore(secret_store=_FileOnlySecretStore()),
+    )
+    _ = service.save_profile(
+        ssh_profile_id="prod-profile",
+        config=SshProfileConfig(
+            host="prod.example.com",
+            username="deploy",
+            password="prompt-password",
+            port=2222,
+            remote_shell="zsh",
+            private_key="-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n",
+            private_key_name="prod-key.pem",
+        ),
+    )
+
+    metadata = build_workspace_ssh_profile_prompt_metadata(
+        workspace=workspace,
+        ssh_profile_service=service,
+        consumer="tests.unit_tests.agents.execution.test_prompts",
+    )
+    prompt = system_prompts.build_workspace_environments_prompt(
+        workspace=workspace,
+        ssh_profile_metadata=metadata,
+    )
+
+    assert "- SSH Host: prod.example.com" in prompt
+    assert "- SSH Username: deploy" in prompt
+    assert "prompt-password" not in prompt
+    assert "OPENSSH PRIVATE KEY" not in prompt
+    assert "prod-key.pem" not in prompt
+    assert "password" not in prompt.casefold()
+    assert "private_key" not in prompt.casefold()
+    assert "private key" not in prompt.casefold()
+    assert "has_private_key" not in prompt.casefold()
+
+
+def test_runtime_system_prompt_keeps_stable_prefix_across_workspaces(
+    tmp_path: Path,
+) -> None:
+    first_workspace = _mixed_workspace_handle(tmp_path / "first")
+    second_workspace = _mixed_workspace_handle(tmp_path / "second")
+
+    first_prompt = asyncio.run(
+        build_runtime_system_prompt(
+            RuntimePromptBuildInput(
+                role=_role("writer_agent"),
+                task=_task(),
+                shared_state_snapshot=(),
+                working_directory=first_workspace.resolve_workdir(),
+                worktree_root=first_workspace.scope_root,
+                workspace=first_workspace,
+            )
+        )
+    )
+    second_prompt = asyncio.run(
+        build_runtime_system_prompt(
+            RuntimePromptBuildInput(
+                role=_role("writer_agent"),
+                task=_task(),
+                shared_state_snapshot=(),
+                working_directory=second_workspace.resolve_workdir(),
+                worktree_root=second_workspace.scope_root,
+                workspace=second_workspace,
+            )
+        )
+    )
+
+    first_prefix = first_prompt.split("## Runtime Environment Information", 1)[0]
+    second_prefix = second_prompt.split("## Runtime Environment Information", 1)[0]
+    assert first_prefix == second_prefix
+    assert "## Workspace Environments" not in first_prefix
 
 
 def test_runtime_environment_prompt_mentions_github_when_token_and_system_gh_exist(

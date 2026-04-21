@@ -90,6 +90,8 @@ provider 只存在于 workspace 模块内部。其它域只知道：
 
 workspace 中的 `ssh` mount 只引用 `ssh_profile_id`，并额外声明远端目录根。SSH profile 不属于 session，也不属于某个单独的 workspace。
 
+运行时 system prompt 只展示当前 workspace 已挂载的环境，不展示所有全局 SSH profiles。这样可以保持 workspace 仍是唯一稳定执行作用域，避免模型看到自己无法直接使用的远端环境。
+
 ## 5. 数据模型
 
 ### 5.1 WorkspaceRecord
@@ -224,6 +226,40 @@ provider SPI 至少覆盖：
 
 SSH provider 不把远端路径伪装成本地 Path。远端资源通过 provider 方法调用，不通过本地绝对路径传递。
 
+SSH 认证对 LLM 透明：
+
+- LLM 不接收密码、私钥、临时 key 路径或 askpass 环境变量。
+- LLM 只通过 workspace tools 引用 mount/path。
+- 后端工具运行时通过 `SshProfileService` 从 secret store 读取凭据，并在 `prepare_remote_command()` 或 `ensure_filesystem_mount()` 中完成远程命令或 SSHFS 挂载准备。
+- 认证失败时，工具结果只返回脱敏错误，不返回 secret 值或临时认证文件位置。
+
+### 7.5 Workspace Environments Prompt
+
+运行时 system prompt 在动态 `workspace_context` 层追加 `## Workspace Environments`。该 section 用于告诉 LLM 当前 workspace 有哪些可用执行环境。
+
+每个 mount 展示：
+
+- `mount_name`
+- 是否默认 mount
+- provider
+- root 或 remote root
+- working directory
+- readable / writable scope
+- capabilities
+- 路径语法
+
+SSH mount 额外展示非敏感连接元数据：
+
+- `ssh_profile_id`
+- host
+- username
+- port
+- remote shell
+- remote root
+- 是否已 materialize 到本地 mount root
+
+该 section 不展示全局未挂载 SSH profiles，也不展示任何认证材料。
+
 ## 8. 稳定交互边界
 
 ### 8.1 Session 与 Automation
@@ -260,6 +296,8 @@ SSH provider 不把远端路径伪装成本地 Path。远端资源通过 provide
 统一路径语法：
 
 `mount_name:/path/to/file`
+
+未带 mount 前缀的路径解析到默认 mount。多 mount workspace 中访问非默认 mount 时，应使用 `mount_name:/path/to/file`。`tmp/...` 始终解析到 workspace 临时目录。
 
 ## 10. 设置与 UI
 

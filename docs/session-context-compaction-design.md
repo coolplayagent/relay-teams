@@ -336,8 +336,11 @@ Microcompact 139.9k -> 9.0k
 - 当前 system prompt 实际上仍是“稳定前缀 + 动态尾巴”：
   - 基础 role/system 指令块大体稳定
   - rolling summary 作为动态 section 追加在 system prompt 末尾
+  - workspace、SSH mount、日期、shell、tool authorization 等运行时信息只放在动态 `workspace_context` 尾部
   - 这让缓存收益主要集中在 system prompt 前半段
   - 只要 summary 改变，位于它后面的 history 前缀缓存通常就会一起失效
+
+新增 system prompt section 时必须遵守稳定前缀合同：不得把 workspace、SSH、时间或 objective-dependent 内容插入 role prompt、runtime rules、skill catalog、capability summary 之前。详细规则见 `docs/system-prompt-layering.md`。
 
 后续建议继续完善：
 

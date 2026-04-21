@@ -432,6 +432,9 @@ def test_prompts_preview_uses_workspace_execution_root_when_workspace_is_provide
         f"- Working Directory: {workspace_root.resolve()}"
         in payload["runtime_system_prompt"]
     )
+    assert "## Workspace Environments" in payload["runtime_system_prompt"]
+    assert "- Workspace ID: preview-workspace" in payload["runtime_system_prompt"]
+    assert "### Mount: default (default)" in payload["runtime_system_prompt"]
 
 
 def test_prompts_preview_includes_project_instruction_files(tmp_path: Path) -> None:
