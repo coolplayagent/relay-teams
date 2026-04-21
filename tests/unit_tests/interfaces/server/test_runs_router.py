@@ -34,6 +34,18 @@ class _FakeRunService:
                 "status": "active",
             }
         }
+        self.todo = {
+            "run_id": "run-1",
+            "session_id": "session-1",
+            "items": [
+                {"content": "Inspect issue", "status": "completed"},
+                {"content": "Implement todo flow", "status": "in_progress"},
+            ],
+            "version": 2,
+            "updated_at": "2026-04-20T00:00:00+00:00",
+            "updated_by_role_id": "MainAgent",
+            "updated_by_instance_id": "inst-1",
+        }
 
     def create_run(self, intent_input) -> tuple[str, str]:
         self.created_run_inputs.append(intent_input)
@@ -62,6 +74,10 @@ class _FakeRunService:
     def list_background_tasks(self, run_id: str) -> tuple[dict[str, object], ...]:
         _ = run_id
         return tuple(self.background_tasks.values())
+
+    def get_todo(self, run_id: str) -> dict[str, object]:
+        _ = run_id
+        return dict(self.todo)
 
     def get_background_task(
         self,
@@ -308,6 +324,16 @@ def test_list_background_tasks_route_returns_items() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"items": [fake_service.background_tasks["exec-1"]]}
+
+
+def test_get_todo_route_returns_snapshot() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.get("/api/runs/run-1/todo")
+
+    assert response.status_code == 200
+    assert response.json() == {"todo": fake_service.todo}
 
 
 def test_get_background_task_route_returns_single_terminal() -> None:

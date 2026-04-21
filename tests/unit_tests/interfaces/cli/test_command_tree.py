@@ -541,6 +541,48 @@ def test_run_module_removed() -> None:
     assert "No such command 'run'" in result.output
 
 
+def test_runs_module_todo_command(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_autostart(base_url: str, autostart: bool) -> None:
+        _ = (base_url, autostart)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object] | list[object]:
+        _ = (base_url, timeout_seconds)
+        calls.append((method, path, payload))
+        return {
+            "todo": {
+                "run_id": "run-1",
+                "session_id": "session-1",
+                "items": [
+                    {"content": "Inspect issue", "status": "completed"},
+                    {"content": "Implement todo flow", "status": "in_progress"},
+                ],
+                "version": 2,
+                "updated_at": "2026-04-20T00:00:00+00:00",
+                "updated_by_role_id": "MainAgent",
+                "updated_by_instance_id": "inst-1",
+            }
+        }
+
+    monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
+    monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+
+    result = runner.invoke(cli_app.app, ["runs", "todo", "--run-id", "run-1"])
+
+    normalized_output = _normalized_output(result.output)
+    assert result.exit_code == 0
+    assert "Run ID : run-1" in normalized_output
+    assert "[in_progress] Implement todo flow" in normalized_output
+    assert calls == [("GET", "/api/runs/run-1/todo", None)]
+
+
 def test_root_help_lists_env_module() -> None:
     result = runner.invoke(cli_app.app, ["--help"])
     normalized_output = _normalized_output(result.output)
@@ -557,4 +599,5 @@ def test_root_help_lists_env_module() -> None:
     assert "roles" in normalized_output
     assert "skills" in normalized_output
     assert "gateway" in normalized_output
+    assert "runs" in normalized_output
     assert "prompts" not in normalized_output

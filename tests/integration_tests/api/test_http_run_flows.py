@@ -90,6 +90,50 @@ def test_ai_run_uses_fake_llm(
     assert after_calls > before_calls
 
 
+def test_ai_run_persists_todo_snapshot_and_projects_it(
+    api_client: httpx.Client,
+) -> None:
+    session_id = create_session(
+        api_client,
+        session_id=new_session_id("session-todo"),
+    )
+    run_id = create_run(
+        api_client,
+        session_id=session_id,
+        intent="[todo-validation] 维护当前 run 的 todo，并完成一次持久化校验。",
+        execution_mode="ai",
+        yolo=True,
+    )
+
+    events = stream_run_until_terminal(api_client, run_id=run_id)
+    event_types = [str(event.get("event_type") or "") for event in events]
+
+    assert event_types[-1] == "run_completed"
+    assert "todo_updated" in event_types
+    assert "tool_call" in event_types
+    assert "tool_result" in event_types
+
+    todo_response = api_client.get(f"/api/runs/{run_id}/todo")
+    todo_response.raise_for_status()
+    todo_payload = todo_response.json()
+    todo = todo_payload.get("todo")
+    assert isinstance(todo, dict)
+    assert todo.get("run_id") == run_id
+    assert todo.get("session_id") == session_id
+    items = todo.get("items")
+    assert isinstance(items, list)
+    assert items == [
+        {"content": "Inspect issue 399 requirements", "status": "completed"},
+        {"content": "Implement run todo persistence", "status": "in_progress"},
+        {"content": "Verify API and CLI output", "status": "pending"},
+    ]
+
+    round_response = api_client.get(f"/api/sessions/{session_id}/rounds/{run_id}")
+    round_response.raise_for_status()
+    round_payload = round_response.json()
+    assert round_payload.get("todo") == todo
+
+
 def test_ai_run_continues_after_invalid_tool_args_validation_failure(
     api_client: httpx.Client,
 ) -> None:
@@ -289,10 +333,11 @@ def test_ai_run_executes_builtin_computer_tools_with_fake_runtime(
         )
         restore_response.raise_for_status()
 
-    events = _session_run_events(
+    events = _wait_for_session_run_events(
         api_client,
         session_id=session_id,
         run_id=run_id,
+        expected_event_counts={"tool_call": 2, "tool_result": 2},
     )
     tool_calls = [
         json.loads(str(event["payload_json"]))
@@ -376,10 +421,11 @@ def test_ai_run_executes_builtin_mouse_computer_tools_with_fake_runtime(
         )
         restore_response.raise_for_status()
 
-    events = _session_run_events(
+    events = _wait_for_session_run_events(
         api_client,
         session_id=session_id,
         run_id=run_id,
+        expected_event_counts={"tool_call": 4, "tool_result": 4},
     )
     tool_calls = [
         json.loads(str(event["payload_json"]))
@@ -483,10 +529,11 @@ def test_ai_run_executes_builtin_input_computer_tools_with_fake_runtime(
         )
         restore_response.raise_for_status()
 
-    events = _session_run_events(
+    events = _wait_for_session_run_events(
         api_client,
         session_id=session_id,
         run_id=run_id,
+        expected_event_counts={"tool_call": 4, "tool_result": 4},
     )
     tool_calls = [
         json.loads(str(event["payload_json"]))
@@ -593,10 +640,11 @@ def test_ai_run_executes_builtin_wait_for_window_computer_tools_with_fake_runtim
         )
         restore_response.raise_for_status()
 
-    events = _session_run_events(
+    events = _wait_for_session_run_events(
         api_client,
         session_id=session_id,
         run_id=run_id,
+        expected_event_counts={"tool_call": 3, "tool_result": 3},
     )
     tool_calls = [
         json.loads(str(event["payload_json"]))
@@ -669,6 +717,39 @@ def _session_run_events(
         for event in payload
         if isinstance(event, dict) and str(event.get("trace_id") or "") == run_id
     ]
+
+
+def _wait_for_session_run_events(
+    api_client: httpx.Client,
+    *,
+    session_id: str,
+    run_id: str,
+    expected_event_counts: dict[str, int],
+    timeout_seconds: float = 5.0,
+) -> list[dict[str, object]]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        events = _session_run_events(
+            api_client,
+            session_id=session_id,
+            run_id=run_id,
+        )
+        observed_counts: dict[str, int] = {}
+        for event in events:
+            event_type = str(event.get("event_type") or "")
+            if not event_type:
+                continue
+            observed_counts[event_type] = observed_counts.get(event_type, 0) + 1
+        if all(
+            observed_counts.get(event_type, 0) >= expected_count
+            for event_type, expected_count in expected_event_counts.items()
+        ):
+            return events
+        time.sleep(0.1)
+    raise AssertionError(
+        "Run events did not reach expected persisted counts within "
+        f"{timeout_seconds}s for run {run_id}: expected {expected_event_counts}"
+    )
 
 
 def _wait_for_role_tools(

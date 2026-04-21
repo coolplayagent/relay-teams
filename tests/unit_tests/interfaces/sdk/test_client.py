@@ -429,6 +429,32 @@ def test_get_github_config_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
+def test_get_run_todo_calls_expected_endpoint(monkeypatch) -> None:
+    client = AgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"todo": {"run_id": "run-1", "items": []}}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    response = client.get_run_todo("run-1")
+
+    assert response == {"todo": {"run_id": "run-1", "items": []}}
+    assert captured == {
+        "method": "GET",
+        "path": "/api/runs/run-1/todo",
+        "payload": None,
+    }
+
+
 def test_clawhub_sdk_calls_expected_endpoints(monkeypatch) -> None:
     client = AgentTeamsClient()
     calls: list[tuple[str, str, object | None]] = []

@@ -1,0 +1,12 @@
+Read the current run-scoped todo list for this run.
+
+Use this when you need to inspect the latest persisted todo snapshot before updating it or when you want to confirm current progress state.
+
+Returns the todo snapshot with:
+- `run_id`
+- `session_id`
+- `items`
+- `version`
+- `updated_at`
+- `updated_by_role_id`
+- `updated_by_instance_id`

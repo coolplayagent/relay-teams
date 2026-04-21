@@ -340,6 +340,9 @@ class AgentTeamsClient:
             return [item for item in items if isinstance(item, dict)]
         return []
 
+    def get_run_todo(self, run_id: str) -> dict[str, JsonValue]:
+        return self._request_json("GET", f"/api/runs/{run_id}/todo")
+
     def resolve_tool_approval(
         self, run_id: str, tool_call_id: str, action: str, feedback: str = ""
     ) -> dict[str, JsonValue]:

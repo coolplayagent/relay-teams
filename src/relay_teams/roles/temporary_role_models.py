@@ -8,7 +8,7 @@ from relay_teams.computer import ExecutionSurface
 from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.roles.default_role_tools import apply_default_role_tools
-from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.memory_models import MemoryProfile, default_memory_profile
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
@@ -30,6 +30,7 @@ class TemporaryRoleSpec(BaseModel):
     model_profile: str = Field(default="default", min_length=1)
     bound_agent_id: OptionalIdentifierStr = None
     execution_surface: ExecutionSurface = ExecutionSurface.API
+    mode: RoleMode = RoleMode.SUBAGENT
     memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
     system_prompt: str = Field(min_length=1)
     template_role_id: OptionalIdentifierStr = None
@@ -43,6 +44,7 @@ class TemporaryRoleSpec(BaseModel):
             tools=apply_default_role_tools(
                 role_id=self.role_id,
                 role_name=self.name,
+                mode=self.mode.value,
                 tools=self.tools,
             ),
             mcp_servers=self.mcp_servers,
@@ -50,6 +52,7 @@ class TemporaryRoleSpec(BaseModel):
             model_profile=self.model_profile,
             bound_agent_id=self.bound_agent_id,
             execution_surface=self.execution_surface,
+            mode=self.mode,
             memory_profile=self.memory_profile,
             system_prompt=self.system_prompt,
         )

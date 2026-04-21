@@ -30,10 +30,16 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert "edit" in crafter.tools
     assert "read" in crafter.tools
     assert "office_read_markdown" not in coordinator.tools
+    assert "todo_write" not in coordinator.tools
+    assert "todo_read" not in coordinator.tools
     assert "office_read_markdown" in crafter.tools
+    assert "todo_write" not in crafter.tools
+    assert "todo_read" not in crafter.tools
     assert "notebook_edit" in crafter.tools
     assert "notebook_edit" in main_agent.tools
     assert "office_read_markdown" in main_agent.tools
+    assert "todo_write" in main_agent.tools
+    assert "todo_read" in main_agent.tools
     assert "webfetch" in crafter.tools
     assert "websearch" in crafter.tools
     assert background_task_tools.issubset(set(crafter.tools))
@@ -51,15 +57,23 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert "websearch" in main_agent.tools
     assert "skill-installer" in main_agent.skills
     assert "office_read_markdown" in daily_ai_report.tools
+    assert "todo_write" not in daily_ai_report.tools
+    assert "todo_read" not in daily_ai_report.tools
     assert "office_read_markdown" in designer.tools
+    assert "todo_write" not in designer.tools
+    assert "todo_read" not in designer.tools
     assert "write_tmp" in designer.tools
     assert "write" not in designer.tools
     assert "edit" not in designer.tools
     assert "office_read_markdown" in explorer.tools
+    assert "todo_write" not in explorer.tools
+    assert "todo_read" not in explorer.tools
     assert "write_tmp" in explorer.tools
     assert "write" not in explorer.tools
     assert "edit" not in explorer.tools
     assert "office_read_markdown" in gater.tools
+    assert "todo_write" not in gater.tools
+    assert "todo_read" not in gater.tools
     assert "write_tmp" in gater.tools
     assert "write" not in gater.tools
     assert "edit" not in gater.tools

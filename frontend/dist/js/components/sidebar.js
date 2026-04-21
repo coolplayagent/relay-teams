@@ -70,6 +70,7 @@ let openProjectMenuId = null;
 let projectMenuDismissBound = false;
 let languageRefreshBound = false;
 let pendingSessionAnimation = null;
+let loadProjectsRequestId = 0;
 
 const SESSION_ANIMATION_ENTER_MS = 220;
 const SESSION_ANIMATION_REMOVE_MS = 180;
@@ -1064,11 +1065,12 @@ export async function loadProjects() {
     if (!languageRefreshBound && typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => void loadProjects());
         document.addEventListener('agent-teams-projects-changed', () => void loadProjects());
-        document.addEventListener('agent-teams-subagent-sessions-changed', () => void loadProjects());
+        document.addEventListener('agent-teams-subagent-sessions-changed', () => scheduleSessionsRefresh(90));
         document.addEventListener('agent-teams-session-selected', () => void loadProjects());
         document.addEventListener('agent-teams-subagent-session-selected', () => void loadProjects());
         languageRefreshBound = true;
     }
+    const requestId = ++loadProjectsRequestId;
     try {
         ensureProjectMenuDismissBinding();
         const [workspaces, sessions, automationProjects] = await Promise.all([
@@ -1076,6 +1078,9 @@ export async function loadProjects() {
             fetchSessions(),
             fetchAutomationProjects(),
         ]);
+        if (requestId !== loadProjectsRequestId) {
+            return;
+        }
         automationBoundSessionIds.clear();
         (Array.isArray(automationProjects) ? automationProjects : []).forEach(project => {
             const binding = project?.delivery_binding && typeof project.delivery_binding === 'object'
@@ -1107,6 +1112,9 @@ export async function loadProjects() {
         prefetchVisibleSubagentSessions(groups);
         playPendingSessionAnimation();
     } catch (error) {
+        if (requestId !== loadProjectsRequestId) {
+            return;
+        }
         sysLog(formatMessage('sidebar.error.loading_projects', { error: error.message }), 'log-error');
     }
 }
