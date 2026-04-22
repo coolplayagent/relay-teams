@@ -152,6 +152,17 @@ class WorkspaceMountRecord(BaseModel):
         return self.provider_config.root_path.resolve()
 
 
+def _sort_workspace_mounts(
+    mounts: tuple[WorkspaceMountRecord, ...],
+) -> tuple[WorkspaceMountRecord, ...]:
+    return tuple(sorted(mounts, key=_workspace_mount_sort_key))
+
+
+def _workspace_mount_sort_key(mount: WorkspaceMountRecord) -> tuple[int, str, str]:
+    provider_order = 0 if mount.provider == WorkspaceMountProvider.LOCAL else 1
+    return (provider_order, mount.mount_name.casefold(), mount.mount_name)
+
+
 def build_local_workspace_mount(
     *,
     mount_name: str,
@@ -317,6 +328,7 @@ class WorkspaceRecord(BaseModel):
             seen.add(mount.mount_name)
         if self.default_mount_name not in seen:
             raise ValueError(f"default mount does not exist: {self.default_mount_name}")
+        self.mounts = _sort_workspace_mounts(self.mounts)
         return self
 
     def mount_by_name(self, mount_name: str) -> WorkspaceMountRecord:

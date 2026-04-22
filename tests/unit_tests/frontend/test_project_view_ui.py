@@ -749,6 +749,7 @@ await flushTasks();
 await flushTasks();
 
 const mountButtons = Array.from(els.projectViewContent.querySelectorAll("[data-workspace-mount]"));
+const mountOrder = mountButtons.map(button => button.getAttribute("data-workspace-mount"));
 const defaultMountButton = mountButtons.find(button => button.getAttribute("data-mount-name") === "default") || null;
 defaultMountButton?.click();
 await flushTasks();
@@ -760,30 +761,32 @@ await flushTasks();
 await flushTasks();
 
 console.log(JSON.stringify({
+    mountOrder,
     updatedWorkspacePayload: globalThis.__updatedWorkspacePayload,
     toastCalls: globalThis.__toastCalls || [],
 }));
 """.strip(),
     )
 
+    assert payload["mountOrder"] == ["default", "ops", "prod"]
     assert payload["updatedWorkspacePayload"] == {
         "workspaceId": "alpha-project",
         "payload": {
             "default_mount_name": "ops",
             "mounts": [
                 {
+                    "mount_name": "ops",
+                    "provider": "local",
+                    "provider_config": {
+                        "root_path": "/work/ops",
+                    },
+                },
+                {
                     "mount_name": "prod",
                     "provider": "ssh",
                     "provider_config": {
                         "ssh_profile_id": "prod",
                         "remote_root": "/srv/app",
-                    },
-                },
-                {
-                    "mount_name": "ops",
-                    "provider": "local",
-                    "provider_config": {
-                        "root_path": "/work/ops",
                     },
                 },
             ],

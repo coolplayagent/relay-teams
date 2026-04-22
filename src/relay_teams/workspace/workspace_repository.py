@@ -189,7 +189,13 @@ class WorkspaceRepository:
                 """
                 SELECT * FROM workspace_mounts
                 WHERE workspace_id=?
-                ORDER BY mount_name ASC
+                ORDER BY
+                    CASE provider
+                        WHEN 'local' THEN 0
+                        WHEN 'ssh' THEN 1
+                        ELSE 2
+                    END ASC,
+                    mount_name ASC
                 """,
                 (workspace_id,),
             ).fetchall()
@@ -270,7 +276,14 @@ class WorkspaceRepository:
             mount_rows = self._conn.execute(
                 """
                 SELECT * FROM workspace_mounts
-                ORDER BY workspace_id ASC, mount_name ASC
+                ORDER BY
+                    workspace_id ASC,
+                    CASE provider
+                        WHEN 'local' THEN 0
+                        WHEN 'ssh' THEN 1
+                        ELSE 2
+                    END ASC,
+                    mount_name ASC
                 """
             ).fetchall()
         mounts_by_workspace: dict[str, list[sqlite3.Row]] = {}
