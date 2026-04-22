@@ -35,7 +35,7 @@ def test_save_get_and_delete_skill(tmp_path: Path) -> None:
 
     assert saved.skill_id == "skill-creator-2"
     assert saved.runtime_name == "skill-creator"
-    assert saved.ref == "app:skill-creator"
+    assert saved.ref == "skill-creator"
     assert saved.valid is True
     assert mutation_count == 1
 

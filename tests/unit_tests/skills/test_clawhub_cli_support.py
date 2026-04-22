@@ -78,7 +78,7 @@ def test_run_clawhub_install_reports_runtime_identity(
     assert isinstance(installed_skill, dict)
     assert installed_skill["skill_id"] == "skill-creator-2"
     assert installed_skill["runtime_name"] == "skill-creator"
-    assert installed_skill["ref"] == "app:skill-creator"
+    assert installed_skill["ref"] == "skill-creator"
     diagnostics = result.get("diagnostics")
     assert isinstance(diagnostics, dict)
     assert diagnostics["registry"] == "https://mirror-cn.clawhub.com"

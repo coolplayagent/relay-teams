@@ -64,7 +64,7 @@ Response fields:
   - `has_builtin_main_agent`
 - `skill_registry_sanity`
   - `builtin_skill_count`
-  - `builtin_skill_refs`
+  - `builtin_skill_names`
   - `has_builtin_deepresearch`
 - `tool_registry_sanity`
   - `available_tool_count`
@@ -350,8 +350,8 @@ Each item includes:
 - `skill_id`: directory id under `~/.relay-teams/skills`
 - `runtime_name`: runtime skill name parsed from `SKILL.md` front matter when valid
 - `description`
-- `ref`: canonical runtime ref such as `app:skill-creator` when valid
-- `scope`: always `app`
+- `ref`: effective runtime skill name from `SKILL.md`, such as `skill-creator`
+- `source`: current source bucket for the effective skill, typically `user_relay_teams`
 - `directory`
 - `manifest_path`
 - `valid`
@@ -1785,19 +1785,23 @@ Response fields:
 - `tools`
 - `mcp_servers`
 - `skills[]`
-  - `ref`: canonical skill ref. Uses `builtin:<name>` for built-in skills and
-    `app:<name>` for user/app skills.
+  - `ref`: effective runtime skill name
   - `name`
   - `description`
-  - `scope`: `builtin` or `app`
+  - `source`: one of `builtin`, `user_relay_teams`, `user_agents`,
+    `project_relay_teams`, or `project_agents`
 - `agents[]`
   - `agent_id`
   - `name`
   - `transport`
 
 Notes:
-- Same-name builtin/app skills are both returned. Frontends must treat `ref` as
-  the stable identity and use `name` only for display.
+- Skills are loaded in override order: builtin, `~/.relay-teams/skills`,
+  `~/.agents/skills`, project `.relay-teams/skills` from cwd up to git root,
+  then project `.agents/skills` from cwd up to git root.
+- Same-name skills do not coexist in the effective options payload. Later
+  sources override earlier ones, and the returned `ref` is the surviving bare
+  skill name.
 - `capabilities.input/output.*` is the canonical multimodal contract for a role's
   resolved runtime model profile. `input_modalities[]` is derived from
   `capabilities.input` for compatibility with existing consumers.
@@ -1853,9 +1857,9 @@ Response fields:
 - `content`
 
 Notes:
-- `skills` in saved role documents are returned as canonical refs when they can
-  be resolved uniquely. Existing unknown saved values are preserved so the UI
-  can still display and edit the role.
+- `skills` in saved role documents are returned as effective runtime skill
+  names. Existing unknown saved values are preserved so the UI can still
+  display and edit the role.
 
 ### `PUT /roles/configs/{role_id}`
 
@@ -2213,10 +2217,10 @@ Notes:
 - When `conversation_context.source_provider = "feishu"` and `conversation_context.feishu_chat_type = "group"`, both `runtime_system_prompt` and `provider_system_prompt` append the extra Feishu-group instruction:
   `当前对话来自飞书群聊；用户输入会包含发送者标识，你必须明确区分不同发送者，不要把群成员当作同一用户。`
 - Other contexts leave the role system prompt unchanged.
-- Skill requests accept canonical refs or unique plain names.
+- Skill requests accept effective runtime skill names.
 - Prompt-facing preview output returns plain skill names.
-- Roles/settings/skills management APIs continue to use canonical refs so same-name
-  builtin/app skills remain distinguishable.
+- Roles/settings/skills management APIs also use effective runtime skill names.
+- Same-name conflicts are resolved by source ordering before these APIs respond.
 - When `workspace_id` does not exist, the endpoint returns `404`.
 - When the authorized skill count is `<= 8`, the preview injects the stable
   skill catalog into `runtime_system_prompt` and `provider_system_prompt`, and

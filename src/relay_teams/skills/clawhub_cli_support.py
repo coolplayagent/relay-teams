@@ -445,7 +445,7 @@ def _load_installed_skill_summary(
         "runtime_name": payload["runtime_name"],
         "description": payload["description"],
         "ref": payload["ref"],
-        "scope": payload["scope"],
+        "source": payload["source"],
         "directory": payload["directory"],
         "manifest_path": payload["manifest_path"],
         "valid": payload["valid"],

@@ -351,7 +351,7 @@ function normalizeStatusItem(item) {
         return {
             name,
             description: '',
-            scope: '',
+            source: '',
         };
     }
 
@@ -363,7 +363,9 @@ function normalizeStatusItem(item) {
     return {
         name,
         description: typeof item?.description === 'string' ? item.description.trim() : '',
-        scope: typeof item?.scope === 'string' ? item.scope.trim() : '',
+        source: typeof item?.source === 'string'
+            ? item.source.trim()
+            : (typeof item?.scope === 'string' ? item.scope.trim() : ''),
     };
 }
 
@@ -385,7 +387,7 @@ function formatStatusItemLabel(item, nameCounts) {
     if (duplicateCount <= 1) {
         return safeName;
     }
-    return formatSkillStatusLabel(safeName, item?.scope);
+    return formatSkillStatusLabel(safeName, item?.source);
 }
 
 function formatSkillStatusLabel(name, scope) {

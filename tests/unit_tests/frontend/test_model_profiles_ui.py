@@ -243,7 +243,9 @@ console.log(JSON.stringify({
     assert saved_profile_body["fallback_priority"] == 9
 
 
-def test_model_fallback_labels_use_i18n_translations(tmp_path: Path) -> None:
+def test_model_profiles_list_rerenders_dynamic_fallback_copy_on_language_change(
+    tmp_path: Path,
+) -> None:
     payload = _run_model_profiles_script(
         tmp_path=tmp_path,
         runner_source="""
@@ -256,33 +258,546 @@ installGlobals(elements, notifications);
 bindModelProfileHandlers();
 await loadModelProfilesPanel();
 
+const beforeHtml = document.getElementById("profiles-list").innerHTML;
+globalThis.__language = "alt";
+document.dispatchEvent(new CustomEvent("agent-teams-language-changed"));
+
 console.log(JSON.stringify({
-    optionsHtml: document.getElementById("profile-fallback-policy").innerHTML,
-    renderedHtml: document.getElementById("profiles-list").innerHTML,
+    beforeHtml,
+    afterHtml: document.getElementById("profiles-list").innerHTML,
 }));
 """.strip(),
-        mock_api_source=DEFAULT_MOCK_API_SOURCE.replace(
-            'input_modalities: ["image"],\n        },',
-            (
-                'input_modalities: ["image"],\n'
-                '            fallback_policy_id: "same_provider_then_other_provider",\n'
-                "            fallback_priority: 7,\n"
-                "        },"
-            ),
-            1,
-        ),
+        mock_i18n_source="""
+const translations = {
+    en: {
+        "settings.model.add_profile": "Add Profile",
+        "settings.model.edit_profile": "Edit Profile",
+        "settings.model.empty_title": "No profiles configured",
+        "settings.model.empty_copy": "Create a profile to define the model endpoint, request limits, and sampling defaults.",
+        "settings.model.saved_title": "Profile Saved",
+        "settings.model.saved_message_detail": "Profile saved and reloaded.",
+        "settings.model.save_failed_title": "Save Failed",
+        "settings.model.save_failed_detail": "Failed to save: {error}",
+        "settings.model.testing": "Testing connection...",
+        "settings.model.probe_failed": "Probe failed: {error}",
+        "settings.model.delete_title": "Delete Profile",
+        "settings.model.delete_message": "Delete profile \\"{name}\\"?",
+        "settings.model.deleted_title": "Profile Deleted",
+        "settings.model.deleted_message_detail": "Profile deleted and reloaded.",
+        "settings.model.delete_failed_title": "Delete Failed",
+        "settings.model.delete_failed_detail": "Failed to delete: {error}",
+        "settings.model.fetching_models": "Fetching models...",
+        "settings.model.fetch_failed": "Fetch failed: {error}",
+        "settings.model.fetch_models": "Fetch Models",
+        "settings.model.validation_test_new": "Model, base URL, and API key are required before testing a new profile.",
+        "settings.model.validation_fetch_models": "Base URL and API key are required before fetching models for a new profile.",
+        "settings.model.probe_success": "Connected in {latency_ms}ms{usage_text}",
+        "settings.model.connection_failed": "Connection failed: {reason}",
+        "settings.model.probe_no_models": "Connected in {latency_ms}ms, but the endpoint returned no models.",
+        "settings.model.models_fetched": "Fetched {count} models in {latency_ms}ms.",
+        "settings.model.usage_tokens": " · {tokens} tokens",
+        "settings.model.context_window_compact": "{count} ctx",
+        "settings.model.show_models": "Show Models",
+        "settings.model.no_models_loaded": "No Models Loaded",
+        "settings.model.capability_section": "Capabilities",
+        "settings.model.image_capability": "Image Input",
+        "settings.model.image_capability_follow": "Follow detection",
+        "settings.model.image_capability_supported": "Supports image input",
+        "settings.model.image_capability_unsupported": "Text only",
+        "settings.model.show_api_key": "Show API key",
+        "settings.model.hide_api_key": "Hide API key",
+        "settings.model.show_password": "Show password",
+        "settings.model.hide_password": "Hide password",
+        "settings.model.default_badge": "Default",
+        "settings.model.capability_image_input": "Image input",
+        "settings.model.capability_text_only": "Text only",
+        "settings.model.capability_unknown": "Capability unknown",
+        "settings.model.no_model": "No model",
+        "settings.model.no_endpoint": "No endpoint",
+        "settings.model.fallback_disabled": "Fallback disabled",
+        "settings.model.priority_compact": "Priority {priority}",
+        "settings.model.disabled": "Disabled",
+        "settings.model.unknown": "Unknown",
+        "settings.action.test": "Test",
+        "settings.action.edit": "Edit",
+        "settings.action.delete": "Delete",
+        "settings.action.cancel": "Cancel",
+    },
+    alt: {
+        "settings.model.add_profile": "Add Profile ALT",
+        "settings.model.edit_profile": "Edit Profile ALT",
+        "settings.model.empty_title": "No profiles configured ALT",
+        "settings.model.empty_copy": "Create a profile ALT",
+        "settings.model.saved_title": "Profile Saved ALT",
+        "settings.model.saved_message_detail": "Profile saved and reloaded ALT.",
+        "settings.model.save_failed_title": "Save Failed ALT",
+        "settings.model.save_failed_detail": "Failed to save ALT: {error}",
+        "settings.model.testing": "Testing ALT...",
+        "settings.model.probe_failed": "Probe failed ALT: {error}",
+        "settings.model.delete_title": "Delete Profile ALT",
+        "settings.model.delete_message": "Delete profile ALT \\"{name}\\"?",
+        "settings.model.deleted_title": "Profile Deleted ALT",
+        "settings.model.deleted_message_detail": "Profile deleted and reloaded ALT.",
+        "settings.model.delete_failed_title": "Delete Failed ALT",
+        "settings.model.delete_failed_detail": "Failed to delete ALT: {error}",
+        "settings.model.fetching_models": "Fetching models ALT...",
+        "settings.model.fetch_failed": "Fetch failed ALT: {error}",
+        "settings.model.fetch_models": "Fetch Models ALT",
+        "settings.model.validation_test_new": "Validation ALT",
+        "settings.model.validation_fetch_models": "Fetch validation ALT",
+        "settings.model.probe_success": "Connected ALT in {latency_ms}ms{usage_text}",
+        "settings.model.connection_failed": "Connection failed ALT: {reason}",
+        "settings.model.probe_no_models": "No models ALT",
+        "settings.model.models_fetched": "Fetched ALT {count} models in {latency_ms}ms.",
+        "settings.model.usage_tokens": " ALT {tokens} tokens",
+        "settings.model.context_window_compact": "{count} ctx ALT",
+        "settings.model.show_models": "Show Models ALT",
+        "settings.model.no_models_loaded": "No Models Loaded ALT",
+        "settings.model.capability_section": "Capabilities ALT",
+        "settings.model.image_capability": "Image Input ALT",
+        "settings.model.image_capability_follow": "Follow detection ALT",
+        "settings.model.image_capability_supported": "Supports image input ALT",
+        "settings.model.image_capability_unsupported": "Text only ALT",
+        "settings.model.show_api_key": "Show API key ALT",
+        "settings.model.hide_api_key": "Hide API key ALT",
+        "settings.model.show_password": "Show password ALT",
+        "settings.model.hide_password": "Hide password ALT",
+        "settings.model.default_badge": "Default ALT",
+        "settings.model.capability_image_input": "Image input ALT",
+        "settings.model.capability_text_only": "Text only ALT",
+        "settings.model.capability_unknown": "Capability unknown ALT",
+        "settings.model.no_model": "No model ALT",
+        "settings.model.no_endpoint": "No endpoint ALT",
+        "settings.model.fallback_disabled": "Fallback disabled ALT",
+        "settings.model.priority_compact": "Priority ALT {priority}",
+        "settings.model.disabled": "Disabled ALT",
+        "settings.model.unknown": "Unknown ALT",
+        "settings.action.test": "Test ALT",
+        "settings.action.edit": "Edit ALT",
+        "settings.action.delete": "Delete ALT",
+        "settings.action.cancel": "Cancel ALT",
+    },
+};
+
+globalThis.__language = globalThis.__language || "en";
+
+export function t(key) {
+    return translations[globalThis.__language]?.[key] || key;
+}
+""".strip(),
     )
 
-    options_html = cast(str, payload["optionsHtml"])
-    rendered_html = cast(str, payload["renderedHtml"])
-    assert '<option value="">No fallback</option>' in options_html
-    assert "Same provider, then other providers" in options_html
-    assert "Other providers only" in options_html
-    assert "Same Provider Then Other Provider" not in options_html
-    assert "Same provider, then other providers" in rendered_html
-    assert "Fallback priority 7" in rendered_html
-    assert "No fallback" in rendered_html
-    assert "Fallback disabled" not in rendered_html
+    before_html = cast(str, payload["beforeHtml"])
+    after_html = cast(str, payload["afterHtml"])
+    assert "Fallback disabled" in before_html
+    assert "Priority 0" in before_html
+    assert "Fallback disabled ALT" in after_html
+    assert "Priority ALT 0" in after_html
+
+
+def test_model_profile_editor_refreshes_fallback_options_on_language_change(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+document.getElementById("profile-fallback-policy").value = "other_provider_only";
+globalThis.__language = "alt";
+document.dispatchEvent(new CustomEvent("agent-teams-language-changed"));
+
+console.log(JSON.stringify({
+    titleText: document.getElementById("profile-editor-title").textContent,
+    fallbackOptionsHtml: document.getElementById("profile-fallback-policy").innerHTML,
+    fallbackValue: document.getElementById("profile-fallback-policy").value,
+}));
+""".strip(),
+        mock_i18n_source="""
+const translations = {
+    en: {
+        "settings.model.add_profile": "Add Profile",
+        "settings.model.edit_profile": "Edit Profile",
+        "settings.model.disabled": "Disabled",
+        "settings.model.show_api_key": "Show API key",
+        "settings.model.hide_api_key": "Hide API key",
+        "settings.model.show_password": "Show password",
+        "settings.model.hide_password": "Hide password",
+        "settings.model.image_capability_follow": "Follow detection",
+        "settings.model.image_capability_supported": "Supports image input",
+        "settings.model.image_capability_unsupported": "Text only",
+        "settings.model.testing": "Testing connection...",
+        "settings.model.fetching_models": "Fetching models...",
+        "settings.model.no_models_loaded": "No Models Loaded",
+        "settings.model.context_window_compact": "{count} ctx",
+        "settings.model.capability_image_input": "Image input",
+        "settings.model.capability_text_only": "Text only",
+        "settings.model.capability_unknown": "Capability unknown",
+        "settings.model.unknown": "Unknown",
+        "settings.model.no_model": "No model",
+        "settings.model.no_endpoint": "No endpoint",
+        "settings.model.fallback_disabled": "Fallback disabled",
+        "settings.model.priority_compact": "Priority {priority}",
+        "settings.action.test": "Test",
+        "settings.action.edit": "Edit",
+        "settings.action.delete": "Delete",
+        "settings.action.cancel": "Cancel",
+    },
+    alt: {
+        "settings.model.add_profile": "Add Profile ALT",
+        "settings.model.edit_profile": "Edit Profile ALT",
+        "settings.model.disabled": "Disabled ALT",
+        "settings.model.show_api_key": "Show API key ALT",
+        "settings.model.hide_api_key": "Hide API key ALT",
+        "settings.model.show_password": "Show password ALT",
+        "settings.model.hide_password": "Hide password ALT",
+        "settings.model.image_capability_follow": "Follow detection ALT",
+        "settings.model.image_capability_supported": "Supports image input ALT",
+        "settings.model.image_capability_unsupported": "Text only ALT",
+        "settings.model.testing": "Testing ALT...",
+        "settings.model.fetching_models": "Fetching models ALT...",
+        "settings.model.no_models_loaded": "No Models Loaded ALT",
+        "settings.model.context_window_compact": "{count} ctx ALT",
+        "settings.model.capability_image_input": "Image input ALT",
+        "settings.model.capability_text_only": "Text only ALT",
+        "settings.model.capability_unknown": "Capability unknown ALT",
+        "settings.model.unknown": "Unknown ALT",
+        "settings.model.no_model": "No model ALT",
+        "settings.model.no_endpoint": "No endpoint ALT",
+        "settings.model.fallback_disabled": "Fallback disabled ALT",
+        "settings.model.priority_compact": "Priority ALT {priority}",
+        "settings.action.test": "Test ALT",
+        "settings.action.edit": "Edit ALT",
+        "settings.action.delete": "Delete ALT",
+        "settings.action.cancel": "Cancel ALT",
+    },
+};
+
+globalThis.__language = globalThis.__language || "en";
+
+export function t(key) {
+    return translations[globalThis.__language]?.[key] || key;
+}
+""".strip(),
+    )
+
+    assert payload["titleText"] == "Edit Profile ALT"
+    assert "Disabled ALT" in cast(str, payload["fallbackOptionsHtml"])
+    assert payload["fallbackValue"] == "other_provider_only"
+
+
+def test_model_profiles_localize_builtin_fallback_policy_summary_labels(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+const beforeHtml = document.getElementById("profiles-list").innerHTML;
+globalThis.__language = "alt";
+document.dispatchEvent(new CustomEvent("agent-teams-language-changed"));
+
+console.log(JSON.stringify({
+    beforeHtml,
+    afterHtml: document.getElementById("profiles-list").innerHTML,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        translated: {
+            provider: "openai_compatible",
+            model: "fake-chat-model",
+            base_url: "http://127.0.0.1:8001/v1",
+            api_key: "saved-secret-key",
+            has_api_key: true,
+            is_default: true,
+            fallback_policy_id: "same_provider_then_other_provider",
+            fallback_priority: 3,
+            capabilities: {
+                input: { text: true, image: false, audio: false, video: false, pdf: false },
+                output: { text: true, image: false, audio: false, video: false, pdf: false },
+            },
+            input_modalities: [],
+        },
+    };
+}
+
+export async function fetchModelFallbackConfig() {
+    return {
+        policies: [
+            {
+                policy_id: "same_provider_then_other_provider",
+                name: "Same Provider Then Other Provider",
+                enabled: true,
+            },
+            {
+                policy_id: "other_provider_only",
+                name: "Other Provider Only",
+                enabled: true,
+            },
+        ],
+    };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42 };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: [] };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+        mock_i18n_source="""
+const translations = {
+    en: {
+        "settings.model.add_profile": "Add Profile",
+        "settings.model.edit_profile": "Edit Profile",
+        "settings.model.testing": "Testing connection...",
+        "settings.model.fallback_disabled": "Fallback disabled",
+        "settings.model.fallback_policy_same_provider_then_other_provider": "Same Provider Then Other Provider",
+        "settings.model.fallback_policy_other_provider_only": "Other Provider Only",
+        "settings.model.priority_compact": "Priority {priority}",
+        "settings.model.default_badge": "Default",
+        "settings.model.capability_image_input": "Image input",
+        "settings.model.capability_text_only": "Text only",
+        "settings.model.capability_unknown": "Capability unknown",
+        "settings.model.no_model": "No model",
+        "settings.model.no_endpoint": "No endpoint",
+        "settings.model.unknown": "Unknown",
+        "settings.action.test": "Test",
+        "settings.action.edit": "Edit",
+        "settings.action.delete": "Delete",
+        "settings.action.cancel": "Cancel",
+    },
+    alt: {
+        "settings.model.add_profile": "Add Profile ALT",
+        "settings.model.edit_profile": "Edit Profile ALT",
+        "settings.model.testing": "Testing ALT...",
+        "settings.model.fallback_disabled": "Fallback disabled ALT",
+        "settings.model.fallback_policy_same_provider_then_other_provider": "Same Provider Then Other Provider ALT",
+        "settings.model.fallback_policy_other_provider_only": "Other Provider Only ALT",
+        "settings.model.priority_compact": "Priority ALT {priority}",
+        "settings.model.default_badge": "Default ALT",
+        "settings.model.capability_image_input": "Image input ALT",
+        "settings.model.capability_text_only": "Text only ALT",
+        "settings.model.capability_unknown": "Capability unknown ALT",
+        "settings.model.no_model": "No model ALT",
+        "settings.model.no_endpoint": "No endpoint ALT",
+        "settings.model.unknown": "Unknown ALT",
+        "settings.action.test": "Test ALT",
+        "settings.action.edit": "Edit ALT",
+        "settings.action.delete": "Delete ALT",
+        "settings.action.cancel": "Cancel ALT",
+    },
+};
+
+globalThis.__language = globalThis.__language || "en";
+
+export function t(key) {
+    return translations[globalThis.__language]?.[key] || key;
+}
+""".strip(),
+    )
+
+    before_html = cast(str, payload["beforeHtml"])
+    after_html = cast(str, payload["afterHtml"])
+    assert "Same Provider Then Other Provider" in before_html
+    assert "Priority 3" in before_html
+    assert "Same Provider Then Other Provider ALT" in after_html
+    assert "Priority ALT 3" in after_html
+
+
+def test_model_profile_editor_localizes_builtin_fallback_policy_options(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+globalThis.__language = "alt";
+document.dispatchEvent(new CustomEvent("agent-teams-language-changed"));
+
+console.log(JSON.stringify({
+    fallbackOptionsHtml: document.getElementById("profile-fallback-policy").innerHTML,
+    fallbackValue: document.getElementById("profile-fallback-policy").value,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        translated: {
+            provider: "openai_compatible",
+            model: "fake-chat-model",
+            base_url: "http://127.0.0.1:8001/v1",
+            api_key: "saved-secret-key",
+            has_api_key: true,
+            is_default: true,
+            fallback_policy_id: "same_provider_then_other_provider",
+            fallback_priority: 3,
+            capabilities: {
+                input: { text: true, image: false, audio: false, video: false, pdf: false },
+                output: { text: true, image: false, audio: false, video: false, pdf: false },
+            },
+            input_modalities: [],
+        },
+    };
+}
+
+export async function fetchModelFallbackConfig() {
+    return {
+        policies: [
+            {
+                policy_id: "same_provider_then_other_provider",
+                name: "Same Provider Then Other Provider",
+                enabled: true,
+            },
+            {
+                policy_id: "other_provider_only",
+                name: "Other Provider Only",
+                enabled: true,
+            },
+        ],
+    };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42 };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: [] };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+        mock_i18n_source="""
+const translations = {
+    en: {
+        "settings.model.add_profile": "Add Profile",
+        "settings.model.edit_profile": "Edit Profile",
+        "settings.model.disabled": "Disabled",
+        "settings.model.testing": "Testing connection...",
+        "settings.model.fetching_models": "Fetching models...",
+        "settings.model.no_models_loaded": "No Models Loaded",
+        "settings.model.show_api_key": "Show API key",
+        "settings.model.hide_api_key": "Hide API key",
+        "settings.model.show_password": "Show password",
+        "settings.model.hide_password": "Hide password",
+        "settings.model.image_capability_follow": "Follow detection",
+        "settings.model.image_capability_supported": "Supports image input",
+        "settings.model.image_capability_unsupported": "Text only",
+        "settings.model.context_window_compact": "{count} ctx",
+        "settings.model.capability_image_input": "Image input",
+        "settings.model.capability_text_only": "Text only",
+        "settings.model.capability_unknown": "Capability unknown",
+        "settings.model.no_model": "No model",
+        "settings.model.no_endpoint": "No endpoint",
+        "settings.model.fallback_disabled": "Fallback disabled",
+        "settings.model.fallback_policy_same_provider_then_other_provider": "Same Provider Then Other Provider",
+        "settings.model.fallback_policy_other_provider_only": "Other Provider Only",
+        "settings.model.priority_compact": "Priority {priority}",
+        "settings.model.unknown": "Unknown",
+        "settings.action.test": "Test",
+        "settings.action.edit": "Edit",
+        "settings.action.delete": "Delete",
+        "settings.action.cancel": "Cancel",
+    },
+    alt: {
+        "settings.model.add_profile": "Add Profile ALT",
+        "settings.model.edit_profile": "Edit Profile ALT",
+        "settings.model.disabled": "Disabled ALT",
+        "settings.model.testing": "Testing ALT...",
+        "settings.model.fetching_models": "Fetching models ALT...",
+        "settings.model.no_models_loaded": "No Models Loaded ALT",
+        "settings.model.show_api_key": "Show API key ALT",
+        "settings.model.hide_api_key": "Hide API key ALT",
+        "settings.model.show_password": "Show password ALT",
+        "settings.model.hide_password": "Hide password ALT",
+        "settings.model.image_capability_follow": "Follow detection ALT",
+        "settings.model.image_capability_supported": "Supports image input ALT",
+        "settings.model.image_capability_unsupported": "Text only ALT",
+        "settings.model.context_window_compact": "{count} ctx ALT",
+        "settings.model.capability_image_input": "Image input ALT",
+        "settings.model.capability_text_only": "Text only ALT",
+        "settings.model.capability_unknown": "Capability unknown ALT",
+        "settings.model.no_model": "No model ALT",
+        "settings.model.no_endpoint": "No endpoint ALT",
+        "settings.model.fallback_disabled": "Fallback disabled ALT",
+        "settings.model.fallback_policy_same_provider_then_other_provider": "Same Provider Then Other Provider ALT",
+        "settings.model.fallback_policy_other_provider_only": "Other Provider Only ALT",
+        "settings.model.priority_compact": "Priority ALT {priority}",
+        "settings.model.unknown": "Unknown ALT",
+        "settings.action.test": "Test ALT",
+        "settings.action.edit": "Edit ALT",
+        "settings.action.delete": "Delete ALT",
+        "settings.action.cancel": "Cancel ALT",
+    },
+};
+
+globalThis.__language = globalThis.__language || "en";
+
+export function t(key) {
+    return translations[globalThis.__language]?.[key] || key;
+}
+""".strip(),
+    )
+
+    options_html = cast(str, payload["fallbackOptionsHtml"])
+    assert "Same Provider Then Other Provider ALT" in options_html
+    assert "Other Provider Only ALT" in options_html
+    assert payload["fallbackValue"] == "same_provider_then_other_provider"
 
 
 def test_draft_probe_updates_inline_status_and_payload(tmp_path: Path) -> None:
@@ -2072,6 +2587,7 @@ def _run_model_profiles_script(
     tmp_path: Path,
     runner_source: str,
     mock_api_source: str = DEFAULT_MOCK_API_SOURCE,
+    mock_i18n_source: str | None = None,
 ) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -2128,8 +2644,9 @@ export async function showConfirmDialog(payload) {
 """.strip(),
         encoding="utf-8",
     )
-    mock_i18n_path.write_text(
-        """
+    resolved_mock_i18n_source = (
+        mock_i18n_source
+        or """
 const translations = {
     "settings.model.add_profile": "Add Profile",
     "settings.model.edit_profile": "Edit Profile",
@@ -2169,20 +2686,14 @@ const translations = {
     "settings.model.hide_api_key": "Hide API key",
     "settings.model.show_password": "Show password",
     "settings.model.hide_password": "Hide password",
-    "settings.model.fallback_section": "Fallback",
-    "settings.model.fallback_strategy": "Fallback strategy",
-    "settings.model.fallback_priority": "Fallback priority",
-    "settings.model.fallback_disabled": "No fallback",
-    "settings.model.fallback_disabled_option": "No fallback",
-    "settings.model.fallback_priority_value": "Fallback priority {priority}",
-    "settings.model.fallback_policy.same_provider_then_other_provider": "Same provider, then other providers",
-    "settings.model.fallback_policy.other_provider_only": "Other providers only",
     "settings.model.default_badge": "Default",
     "settings.model.capability_image_input": "Image input",
     "settings.model.capability_text_only": "Text only",
     "settings.model.capability_unknown": "Capability unknown",
     "settings.model.no_model": "No model",
     "settings.model.no_endpoint": "No endpoint",
+    "settings.model.fallback_policy_same_provider_then_other_provider": "Same Provider Then Other Provider",
+    "settings.model.fallback_policy_other_provider_only": "Other Provider Only",
     "settings.model.unknown": "Unknown",
     "settings.action.test": "Test",
     "settings.action.edit": "Edit",
@@ -2193,7 +2704,10 @@ const translations = {
 export function t(key) {
     return translations[key] || key;
 }
-""".strip(),
+""".strip()
+    )
+    mock_i18n_path.write_text(
+        resolved_mock_i18n_source,
         encoding="utf-8",
     )
 
@@ -2331,6 +2845,8 @@ function createElements() {{
     }}
 
 function installGlobals(elements, notifications) {{
+    const documentListeners = new Map();
+
     function collectDocumentMatches(selector) {{
         if (selector !== ".profile-card") {{
             return [];
@@ -2374,8 +2890,24 @@ function installGlobals(elements, notifications) {{
         querySelectorAll(selector) {{
             return collectDocumentMatches(selector);
         }},
+        addEventListener(type, listener) {{
+            if (!documentListeners.has(type)) {{
+                documentListeners.set(type, []);
+            }}
+            documentListeners.get(type).push(listener);
+        }},
+        removeEventListener(type, listener) {{
+            const listeners = documentListeners.get(type) || [];
+            documentListeners.set(
+                type,
+                listeners.filter(candidate => candidate !== listener),
+            );
+        }},
         dispatchEvent(event) {{
-            globalThis.__dispatchedEvents.push(String(event?.type || ""));
+            const eventType = String(event?.type || "");
+            globalThis.__dispatchedEvents.push(eventType);
+            const listeners = documentListeners.get(eventType) || [];
+            listeners.forEach(listener => listener(event));
             return true;
         }},
     }};

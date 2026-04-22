@@ -9,9 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from relay_teams.hooks.hook_models import HooksConfig
 
 
-class SkillScope(str, Enum):
+class SkillSource(str, Enum):
     BUILTIN = "builtin"
-    APP = "app"
+    USER_RELAY_TEAMS = "user_relay_teams"
+    USER_AGENTS = "user_agents"
+    PROJECT_RELAY_TEAMS = "project_relay_teams"
+    PROJECT_AGENTS = "project_agents"
 
 
 class SkillResource(BaseModel):
@@ -31,24 +34,6 @@ class SkillScript(BaseModel):
     path: Path
 
 
-def build_skill_ref(*, scope: SkillScope, name: str) -> str:
-    return f"{scope.value}:{name}"
-
-
-def parse_skill_ref(value: str) -> tuple[SkillScope, str] | None:
-    normalized = value.strip()
-    if ":" not in normalized:
-        return None
-    scope_text, name = normalized.split(":", maxsplit=1)
-    if not name.strip():
-        return None
-    try:
-        scope = SkillScope(scope_text.strip())
-    except ValueError:
-        return None
-    return scope, name.strip()
-
-
 class SkillMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -66,7 +51,7 @@ class Skill(BaseModel):
     ref: str = Field(min_length=1)
     metadata: SkillMetadata
     directory: Path
-    scope: SkillScope
+    source: SkillSource
 
 
 class SkillSummaryEntry(BaseModel):
@@ -75,7 +60,7 @@ class SkillSummaryEntry(BaseModel):
     ref: str = Field(min_length=1)
     name: str = Field(min_length=1)
     description: str = ""
-    scope: SkillScope
+    source: SkillSource
 
 
 class SkillOptionEntry(BaseModel):
@@ -84,7 +69,7 @@ class SkillOptionEntry(BaseModel):
     ref: str = Field(min_length=1)
     name: str = Field(min_length=1)
     description: str = ""
-    scope: SkillScope
+    source: SkillSource
 
 
 class SkillInstructionEntry(BaseModel):

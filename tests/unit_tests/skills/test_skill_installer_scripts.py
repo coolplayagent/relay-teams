@@ -336,7 +336,7 @@ def test_install_clawhub_skill_script_reports_runtime_identity(
     assert payload["slug"] == "skill-creator-2"
     assert payload["installed_skill"]["skill_id"] == "skill-creator-2"
     assert payload["installed_skill"]["runtime_name"] == "skill-creator"
-    assert payload["installed_skill"]["ref"] == "app:skill-creator"
+    assert payload["installed_skill"]["ref"] == "skill-creator"
 
 
 def test_search_and_install_clawhub_skill_script_runs_both_steps(
@@ -375,9 +375,7 @@ def test_search_and_install_clawhub_skill_script_runs_both_steps(
     assert payload["search"]["ok"] is True
     assert payload["search"]["items"][0]["slug"] == "best-practice-skill-creator"
     assert payload["install"]["ok"] is True
-    assert payload["install"]["installed_skill"]["ref"] == (
-        "app:best-practice-skill-creator"
-    )
+    assert payload["install"]["installed_skill"]["ref"] == "best-practice-skill-creator"
 
 
 def test_install_skill_script_downloads_and_installs_skill(tmp_path: Path) -> None:
@@ -448,7 +446,7 @@ def test_bind_skill_script_updates_main_agent_role(tmp_path: Path) -> None:
     role_path = tmp_path / ".relay-teams" / "roles" / "MainAgent.md"
     assert role_path.exists()
     role_text = role_path.read_text(encoding="utf-8")
-    assert "- app:demo-skill" in role_text
+    assert "- demo-skill" in role_text
     assert "Updated roles: MainAgent" in result.stdout
     assert result.stderr == ""
 
@@ -478,7 +476,7 @@ def test_bind_skill_script_defaults_to_current_role_env(tmp_path: Path) -> None:
     role_path = tmp_path / ".relay-teams" / "roles" / "Crafter.md"
     assert role_path.exists()
     role_text = role_path.read_text(encoding="utf-8")
-    assert "- app:demo-skill" in role_text
+    assert "- demo-skill" in role_text
     assert "Updated roles: Crafter" in result.stdout
 
 
@@ -514,8 +512,39 @@ def test_mount_skills_to_roles_creates_main_agent_override(tmp_path: Path) -> No
     assert role_path.exists()
     role_text = role_path.read_text(encoding="utf-8")
     assert "role_id: MainAgent" in role_text
-    assert "- builtin:skill-installer" in role_text
-    assert "- app:demo-skill" in role_text
+    assert "- skill-installer" in role_text
+    assert "- demo-skill" in role_text
+
+
+def test_mount_skills_to_roles_rejects_project_only_skill_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home_dir = tmp_path / "home"
+    project_dir = tmp_path / "repo"
+    project_skill_dir = project_dir / ".agents" / "skills" / "project-only"
+    project_skill_dir.mkdir(parents=True)
+    (project_skill_dir / "SKILL.md").write_text(
+        (
+            "---\n"
+            "name: project-only\n"
+            "description: project-only skill\n"
+            "---\n"
+            "Use the project-only skill.\n"
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", home_dir.resolve().as_posix())
+    monkeypatch.setenv("USERPROFILE", home_dir.resolve().as_posix())
+    monkeypatch.chdir(project_dir)
+
+    with pytest.raises(installer_support.SkillInstallerError) as exc_info:
+        installer_support.mount_skills_to_roles(
+            role_ids=("MainAgent",),
+            skill_names=("project-only",),
+        )
+
+    assert str(exc_info.value) == "Unknown skills: ['project-only']"
 
 
 def test_resolve_role_mount_targets_defaults_to_current_role_env(

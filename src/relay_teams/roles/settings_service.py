@@ -524,4 +524,4 @@ def _normalize_optional_text(value: str | None) -> str | None:
 
 def _should_retry_builtin_skill_resolution(error: ValueError) -> bool:
     message = str(error)
-    return "Unknown skills:" in message and "builtin:" in message
+    return "Unknown skills:" in message

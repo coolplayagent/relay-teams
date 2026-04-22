@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from relay_teams.interfaces.cli import app as cli_app
 from relay_teams.skills.discovery import SkillsDirectory
+from relay_teams.skills.skill_models import SkillSource
 from relay_teams.skills.skill_registry import SkillRegistry
 
 runner = CliRunner()
@@ -19,7 +20,7 @@ def _normalized_output(text: str) -> str:
     return " ".join(_ANSI_ESCAPE_RE.sub("", text).split())
 
 
-def test_skills_list_returns_builtin_and_app_skill_entries_in_json_output(
+def test_skills_list_returns_effective_skill_entries_in_json_output(
     tmp_path: Path, monkeypatch
 ) -> None:
     registry = _build_registry(tmp_path)
@@ -33,16 +34,16 @@ def test_skills_list_returns_builtin_and_app_skill_entries_in_json_output(
     payload = json.loads(result.output)
     assert payload == [
         {
-            "ref": "app:app_only",
+            "ref": "app_only",
             "name": "app_only",
-            "source": "app",
+            "source": "user_relay_teams",
             "directory": (tmp_path / ".agent-teams" / "skills" / "app_only")
             .resolve()
             .as_posix(),
             "description": "app only skill",
         },
         {
-            "ref": "builtin:builtin_only",
+            "ref": "builtin_only",
             "name": "builtin_only",
             "source": "builtin",
             "directory": (tmp_path / "builtin" / "skills" / "builtin_only")
@@ -51,22 +52,13 @@ def test_skills_list_returns_builtin_and_app_skill_entries_in_json_output(
             "description": "builtin only skill",
         },
         {
-            "ref": "app:shared",
+            "ref": "shared",
             "name": "shared",
-            "source": "app",
+            "source": "user_relay_teams",
             "directory": (tmp_path / ".agent-teams" / "skills" / "shared")
             .resolve()
             .as_posix(),
             "description": "app shared skill",
-        },
-        {
-            "ref": "builtin:shared",
-            "name": "shared",
-            "source": "builtin",
-            "directory": (tmp_path / "builtin" / "skills" / "shared")
-            .resolve()
-            .as_posix(),
-            "description": "builtin shared skill",
         },
     ]
 
@@ -80,14 +72,14 @@ def test_skills_show_returns_effective_skill_details(
     )
 
     result = runner.invoke(
-        cli_app.app, ["skills", "show", "app:shared", "--format", "json"]
+        cli_app.app, ["skills", "show", "shared", "--format", "json"]
     )
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["ref"] == "app:shared"
+    assert payload["ref"] == "shared"
     assert payload["name"] == "shared"
-    assert payload["source"] == "app"
+    assert payload["source"] == "user_relay_teams"
     assert payload["description"] == "app shared skill"
     assert (
         payload["manifest_path"]
@@ -112,10 +104,10 @@ def test_skills_list_table_output_is_rendered(tmp_path: Path, monkeypatch) -> No
     result = runner.invoke(cli_app.app, ["skills", "list"])
 
     assert result.exit_code == 0
-    assert result.output.startswith("Skills (4 total)")
+    assert result.output.startswith("Skills (3 total)")
     assert "| Name" in result.output
     assert "shared" in result.output
-    assert "app" in result.output
+    assert "user_relay_teams" in result.output
 
 
 def test_skills_help_explains_merge_order() -> None:
@@ -124,11 +116,12 @@ def test_skills_help_explains_merge_order() -> None:
 
     assert result.exit_code == 0
     assert (
-        "Inspect skills discovered from built-in defaults and the app directory."
+        "Inspect skills discovered from built-in, user, and project directories."
         in normalized_output
     )
     assert "~/.relay-teams/skills" in normalized_output
-    assert "both entries are kept" in normalized_output
+    assert "~/.agents/skills" in normalized_output
+    assert "the later source wins" in normalized_output
     assert "relay-teams skills show time" in normalized_output
 
 
@@ -140,7 +133,7 @@ def test_skills_list_help_includes_examples_and_source_behavior() -> None:
     assert (
         "List all discovered skills across builtin and app scopes." in normalized_output
     )
-    assert "both entries are shown" in normalized_output
+    assert "only the final winning entry is shown" in normalized_output
     assert "--source" in normalized_output
     assert "relay-teams skills list --source builtin" in normalized_output
 
@@ -151,9 +144,46 @@ def test_skills_show_help_describes_effective_skill_resolution() -> None:
 
     assert result.exit_code == 0
     assert "Show a single skill definition." in normalized_output
-    assert "canonical ref such as app:time or builtin:time" in normalized_output
-    assert "Skill canonical ref or unique plain name to inspect." in normalized_output
+    assert "The argument is the skill name." in normalized_output
+    assert "Skill name to inspect." in normalized_output
     assert "relay-teams skills show time --format json" in normalized_output
+
+
+def test_skills_list_can_filter_project_agents_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_agents_dir = tmp_path / "repo" / ".agents" / "skills"
+    _write_skill(
+        project_agents_dir / "time",
+        name="time",
+        description="project agents time skill",
+        instructions="Use project time.",
+    )
+    registry = SkillRegistry(
+        directory=SkillsDirectory(
+            sources=((SkillSource.PROJECT_AGENTS, project_agents_dir),)
+        )
+    )
+    monkeypatch.setattr(
+        "relay_teams.skills.skill_cli.load_skill_registry", lambda: registry
+    )
+
+    result = runner.invoke(
+        cli_app.app,
+        ["skills", "list", "--source", "project_agents", "--format", "json"],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == [
+        {
+            "ref": "time",
+            "name": "time",
+            "source": "project_agents",
+            "directory": (project_agents_dir / "time").resolve().as_posix(),
+            "description": "project agents time skill",
+        }
+    ]
 
 
 def _build_registry(tmp_path: Path) -> SkillRegistry:
@@ -187,8 +217,10 @@ def _build_registry(tmp_path: Path) -> SkillRegistry:
 
     return SkillRegistry(
         directory=SkillsDirectory(
-            base_dir=app_skills_dir,
-            fallback_dirs=(builtin_skills_dir,),
+            sources=(
+                (SkillSource.BUILTIN, builtin_skills_dir),
+                (SkillSource.USER_RELAY_TEAMS, app_skills_dir),
+            )
         )
     )
 

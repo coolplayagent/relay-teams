@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+from pydantic import JsonValue
+
 from relay_teams.logger import get_logger
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.skills.skill_registry import SkillRegistry
@@ -17,23 +19,34 @@ class SkillsConfigReloadService:
         self,
         *,
         config_dir: Path,
+        project_start_dir: Path | None = None,
         role_registry: RoleRegistry,
         on_skill_reloaded: Callable[[SkillRegistry], None],
     ) -> None:
         self._config_dir: Path = config_dir
+        self._project_start_dir: Path | None = project_start_dir
         self._role_registry: RoleRegistry = role_registry
         self._on_skill_reloaded: Callable[[SkillRegistry], None] = on_skill_reloaded
 
     def reload_skills_config(self) -> SkillRegistry:
+        attributes: dict[str, JsonValue] = {"config_dir": str(self._config_dir)}
+        if self._project_start_dir is not None:
+            attributes["project_start_dir"] = str(self._project_start_dir)
         with trace_span(
             LOGGER,
             component="skills.config",
             operation="reload",
-            attributes={"config_dir": str(self._config_dir)},
+            attributes=attributes,
         ):
-            skill_registry = SkillRegistry.from_config_dirs(
-                app_config_dir=self._config_dir
-            )
+            if self._project_start_dir is None:
+                skill_registry = SkillRegistry.from_config_dirs(
+                    app_config_dir=self._config_dir
+                )
+            else:
+                skill_registry = SkillRegistry.from_config_dirs(
+                    app_config_dir=self._config_dir,
+                    project_start_dir=self._project_start_dir,
+                )
             for role in self._role_registry.list_roles():
                 skill_registry.resolve_known(
                     role.skills,

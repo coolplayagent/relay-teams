@@ -14,6 +14,7 @@ from relay_teams.env.environment_variable_models import (
 from relay_teams.interfaces.server.container import ServerContainer
 from relay_teams.providers.model_fallback import LlmFallbackMiddleware
 from relay_teams.roles import RoleLoader
+from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
@@ -157,6 +158,38 @@ def test_container_tolerates_missing_builtin_roles_on_startup(
     container = ServerContainer(config_dir=config_dir)
 
     assert container.role_registry.list_roles() == ()
+
+
+def test_container_skill_registry_uses_explicit_project_start_dir_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    captured_kwargs: list[dict[str, object]] = []
+    original_from_config_dirs = SkillRegistry.from_config_dirs
+
+    def _fake_from_config_dirs(cls, **kwargs: object) -> SkillRegistry:
+        captured_kwargs.append(dict(kwargs))
+        return original_from_config_dirs(app_config_dir=config_dir)
+
+    monkeypatch.setattr(
+        "relay_teams.interfaces.server.container.SkillRegistry.from_config_dirs",
+        classmethod(_fake_from_config_dirs),
+    )
+
+    _ = ServerContainer(config_dir=config_dir)
+
+    assert captured_kwargs == [
+        {
+            "app_config_dir": config_dir,
+            "project_start_dir": project_dir.resolve(),
+        }
+    ]
 
 
 def test_saving_environment_variable_reloads_model_runtime(

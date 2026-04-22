@@ -141,7 +141,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger,
             logging.WARNING,
             event="app.startup.expected_builtin_skill_missing",
-            message="Expected builtin skill builtin:deepresearch is missing",
+            message="Expected builtin skill deepresearch is missing",
             payload=startup_payload,
         )
     if (

@@ -243,16 +243,15 @@ function normalizeSkillOptions(values) {
 
 function normalizeSkillOption(value) {
     if (typeof value === 'string') {
-        const parsed = parseSkillRef(value);
         const ref = value.trim();
         if (!ref) {
             return null;
         }
         return {
             ref,
-            name: parsed ? parsed.name : ref,
+            name: ref,
             description: '',
-            scope: parsed ? parsed.scope : '',
+            source: '',
         };
     }
     const ref = typeof value?.ref === 'string' ? value.ref.trim() : '';
@@ -264,7 +263,9 @@ function normalizeSkillOption(value) {
         ref,
         name,
         description: typeof value?.description === 'string' ? value.description.trim() : '',
-        scope: typeof value?.scope === 'string' ? value.scope.trim().toLowerCase() : '',
+        source: typeof value?.source === 'string'
+            ? value.source.trim().toLowerCase()
+            : (typeof value?.scope === 'string' ? value.scope.trim().toLowerCase() : ''),
     };
 }
 
@@ -291,38 +292,19 @@ function compareSkillOptions(left, right) {
     if (leftName !== rightName) {
         return leftName.localeCompare(rightName);
     }
-    const leftPriority = left?.scope === 'app' ? 0 : 1;
-    const rightPriority = right?.scope === 'app' ? 0 : 1;
-    if (leftPriority !== rightPriority) {
-        return leftPriority - rightPriority;
-    }
     return String(left?.ref || '').localeCompare(String(right?.ref || ''));
-}
-
-function parseSkillRef(value) {
-    const normalized = String(value || '').trim();
-    const delimiterIndex = normalized.indexOf(':');
-    if (delimiterIndex <= 0 || delimiterIndex >= normalized.length - 1) {
-        return null;
-    }
-    const scope = normalized.slice(0, delimiterIndex).trim().toLowerCase();
-    const name = normalized.slice(delimiterIndex + 1).trim();
-    if (!name || (scope !== 'app' && scope !== 'builtin')) {
-        return null;
-    }
-    return { scope, name };
 }
 
 function formatSkillOptionLabel(option) {
     const name = String(option?.name || '').trim();
-    const scope = String(option?.scope || '').trim().toUpperCase();
+    const source = String(option?.source || '').trim().toUpperCase();
     const duplicateCount = roleConfigOptions.skills.filter(
         candidate => String(candidate?.name || '').trim() === name,
     ).length;
-    if (!scope || duplicateCount <= 1) {
+    if (!source || duplicateCount <= 1) {
         return name;
     }
-    return `${name} · ${scope}`;
+    return `${name} · ${source}`;
 }
 
 function renderRolesList() {
@@ -1297,7 +1279,7 @@ async function performRoleRequestWithBuiltinSkillRecovery(request) {
 
 function shouldRetryBuiltinSkillRecovery(error) {
     const message = String(error?.message || '').trim();
-    return message.includes('Unknown skills:') && /builtin:[\w-]+/.test(message);
+    return message.includes('Unknown skills:');
 }
 
 function setPromptPreviewMode(mode) {

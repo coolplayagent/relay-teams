@@ -1486,7 +1486,12 @@ function resolveSkillScopeLabel(scope) {
     if (normalizedScope === 'builtin') {
         return t('feature.skills.scope_builtin');
     }
-    if (normalizedScope === 'app') {
+    if (
+        normalizedScope === 'user_relay_teams'
+        || normalizedScope === 'user_agents'
+        || normalizedScope === 'project_relay_teams'
+        || normalizedScope === 'project_agents'
+    ) {
         return t('feature.skills.scope_app');
     }
     return t('feature.skills.scope_unknown');
@@ -3002,7 +3007,7 @@ function renderSkillsFeatureView() {
                                 <div class="skills-directory-main">
                                     <div class="skills-directory-title-row">
                                         <strong>${escapeHtml(String(skill?.name || skill?.ref || ''))}</strong>
-                                        ${renderFeatureStatusPill(resolveSkillScopeLabel(skill?.scope), 'neutral')}
+                                        ${renderFeatureStatusPill(resolveSkillScopeLabel(skill?.source || skill?.scope), 'neutral')}
                                     </div>
                                     <p>${escapeHtml(String(skill?.description || ''))}</p>
                                 </div>
