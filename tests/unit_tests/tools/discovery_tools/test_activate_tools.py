@@ -276,3 +276,71 @@ async def test_activate_tools_accepts_single_string_tool_name(
     assert result["activated"] == ["read"]
     assert result["unknown_or_unauthorized"] == []
     assert result["active_tools"] == ["tool_search", "activate_tools", "read"]
+
+
+@pytest.mark.asyncio
+async def test_activate_tools_empty_input_preserves_current_runtime_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_activate_tools(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["activate_tools"],
+    )
+    agent_repo = AgentInstanceRepository(tmp_path / "instances.db")
+    _seed_runtime_snapshot(
+        agent_repo=agent_repo,
+        instance_id="instance-1",
+        runtime_tools=RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="activate_tools",
+                    description="Activate tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="tool_search",
+                    description="Discover tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read files.",
+                ),
+            ),
+        ),
+        runtime_active_tools_json='["tool_search","activate_tools"]',
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            agent_repo=agent_repo,
+            instance_id="instance-1",
+        )
+    )
+
+    async def _fake_execute_tool_call(ctx, **kwargs: object) -> dict[str, object]:
+        del ctx
+        return cast(
+            dict[str, object],
+            _invoke_tool_action(
+                cast(Callable[..., object], kwargs["action"]),
+                cast(dict[str, object], kwargs.get("raw_args")),
+            ),
+        )
+
+    monkeypatch.setattr(
+        activate_tools_module,
+        "execute_tool_call",
+        _fake_execute_tool_call,
+    )
+
+    result = await tool(ctx, tool_names=["", "  "])
+
+    assert result["activated"] == []
+    assert result["active_tools"] == ["tool_search", "activate_tools"]
+    assert result["active_tools_count"] == 2
+    assert result["deferred_tools_count"] == 1
+    assert "must contain at least one non-empty tool name" in str(result["warning"])

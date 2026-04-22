@@ -50,18 +50,6 @@ def _activate_runtime_tools(
     tool_names: list[str] | str,
 ) -> dict[str, JsonValue]:
     requested_tool_names = _normalize_requested_tool_names(tool_names)
-    if not requested_tool_names:
-        return {
-            "activated": [],
-            "already_active": [],
-            "unknown_or_unauthorized": [],
-            "rejected_due_to_limit": [],
-            "active_tools": [],
-            "active_tools_count": 0,
-            "deferred_tools_count": 0,
-            "warning": "tool_names must contain at least one non-empty tool name.",
-        }
-
     try:
         runtime_record = ctx.deps.agent_repo.get_instance(ctx.deps.instance_id)
     except KeyError:
@@ -86,6 +74,17 @@ def _activate_runtime_tools(
         requested_tool_names=requested_tool_names,
         max_active_tools=_MAX_ACTIVE_TOOLS,
     )
+    if not requested_tool_names:
+        return {
+            "activated": [],
+            "already_active": [],
+            "unknown_or_unauthorized": [],
+            "rejected_due_to_limit": [],
+            "active_tools": list(activation_result.active_tools),
+            "active_tools_count": len(activation_result.active_tools),
+            "deferred_tools_count": len(activation_result.deferred_tools),
+            "warning": "tool_names must contain at least one non-empty tool name.",
+        }
 
     next_runtime_active_tools_json = json.dumps(
         list(activation_result.active_tools),
