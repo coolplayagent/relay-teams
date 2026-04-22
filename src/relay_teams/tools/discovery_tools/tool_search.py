@@ -16,7 +16,7 @@ from relay_teams.agents.instances.models import (
     RuntimeToolsSnapshot,
 )
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool_call
 
 DESCRIPTION = load_tool_description(__file__)
 _DEFAULT_MAX_RESULTS = 5
@@ -81,24 +81,25 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Discover runtime-authorized tools and inspect their contracts."""
 
-        normalized_query = query.strip()
-        resolved_max_results = _clamp_max_results(max_results)
-
-        def _action() -> dict[str, JsonValue]:
+        def _action(
+            query: str,
+            max_results: int = _DEFAULT_MAX_RESULTS,
+        ) -> dict[str, JsonValue]:
             return _search_runtime_tools(
                 ctx=ctx,
-                query=normalized_query,
-                max_results=resolved_max_results,
+                query=query.strip(),
+                max_results=_clamp_max_results(max_results),
             )
 
-        return await execute_tool(
+        return await execute_tool_call(
             ctx,
             tool_name="tool_search",
             args_summary={
-                "query": normalized_query,
-                "max_results": resolved_max_results,
+                "query": query,
+                "max_results": max_results,
             },
             action=_action,
+            raw_args=locals(),
         )
 
 

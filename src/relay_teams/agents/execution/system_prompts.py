@@ -726,15 +726,26 @@ def build_runtime_tools_prompt(runtime_tools: RuntimeToolsSnapshot | None) -> st
         + len(runtime_tools.skill_tools)
         + len(runtime_tools.mcp_tools)
     )
+    discovery_authorized = "tool_search" in set(_tool_names(runtime_tools.local_tools))
     lines = [AUTHORIZED_RUNTIME_TOOLS_HEADING]
     lines.append("- Only call tools that are authorized for this runtime.")
-    if "tool_search" in set(_tool_names(runtime_tools.local_tools)):
+    if discovery_authorized:
         lines.append(
             "- Use `tool_search` to discover authorized tools and inspect parameter schemas before calling unfamiliar tools."
         )
-    lines.append(
-        "- Tool names and descriptions are intentionally summarized here to keep the prompt compact."
-    )
+        lines.append(
+            "- Tool names and descriptions are intentionally summarized here to keep the prompt compact."
+        )
+    else:
+        lines.append(
+            "- Discovery tooling is unavailable in this runtime, so explicit authorized tool names are listed below."
+        )
+        lines.append(
+            "- Local Tools: " + _format_names(_tool_names(runtime_tools.local_tools))
+        )
+        lines.append(
+            "- Skill Tools: " + _format_names(_tool_names(runtime_tools.skill_tools))
+        )
     lines.extend(_build_todo_guidance(runtime_tools))
     lines.append(f"- Total Authorized Tools: {total_tools}")
     lines.append(f"- Local Tools: {len(runtime_tools.local_tools)} authorized")
@@ -888,6 +899,7 @@ def _append_available_subagents_prompt(
 def _format_mcp_tool_lines(runtime_tools: RuntimeToolsSnapshot) -> list[str]:
     if not runtime_tools.mcp_tools:
         return ["- MCP Tools: 0 authorized"]
+    discovery_authorized = "tool_search" in set(_tool_names(runtime_tools.local_tools))
     grouped: dict[str, list[str]] = {}
     for entry in runtime_tools.mcp_tools:
         server_name = entry.server_name or "unknown"
@@ -895,8 +907,16 @@ def _format_mcp_tool_lines(runtime_tools: RuntimeToolsSnapshot) -> list[str]:
     lines: list[str] = [
         f"- MCP Tools: {len(runtime_tools.mcp_tools)} authorized across {len(grouped)} server(s)"
     ]
+    if discovery_authorized:
+        for server_name in sorted(grouped.keys()):
+            lines.append(
+                f"- MCP Tool Server: {server_name} ({len(grouped[server_name])})"
+            )
+        return lines
     for server_name in sorted(grouped.keys()):
-        lines.append(f"- MCP Tool Server: {server_name} ({len(grouped[server_name])})")
+        lines.append(
+            f"- MCP Tools {server_name}: {', '.join(sorted(grouped[server_name]))}"
+        )
     return lines
 
 

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -39,8 +40,17 @@ class _FakeAgent:
 
 def _invoke_tool_action(
     action: Callable[..., object],
+    raw_args: dict[str, object] | None = None,
 ) -> object:
-    return action()
+    if raw_args is None:
+        return action()
+    signature = inspect.signature(action)
+    bound_args = {
+        name: raw_args[name]
+        for name in signature.parameters
+        if name in raw_args and name != "ctx"
+    }
+    return action(**bound_args)
 
 
 def _seed_runtime_snapshot(
@@ -111,14 +121,21 @@ async def test_tool_search_keyword_search_returns_compact_matches(
         )
     )
 
-    async def _fake_execute_tool(ctx, **kwargs: object) -> dict[str, object]:
+    async def _fake_execute_tool_call(ctx, **kwargs: object) -> dict[str, object]:
         del ctx
         return cast(
             dict[str, object],
-            _invoke_tool_action(cast(Callable[..., object], kwargs["action"])),
+            _invoke_tool_action(
+                cast(Callable[..., object], kwargs["action"]),
+                cast(dict[str, object], kwargs.get("raw_args")),
+            ),
         )
 
-    monkeypatch.setattr(tool_search_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(
+        tool_search_module,
+        "execute_tool_call",
+        _fake_execute_tool_call,
+    )
 
     result = await tool(ctx, query="docs search")
 
@@ -168,14 +185,21 @@ async def test_tool_search_select_includes_schema(
         )
     )
 
-    async def _fake_execute_tool(ctx, **kwargs: object) -> dict[str, object]:
+    async def _fake_execute_tool_call(ctx, **kwargs: object) -> dict[str, object]:
         del ctx
         return cast(
             dict[str, object],
-            _invoke_tool_action(cast(Callable[..., object], kwargs["action"])),
+            _invoke_tool_action(
+                cast(Callable[..., object], kwargs["action"]),
+                cast(dict[str, object], kwargs.get("raw_args")),
+            ),
         )
 
-    monkeypatch.setattr(tool_search_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(
+        tool_search_module,
+        "execute_tool_call",
+        _fake_execute_tool_call,
+    )
 
     result = await tool(ctx, query="select:read")
 
@@ -237,14 +261,21 @@ async def test_tool_search_select_respects_max_results(
         )
     )
 
-    async def _fake_execute_tool(ctx, **kwargs: object) -> dict[str, object]:
+    async def _fake_execute_tool_call(ctx, **kwargs: object) -> dict[str, object]:
         del ctx
         return cast(
             dict[str, object],
-            _invoke_tool_action(cast(Callable[..., object], kwargs["action"])),
+            _invoke_tool_action(
+                cast(Callable[..., object], kwargs["action"]),
+                cast(dict[str, object], kwargs.get("raw_args")),
+            ),
         )
 
-    monkeypatch.setattr(tool_search_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(
+        tool_search_module,
+        "execute_tool_call",
+        _fake_execute_tool_call,
+    )
 
     result = await tool(ctx, query="select:read,write", max_results=1)
 
@@ -289,14 +320,21 @@ async def test_tool_search_exact_name_returns_schema_without_select_prefix(
         )
     )
 
-    async def _fake_execute_tool(ctx, **kwargs: object) -> dict[str, object]:
+    async def _fake_execute_tool_call(ctx, **kwargs: object) -> dict[str, object]:
         del ctx
         return cast(
             dict[str, object],
-            _invoke_tool_action(cast(Callable[..., object], kwargs["action"])),
+            _invoke_tool_action(
+                cast(Callable[..., object], kwargs["action"]),
+                cast(dict[str, object], kwargs.get("raw_args")),
+            ),
         )
 
-    monkeypatch.setattr(tool_search_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(
+        tool_search_module,
+        "execute_tool_call",
+        _fake_execute_tool_call,
+    )
 
     result = await tool(ctx, query="tool_search")
 
@@ -346,14 +384,21 @@ async def test_tool_search_exact_name_prioritizes_exact_match_and_includes_relat
         )
     )
 
-    async def _fake_execute_tool(ctx, **kwargs: object) -> dict[str, object]:
+    async def _fake_execute_tool_call(ctx, **kwargs: object) -> dict[str, object]:
         del ctx
         return cast(
             dict[str, object],
-            _invoke_tool_action(cast(Callable[..., object], kwargs["action"])),
+            _invoke_tool_action(
+                cast(Callable[..., object], kwargs["action"]),
+                cast(dict[str, object], kwargs.get("raw_args")),
+            ),
         )
 
-    monkeypatch.setattr(tool_search_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(
+        tool_search_module,
+        "execute_tool_call",
+        _fake_execute_tool_call,
+    )
 
     result = await tool(ctx, query="edit")
 
@@ -415,14 +460,21 @@ async def test_tool_search_keyword_search_filters_low_signal_false_positives(
         )
     )
 
-    async def _fake_execute_tool(ctx, **kwargs: object) -> dict[str, object]:
+    async def _fake_execute_tool_call(ctx, **kwargs: object) -> dict[str, object]:
         del ctx
         return cast(
             dict[str, object],
-            _invoke_tool_action(cast(Callable[..., object], kwargs["action"])),
+            _invoke_tool_action(
+                cast(Callable[..., object], kwargs["action"]),
+                cast(dict[str, object], kwargs.get("raw_args")),
+            ),
         )
 
-    monkeypatch.setattr(tool_search_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(
+        tool_search_module,
+        "execute_tool_call",
+        _fake_execute_tool_call,
+    )
 
     result = await tool(ctx, query="definitely_not_a_real_tool")
 
@@ -468,14 +520,21 @@ async def test_tool_search_keyword_search_matches_compound_tool_names(
         )
     )
 
-    async def _fake_execute_tool(ctx, **kwargs: object) -> dict[str, object]:
+    async def _fake_execute_tool_call(ctx, **kwargs: object) -> dict[str, object]:
         del ctx
         return cast(
             dict[str, object],
-            _invoke_tool_action(cast(Callable[..., object], kwargs["action"])),
+            _invoke_tool_action(
+                cast(Callable[..., object], kwargs["action"]),
+                cast(dict[str, object], kwargs.get("raw_args")),
+            ),
         )
 
-    monkeypatch.setattr(tool_search_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(
+        tool_search_module,
+        "execute_tool_call",
+        _fake_execute_tool_call,
+    )
 
     result = await tool(ctx, query="web fetch")
 
@@ -529,14 +588,21 @@ async def test_tool_search_empty_query_reports_actual_authorized_count(
         )
     )
 
-    async def _fake_execute_tool(ctx, **kwargs: object) -> dict[str, object]:
+    async def _fake_execute_tool_call(ctx, **kwargs: object) -> dict[str, object]:
         del ctx
         return cast(
             dict[str, object],
-            _invoke_tool_action(cast(Callable[..., object], kwargs["action"])),
+            _invoke_tool_action(
+                cast(Callable[..., object], kwargs["action"]),
+                cast(dict[str, object], kwargs.get("raw_args")),
+            ),
         )
 
-    monkeypatch.setattr(tool_search_module, "execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(
+        tool_search_module,
+        "execute_tool_call",
+        _fake_execute_tool_call,
+    )
 
     result = await tool(ctx, query="   ")
 

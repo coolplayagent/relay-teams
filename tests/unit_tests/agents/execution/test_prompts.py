@@ -867,12 +867,32 @@ def test_build_runtime_tools_prompt_omits_tool_search_guidance_when_unavailable(
                     description="Read files.",
                 ),
             ),
+            skill_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="skill",
+                    name="load_skill",
+                    description="Load skills.",
+                ),
+            ),
+            mcp_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="mcp",
+                    name="docs_search",
+                    description="Search docs.",
+                    server_name="docs",
+                ),
+            ),
         )
     )
 
     assert "## Authorized Runtime Tools" in prompt
-    assert "Total Authorized Tools: 1" in prompt
+    assert "Total Authorized Tools: 3" in prompt
+    assert "Local Tools: read" in prompt
+    assert "Skill Tools: load_skill" in prompt
+    assert "MCP Tools docs: docs_search" in prompt
     assert "Local Tools: 1 authorized" in prompt
+    assert "Skill Tools: 1 authorized" in prompt
+    assert "MCP Tools: 1 authorized across 1 server(s)" in prompt
     assert "Use `tool_search` to discover authorized tools" not in prompt
 
 
