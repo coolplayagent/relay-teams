@@ -61,6 +61,8 @@ def test_pr_checks_gate_changed_line_unit_coverage() -> None:
     diff_cover = pyproject["tool"]["diff_cover"]
 
     assert "diff-cover>=9.0.0" in dev_dependencies
+    assert "bandit>=1.8.0" in dev_dependencies
+    assert "xenon>=0.9.3" in dev_dependencies
     assert coverage_run["source"] == ["src/relay_teams", "src/relay_teams_evals"]
     assert diff_cover["compare_branch"] == "origin/main"
     assert diff_cover["fail_under"] == 90
@@ -69,10 +71,37 @@ def test_pr_checks_gate_changed_line_unit_coverage() -> None:
         "src/relay_teams_evals/**/*.py",
     ]
     assert "fetch-depth: 0" in pr_workflow
+    assert "ruff check --no-cache --force-exclude ." in pr_workflow
+    assert "ruff format --check --no-cache --force-exclude ." in pr_workflow
+    assert "bandit -r src" in pr_workflow
+    assert "--severity-level high" in pr_workflow
+    assert "xenon" in pr_workflow
+    assert "--max-modules C" in pr_workflow
     assert "--cov=src/relay_teams" in pr_workflow
     assert "--cov=src/relay_teams_evals" in pr_workflow
     assert "--cov-report=xml:coverage.xml" in pr_workflow
     assert "diff-cover coverage.xml --config-file pyproject.toml" in pr_workflow
+
+
+def test_qodana_configuration_upload_workflow_uses_cloud_uploader() -> None:
+    project_root = _project_root()
+    qodana_workflow = (
+        project_root / ".github" / "workflows" / "qodana-config-upload.yml"
+    ).read_text(encoding="utf-8")
+    global_config = (project_root / "qodana-global-configurations.yaml").read_text(
+        encoding="utf-8"
+    )
+    qodana_config = (project_root / "qodana.yaml").read_text(encoding="utf-8")
+
+    assert "name: Qodana Configuration Upload" in qodana_workflow
+    assert "QODANA_CONFIGURATIONS_TOKEN" in qodana_workflow
+    assert "jetbrains/qodana-configuration-uploader:latest" in qodana_workflow
+    assert "--global-configs-file qodana-global-configurations.yaml" in qodana_workflow
+    assert "--qodana-host https://qodana.cloud" in qodana_workflow
+    assert "qodanaYaml: qodana.yaml" in global_config
+    assert "linter: qodana-python-community" in qodana_config
+    assert "critical: 0" in qodana_config
+    assert "high: 0" in qodana_config
 
 
 def test_pptx_craft_package_metadata_preserves_esm_runtime_contract() -> None:

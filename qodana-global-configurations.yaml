@@ -1,0 +1,5 @@
+configurations:
+  - id: relay_teams_python
+    name: relay-teams Python
+    description: Shared Qodana configuration for relay-teams Python analysis.
+    qodanaYaml: qodana.yaml
