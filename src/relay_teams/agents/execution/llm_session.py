@@ -4247,7 +4247,10 @@ class AgentLlmSession:
         committed_tool_validation_failures = self._has_tool_input_validation_failures(
             raw_ready
         )
-        ready = self._normalize_committable_messages(raw_ready)
+        ready = self._normalize_committable_messages(
+            raw_ready,
+            instance_id=request.instance_id,
+        )
         self._message_repo.append(
             session_id=request.session_id,
             workspace_id=self._workspace_id(request),
@@ -4336,6 +4339,8 @@ class AgentLlmSession:
     def _normalize_committable_messages(
         self,
         messages: Sequence[ModelRequest | ModelResponse],
+        *,
+        instance_id: str = "",
     ) -> list[ModelRequest | ModelResponse]:
         normalized: list[ModelRequest | ModelResponse] = []
         for message in messages:
@@ -4353,6 +4358,7 @@ class AgentLlmSession:
                             content=build_tool_error_result(
                                 error_code="tool_input_validation_failed",
                                 message=self._normalize_tool_retry_prompt_message(
+                                    instance_id=instance_id,
                                     tool_name=str(part.tool_name or ""),
                                     message=str(part.content or "").strip(),
                                 ),
@@ -4371,6 +4377,7 @@ class AgentLlmSession:
     def _normalize_tool_retry_prompt_message(
         self,
         *,
+        instance_id: str,
         tool_name: str,
         message: str,
     ) -> str:
@@ -4385,13 +4392,45 @@ class AgentLlmSession:
                 "not a valid tool",
                 "tool is not available",
             )
-        ):
+        ) and self._runtime_has_deferred_tool_discovery(instance_id):
             return (
                 f"{normalized_message} If `{tool_name}` is an authorized local tool "
                 "that is currently deferred, use `tool_search` to inspect it and "
                 "`activate_tools` before retrying."
             )
         return normalized_message
+
+    def _runtime_has_deferred_tool_discovery(self, instance_id: str) -> bool:
+        if not instance_id:
+            return False
+        agent_repo = getattr(self, "_agent_repo", None)
+        if agent_repo is None or not hasattr(agent_repo, "get_instance"):
+            return False
+        try:
+            runtime_record = agent_repo.get_instance(instance_id)
+        except KeyError:
+            return False
+        raw_snapshot = str(getattr(runtime_record, "runtime_tools_json", "")).strip()
+        if not raw_snapshot:
+            return False
+        try:
+            parsed = json.loads(raw_snapshot)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(parsed, dict):
+            return False
+        local_tools = parsed.get("local_tools")
+        if not isinstance(local_tools, list):
+            return False
+        local_tool_names = {
+            str(entry.get("name", "")).strip()
+            for entry in local_tools
+            if isinstance(entry, dict)
+        }
+        return {
+            "tool_search",
+            "activate_tools",
+        }.issubset(local_tool_names)
 
     @staticmethod
     def _normalize_tool_call_args_for_replay(
