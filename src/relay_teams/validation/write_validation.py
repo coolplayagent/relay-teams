@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Protocol, Set, TypeVar, cast
+from typing import Optional, Protocol, Set
 
 
 class _HasModelFieldsSet(Protocol):
@@ -9,14 +9,11 @@ class _HasModelFieldsSet(Protocol):
         raise NotImplementedError
 
 
-ModelT = TypeVar("ModelT", bound=_HasModelFieldsSet)
-
-
 def require_non_empty_patch(
-    model: ModelT,
+    model: _HasModelFieldsSet,
     *,
     message: str = "update must include at least one field",
-) -> ModelT:
+) -> _HasModelFieldsSet:
     if not model.model_fields_set:
         raise ValueError(message)
     return model
@@ -44,14 +41,14 @@ def normalize_optional_string(
     field_name: str,
     empty_to_none: bool = False,
 ) -> Optional[str]:
-    return cast(
-        Optional[str],
-        normalize_optional_text_field(
-            value,
-            field_name=field_name,
-            empty_to_none=empty_to_none,
-        ),
+    normalized = normalize_optional_text_field(
+        value,
+        field_name=field_name,
+        empty_to_none=empty_to_none,
     )
+    if normalized is None or isinstance(normalized, str):
+        return normalized
+    raise TypeError(f"{field_name} must be a string or None")
 
 
 def reject_empty_mapping_patch(value: object, *, message: str) -> object:

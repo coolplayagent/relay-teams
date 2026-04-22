@@ -107,7 +107,8 @@ class WeChatAccountUpdateInput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_patch(self) -> WeChatAccountUpdateInput:
-        return require_non_empty_patch(self)
+        require_non_empty_patch(self)
+        return self
 
 
 class WeChatLoginStartRequest(BaseModel):

@@ -170,7 +170,8 @@ class FeishuGatewayAccountUpdateInput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_patch(self) -> FeishuGatewayAccountUpdateInput:
-        return require_non_empty_patch(self)
+        require_non_empty_patch(self)
+        return self
 
 
 class FeishuGatewayAccountRecord(BaseModel):

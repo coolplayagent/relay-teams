@@ -229,10 +229,11 @@ class SessionMetadataPatch(BaseModel):
 
     @model_validator(mode="after")
     def _require_non_empty_patch(self) -> "SessionMetadataPatch":
-        return require_non_empty_patch(
+        require_non_empty_patch(
             self,
             message="session update must include at least one field",
         )
+        return self
 
 
 class SessionRecord(BaseModel):

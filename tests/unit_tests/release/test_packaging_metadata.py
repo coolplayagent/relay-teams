@@ -93,7 +93,9 @@ def test_qodana_code_quality_workflow_uses_cloud_scan() -> None:
     assert "name: Qodana" in qodana_workflow
     assert "JetBrains/qodana-action" not in qodana_workflow
     assert "https://jb.gg/qodana-cli/install" in qodana_workflow
-    assert "qodana_args=(scan --within-docker false)" in qodana_workflow
+    assert (
+        "qodana_args=(scan --within-docker false --print-problems)" in qodana_workflow
+    )
     assert '--diff-start "$diff_start"' in qodana_workflow
     assert "--within-docker false" in qodana_workflow
     assert "QODANA_PYTHON_PATH" in qodana_workflow

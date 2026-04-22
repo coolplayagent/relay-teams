@@ -41,7 +41,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          qodana_args=(scan --within-docker false)
+          qodana_args=(scan --within-docker false --print-problems)
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base_ref="${{ github.event.pull_request.base.ref }}"
             git fetch --no-tags origin "${base_ref}:refs/remotes/origin/${base_ref}"
