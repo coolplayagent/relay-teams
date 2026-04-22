@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from relay_teams.tools.discovery_tools import (
+    DiscoveryToolResolver,
+    TOOLS as DISCOVERY_TOOLS,
+)
 from relay_teams.tools.computer_tools import TOOLS as COMPUTER_TOOLS
 from relay_teams.tools.im_tools.im_send import register as register_im_send
 from relay_teams.tools.orchestration_tools import TOOLS as ORCHESTRATION_TOOLS
@@ -13,7 +17,7 @@ from relay_teams.tools.workspace_tools import TOOLS as WORKSPACE_TOOLS
 IM_TOOLS = {
     "im_send": register_im_send,
 }
-HIDDEN_FROM_ROLE_CONFIG: tuple[str, ...] = ("im_send",)
+HIDDEN_FROM_ROLE_CONFIG: tuple[str, ...] = ("im_send", "tool_search")
 
 
 def build_default_registry() -> ToolRegistry:
@@ -24,9 +28,12 @@ def build_default_registry() -> ToolRegistry:
         **WEB_TOOLS,
         **WORKSPACE_TOOLS,
         **COMPUTER_TOOLS,
+        **DISCOVERY_TOOLS,
         **IM_TOOLS,
     }
-    return ToolRegistry(
+    registry = ToolRegistry(
         tools,
         hidden_from_config=HIDDEN_FROM_ROLE_CONFIG,
     )
+    registry.register_implicit_resolver(DiscoveryToolResolver())
+    return registry

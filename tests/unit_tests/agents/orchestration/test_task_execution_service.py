@@ -357,11 +357,10 @@ async def test_execute_persists_objective_before_first_turn(
     assert history[0].parts[0].content == "query time"
     runtime_record = agent_repo.get_instance(instance.instance_id)
     assert "You are the time role." in runtime_record.runtime_system_prompt
-    assert json.loads(runtime_record.runtime_tools_json) == {
-        "local_tools": [],
-        "skill_tools": [],
-        "mcp_tools": [],
-    }
+    runtime_tools = json.loads(runtime_record.runtime_tools_json)
+    assert [entry["name"] for entry in runtime_tools["local_tools"]] == ["tool_search"]
+    assert runtime_tools["skill_tools"] == []
+    assert runtime_tools["mcp_tools"] == []
 
 
 @pytest.mark.asyncio
@@ -462,6 +461,7 @@ async def test_execute_runtime_snapshot_includes_skill_list_for_ui(
     assert "- time:" in runtime_record.runtime_system_prompt
     assert "missing_skill" not in runtime_record.runtime_system_prompt
     tools_snapshot = json.loads(runtime_record.runtime_tools_json)
+    assert [entry["name"] for entry in tools_snapshot["local_tools"]] == ["tool_search"]
     assert len(tools_snapshot["skill_tools"]) == 1
     assert tools_snapshot["skill_tools"][0]["name"] == "load_skill"
     assert tools_snapshot["skill_tools"][0]["source"] == "skill"
@@ -544,7 +544,12 @@ async def test_execute_runtime_prompt_lists_authorized_runtime_tools(
 
     runtime_record = agent_repo.get_instance(instance.instance_id)
     assert "## Authorized Runtime Tools" in runtime_record.runtime_system_prompt
-    assert "Local Tools: read" in runtime_record.runtime_system_prompt
+    assert (
+        "Use `tool_search` to discover authorized tools"
+        in runtime_record.runtime_system_prompt
+    )
+    assert "Local Tools: 2 authorized" in runtime_record.runtime_system_prompt
+    assert "Local Tools: read" not in runtime_record.runtime_system_prompt
 
 
 @pytest.mark.asyncio

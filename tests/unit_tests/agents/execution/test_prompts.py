@@ -11,12 +11,17 @@ from relay_teams.agents.execution import system_prompts
 from relay_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
     RuntimePromptBuildInput,
+    build_runtime_tools_prompt,
     SystemPromptSectionsInput,
     WorkspaceSshProfilePromptMetadata,
     build_workspace_ssh_profile_prompt_metadata,
     build_runtime_system_prompt,
     build_runtime_system_prompt_result,
     compose_system_prompt,
+)
+from relay_teams.agents.instances.models import (
+    RuntimeToolSnapshotEntry,
+    RuntimeToolsSnapshot,
 )
 from relay_teams.agents.execution.user_prompts import (
     UserPromptBuildInput,
@@ -805,6 +810,70 @@ def test_compose_system_prompt_places_skill_catalog_before_capability_summary() 
     assert prompt.index("## Available Roles") < prompt.index(
         "## Runtime Environment Information"
     )
+
+
+def test_build_runtime_tools_prompt_summarizes_authorized_tools() -> None:
+    prompt = build_runtime_tools_prompt(
+        RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="tool_search",
+                    description="Discover tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read files.",
+                ),
+            ),
+            skill_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="skill",
+                    name="load_skill",
+                    description="Load skills.",
+                ),
+            ),
+            mcp_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="mcp",
+                    name="docs_search",
+                    description="Search docs.",
+                    server_name="docs",
+                ),
+            ),
+        )
+    )
+
+    assert "## Authorized Runtime Tools" in prompt
+    assert "Use `tool_search` to discover authorized tools" in prompt
+    assert "Total Authorized Tools: 4" in prompt
+    assert "Local Tools: 2 authorized" in prompt
+    assert "Skill Tools: 1 authorized" in prompt
+    assert "MCP Tools: 1 authorized across 1 server(s)" in prompt
+    assert "MCP Tool Server: docs (1)" in prompt
+    assert "read, tool_search" not in prompt
+
+
+def test_build_runtime_tools_prompt_omits_tool_search_guidance_when_unavailable() -> (
+    None
+):
+    prompt = build_runtime_tools_prompt(
+        RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read files.",
+                ),
+            ),
+        )
+    )
+
+    assert "## Authorized Runtime Tools" in prompt
+    assert "Total Authorized Tools: 1" in prompt
+    assert "Local Tools: 1 authorized" in prompt
+    assert "Use `tool_search` to discover authorized tools" not in prompt
 
 
 def test_user_prompt_builder_returns_raw_objective() -> None:

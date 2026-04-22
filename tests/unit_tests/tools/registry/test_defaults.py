@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from relay_teams.tools.registry import build_default_registry
+from relay_teams.tools.registry import ToolResolutionContext, build_default_registry
 
 
 def test_registry_rejects_unknown_tools() -> None:
@@ -47,6 +47,7 @@ def test_registry_contains_registered_local_tools() -> None:
         "stop_monitor",
         "todo_read",
         "todo_write",
+        "tool_search",
         "type_text",
         "wait_background_task",
         "wait_for_window",
@@ -61,6 +62,7 @@ def test_registry_hides_im_send_from_manual_role_configuration() -> None:
     registry = build_default_registry()
 
     assert "im_send" not in registry.list_configurable_names()
+    assert "tool_search" not in registry.list_configurable_names()
 
 
 def test_default_registry_ignores_unknown_tools_for_runtime_resolution() -> None:
@@ -85,3 +87,15 @@ def test_default_registry_rejects_unknown_tools_for_explicit_validation() -> Non
         registry.validate_known(("missing_background_tool",))
     with pytest.raises(ValueError, match="Unknown tools"):
         registry.validate_known(("deprecated_writer",))
+
+
+def test_default_registry_implicitly_adds_tool_search() -> None:
+    registry = build_default_registry()
+
+    context = ToolResolutionContext(session_id="session-1")
+
+    assert registry.resolve_names((), context=context) == ("tool_search",)
+    assert registry.resolve_names(("read",), context=context) == (
+        "read",
+        "tool_search",
+    )
