@@ -5,10 +5,9 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from relay_teams.agents.orchestration.task_orchestration_service import (
-    TaskDraft,
     TaskOrchestrationService,
-    TaskUpdate,
 )
+from relay_teams.agents.orchestration.task_contracts import TaskDraft, TaskUpdate
 from relay_teams.interfaces.server.deps import get_task_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.validation import RequiredIdentifierStr

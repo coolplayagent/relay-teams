@@ -134,19 +134,24 @@ class _AsyncProcessWriter(Protocol):
 
 class _PipeProcess(Protocol):
     @property
-    def pid(self) -> int | None: ...
+    def pid(self) -> int | None:
+        raise NotImplementedError
 
     @property
-    def returncode(self) -> int | None: ...
+    def returncode(self) -> int | None:
+        raise NotImplementedError
 
     @property
-    def stdin(self) -> _AsyncProcessWriter | None: ...
+    def stdin(self) -> _AsyncProcessWriter | None:
+        raise NotImplementedError
 
     @property
-    def stdout(self) -> asyncio.StreamReader | None: ...
+    def stdout(self) -> asyncio.StreamReader | None:
+        raise NotImplementedError
 
     @property
-    def stderr(self) -> asyncio.StreamReader | None: ...
+    def stderr(self) -> asyncio.StreamReader | None:
+        raise NotImplementedError
 
     async def wait(self) -> int | None: ...
 

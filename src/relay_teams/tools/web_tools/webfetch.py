@@ -989,7 +989,6 @@ async def read_response_body(response: httpx.Response) -> bytes:
                 retryable=False,
             )
     return bytes(body)
-    return body
 
 
 def is_tunnel_error_message(message: str) -> bool:

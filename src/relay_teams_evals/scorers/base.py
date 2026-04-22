@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
 
 from relay_teams_evals.models import EvalItem, EvalResult, RunOutcome, TokenUsage
-
-if TYPE_CHECKING:
-    from relay_teams_evals.workspace.base import PreparedWorkspace
+from relay_teams_evals.workspace.base import PreparedWorkspace
 
 
 class Scorer(ABC):
@@ -30,4 +27,5 @@ class Scorer(ABC):
 
     @property
     @abstractmethod
-    def name(self) -> str: ...
+    def name(self) -> str:
+        raise NotImplementedError

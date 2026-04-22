@@ -1,20 +1,18 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Awaitable
 from pathlib import Path
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, SkipValidation
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 from pydantic_ai import RunContext
 
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.agents.orchestration.task_orchestration_service import (
-    TaskDraft,
-    TaskUpdate,
+from relay_teams.agents.orchestration.task_contracts import (
+    TaskExecutionServiceLike,
+    TaskOrchestrationServiceLike,
 )
-from relay_teams.agents.tasks.models import TaskEnvelope
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.computer import ComputerRuntime
 from relay_teams.mcp.mcp_registry import McpRegistry
@@ -43,57 +41,6 @@ from relay_teams.tools.workspace_tools.shell_approval_repo import (
 )
 from relay_teams.workspace import WorkspaceHandle
 from relay_teams.hooks import HookService
-
-
-class TaskOrchestrationServiceLike(Protocol):
-    async def create_tasks(
-        self,
-        *,
-        run_id: str,
-        tasks: list[TaskDraft],
-    ) -> dict[str, JsonValue]: ...
-
-    def update_task(
-        self,
-        *,
-        run_id: str | None,
-        task_id: str,
-        update: TaskUpdate,
-    ) -> dict[str, JsonValue]: ...
-
-    def list_delegated_tasks(
-        self,
-        *,
-        run_id: str,
-        include_root: bool = False,
-    ) -> dict[str, JsonValue]: ...
-
-    def list_run_tasks(
-        self,
-        *,
-        run_id: str,
-        include_root: bool = False,
-    ) -> dict[str, JsonValue]: ...
-
-    def dispatch_task(
-        self,
-        *,
-        run_id: str | None,
-        task_id: str,
-        role_id: str,
-        prompt: str = "",
-    ) -> Awaitable[dict[str, JsonValue]]: ...
-
-
-class TaskExecutionServiceLike(Protocol):
-    async def execute(
-        self,
-        *,
-        instance_id: str,
-        role_id: str,
-        task: TaskEnvelope,
-        user_prompt_override: str | None = None,
-    ) -> object: ...
 
 
 class ImToolServiceLike(Protocol):

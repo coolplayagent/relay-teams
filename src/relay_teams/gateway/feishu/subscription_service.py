@@ -6,10 +6,12 @@ import logging
 import random
 from contextlib import suppress
 from threading import Event, Lock, Thread
-from typing import TYPE_CHECKING, NoReturn, Protocol, runtime_checkable
+from typing import NoReturn, Protocol, runtime_checkable
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
+from lark_oapi.ws.model import ClientConfig
 from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 
 from relay_teams.gateway.feishu.lark_ws_compat import (
@@ -28,10 +30,6 @@ from relay_teams.net.websocket import (
 )
 
 logger = get_logger(__name__)
-
-if TYPE_CHECKING:
-    from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
-    from lark_oapi.ws.model import ClientConfig
 
 
 class FeishuRuntimeConfigLookup(Protocol):
@@ -547,7 +545,7 @@ class _FeishuWsController:
         service_ids = conn_query.get(SERVICE_ID)
         if not conn_ids or not service_ids:
             raise RuntimeError("Feishu websocket connection metadata is incomplete")
-        connection: WsConnectionLike
+        connection: WsConnectionLike | None = None
         try:
             connection = await ws_client_module.websockets.connect(
                 conn_url,
@@ -556,6 +554,8 @@ class _FeishuWsController:
             )
         except InvalidStatus as exc:
             _parse_ws_conn_exception(exc)
+        if connection is None:
+            raise RuntimeError("Feishu websocket connection failed")
         client._conn = connection
         client._conn_url = conn_url
         client._conn_id = conn_ids[0]

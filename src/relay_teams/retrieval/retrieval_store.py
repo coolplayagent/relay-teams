@@ -16,7 +16,8 @@ from relay_teams.retrieval.retrieval_models import (
 
 class RetrievalStore(Protocol):
     @property
-    def backend_kind(self) -> RetrievalBackendKind: ...
+    def backend_kind(self) -> RetrievalBackendKind:
+        raise NotImplementedError
 
     def replace_scope(
         self,

@@ -11,19 +11,31 @@ on:
 jobs:
   qodana:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     permissions:
       contents: write
       pull-requests: write
       checks: write
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6.0.2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+      - name: Install project dependencies
+        run: uv sync --extra dev --no-default-groups
       - name: Qodana Scan
         uses: JetBrains/qodana-action@v2025.3.2
         with:
-          pr-mode: false
+          pr-mode: true
+          args: --within-docker false
         env:
           QODANA_TOKEN: ${{ secrets.QODANA_TOKEN }}
           QODANA_ENDPOINT: "https://qodana.cloud"
+          QODANA_PYTHON_PATH: ${{ github.workspace }}/.venv/bin/python

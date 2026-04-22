@@ -9,9 +9,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
-from relay_teams.agents.orchestration.task_execution_service import (
-    TaskExecutionResult,
-)
+from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.models import (
     SubAgentInstance,

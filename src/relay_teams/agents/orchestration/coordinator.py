@@ -11,10 +11,8 @@ from pydantic_ai.messages import ModelResponse, TextPart
 
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.models import create_subagent_instance
-from relay_teams.agents.orchestration.task_execution_service import (
-    TaskExecutionResult,
-    TaskExecutionService,
-)
+from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
+from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.orchestration.verification import verify_task
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder

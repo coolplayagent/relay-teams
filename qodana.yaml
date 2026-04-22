@@ -1,6 +1,6 @@
 version: "1.0"
 linter: qodana-python-community
-failThreshold: 100000
+failThreshold: 0
 profile:
   name: qodana.recommended
 exclude:

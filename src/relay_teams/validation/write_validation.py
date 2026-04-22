@@ -5,7 +5,8 @@ from typing import Protocol, TypeVar, cast
 
 class _HasModelFieldsSet(Protocol):
     @property
-    def model_fields_set(self) -> set[str]: ...
+    def model_fields_set(self) -> set[str]:
+        raise NotImplementedError
 
 
 ModelT = TypeVar("ModelT", bound=_HasModelFieldsSet)

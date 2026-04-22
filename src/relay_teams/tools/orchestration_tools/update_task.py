@@ -5,7 +5,7 @@ from pydantic import JsonValue
 
 from pydantic_ai import Agent
 
-from relay_teams.agents.orchestration.task_orchestration_service import TaskUpdate
+from relay_teams.agents.orchestration.task_contracts import TaskUpdate
 
 from relay_teams.tools._description_loader import load_tool_description
 from relay_teams.tools.runtime.context import (

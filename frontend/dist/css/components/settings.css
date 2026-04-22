@@ -1424,7 +1424,9 @@
 }
 
 .workspace-profile-grid .form-group label {
-    min-height: 1rem;
+    display: flex;
+    align-items: flex-end;
+    min-height: 2.4em;
     line-height: 1.2;
 }
 

@@ -92,11 +92,14 @@ def test_qodana_code_quality_workflow_uses_cloud_scan() -> None:
 
     assert "name: Qodana" in qodana_workflow
     assert "JetBrains/qodana-action@v2025.3.2" in qodana_workflow
-    assert "pr-mode: false" in qodana_workflow
+    assert "pr-mode: true" in qodana_workflow
+    assert "--within-docker false" in qodana_workflow
+    assert "QODANA_PYTHON_PATH" in qodana_workflow
     assert "QODANA_TOKEN" in qodana_workflow
     assert 'QODANA_ENDPOINT: "https://qodana.cloud"' in qodana_workflow
     assert "fetch-depth: 0" in qodana_workflow
     assert "linter: qodana-python-community" in qodana_config
+    assert "failThreshold: 0" in qodana_config
     assert "failureConditions" not in qodana_config
 
 

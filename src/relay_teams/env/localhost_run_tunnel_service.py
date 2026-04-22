@@ -244,8 +244,8 @@ class LocalhostRunTunnelService:
         return self._wait_for_status(request.wait_timeout_ms)
 
     def stop(self) -> LocalhostRunTunnelStatus:
-        process: subprocess.Popen[str] | None
-        reader_thread: threading.Thread | None
+        process: subprocess.Popen[str] | None = None
+        reader_thread: threading.Thread | None = None
         with self._lock:
             self._refresh_process_state_locked()
             process = self._process
