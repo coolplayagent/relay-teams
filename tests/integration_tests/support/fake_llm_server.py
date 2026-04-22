@@ -245,6 +245,16 @@ def plan_fake_response(payload: object) -> dict[str, object]:
         return _plan_invalid_json_auto_recovery_response(payload, messages)
     if _hook_read_rewrite_mode(messages):
         return _plan_hook_read_rewrite_response(payload, messages)
+    if _hook_prompt_eval_mode(messages):
+        return _plan_hook_prompt_eval_response(messages)
+    if _hook_agent_stop_mode(messages):
+        return _plan_hook_agent_stop_response(messages)
+    if _hook_agent_stop_main_mode(messages):
+        return _plan_hook_agent_stop_main_response(messages)
+    if _hook_subagent_worker_mode(messages):
+        return _plan_hook_subagent_worker_response(messages)
+    if _hook_subagent_lifecycle_mode(messages):
+        return _plan_hook_subagent_lifecycle_response(payload, messages)
     if _hook_shell_env_mode(messages):
         return _plan_hook_shell_env_response(payload, messages)
     if _hook_deferred_followup_mode(messages):
@@ -462,6 +472,96 @@ def _plan_hook_read_rewrite_response(
             "arguments": {"path": "missing-from-hook.txt", "offset": 1, "limit": 20},
         }
     return {"kind": "text", "content": "[fake-llm] hook read rewrite completed"}
+
+
+def _hook_prompt_eval_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[hook-prompt-eval]")
+
+
+def _plan_hook_prompt_eval_response(messages: list[object]) -> dict[str, object]:
+    return {
+        "kind": "text",
+        "content": '{"decision":"updated_input","updated_input":"prompt rewrite target"}',
+    }
+
+
+def _hook_agent_stop_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[hook-agent-stop]")
+
+
+def _plan_hook_agent_stop_response(messages: list[object]) -> dict[str, object]:
+    if _messages_contain_user_text(messages, "agent stop hook follow-up completed"):
+        return {
+            "kind": "text",
+            "content": '{"decision":"allow","reason":"follow-up already completed"}',
+        }
+    return {
+        "kind": "text",
+        "content": (
+            '{"decision":"retry","additional_context":'
+            '["Agent stop hook requested another pass"]}'
+        ),
+    }
+
+
+def _hook_agent_stop_main_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[hook-agent-stop-main]")
+
+
+def _plan_hook_agent_stop_main_response(messages: list[object]) -> dict[str, object]:
+    if _messages_contain_user_text(messages, "Agent stop hook requested another pass"):
+        return {
+            "kind": "text",
+            "content": "[fake-llm] agent stop hook follow-up completed",
+        }
+    return {
+        "kind": "text",
+        "content": "[fake-llm] first draft before stop hook retry",
+    }
+
+
+def _hook_subagent_worker_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[hook-subagent-worker]")
+
+
+def _plan_hook_subagent_worker_response(messages: list[object]) -> dict[str, object]:
+    return {
+        "kind": "text",
+        "content": "[fake-llm] subagent worker completed",
+    }
+
+
+def _hook_subagent_lifecycle_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[hook-subagent-lifecycle]")
+
+
+def _plan_hook_subagent_lifecycle_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    available_tools = _extract_available_tools(payload)
+    if "spawn_subagent" not in available_tools:
+        return {
+            "kind": "text",
+            "content": "[fake-llm] spawn_subagent is not available for this role.",
+        }
+    last_tool_call_id = _extract_last_tool_call_id(messages)
+    if last_tool_call_id is None:
+        return {
+            "kind": "tool_call",
+            "tool_name": "spawn_subagent",
+            "tool_call_id": "call-hook-subagent-lifecycle-1",
+            "arguments": {
+                "role_id": "Explorer",
+                "description": "Run a short hook lifecycle verification task",
+                "prompt": "[hook-subagent-worker] return one short status line",
+                "background": False,
+            },
+        }
+    return {
+        "kind": "text",
+        "content": "[fake-llm] subagent lifecycle completed",
+    }
 
 
 def _hook_shell_env_mode(messages: list[object]) -> bool:

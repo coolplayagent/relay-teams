@@ -85,6 +85,28 @@ def test_role_loader_keeps_coordinator_tools_unchanged(tmp_path: Path) -> None:
     assert role.tools == ("create_tasks", "update_task", "dispatch_task")
 
 
+def test_role_loader_tolerates_invalid_frontmatter_hooks(tmp_path: Path) -> None:
+    role_file = tmp_path / "writer.md"
+    role_file.write_text(
+        "---\n"
+        "role_id: writer\n"
+        "name: Writer\n"
+        "description: Drafts content\n"
+        "version: 1.0.0\n"
+        "tools: []\n"
+        "hooks:\n"
+        "  Stop: bad\n"
+        "---\n"
+        "Write clearly.\n",
+        encoding="utf-8",
+    )
+
+    role = RoleLoader().load_one(role_file)
+
+    assert role.role_id == "writer"
+    assert role.hooks.hooks == {}
+
+
 def test_role_registry_resolves_dynamic_coordinator_role() -> None:
     registry = RoleRegistry()
     registry.register(

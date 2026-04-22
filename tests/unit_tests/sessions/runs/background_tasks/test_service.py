@@ -41,6 +41,8 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
+from relay_teams.hooks.hook_models import HookRuntimeSnapshot
+from relay_teams.hooks import HookService
 from relay_teams.workspace import WorkspaceHandle
 
 
@@ -303,6 +305,30 @@ class _FakeRunControlManager:
 
     def is_run_stop_requested(self, run_id: str) -> bool:
         return run_id in self._stopped_run_ids
+
+
+class _CapturingHookService:
+    def __init__(self) -> None:
+        self.executed_events: list[str] = []
+        self.snapshots: list[str] = []
+        self.cleared: list[str] = []
+
+    async def execute(
+        self,
+        *,
+        event_input: object,
+        run_event_hub: object | None,
+    ) -> object:
+        _ = run_event_hub
+        self.executed_events.append(str(getattr(event_input, "event_name").value))
+        return object()
+
+    def set_run_snapshot(self, run_id: str, snapshot: HookRuntimeSnapshot) -> None:
+        _ = snapshot
+        self.snapshots.append(run_id)
+
+    def clear_run(self, run_id: str) -> None:
+        self.cleared.append(run_id)
 
 
 def _build_record(
@@ -782,6 +808,51 @@ async def test_background_task_service_run_subagent_returns_synchronous_result(
     assert runtime is not None
     assert runtime.status == RunRuntimeStatus.COMPLETED
     assert runtime.phase == RunRuntimePhase.TERMINAL
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_run_subagent_with_suppressed_hooks_skips_lifecycle_hooks(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-sync-suppressed.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-sync-suppressed.db"
+    )
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    hook_service = _CapturingHookService()
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+        hook_service=cast(HookService, hook_service),
+    )
+
+    result = await service.run_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        workspace_id="workspace-1",
+        subagent_role_id="Crafter",
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+        suppress_hooks=True,
+    )
+
+    assert result.output == "analysis complete"
+    assert hook_service.snapshots == [result.run_id]
+    assert hook_service.executed_events == []
+    assert hook_service.cleared == [result.run_id]
 
 
 @pytest.mark.asyncio

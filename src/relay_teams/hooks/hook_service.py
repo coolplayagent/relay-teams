@@ -7,7 +7,9 @@ from json import dumps
 from pydantic import JsonValue
 
 from relay_teams.hooks.executors.command_executor import CommandHookExecutor
+from relay_teams.hooks.executors.agent_executor import AgentHookExecutor
 from relay_teams.hooks.executors.http_executor import HttpHookExecutor
+from relay_teams.hooks.executors.prompt_executor import PromptHookExecutor
 from relay_teams.hooks.hook_event_models import HookEventInput, PreToolUseInput
 from relay_teams.hooks.hook_loader import HookLoader
 from relay_teams.hooks.hook_matcher import hook_matches_event
@@ -42,11 +44,15 @@ class HookService:
         runtime_state: HookRuntimeState,
         command_executor: CommandHookExecutor,
         http_executor: HttpHookExecutor,
+        prompt_executor: PromptHookExecutor | None = None,
+        agent_executor: AgentHookExecutor | None = None,
     ) -> None:
         self._loader = loader
         self._runtime_state = runtime_state
         self._command_executor = command_executor
         self._http_executor = http_executor
+        self._prompt_executor = prompt_executor
+        self._agent_executor = agent_executor
 
     def get_user_config(self) -> HooksConfig:
         return self._loader.get_user_config()
@@ -66,6 +72,8 @@ class HookService:
                                 handler.name
                                 or handler.command
                                 or handler.url
+                                or handler.prompt
+                                or handler.role_id
                                 or handler.type.value
                             ),
                             handler_type=handler.type,
@@ -102,6 +110,15 @@ class HookService:
 
     def clear_run(self, run_id: str) -> None:
         self._runtime_state.clear(run_id)
+
+    def set_run_snapshot(self, run_id: str, snapshot: HookRuntimeSnapshot) -> None:
+        self._runtime_state.set_snapshot(run_id, snapshot)
+
+    def set_prompt_executor(self, executor: PromptHookExecutor | None) -> None:
+        self._prompt_executor = executor
+
+    def set_agent_executor(self, executor: AgentHookExecutor | None) -> None:
+        self._agent_executor = executor
 
     def get_run_env(self, run_id: str) -> dict[str, str]:
         return self._runtime_state.get_env(run_id)
@@ -178,7 +195,15 @@ class HookService:
             or (
                 handler.command
                 if handler.type == HookHandlerType.COMMAND
-                else handler.url
+                else (
+                    handler.url
+                    if handler.type == HookHandlerType.HTTP
+                    else (
+                        handler.prompt
+                        if handler.type == HookHandlerType.PROMPT
+                        else handler.role_id
+                    )
+                )
             )
             or handler.type.value
         )
@@ -199,8 +224,22 @@ class HookService:
                     handler=handler,
                     event_input=event_input,
                 )
-            else:
+            elif handler.type == HookHandlerType.HTTP:
                 decision = await self._http_executor.execute(
+                    handler=handler,
+                    event_input=event_input,
+                )
+            elif handler.type == HookHandlerType.PROMPT:
+                if self._prompt_executor is None:
+                    raise RuntimeError("Prompt hooks are not configured")
+                decision = await self._prompt_executor.execute(
+                    handler=handler,
+                    event_input=event_input,
+                )
+            else:
+                if self._agent_executor is None:
+                    raise RuntimeError("Agent hooks are not configured")
+                decision = await self._agent_executor.execute(
                     handler=handler,
                     event_input=event_input,
                 )

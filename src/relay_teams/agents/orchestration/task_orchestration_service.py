@@ -21,6 +21,8 @@ from relay_teams.agents.tasks.models import (
     TaskRecord,
     VerificationPlan,
 )
+from relay_teams.hooks import HookEventName, HookService, TaskCreatedInput
+from relay_teams.sessions.runs.event_stream import RunEventHub
 
 
 class TaskDraft(BaseModel):
@@ -54,6 +56,8 @@ class TaskOrchestrationService:
         message_repo: MessageRepository,
         session_repo: SessionRepository | None = None,
         runtime_role_resolver: RuntimeRoleResolver | None = None,
+        hook_service: HookService | None = None,
+        run_event_hub: RunEventHub | None = None,
     ) -> None:
         self._task_repo = task_repo
         self._role_registry = role_registry
@@ -62,6 +66,8 @@ class TaskOrchestrationService:
         self._message_repo = message_repo
         self._session_repo = session_repo
         self._runtime_role_resolver = runtime_role_resolver
+        self._hook_service = hook_service
+        self._run_event_hub = run_event_hub
 
     async def create_tasks(
         self,
@@ -75,28 +81,46 @@ class TaskOrchestrationService:
         root = self._get_root_task(run_id)
         created_records: list[TaskRecord] = []
         for draft in tasks:
-            created_records.append(
-                self._task_repo.create(
-                    TaskEnvelope(
-                        task_id=new_task_id().value,
-                        session_id=root.envelope.session_id,
-                        parent_task_id=root.envelope.task_id,
-                        trace_id=root.envelope.trace_id,
-                        role_id=None,
-                        title=_resolved_title(draft.title, draft.objective),
-                        objective=draft.objective,
-                        verification=VerificationPlan(
-                            checklist=("non_empty_response",)
-                        ),
-                    )
+            record = self._task_repo.create(
+                TaskEnvelope(
+                    task_id=new_task_id().value,
+                    session_id=root.envelope.session_id,
+                    parent_task_id=root.envelope.task_id,
+                    trace_id=root.envelope.trace_id,
+                    role_id=None,
+                    title=_resolved_title(draft.title, draft.objective),
+                    objective=draft.objective,
+                    verification=VerificationPlan(checklist=("non_empty_response",)),
                 )
             )
+            created_records.append(record)
+            await self._execute_task_created_hooks(record=record)
 
         response: dict[str, JsonValue] = {
             "created_count": len(created_records),
             "tasks": [_task_projection(record) for record in created_records],
         }
         return response
+
+    async def _execute_task_created_hooks(self, *, record: TaskRecord) -> None:
+        if self._hook_service is None:
+            return
+        envelope = record.envelope
+        _ = await self._hook_service.execute(
+            event_input=TaskCreatedInput(
+                event_name=HookEventName.TASK_CREATED,
+                session_id=envelope.session_id,
+                run_id=envelope.trace_id,
+                trace_id=envelope.trace_id,
+                task_id=envelope.task_id,
+                role_id=envelope.role_id,
+                created_task_id=envelope.task_id,
+                parent_task_id=envelope.parent_task_id,
+                title=envelope.title or "",
+                objective=envelope.objective,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
 
     def update_task(
         self,

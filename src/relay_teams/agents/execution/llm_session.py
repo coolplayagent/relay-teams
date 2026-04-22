@@ -166,6 +166,8 @@ from relay_teams.hooks import (
     HookDecisionType,
     HookEventName,
     HookService,
+    PostCompactInput,
+    PreCompactInput,
     UserPromptSubmitInput,
 )
 
@@ -3820,7 +3822,30 @@ class AgentLlmSession:
     ) -> list[ModelRequest | ModelResponse]:
         if self._conversation_compaction_service is None:
             return history
-        return await self._conversation_compaction_service.maybe_compact(
+        hook_service = getattr(self, "_hook_service", None)
+        if hook_service is not None:
+            _ = await hook_service.execute(
+                event_input=PreCompactInput(
+                    event_name=HookEventName.PRE_COMPACT,
+                    session_id=request.session_id,
+                    run_id=request.run_id,
+                    trace_id=request.trace_id,
+                    task_id=request.task_id,
+                    instance_id=request.instance_id,
+                    role_id=request.role_id,
+                    run_kind=request.run_kind.value,
+                    conversation_id=conversation_id,
+                    message_count_before=len(history),
+                    estimated_tokens_before=estimated_tokens_before_microcompact or 0,
+                    estimated_tokens_after_microcompact=(
+                        estimated_tokens_after_microcompact or 0
+                    ),
+                    threshold_tokens=budget.history_trigger_tokens,
+                    target_tokens=budget.history_target_tokens,
+                ),
+                run_event_hub=self._run_event_hub,
+            )
+        compacted_history = await self._conversation_compaction_service.maybe_compact(
             session_id=request.session_id,
             role_id=request.role_id,
             conversation_id=conversation_id,
@@ -3830,6 +3855,28 @@ class AgentLlmSession:
             estimated_tokens_before_microcompact=estimated_tokens_before_microcompact,
             estimated_tokens_after_microcompact=estimated_tokens_after_microcompact,
         )
+        if hook_service is not None:
+            _ = await hook_service.execute(
+                event_input=PostCompactInput(
+                    event_name=HookEventName.POST_COMPACT,
+                    session_id=request.session_id,
+                    run_id=request.run_id,
+                    trace_id=request.trace_id,
+                    task_id=request.task_id,
+                    instance_id=request.instance_id,
+                    role_id=request.role_id,
+                    run_kind=request.run_kind.value,
+                    conversation_id=conversation_id,
+                    message_count_before=len(history),
+                    message_count_after=len(compacted_history),
+                    estimated_tokens_before=estimated_tokens_before_microcompact or 0,
+                    estimated_tokens_after=ConversationTokenEstimator().estimate_history_tokens(
+                        compacted_history
+                    ),
+                ),
+                run_event_hub=self._run_event_hub,
+            )
+        return compacted_history
 
     def _inject_compaction_summary(
         self,

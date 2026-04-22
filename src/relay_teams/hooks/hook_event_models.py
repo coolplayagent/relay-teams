@@ -70,3 +70,56 @@ class StopFailureInput(HookEventInput):
     completion_reason: str = ""
     error_code: str = ""
     error_message: str = ""
+
+
+class SubagentStartInput(HookEventInput):
+    parent_run_id: str = ""
+    subagent_run_id: str
+    subagent_task_id: str
+    subagent_instance_id: str
+    subagent_role_id: str
+    title: str = ""
+    prompt: str = ""
+
+
+class SubagentStopInput(HookEventInput):
+    parent_run_id: str = ""
+    subagent_run_id: str
+    subagent_task_id: str
+    subagent_instance_id: str
+    subagent_role_id: str
+    title: str = ""
+    status: str = ""
+    output_text: str = ""
+
+
+class TaskCreatedInput(HookEventInput):
+    created_task_id: str
+    parent_task_id: str | None = None
+    title: str = ""
+    objective: str = ""
+
+
+class TaskCompletedInput(HookEventInput):
+    completed_task_id: str
+    title: str = ""
+    objective: str = ""
+    output_text: str = ""
+    completion_reason: str = ""
+
+
+class PreCompactInput(HookEventInput):
+    conversation_id: str
+    message_count_before: int = 0
+    estimated_tokens_before: int = 0
+    estimated_tokens_after_microcompact: int = 0
+    threshold_tokens: int = 0
+    target_tokens: int = 0
+
+
+class PostCompactInput(HookEventInput):
+    conversation_id: str
+    message_count_before: int = 0
+    message_count_after: int = 0
+    estimated_tokens_before: int = 0
+    estimated_tokens_after: int = 0

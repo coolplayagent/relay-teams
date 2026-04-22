@@ -8,6 +8,7 @@ from threading import RLock
 import yaml
 
 from relay_teams.builtin import get_builtin_skills_dir
+from relay_teams.hooks.hook_models import HooksConfig
 from relay_teams.logger import get_logger
 from relay_teams.paths import get_app_config_dir
 from relay_teams.skills.skill_models import (
@@ -252,6 +253,7 @@ class SkillsDirectory:
                 instructions=body.strip(),
                 resources=resources,
                 scripts=scripts,
+                hooks=_parse_frontmatter_hooks(data.get("hooks")),
             )
             return Skill(
                 ref=build_skill_ref(scope=scope, name=name),
@@ -279,3 +281,11 @@ def _resolve_optional_path(base_dir: Path, value: object) -> Path | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return base_dir / value
+
+
+def _parse_frontmatter_hooks(value: object) -> HooksConfig:
+    if isinstance(value, dict) and "hooks" in value:
+        return HooksConfig.model_validate(value)
+    if isinstance(value, dict):
+        return HooksConfig.model_validate({"hooks": value})
+    return HooksConfig()
