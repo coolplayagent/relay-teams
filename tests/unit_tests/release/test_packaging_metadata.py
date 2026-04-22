@@ -91,7 +91,7 @@ def test_qodana_code_quality_workflow_uses_cloud_scan() -> None:
     qodana_config = (project_root / "qodana.yaml").read_text(encoding="utf-8")
 
     assert "name: Qodana" in qodana_workflow
-    assert "JetBrains/qodana-action@v2026.1" in qodana_workflow
+    assert "JetBrains/qodana-action@v2025.3.2" in qodana_workflow
     assert "pr-mode: false" in qodana_workflow
     assert "QODANA_TOKEN" in qodana_workflow
     assert 'QODANA_ENDPOINT: "https://qodana.cloud"' in qodana_workflow
