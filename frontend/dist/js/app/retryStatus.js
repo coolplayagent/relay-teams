@@ -6,7 +6,7 @@ import {
     appendRoundRetryEvent,
     removeRoundRetryEvent,
     updateRoundRetryEvent,
-} from '../components/rounds.js';
+} from '../components/rounds/timeline.js';
 
 let retryState = null;
 const RETRY_PHASE_SCHEDULED = 'scheduled';

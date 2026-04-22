@@ -9,7 +9,7 @@ import {
     loadSessionRounds,
     overlayRoundRecoveryState,
     syncRoundTodoVisibility,
-} from '../components/rounds.js';
+} from '../components/rounds/timeline.js';
 import { scheduleSessionsRefresh } from '../components/sidebar.js';
 import {
     answerUserQuestion,

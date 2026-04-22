@@ -683,6 +683,7 @@ def _run_event_router_script(tmp_path: Path, runner_source: str) -> dict[str, ob
     replacements = {
         "../../app/recovery.js": "./mockRecovery.mjs",
         "../../components/rounds.js": "./mockRounds.mjs",
+        "../../components/rounds/timeline.js": "./mockRounds.mjs",
         "../../components/sessionTokenUsage.js": "./mockSessionTokenUsage.mjs",
         "../state.js": "./mockState.mjs",
         "../../utils/logger.js": "./mockLogger.mjs",

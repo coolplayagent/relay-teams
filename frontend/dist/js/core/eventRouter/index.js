@@ -3,7 +3,10 @@
  * Event switchboard for SSE RunEventType payloads.
  */
 import { scheduleRecoveryContinuityRefresh } from '../../app/recovery.js';
-import { syncRoundTodoVisibility, updateRoundTodo } from '../../components/rounds.js';
+import {
+    syncRoundTodoVisibility,
+    updateRoundTodo,
+} from '../../components/rounds/timeline.js';
 import { scheduleSessionTokenUsageRefresh } from '../../components/sessionTokenUsage.js';
 import { state } from '../state.js';
 import { sysLog } from '../../utils/logger.js';
