@@ -17,11 +17,6 @@ from relay_teams.env.proxy_env import (
 )
 from relay_teams.env.proxy_secret_store import ProxySecretStore, get_proxy_secret_store
 from relay_teams.env.runtime_env import load_env_file, load_merged_env_vars
-from relay_teams.env.web_connectivity import (
-    WebConnectivityProbeRequest,
-    WebConnectivityProbeResult,
-    WebConnectivityProbeService,
-)
 
 
 class ProxyConfigService:
@@ -36,9 +31,6 @@ class ProxyConfigService:
         self._on_proxy_reloaded: Callable[[ProxyEnvConfig], None] = on_proxy_reloaded
         self._secret_store: ProxySecretStore = (
             get_proxy_secret_store() if secret_store is None else secret_store
-        )
-        self._web_probe_service = WebConnectivityProbeService(
-            get_proxy_config=self.get_proxy_config
         )
 
     def get_saved_proxy_config(self) -> ProxyEnvInput:
@@ -104,12 +96,6 @@ class ProxyConfigService:
         self._on_proxy_reloaded(
             self._load_runtime_proxy_config(include_process_env=False)
         )
-
-    def probe_web_connectivity(
-        self,
-        request: WebConnectivityProbeRequest,
-    ) -> WebConnectivityProbeResult:
-        return self._web_probe_service.probe(request)
 
     def _write_proxy_env_file(self, proxy_config: ProxyEnvConfig) -> None:
         env_file_path = self._config_dir / ".env"

@@ -11,12 +11,14 @@ from relay_teams.computer import (
     describe_builtin_tool,
 )
 from relay_teams.media import MediaModality
-from relay_teams.tools.runtime import (
-    ToolApprovalRequest,
+from relay_teams.tools.runtime.context import (
     ToolContext,
     ToolDeps,
+)
+from relay_teams.tools.runtime.execution import execute_tool
+from relay_teams.tools.runtime.models import (
+    ToolApprovalRequest,
     ToolResultProjection,
-    execute_tool,
 )
 
 _DESCRIPTIONS = {

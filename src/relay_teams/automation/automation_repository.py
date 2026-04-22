@@ -9,6 +9,7 @@ from pathlib import Path
 
 from pydantic import JsonValue, ValidationError
 
+from relay_teams.automation.errors import AutomationProjectNameConflictError
 from relay_teams.automation.automation_models import (
     AutomationDeliveryEvent,
     AutomationFeishuBinding,
@@ -26,10 +27,6 @@ from relay_teams.validation import (
 )
 
 LOGGER = get_logger(__name__)
-
-
-class AutomationProjectNameConflictError(ValueError):
-    pass
 
 
 class AutomationProjectRepository(SharedSqliteRepository):

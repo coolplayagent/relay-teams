@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -9,9 +10,7 @@ import subprocess
 
 from pydantic import BaseModel, ConfigDict
 
-from relay_teams.logger import get_logger
-
-LOGGER = get_logger(__name__)
+LOGGER = logging.getLogger("relay_teams.backend.env.clawhub_cli")
 
 CLAWHUB_NPM_PACKAGE_NAME = "clawhub"
 CLAWHUB_PREFERRED_NPM_REGISTRY = "https://mirrors.huaweicloud.com/repository/npm/"

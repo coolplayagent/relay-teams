@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from relay_teams.env.runtime_env import load_env_file, sync_app_env_to_process_env
@@ -10,7 +11,6 @@ from relay_teams.env.web_config_models import (
     WebProvider,
 )
 from relay_teams.env.web_secret_store import WebSecretStore, get_web_secret_store
-from relay_teams.logger import get_logger
 
 _PROVIDER_ENV_KEY = "AGENT_TEAMS_WEB_PROVIDER"
 _FALLBACK_PROVIDER_ENV_KEY = "AGENT_TEAMS_WEB_FALLBACK_PROVIDER"
@@ -19,7 +19,7 @@ _LEGACY_API_KEY_ENV_KEY = "AGENT_TEAMS_WEB_API_KEY"
 _EXA_API_KEY_ENV_KEY = "AGENT_TEAMS_WEB_EXA_API_KEY"
 _SEARXNG_API_KEY_ENV_KEY = "AGENT_TEAMS_WEB_SEARXNG_API_KEY"
 
-LOGGER = get_logger(__name__)
+LOGGER = logging.getLogger("relay_teams.backend.env.web_config_service")
 
 
 class WebConfigService:

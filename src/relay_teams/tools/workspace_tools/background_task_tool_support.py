@@ -6,7 +6,8 @@ from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskReco
 from relay_teams.sessions.runs.background_tasks.projection import (
     build_background_task_result_payload,
 )
-from relay_teams.tools.runtime import ToolContext, ToolResultProjection
+from relay_teams.tools.runtime.context import ToolContext
+from relay_teams.tools.runtime.models import ToolResultProjection
 
 
 def require_background_task_service(ctx: ToolContext) -> BackgroundTaskService:

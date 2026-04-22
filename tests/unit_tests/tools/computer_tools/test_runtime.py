@@ -14,7 +14,7 @@ from relay_teams.computer import (
 )
 from relay_teams.media import MediaAssetRecord, MediaModality, MediaRefContentPart
 from relay_teams.media.models import MediaAssetStorageKind
-from relay_teams.tools.runtime import ToolContext
+from relay_teams.tools.runtime.context import ToolContext
 from relay_teams.tools.computer_tools.runtime import _approval_request, _project_result
 
 

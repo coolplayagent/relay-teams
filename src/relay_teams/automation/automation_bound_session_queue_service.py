@@ -76,7 +76,8 @@ class FeishuRuntimeConfigLookup(Protocol):
 
 class FeishuRuntimeConfigLike(Protocol):
     @property
-    def environment(self) -> FeishuEnvironment: ...
+    def environment(self) -> FeishuEnvironment:
+        raise NotImplementedError
 
 
 class FeishuClientLike(Protocol):

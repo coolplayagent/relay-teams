@@ -9,10 +9,9 @@ from typing import cast
 import pytest
 
 from relay_teams.agents.orchestration.task_orchestration_service import (
-    TaskDraft,
     TaskOrchestrationService,
-    TaskUpdate,
 )
+from relay_teams.agents.orchestration.task_contracts import TaskDraft, TaskUpdate
 from relay_teams.hooks import HookService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry

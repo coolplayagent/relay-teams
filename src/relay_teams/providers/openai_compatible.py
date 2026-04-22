@@ -5,7 +5,7 @@ import asyncio
 import base64
 import binascii
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, final, override
+from typing import final, override
 
 import httpx
 from pydantic_ai.exceptions import ModelAPIError
@@ -18,12 +18,29 @@ from relay_teams.agents.execution.conversation_microcompact import (
     ConversationMicrocompactService,
 )
 from relay_teams.agents.execution.llm_session import AgentLlmSession
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agents.orchestration.task_contracts import (
+    TaskExecutionServiceLike,
+    TaskOrchestrationServiceLike,
+)
+from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.computer import ComputerRuntime
+from relay_teams.gateway.im.service import ImToolService
+from relay_teams.hooks import HookService
 from relay_teams.media import ContentPart, MediaAssetService, MediaModality
 from relay_teams.metrics import MetricRecorder
 from relay_teams.monitors import MonitorService
+from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.net.llm_client import build_llm_http_client
-from relay_teams.providers.model_config import LlmRetryConfig, ProviderType
+from relay_teams.notifications import NotificationService
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.providers.model_config import (
+    LlmRetryConfig,
+    ModelEndpointConfig,
+    ProviderType,
+)
 from relay_teams.providers.model_fallback import (
     DisabledLlmFallbackMiddleware,
     LlmFallbackMiddleware,
@@ -34,60 +51,36 @@ from relay_teams.providers.provider_contracts import (
     LLMRequest,
     ProviderCapabilities,
 )
+from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.roles.memory_service import RoleMemoryService
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
+from relay_teams.sessions.runs.run_control_manager import RunControlManager
+from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_models import (
     AudioGenerationConfig,
     ImageGenerationConfig,
     VideoGenerationConfig,
 )
-
-if TYPE_CHECKING:
-    from relay_teams.agents.orchestration.task_execution_service import (
-        TaskExecutionService,
-    )
-    from relay_teams.agents.orchestration.task_orchestration_service import (
-        TaskOrchestrationService,
-    )
-    from relay_teams.mcp.mcp_registry import McpRegistry
-    from relay_teams.notifications import NotificationService
-    from relay_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
-    from relay_teams.roles.memory_service import RoleMemoryService
-    from relay_teams.agents.execution.subagent_reflection import (
-        SubagentReflectionService,
-    )
-    from relay_teams.roles.role_registry import RoleRegistry
-    from relay_teams.sessions.runs.run_control_manager import RunControlManager
-    from relay_teams.sessions.runs.event_stream import RunEventHub
-    from relay_teams.sessions.runs.injection_queue import RunInjectionManager
-    from relay_teams.skills.skill_registry import SkillRegistry
-    from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
-    from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-    from relay_teams.sessions.runs.event_log import EventLog
-    from relay_teams.agents.execution.message_repository import MessageRepository
-    from relay_teams.sessions.session_history_marker_repository import (
-        SessionHistoryMarkerRepository,
-    )
-    from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
-    from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
-    from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
-    from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
-    from relay_teams.sessions.runs.user_question_repository import (
-        UserQuestionRepository,
-    )
-    from relay_teams.sessions.runs.todo_service import TodoService
-    from relay_teams.persistence.shared_state_repo import SharedStateRepository
-    from relay_teams.agents.tasks.task_repository import TaskRepository
-    from relay_teams.providers.token_usage_repo import TokenUsageRepository
-    from relay_teams.tools.registry import ToolRegistry
-    from relay_teams.tools.runtime import (
-        ToolApprovalManager,
-        ToolApprovalPolicy,
-    )
-    from relay_teams.tools.workspace_tools.shell_approval_repo import (
-        ShellApprovalRepository,
-    )
-    from relay_teams.workspace import WorkspaceManager
-    from relay_teams.gateway.im import ImToolService
-    from relay_teams.hooks import HookService
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.runs.todo_service import TodoService
+from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
+from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
+from relay_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
+from relay_teams.skills.skill_registry import SkillRegistry
+from relay_teams.tools.registry import ToolRegistry
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
+from relay_teams.tools.workspace_tools.shell_approval_repo import (
+    ShellApprovalRepository,
+)
+from relay_teams.workspace import WorkspaceManager
 
 
 @final
@@ -123,8 +116,8 @@ class OpenAICompatibleProvider(LLMProvider):
         message_repo: MessageRepository,
         session_history_marker_repo: SessionHistoryMarkerRepository,
         role_registry: RoleRegistry,
-        task_execution_service: TaskExecutionService,
-        task_service: TaskOrchestrationService,
+        task_execution_service: TaskExecutionServiceLike,
+        task_service: TaskOrchestrationServiceLike,
         run_control_manager: RunControlManager,
         tool_approval_manager: ToolApprovalManager,
         user_question_manager: UserQuestionManager | None = None,

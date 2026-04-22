@@ -11,7 +11,7 @@ from pydantic_ai import Agent
 from relay_teams.logger import get_logger, log_event
 
 if TYPE_CHECKING:
-    from relay_teams.tools.runtime import ToolDeps
+    from relay_teams.tools.runtime.context import ToolDeps
 
     ToolRegister: TypeAlias = Callable[[Agent[ToolDeps, str]], None]
 else:

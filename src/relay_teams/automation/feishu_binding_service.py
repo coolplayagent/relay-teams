@@ -8,12 +8,16 @@ from relay_teams.automation.automation_models import (
     AutomationFeishuBinding,
     AutomationFeishuBindingCandidate,
 )
-from relay_teams.gateway.feishu import (
+from relay_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_TYPE_KEY,
     FEISHU_PLATFORM,
+)
+from relay_teams.sessions.external_session_binding_repository import (
+    ExternalSessionBindingRepository,
+)
+from relay_teams.sessions.session_metadata import (
     SESSION_METADATA_SOURCE_LABEL_KEY,
 )
-from relay_teams.sessions import ExternalSessionBindingRepository
 from relay_teams.sessions.session_repository import SessionRepository
 
 

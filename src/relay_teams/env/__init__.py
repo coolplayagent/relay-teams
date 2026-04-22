@@ -1,31 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from relay_teams.env.environment_variable_models import (
-    EnvironmentVariableCatalog,
-    EnvironmentVariableRecord,
-    EnvironmentVariableSaveRequest,
-    EnvironmentVariableScope,
-    EnvironmentVariableValueKind,
-)
-from relay_teams.env.environment_variable_service import EnvironmentVariableService
-from relay_teams.env.runtime_env import (
-    get_app_env_file_path,
-    get_env_var,
-    get_project_env_file_path,
-    get_user_env_file_path,
-    load_env_file,
-    load_merged_env_vars,
-    sync_app_env_to_process_env,
-)
-from relay_teams.env.clawhub_cli import (
-    CLAWHUB_PREFERRED_NPM_REGISTRY,
-    CLAWHUB_NPM_PACKAGE_NAME,
-    ClawHubCliInstallResult,
-    clear_clawhub_path_cache,
-    install_clawhub_via_npm,
-    resolve_existing_clawhub_path,
-)
 from relay_teams.env.clawhub_auth import (
     ClawHubCliLoginResult,
     build_clawhub_managed_subprocess_env,
@@ -34,8 +9,20 @@ from relay_teams.env.clawhub_auth import (
     get_clawhub_runtime_config_path,
     get_clawhub_runtime_home,
 )
+
+from relay_teams.env.clawhub_cli import (
+    CLAWHUB_NPM_PACKAGE_NAME,
+    CLAWHUB_PREFERRED_NPM_REGISTRY,
+    ClawHubCliInstallResult,
+    clear_clawhub_path_cache,
+    install_clawhub_via_npm,
+    resolve_existing_clawhub_path,
+)
+
 from relay_teams.env.clawhub_config_models import ClawHubConfig
+
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
+
 from relay_teams.env.clawhub_env import (
     CLAWHUB_REGISTRY_ENV_KEY,
     CLAWHUB_SITE_ENV_KEY,
@@ -49,12 +36,41 @@ from relay_teams.env.clawhub_env import (
     normalize_clawhub_site,
     normalize_clawhub_token,
     resolve_clawhub_registry_from_env,
-    resolve_default_clawhub_registry,
     resolve_clawhub_site_from_env,
-    resolve_default_clawhub_site,
     resolve_clawhub_token_from_env,
+    resolve_default_clawhub_registry,
+    resolve_default_clawhub_site,
     strip_clawhub_endpoint_overrides,
 )
+
+from relay_teams.env.environment_variable_models import (
+    EnvironmentVariableCatalog,
+    EnvironmentVariableRecord,
+    EnvironmentVariableSaveRequest,
+    EnvironmentVariableScope,
+    EnvironmentVariableValueKind,
+)
+
+from relay_teams.env.environment_variable_service import EnvironmentVariableService
+
+from relay_teams.env.github_config_models import GitHubConfig
+
+from relay_teams.env.github_config_service import GitHubConfigService
+
+from relay_teams.env.github_env import (
+    GH_NO_EXTENSION_UPDATE_NOTIFIER_ENV_KEY,
+    GH_NO_UPDATE_NOTIFIER_ENV_KEY,
+    GH_PROMPT_DISABLED_ENV_KEY,
+    GH_TOKEN_ENV_KEY,
+    GITHUB_TOKEN_ENV_KEY,
+    build_github_cli_env,
+    github_env_keys,
+    normalize_github_token,
+    resolve_github_token_from_env,
+)
+
+from relay_teams.env.proxy_config_service import ProxyConfigService
+
 from relay_teams.env.proxy_env import (
     ProxyEnvConfig,
     ProxyEnvInput,
@@ -69,38 +85,24 @@ from relay_teams.env.proxy_env import (
     resolve_proxy_env_config,
     sync_proxy_env_to_process_env,
 )
-from relay_teams.env.github_config_models import GitHubConfig
-from relay_teams.env.github_config_service import GitHubConfigService
-from relay_teams.env.github_connectivity import (
-    GitHubConnectivityProbeDiagnostics,
-    GitHubConnectivityProbeRequest,
-    GitHubConnectivityProbeResult,
-    GitHubConnectivityProbeService,
+
+from relay_teams.env.runtime_env import (
+    get_app_env_file_path,
+    get_env_var,
+    get_project_env_file_path,
+    get_user_env_file_path,
+    load_env_file,
+    load_merged_env_vars,
+    sync_app_env_to_process_env,
 )
-from relay_teams.env.github_env import (
-    GH_NO_EXTENSION_UPDATE_NOTIFIER_ENV_KEY,
-    GH_NO_UPDATE_NOTIFIER_ENV_KEY,
-    GH_PROMPT_DISABLED_ENV_KEY,
-    GITHUB_TOKEN_ENV_KEY,
-    GH_TOKEN_ENV_KEY,
-    build_github_cli_env,
-    github_env_keys,
-    normalize_github_token,
-    resolve_github_token_from_env,
-)
-from relay_teams.env.proxy_config_service import ProxyConfigService
+
 from relay_teams.env.web_config_models import (
     WebConfig,
     WebFallbackProvider,
     WebProvider,
 )
+
 from relay_teams.env.web_config_service import WebConfigService
-from relay_teams.env.web_connectivity import (
-    WebConnectivityProbeDiagnostics,
-    WebConnectivityProbeRequest,
-    WebConnectivityProbeResult,
-    WebConnectivityProbeService,
-)
 
 __all__ = [
     "EnvironmentVariableCatalog",
@@ -120,10 +122,6 @@ __all__ = [
     "ClawHubConfigService",
     "GitHubConfig",
     "GitHubConfigService",
-    "GitHubConnectivityProbeDiagnostics",
-    "GitHubConnectivityProbeRequest",
-    "GitHubConnectivityProbeResult",
-    "GitHubConnectivityProbeService",
     "GITHUB_TOKEN_ENV_KEY",
     "GH_NO_EXTENSION_UPDATE_NOTIFIER_ENV_KEY",
     "GH_NO_UPDATE_NOTIFIER_ENV_KEY",
@@ -172,10 +170,6 @@ __all__ = [
     "normalize_github_token",
     "resolve_github_token_from_env",
     "sync_proxy_env_to_process_env",
-    "WebConnectivityProbeDiagnostics",
-    "WebConnectivityProbeRequest",
-    "WebConnectivityProbeResult",
-    "WebConnectivityProbeService",
     "WebConfig",
     "WebConfigService",
     "WebFallbackProvider",

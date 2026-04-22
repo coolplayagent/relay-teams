@@ -10,7 +10,7 @@ import pytest
 from pydantic_ai import Agent
 
 from relay_teams.sessions.runs.todo_models import TodoItem, TodoSnapshot, TodoStatus
-from relay_teams.tools.runtime import ToolDeps
+from relay_teams.tools.runtime.context import ToolDeps
 from relay_teams.tools.todo_tools.todo_read import register as register_todo_read
 from relay_teams.tools.todo_tools.todo_write import register as register_todo_write
 

@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from urllib.parse import unquote
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from relay_teams.interfaces.server.api_write_validation import require_force_delete
+from relay_teams.validation import require_force_delete
 from relay_teams.interfaces.server.deps import get_workspace_service
 from relay_teams.interfaces.server.write_models import DeleteRequest
 from relay_teams.validation import RequiredIdentifierStr

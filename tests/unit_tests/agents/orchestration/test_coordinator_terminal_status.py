@@ -9,7 +9,7 @@ from relay_teams.media import content_parts_from_text
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.models import create_subagent_instance
 from relay_teams.agents.orchestration.coordinator import CoordinatorGraph
-from relay_teams.agents.orchestration.task_execution_service import TaskExecutionResult
+from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition

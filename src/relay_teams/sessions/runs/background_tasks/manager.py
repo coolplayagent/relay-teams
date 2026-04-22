@@ -192,19 +192,23 @@ class _BackgroundTaskCompletionListener(Protocol):
 class _BackgroundTaskTransport(ABC):
     @property
     @abstractmethod
-    def tty(self) -> bool: ...
+    def tty(self) -> bool:
+        raise NotImplementedError
 
     @property
     @abstractmethod
-    def stream_count(self) -> int: ...
+    def stream_count(self) -> int:
+        raise NotImplementedError
 
     @property
     @abstractmethod
-    def pid(self) -> int | None: ...
+    def pid(self) -> int | None:
+        raise NotImplementedError
 
     @property
     @abstractmethod
-    def returncode(self) -> int | None: ...
+    def returncode(self) -> int | None:
+        raise NotImplementedError
 
     @abstractmethod
     def start_pumps(

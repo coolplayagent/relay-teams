@@ -6,7 +6,8 @@ import json
 from pydantic import JsonValue
 
 from relay_teams.monitors import MonitorService, MonitorSubscriptionRecord
-from relay_teams.tools.runtime import ToolContext, ToolResultProjection
+from relay_teams.tools.runtime.context import ToolContext
+from relay_teams.tools.runtime.models import ToolResultProjection
 
 
 def require_monitor_service(ctx: ToolContext) -> MonitorService:

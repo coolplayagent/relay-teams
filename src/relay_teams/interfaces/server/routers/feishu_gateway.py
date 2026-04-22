@@ -5,14 +5,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from relay_teams.gateway.feishu import (
-    FeishuAccountNameConflictError,
+from relay_teams.gateway.feishu.errors import FeishuAccountNameConflictError
+from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
+from relay_teams.gateway.feishu.models import (
     FeishuGatewayAccountCreateInput,
     FeishuGatewayAccountRecord,
     FeishuGatewayAccountUpdateInput,
-    FeishuGatewayService,
-    FeishuSubscriptionService,
 )
+from relay_teams.gateway.feishu.subscription_service import FeishuSubscriptionService
 from relay_teams.interfaces.server.deps import (
     get_feishu_gateway_service,
     get_feishu_subscription_service,

@@ -5,15 +5,13 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from relay_teams.agents.orchestration.task_orchestration_service import (
-    TaskDraft,
     TaskOrchestrationService,
-    TaskUpdate,
 )
-from relay_teams.interfaces.server.deps import get_task_repo, get_task_service
+from relay_teams.agents.orchestration.task_contracts import TaskDraft, TaskUpdate
+from relay_teams.interfaces.server.deps import get_task_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.validation import RequiredIdentifierStr
 
-from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.tasks.models import TaskRecord
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
@@ -33,8 +31,10 @@ class UpdateTaskRequest(BaseModel):
 
 
 @router.get("", response_model=list[TaskRecord])
-def list_tasks(task_repo: TaskRepository = Depends(get_task_repo)) -> list[TaskRecord]:
-    return list(task_repo.list_all())
+def list_tasks(
+    service: TaskOrchestrationService = Depends(get_task_service),
+) -> list[TaskRecord]:
+    return list(service.list_tasks())
 
 
 @router.post("/runs/{run_id}")
@@ -70,10 +70,10 @@ def list_tasks_for_run(
 @router.get("/{task_id}", response_model=TaskRecord)
 def get_task(
     task_id: RequiredIdentifierStr,
-    task_repo: TaskRepository = Depends(get_task_repo),
+    service: TaskOrchestrationService = Depends(get_task_service),
 ) -> TaskRecord:
     try:
-        return task_repo.get(task_id)
+        return service.get_task(task_id=task_id)
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Task not found") from exc
 

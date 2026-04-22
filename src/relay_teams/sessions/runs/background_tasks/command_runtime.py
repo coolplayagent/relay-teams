@@ -22,7 +22,7 @@ from relay_teams.env import build_github_cli_env, build_subprocess_env, get_env_
 from relay_teams.env.clawhub_cli import resolve_existing_clawhub_path
 from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.paths import get_app_config_dir
-from relay_teams.sessions.runs.background_tasks.github_cli import (
+from relay_teams.net.github_cli import (
     resolve_existing_gh_path,
 )
 
@@ -134,19 +134,24 @@ class _AsyncProcessWriter(Protocol):
 
 class _PipeProcess(Protocol):
     @property
-    def pid(self) -> int | None: ...
+    def pid(self) -> int | None:
+        raise NotImplementedError
 
     @property
-    def returncode(self) -> int | None: ...
+    def returncode(self) -> int | None:
+        raise NotImplementedError
 
     @property
-    def stdin(self) -> _AsyncProcessWriter | None: ...
+    def stdin(self) -> _AsyncProcessWriter | None:
+        raise NotImplementedError
 
     @property
-    def stdout(self) -> asyncio.StreamReader | None: ...
+    def stdout(self) -> asyncio.StreamReader | None:
+        raise NotImplementedError
 
     @property
-    def stderr(self) -> asyncio.StreamReader | None: ...
+    def stderr(self) -> asyncio.StreamReader | None:
+        raise NotImplementedError
 
     async def wait(self) -> int | None: ...
 

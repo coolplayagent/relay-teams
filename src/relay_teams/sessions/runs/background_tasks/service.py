@@ -9,9 +9,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
-from relay_teams.agents.orchestration.task_execution_service import (
-    TaskExecutionResult,
-)
+from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.models import (
     SubAgentInstance,
@@ -51,6 +49,7 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.workspace import WorkspaceHandle
+from relay_teams.env.hook_runtime_env import merge_tool_hook_runtime_env
 from relay_teams.hooks import (
     HookEventName,
     HookRuntimeSnapshot,
@@ -59,7 +58,6 @@ from relay_teams.hooks import (
     SubagentStopInput,
     TaskCreatedInput,
 )
-from relay_teams.tools.runtime.hook_runtime_env import merge_tool_hook_runtime_env
 
 LOGGER = get_logger(__name__)
 _COMPLETION_RETRY_INITIAL_DELAY_SECONDS = 1.0

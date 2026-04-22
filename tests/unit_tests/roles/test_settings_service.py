@@ -16,7 +16,7 @@ from relay_teams.roles import (
 )
 from relay_teams.roles.settings_service import RoleSettingsService
 from relay_teams.skills.skill_registry import SkillRegistry
-from relay_teams.tools.registry import build_default_registry
+from relay_teams.tools.registry.defaults import build_default_registry
 
 
 def test_save_role_document_renames_role_file_and_reloads_registry(

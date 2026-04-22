@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from relay_teams.interfaces.server.api_write_validation import (
+from relay_teams.validation import (
     normalize_optional_text_field,
     reject_empty_mapping_patch,
     require_cascade_delete,

@@ -62,9 +62,10 @@ from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.skills.skill_registry import SkillRegistry
-from relay_teams.gateway.im import ImToolService
+from relay_teams.gateway.im.service import ImToolService
 from relay_teams.tools.registry import ToolRegistry
-from relay_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.workspace import WorkspaceManager
 
@@ -344,7 +345,7 @@ class _FakeHostToolBridge:
         return {
             "name": HOST_TOOL_SERVER_ID,
             "command": "python",
-            "args": ["-m", "relay_teams.external_agents.host_tool_stdio_server"],
+            "args": ["-m", "relay_teams.interfaces.server.host_tool_stdio_server"],
             "env": [
                 {"name": "RELAY_TEAMS_CONFIG_DIR", "value": str(config_dir)},
                 {"name": "AGENT_TEAMS_HOST_TOOL_RUN_ID", "value": request.run_id},

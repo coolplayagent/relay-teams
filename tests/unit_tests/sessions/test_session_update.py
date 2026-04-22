@@ -17,7 +17,7 @@ from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.sessions.session_models import SessionMetadataPatch, SessionMode
-from relay_teams.gateway.feishu import (
+from relay_teams.sessions.session_metadata import (
     SESSION_METADATA_TITLE_SOURCE_KEY,
     SESSION_TITLE_SOURCE_AUTO,
     SESSION_TITLE_SOURCE_MANUAL,

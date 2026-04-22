@@ -10,7 +10,11 @@ from relay_teams.roles.temporary_role_models import (
 )
 from relay_teams.roles.role_models import RoleMode
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from relay_teams.tools.runtime.context import (
+    ToolContext,
+    ToolDeps,
+)
+from relay_teams.tools.runtime.execution import execute_tool
 
 DESCRIPTION = load_tool_description(__file__)
 

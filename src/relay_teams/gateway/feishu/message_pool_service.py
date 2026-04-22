@@ -26,7 +26,9 @@ from relay_teams.gateway.feishu.models import (
 )
 from relay_teams.gateway.session_ingress_service import GatewaySessionBusyError
 from relay_teams.logger import get_logger, log_event
-from relay_teams.sessions import ExternalSessionBindingRepository
+from relay_teams.sessions.external_session_binding_repository import (
+    ExternalSessionBindingRepository,
+)
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.run_runtime_repo import (

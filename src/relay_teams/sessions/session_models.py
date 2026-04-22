@@ -6,7 +6,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from relay_teams.interfaces.server.api_write_validation import (
+from relay_teams.validation import (
     normalize_optional_text_field,
     require_non_empty_patch,
 )
@@ -229,10 +229,11 @@ class SessionMetadataPatch(BaseModel):
 
     @model_validator(mode="after")
     def _require_non_empty_patch(self) -> "SessionMetadataPatch":
-        return require_non_empty_patch(
+        require_non_empty_patch(
             self,
             message="session update must include at least one field",
         )
+        return self
 
 
 class SessionRecord(BaseModel):

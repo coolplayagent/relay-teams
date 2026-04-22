@@ -17,6 +17,21 @@ from relay_teams.gateway.feishu.models import (
     FeishuEnvironment,
     FeishuNormalizedMessage,
     FeishuTriggerRuntimeConfig,
+)
+from relay_teams.gateway.session_ingress_service import (
+    GatewaySessionIngressRequest,
+    GatewaySessionIngressService,
+)
+from relay_teams.logger import get_logger, log_event
+from relay_teams.media import content_parts_from_text
+from relay_teams.providers.token_usage_repo import SessionTokenUsage
+from relay_teams.sessions.runs.run_models import RuntimePromptConversationContext
+from relay_teams.sessions.external_session_binding_repository import (
+    ExternalSessionBindingRepository,
+)
+from relay_teams.sessions.runs.enums import ExecutionMode
+from relay_teams.sessions.runs.run_models import IntentInput
+from relay_teams.sessions.session_metadata import (
     SESSION_METADATA_SOURCE_ICON_KEY,
     SESSION_METADATA_SOURCE_KIND_KEY,
     SESSION_METADATA_SOURCE_LABEL_KEY,
@@ -27,17 +42,6 @@ from relay_teams.gateway.feishu.models import (
     SESSION_TITLE_SOURCE_AUTO,
     SESSION_TITLE_SOURCE_MANUAL,
 )
-from relay_teams.gateway.session_ingress_service import (
-    GatewaySessionIngressRequest,
-    GatewaySessionIngressService,
-)
-from relay_teams.logger import get_logger, log_event
-from relay_teams.media import content_parts_from_text
-from relay_teams.providers.token_usage_repo import SessionTokenUsage
-from relay_teams.sessions.runs.run_models import RuntimePromptConversationContext
-from relay_teams.sessions import ExternalSessionBindingRepository
-from relay_teams.sessions.runs.enums import ExecutionMode
-from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.session_models import SessionMode, SessionRecord
 
 logger = get_logger(__name__)

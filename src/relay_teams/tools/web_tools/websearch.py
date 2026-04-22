@@ -28,12 +28,14 @@ from relay_teams.env.web_config_models import (
 )
 from relay_teams.net.clients import create_async_http_client
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.runtime import (
+from relay_teams.tools.runtime.context import (
     ToolContext,
     ToolDeps,
+)
+from relay_teams.tools.runtime.execution import execute_tool_call
+from relay_teams.tools.runtime.models import (
     ToolExecutionError,
     ToolResultProjection,
-    execute_tool_call,
 )
 from relay_teams.tools.web_tools.common import load_runtime_web_config
 

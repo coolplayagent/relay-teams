@@ -46,7 +46,8 @@ from relay_teams.skills.discovery import SkillsDirectory
 from relay_teams.skills.skill_models import SkillSource
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.tools.registry import ToolRegistry
-from relay_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.workspace import WorkspaceManager
 
 

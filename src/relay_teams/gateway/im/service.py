@@ -16,7 +16,7 @@ from relay_teams.gateway.im.context import (
 )
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.gateway.wechat.models import WeChatAccountRecord
-from relay_teams.automation import AutomationRunDeliveryRecord
+from relay_teams.automation.automation_models import AutomationRunDeliveryRecord
 
 
 class _FeishuSender(Protocol):

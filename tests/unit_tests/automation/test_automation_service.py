@@ -11,19 +11,25 @@ from pydantic import ValidationError
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
-from relay_teams.automation import (
+from relay_teams.automation.automation_bound_session_queue_service import (
     AutomationBoundSessionQueueService,
-    AutomationDeliveryService,
-    AutomationExecutionHandle,
+)
+from relay_teams.automation.automation_delivery_service import AutomationDeliveryService
+from relay_teams.automation.automation_event_repository import (
     AutomationEventRepository,
+)
+from relay_teams.automation.automation_models import (
+    AutomationExecutionHandle,
     AutomationFeishuBinding,
-    AutomationFeishuBindingService,
     AutomationProjectCreateInput,
-    AutomationProjectRepository,
     AutomationProjectStatus,
     AutomationProjectUpdateInput,
     AutomationScheduleMode,
-    AutomationService,
+)
+from relay_teams.automation.automation_repository import AutomationProjectRepository
+from relay_teams.automation.automation_service import AutomationService
+from relay_teams.automation.feishu_binding_service import (
+    AutomationFeishuBindingService,
 )
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.sessions.runs.run_manager import RunManager

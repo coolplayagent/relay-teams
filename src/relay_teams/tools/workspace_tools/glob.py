@@ -9,12 +9,12 @@ from pydantic_ai import Agent
 
 from relay_teams.paths import path_exists
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.runtime import (
+from relay_teams.tools.runtime.context import (
     ToolContext,
     ToolDeps,
-    ToolResultProjection,
-    execute_tool,
 )
+from relay_teams.tools.runtime.execution import execute_tool
+from relay_teams.tools.runtime.models import ToolResultProjection
 from relay_teams.tools.workspace_tools import ripgrep
 from relay_teams.tools.workspace_tools.path_utils import resolve_workspace_glob_scope
 

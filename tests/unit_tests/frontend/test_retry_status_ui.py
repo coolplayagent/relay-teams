@@ -35,9 +35,16 @@ export function updateRoundRetryEvent(runId, eventId, payload) {
 """.strip(),
         encoding="utf-8",
     )
-    source_text = source_path.read_text(encoding="utf-8").replace(
-        "../components/rounds.js",
-        "./mockRounds.mjs",
+    source_text = (
+        source_path.read_text(encoding="utf-8")
+        .replace(
+            "../components/rounds/timeline.js",
+            "./mockRounds.mjs",
+        )
+        .replace(
+            "../components/rounds.js",
+            "./mockRounds.mjs",
+        )
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
     runner_path.write_text(

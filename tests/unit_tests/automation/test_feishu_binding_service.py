@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from relay_teams.automation import (
-    AutomationFeishuBinding,
+from relay_teams.automation.automation_models import AutomationFeishuBinding
+from relay_teams.automation.feishu_binding_service import (
     AutomationFeishuBindingService,
 )
-from relay_teams.sessions import ExternalSessionBindingRepository
+from relay_teams.sessions.external_session_binding_repository import (
+    ExternalSessionBindingRepository,
+)
 from relay_teams.sessions.session_repository import SessionRepository
 
 

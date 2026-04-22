@@ -19,7 +19,8 @@ from relay_teams.gateway.feishu.models import (
 from relay_teams.logger import get_logger, log_event
 
 if TYPE_CHECKING:
-    from relay_teams.gateway.im import ImSessionCommandService, ImToolService
+    from relay_teams.gateway.im.command_service import ImSessionCommandService
+    from relay_teams.gateway.im.service import ImToolService
     from lark_oapi.api.im.v1.model.event_message import EventMessage
     from lark_oapi.api.im.v1.model.event_sender import EventSender
     from lark_oapi.api.im.v1.model.user_id import UserId

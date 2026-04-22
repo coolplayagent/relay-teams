@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from time import perf_counter
 import subprocess
+from typing import Dict, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,8 +41,8 @@ _DEFAULT_INSTALL_TIMEOUT_SECONDS = 180.0
 class ClawHubConnectivityProbeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    token: str | None = None
-    timeout_ms: int | None = Field(
+    token: Optional[str] = None
+    timeout_ms: Optional[int] = Field(
         default=None,
         ge=1000,
         le=_MAX_CLAWHUB_PROBE_TIMEOUT_MS,
@@ -55,7 +56,7 @@ class ClawHubConnectivityProbeDiagnostics(BaseModel):
     token_configured: bool
     installation_attempted: bool = False
     installed_during_probe: bool = False
-    registry: str | None = None
+    registry: Optional[str] = None
     endpoint_fallback_used: bool = False
 
 
@@ -63,15 +64,15 @@ class ClawHubConnectivityProbeResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ok: bool
-    clawhub_path: str | None = None
-    clawhub_version: str | None = None
-    exit_code: int | None = None
+    clawhub_path: Optional[str] = None
+    clawhub_version: Optional[str] = None
+    exit_code: Optional[int] = None
     latency_ms: int = Field(ge=0)
     checked_at: datetime
     diagnostics: ClawHubConnectivityProbeDiagnostics
     retryable: bool = False
-    error_code: str | None = None
-    error_message: str | None = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 class ClawHubConnectivityProbeService:
@@ -143,7 +144,6 @@ class ClawHubConnectivityProbeService:
             installation_attempted = install_result.attempted
             if install_result.ok and install_result.clawhub_path is not None:
                 clawhub_path = Path(install_result.clawhub_path)
-                binary_available = True
                 installed_during_probe = True
             else:
                 return self._build_result(
@@ -167,7 +167,7 @@ class ClawHubConnectivityProbeService:
         env["PATH"] = _prepend_to_path(env.get("PATH"), clawhub_path.parent)
         registry = resolve_clawhub_registry_from_env(env)
         endpoint_fallback_used = False
-        version_text: str | None = None
+        version_text: Optional[str] = None
         version_timeout_seconds = _resolve_remaining_timeout_seconds(probe_deadline)
         if version_timeout_seconds is not None:
             version_text = _read_clawhub_version(
@@ -419,24 +419,24 @@ class ClawHubConnectivityProbeService:
             endpoint_fallback_used=endpoint_fallback_used,
         )
 
+    @staticmethod
     def _build_result(
-        self,
         *,
         ok: bool,
         checked_at: datetime,
         started: float,
         binary_available: bool,
         token_configured: bool,
-        clawhub_path: Path | None = None,
-        clawhub_version: str | None = None,
-        exit_code: int | None = None,
+        clawhub_path: Optional[Path] = None,
+        clawhub_version: Optional[str] = None,
+        exit_code: Optional[int] = None,
         installation_attempted: bool = False,
         installed_during_probe: bool = False,
-        registry: str | None = None,
+        registry: Optional[str] = None,
         endpoint_fallback_used: bool = False,
         retryable: bool = False,
-        error_code: str | None = None,
-        error_message: str | None = None,
+        error_code: Optional[str] = None,
+        error_message: Optional[str] = None,
     ) -> ClawHubConnectivityProbeResult:
         return ClawHubConnectivityProbeResult(
             ok=ok,
@@ -459,7 +459,7 @@ class ClawHubConnectivityProbeService:
         )
 
 
-def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
+def _prepend_to_path(existing_path: Optional[str], directory: Path) -> str:
     path_parts = [str(directory)]
     if existing_path:
         path_parts.append(existing_path)
@@ -469,9 +469,9 @@ def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
 def _read_clawhub_version(
     clawhub_path: Path,
     *,
-    env: dict[str, str],
+    env: Dict[str, str],
     timeout_seconds: float,
-) -> str | None:
+) -> Optional[str]:
     try:
         completed = subprocess.run(
             [str(clawhub_path), "--cli-version"],
@@ -492,7 +492,7 @@ def _read_clawhub_version(
     )
 
 
-def _resolve_command_output_text(*candidates: str) -> str | None:
+def _resolve_command_output_text(*candidates: str) -> Optional[str]:
     for candidate in candidates:
         non_empty_lines = [
             line.strip() for line in candidate.splitlines() if line.strip()
@@ -502,7 +502,7 @@ def _resolve_command_output_text(*candidates: str) -> str | None:
     return None
 
 
-def _normalize_clawhub_version_text(version_text: str | None) -> str | None:
+def _normalize_clawhub_version_text(version_text: Optional[str]) -> Optional[str]:
     if version_text is None:
         return None
     if version_text.lower().startswith("clawhub "):
@@ -512,17 +512,17 @@ def _normalize_clawhub_version_text(version_text: str | None) -> str | None:
     return version_text
 
 
-def _resolve_probe_deadline(started: float, timeout_ms: int | None) -> float:
+def _resolve_probe_deadline(started: float, timeout_ms: Optional[int]) -> float:
     return started + _resolve_probe_timeout_seconds(timeout_ms)
 
 
-def _resolve_probe_timeout_seconds(timeout_ms: int | None) -> float:
+def _resolve_probe_timeout_seconds(timeout_ms: Optional[int]) -> float:
     if timeout_ms is None:
         return _DEFAULT_TIMEOUT_SECONDS
     return timeout_ms / 1000.0
 
 
-def _resolve_remaining_timeout_seconds(deadline: float) -> float | None:
+def _resolve_remaining_timeout_seconds(deadline: float) -> Optional[float]:
     remaining_seconds = deadline - perf_counter()
     if remaining_seconds <= 0:
         return None
@@ -530,10 +530,10 @@ def _resolve_remaining_timeout_seconds(deadline: float) -> float | None:
 
 
 def _resolve_install_timeout_seconds(
-    timeout_ms: int | None,
+    timeout_ms: Optional[int],
     *,
-    probe_deadline: float | None = None,
-) -> float | None:
+    probe_deadline: Optional[float] = None,
+) -> Optional[float]:
     if timeout_ms is None:
         return _DEFAULT_INSTALL_TIMEOUT_SECONDS
     if probe_deadline is None:
@@ -545,7 +545,7 @@ def _classify_probe_error(
     error_message: str,
     *,
     default_error_code: str,
-) -> tuple[str, bool]:
+) -> Tuple[str, bool]:
     lowered = error_message.lower()
     if (
         "not logged in" in lowered
@@ -553,13 +553,13 @@ def _classify_probe_error(
         or "unauthorized" in lowered
         or "forbidden" in lowered
     ):
-        return ("auth_failed", False)
+        return "auth_failed", False
     if "timed out" in lowered or "timeout" in lowered:
-        return ("network_timeout", True)
+        return "network_timeout", True
     if "could not resolve host" in lowered or "dns" in lowered:
-        return ("dns_error", True)
+        return "dns_error", True
     if "proxy" in lowered:
-        return ("proxy_error", True)
+        return "proxy_error", True
     if "network" in lowered or "connect" in lowered:
-        return ("network_error", True)
-    return (default_error_code, False)
+        return "network_error", True
+    return default_error_code, False

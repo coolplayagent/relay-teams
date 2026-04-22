@@ -5,10 +5,14 @@ from pydantic import JsonValue
 
 from pydantic_ai import Agent
 
-from relay_teams.agents.orchestration.task_orchestration_service import TaskDraft
+from relay_teams.agents.orchestration.task_contracts import TaskDraft
 
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool_call
+from relay_teams.tools.runtime.context import (
+    ToolContext,
+    ToolDeps,
+)
+from relay_teams.tools.runtime.execution import execute_tool_call
 
 DESCRIPTION = load_tool_description(__file__)
 

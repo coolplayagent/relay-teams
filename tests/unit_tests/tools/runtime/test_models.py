@@ -25,9 +25,9 @@ from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
-from relay_teams.tools.runtime import (
+from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.runtime.models import (
     ToolError,
-    ToolDeps,
     ToolInternalRecord,
     ToolResultEnvelope,
     ToolResultProjection,

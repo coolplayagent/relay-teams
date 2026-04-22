@@ -16,7 +16,7 @@ from relay_teams.media import (
     MediaRefContentPart,
     infer_media_modality,
 )
-from relay_teams.sessions import SessionService
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])

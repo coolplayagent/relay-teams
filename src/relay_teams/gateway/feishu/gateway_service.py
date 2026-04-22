@@ -9,10 +9,8 @@ from uuid import uuid4
 from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
-from relay_teams.gateway.feishu.account_repository import (
-    FeishuAccountNameConflictError,
-    FeishuAccountRepository,
-)
+from relay_teams.gateway.feishu.account_repository import FeishuAccountRepository
+from relay_teams.gateway.feishu.errors import FeishuAccountNameConflictError
 from relay_teams.gateway.feishu.models import (
     FeishuEnvironment,
     FeishuGatewayAccountCreateInput,
@@ -29,7 +27,7 @@ from relay_teams.gateway.feishu.secret_store import (
     FeishuTriggerSecretStore,
     get_feishu_trigger_secret_store,
 )
-from relay_teams.interfaces.server.api_write_validation import require_force_delete
+from relay_teams.validation import require_force_delete
 from relay_teams.logger import get_logger, log_event
 from relay_teams.roles import RoleRegistry
 from relay_teams.sessions.external_session_binding_repository import (

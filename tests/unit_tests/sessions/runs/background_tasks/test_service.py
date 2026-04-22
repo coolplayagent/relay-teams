@@ -12,7 +12,7 @@ from typing import Literal, cast
 import pytest
 
 from relay_teams.agents.tasks.models import TaskEnvelope
-from relay_teams.agents.orchestration.task_execution_service import TaskExecutionResult
+from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.sessions.runs.background_tasks.command_runtime import (
     normalize_timeout,
 )

@@ -8,11 +8,12 @@ import shutil
 import tarfile
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 from relay_teams.logger import get_logger
 from relay_teams.net.clients import create_async_http_client
 from relay_teams.paths import get_app_bin_dir
-from relay_teams.tools.workspace_tools.github_cli_errors import (
+from relay_teams.net.github_cli_errors import (
     DownloadFailedError,
     ExtractionFailedError,
     GitHubCliNotFoundError,
@@ -22,8 +23,8 @@ from relay_teams.tools.workspace_tools.github_cli_errors import (
 LOGGER = get_logger(__name__)
 
 VERSION = "2.88.1"
-BIN_DIR: Path | None = None
-_gh_path_cache: Path | None = None
+BIN_DIR: Optional[Path] = None
+_gh_path_cache: Optional[Path] = None
 _gh_path_lock = asyncio.Lock()
 
 PLATFORM_MAP = {
@@ -94,7 +95,7 @@ def clear_gh_path_cache() -> None:
     _gh_path_cache = None
 
 
-def resolve_existing_gh_path() -> Path | None:
+def resolve_existing_gh_path() -> Optional[Path]:
     global _gh_path_cache
 
     try:
@@ -116,7 +117,7 @@ def resolve_existing_gh_path() -> Path | None:
     return None
 
 
-def resolve_system_gh_path() -> Path | None:
+def resolve_system_gh_path() -> Optional[Path]:
     system_gh = shutil.which("gh")
     if not system_gh:
         return None
@@ -126,7 +127,7 @@ def resolve_system_gh_path() -> Path | None:
     return system_path
 
 
-def get_bundled_gh_path() -> Path | None:
+def get_bundled_gh_path() -> Optional[Path]:
     local_path = _bundled_gh_target_path()
     if local_path.is_file():
         return local_path

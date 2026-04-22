@@ -46,11 +46,9 @@ from relay_teams.sessions.runs.user_question_repository import UserQuestionRepos
 from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
-from relay_teams.tools.runtime import (
-    ToolApprovalManager,
-    ToolApprovalPolicy,
-    ToolDeps,
-)
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
@@ -74,7 +72,7 @@ if TYPE_CHECKING:
     from relay_teams.metrics import MetricRecorder
     from relay_teams.notifications import NotificationService
     from relay_teams.persistence.shared_state_repo import SharedStateRepository
-    from relay_teams.gateway.im import ImToolService
+    from relay_teams.gateway.im.service import ImToolService
 
 
 def _load_fastmcp_tool_types() -> tuple[type[object], type[object]]:
@@ -107,7 +105,7 @@ if not TYPE_CHECKING:
 HOST_TOOL_SERVER_ID = "agent_teams_host_tools"
 BUILTIN_TOOL_NAME_PREFIX = "agent_teams_builtin_"
 SKILL_TOOL_NAME_PREFIX = "agent_teams_skill_"
-HOST_TOOL_STDIO_MODULE = "relay_teams.external_agents.host_tool_stdio_server"
+HOST_TOOL_STDIO_MODULE = "relay_teams.interfaces.server.host_tool_stdio_server"
 HOST_TOOL_CONFIG_DIR_ENV = "RELAY_TEAMS_CONFIG_DIR"
 HOST_TOOL_RUN_ID_ENV = "AGENT_TEAMS_HOST_TOOL_RUN_ID"
 HOST_TOOL_TRACE_ID_ENV = "AGENT_TEAMS_HOST_TOOL_TRACE_ID"

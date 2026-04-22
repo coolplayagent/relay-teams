@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+from enum import StrEnum
 from time import perf_counter
-from typing import Literal
+from typing import Optional
 from urllib.parse import urlsplit
 
 import httpx
@@ -21,12 +22,19 @@ _MAX_WEB_PROBE_TIMEOUT_MS = 300_000
 _HEAD_FALLBACK_STATUS_CODES = {405, 501}
 
 
+class WebProbeMethod(StrEnum):
+    HEAD = "HEAD"
+    GET = "GET"
+
+
 class WebConnectivityProbeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     url: str = Field(min_length=1)
-    timeout_ms: int | None = Field(default=None, ge=1000, le=_MAX_WEB_PROBE_TIMEOUT_MS)
-    proxy_override: ProxyEnvInput | None = None
+    timeout_ms: Optional[int] = Field(
+        default=None, ge=1000, le=_MAX_WEB_PROBE_TIMEOUT_MS
+    )
+    proxy_override: Optional[ProxyEnvInput] = None
 
 
 class WebConnectivityProbeDiagnostics(BaseModel):
@@ -43,14 +51,14 @@ class WebConnectivityProbeResult(BaseModel):
     ok: bool
     url: str = Field(min_length=1)
     final_url: str = Field(min_length=1)
-    status_code: int | None = Field(default=None, ge=100, le=599)
+    status_code: Optional[int] = Field(default=None, ge=100, le=599)
     latency_ms: int = Field(ge=0)
     checked_at: datetime
-    used_method: Literal["HEAD", "GET"]
+    used_method: WebProbeMethod
     diagnostics: WebConnectivityProbeDiagnostics
     retryable: bool = False
-    error_code: str | None = None
-    error_message: str | None = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 class WebConnectivityProbeService:
@@ -87,17 +95,17 @@ class WebConnectivityProbeService:
         ) as client:
             try:
                 response = client.head(request.url)
-                method = "HEAD"
+                method = WebProbeMethod.HEAD
                 if response.status_code in _HEAD_FALLBACK_STATUS_CODES:
                     response = client.get(request.url)
-                    method = "GET"
+                    method = WebProbeMethod.GET
             except httpx.TimeoutException as exc:
                 return self._build_transport_error_result(
                     url=request.url,
                     checked_at=checked_at,
                     started=started,
                     used_proxy=used_proxy,
-                    method="HEAD",
+                    method=WebProbeMethod.HEAD,
                     error_code="network_timeout",
                     error_message=str(exc) or "Connection timed out.",
                 )
@@ -107,7 +115,7 @@ class WebConnectivityProbeService:
                     checked_at=checked_at,
                     started=started,
                     used_proxy=used_proxy,
-                    method="HEAD",
+                    method=WebProbeMethod.HEAD,
                     error_code="proxy_error",
                     error_message=str(exc) or "Proxy request failed.",
                 )
@@ -122,7 +130,7 @@ class WebConnectivityProbeService:
                     checked_at=checked_at,
                     started=started,
                     used_proxy=used_proxy,
-                    method="HEAD",
+                    method=WebProbeMethod.HEAD,
                     error_code=error_code,
                     error_message=str(exc) or "Failed to reach target host.",
                 )
@@ -132,7 +140,7 @@ class WebConnectivityProbeService:
                     checked_at=checked_at,
                     started=started,
                     used_proxy=used_proxy,
-                    method="HEAD",
+                    method=WebProbeMethod.HEAD,
                     error_code="network_error",
                     error_message=str(exc) or "Failed to reach target URL.",
                 )
@@ -158,14 +166,14 @@ class WebConnectivityProbeService:
             error_message=None,
         )
 
+    @staticmethod
     def _build_transport_error_result(
-        self,
         *,
         url: str,
         checked_at: datetime,
         started: float,
         used_proxy: bool,
-        method: Literal["HEAD", "GET"],
+        method: WebProbeMethod,
         error_code: str,
         error_message: str,
     ) -> WebConnectivityProbeResult:

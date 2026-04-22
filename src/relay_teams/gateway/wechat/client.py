@@ -368,7 +368,7 @@ class WeChatClient:
     ) -> WeChatUploadedMedia:
         plaintext = file_path.read_bytes()
         raw_size = len(plaintext)
-        raw_md5 = hashlib.md5(plaintext).hexdigest()
+        raw_md5 = hashlib.md5(plaintext, usedforsecurity=False).hexdigest()
         aes_key_bytes = secrets.token_bytes(16)
         filekey = secrets.token_hex(16)
         encrypted_bytes = self._encrypt_aes_ecb(plaintext, aes_key_bytes)

@@ -8,9 +8,10 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
-from relay_teams.env.clawhub_connectivity import (
+from relay_teams.net.clawhub_connectivity import (
     ClawHubConnectivityProbeRequest,
     ClawHubConnectivityProbeResult,
+    ClawHubConnectivityProbeService,
 )
 from relay_teams.env.environment_variable_models import (
     EnvironmentVariableCatalog,
@@ -25,11 +26,13 @@ from relay_teams.env.github_config_models import (
     GitHubTokenRevealView,
 )
 from relay_teams.env.github_config_service import GitHubConfigService
-from relay_teams.env.github_connectivity import (
+from relay_teams.net.github_connectivity import (
     GitHubConnectivityProbeRequest,
     GitHubConnectivityProbeResult,
+    GitHubConnectivityProbeService,
     GitHubWebhookConnectivityProbeRequest,
     GitHubWebhookConnectivityProbeResult,
+    GitHubWebhookConnectivityProbeService,
 )
 from relay_teams.env.localhost_run_tunnel_service import (
     LocalhostRunTunnelStartRequest,
@@ -48,17 +51,21 @@ from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.proxy_env import ProxyEnvInput
 from relay_teams.env.web_config_models import WebConfig
 from relay_teams.env.web_config_service import WebConfigService
-from relay_teams.env.web_connectivity import (
+from relay_teams.net.web_connectivity import (
     WebConnectivityProbeRequest,
     WebConnectivityProbeResult,
+    WebConnectivityProbeService,
 )
 from relay_teams.interfaces.server.deps import (
+    get_clawhub_connectivity_probe_service,
     get_clawhub_config_service,
     get_clawhub_skill_service,
     get_config_status_service,
     get_environment_variable_service,
     get_external_agent_config_service,
+    get_github_connectivity_probe_service,
     get_github_config_service,
+    get_github_webhook_connectivity_probe_service,
     get_localhost_run_tunnel_service,
     get_github_trigger_service,
     get_mcp_config_reload_service,
@@ -70,6 +77,7 @@ from relay_teams.interfaces.server.deps import (
     get_skills_config_reload_service,
     get_ui_language_settings_service,
     get_web_config_service,
+    get_web_connectivity_probe_service,
     get_hook_service,
 )
 from relay_teams.interfaces.server.ui_language_models import UiLanguageSettings
@@ -678,10 +686,12 @@ def save_clawhub_config(
 @router.post("/configs/clawhub:probe")
 def probe_clawhub_connectivity(
     req: ClawHubConnectivityProbeRequest,
-    service: ClawHubConfigService = Depends(get_clawhub_config_service),
+    service: ClawHubConnectivityProbeService = Depends(
+        get_clawhub_connectivity_probe_service
+    ),
 ) -> ClawHubConnectivityProbeResult:
     try:
-        return service.probe_connectivity(req)
+        return service.probe(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -807,10 +817,10 @@ def reload_proxy_config(
 @router.post("/configs/web:probe")
 def probe_web_connectivity(
     req: WebConnectivityProbeRequest,
-    service: ProxyConfigService = Depends(get_proxy_config_service),
+    service: WebConnectivityProbeService = Depends(get_web_connectivity_probe_service),
 ) -> WebConnectivityProbeResult:
     try:
-        return service.probe_web_connectivity(req)
+        return service.probe(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -818,10 +828,12 @@ def probe_web_connectivity(
 @router.post("/configs/github:probe")
 def probe_github_connectivity(
     req: GitHubConnectivityProbeRequest,
-    service: GitHubConfigService = Depends(get_github_config_service),
+    service: GitHubConnectivityProbeService = Depends(
+        get_github_connectivity_probe_service
+    ),
 ) -> GitHubConnectivityProbeResult:
     try:
-        return service.probe_connectivity(req)
+        return service.probe(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -829,10 +841,12 @@ def probe_github_connectivity(
 @router.post("/configs/github/webhook:probe")
 def probe_github_webhook_connectivity(
     req: GitHubWebhookConnectivityProbeRequest,
-    service: GitHubConfigService = Depends(get_github_config_service),
+    service: GitHubWebhookConnectivityProbeService = Depends(
+        get_github_webhook_connectivity_probe_service
+    ),
 ) -> GitHubWebhookConnectivityProbeResult:
     try:
-        return service.probe_webhook_connectivity(req)
+        return service.probe(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -18,7 +18,11 @@ from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
-from relay_teams.tools.runtime import ToolDeps, ToolExecutionError, ToolResultProjection
+from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.runtime.models import (
+    ToolExecutionError,
+    ToolResultProjection,
+)
 from relay_teams.tools.runtime.models import ToolApprovalRequest
 from relay_teams.tools.workspace_tools import (
     register_background_tasks,

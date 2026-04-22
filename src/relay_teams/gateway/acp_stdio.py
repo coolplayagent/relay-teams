@@ -38,7 +38,7 @@ from relay_teams.media import (
 )
 from relay_teams.metrics import MetricRecorder
 from relay_teams.metrics.adapters import record_gateway_operation
-from relay_teams.sessions import SessionService
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.run_models import IntentInput, RunEvent

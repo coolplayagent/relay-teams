@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import relay_teams.external_agents.host_tool_stdio_server as stdio_server
+import relay_teams.interfaces.server.host_tool_stdio_server as stdio_server
 
 
 class _FakeStdioServer:

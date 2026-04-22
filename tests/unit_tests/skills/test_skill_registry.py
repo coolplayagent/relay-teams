@@ -17,7 +17,7 @@ from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.skills.discovery import SkillsDirectory
 from relay_teams.skills.skill_models import SkillSource
 from relay_teams.skills.skill_registry import SkillRegistry
-from relay_teams.tools.runtime import ToolContext
+from relay_teams.tools.runtime.context import ToolContext
 
 
 def test_get_toolset_tools_builds_skill_tools_without_annotation_errors() -> None:

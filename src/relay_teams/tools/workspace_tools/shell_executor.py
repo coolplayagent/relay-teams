@@ -26,7 +26,7 @@ from relay_teams.env.clawhub_cli import resolve_existing_clawhub_path
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.paths import get_app_config_dir
-from relay_teams.tools.workspace_tools.github_cli import resolve_existing_gh_path
+from relay_teams.net.github_cli import resolve_existing_gh_path
 from relay_teams.tools.workspace_tools.shell_policy import (
     DEFAULT_TIMEOUT_SECONDS,
     MAX_TIMEOUT_SECONDS,

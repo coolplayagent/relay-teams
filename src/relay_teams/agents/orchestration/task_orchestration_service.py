@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import JsonValue
 
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.models import create_subagent_instance
-from relay_teams.agents.orchestration.task_execution_service import (
-    TaskExecutionService,
+from relay_teams.agents.orchestration.task_contracts import (
+    TaskDraft,
+    TaskExecutionServiceLike,
+    TaskUpdate,
 )
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
@@ -25,26 +27,6 @@ from relay_teams.hooks import HookEventName, HookService, TaskCreatedInput
 from relay_teams.sessions.runs.event_stream import RunEventHub
 
 
-class TaskDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    objective: str = Field(min_length=1)
-    title: str | None = None
-
-
-class TaskUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    objective: str | None = None
-    title: str | None = None
-
-    @model_validator(mode="after")
-    def validate_non_empty_patch(self) -> TaskUpdate:
-        if self.objective is None and self.title is None:
-            raise ValueError("update must include at least one field")
-        return self
-
-
 class TaskOrchestrationService:
     def __init__(
         self,
@@ -52,7 +34,7 @@ class TaskOrchestrationService:
         task_repo: TaskRepository,
         role_registry: RoleRegistry,
         agent_repo: AgentInstanceRepository,
-        task_execution_service: TaskExecutionService,
+        task_execution_service: TaskExecutionServiceLike,
         message_repo: MessageRepository,
         session_repo: SessionRepository | None = None,
         runtime_role_resolver: RuntimeRoleResolver | None = None,
@@ -182,6 +164,9 @@ class TaskOrchestrationService:
         include_root: bool = False,
     ) -> dict[str, JsonValue]:
         return self.list_delegated_tasks(run_id=run_id, include_root=include_root)
+
+    def list_tasks(self) -> tuple[TaskRecord, ...]:
+        return self._task_repo.list_all()
 
     async def dispatch_task(
         self,

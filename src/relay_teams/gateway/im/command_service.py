@@ -18,7 +18,10 @@ from relay_teams.gateway.feishu.models import (
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
 from relay_teams.logger import get_logger, log_event
 from relay_teams.providers.token_usage_repo import SessionTokenUsage
-from relay_teams.sessions import ExternalSessionBindingRepository, SessionService
+from relay_teams.sessions.external_session_binding_repository import (
+    ExternalSessionBindingRepository,
+)
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.runs.run_manager import RunManager
 
 _SESSION_COMMANDS: frozenset[str] = frozenset({"help", "status", "clear", "resume"})

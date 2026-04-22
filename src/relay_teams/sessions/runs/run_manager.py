@@ -110,7 +110,10 @@ from relay_teams.sessions.runs.user_question_repository import (
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
-from relay_teams.tools.runtime import ToolApprovalAction, ToolApprovalManager
+from relay_teams.tools.runtime.approval_state import (
+    ToolApprovalAction,
+    ToolApprovalManager,
+)
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
     ShellApprovalScope,

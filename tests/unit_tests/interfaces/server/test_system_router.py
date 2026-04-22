@@ -15,7 +15,7 @@ from relay_teams.external_agents import (
     StdioTransportConfig,
 )
 from relay_teams.env.clawhub_config_models import ClawHubConfig
-from relay_teams.env.clawhub_connectivity import (
+from relay_teams.net.clawhub_connectivity import (
     ClawHubConnectivityProbeRequest,
     ClawHubConnectivityProbeResult,
 )
@@ -24,7 +24,7 @@ from relay_teams.env.github_config_models import (
     GitHubConfigUpdate,
     GitHubConfigView,
 )
-from relay_teams.env.github_connectivity import (
+from relay_teams.net.github_connectivity import (
     GitHubConnectivityProbeRequest,
     GitHubConnectivityProbeResult,
     GitHubWebhookConnectivityProbeRequest,
@@ -41,15 +41,21 @@ from relay_teams.env.web_config_models import (
     WebFallbackProvider,
     WebProvider,
 )
-from relay_teams.env.web_connectivity import WebConnectivityProbeResult
+from relay_teams.net.web_connectivity import (
+    WebConnectivityProbeRequest,
+    WebConnectivityProbeResult,
+)
 from relay_teams.media import MediaModality
 from relay_teams.interfaces.server.deps import (
+    get_clawhub_connectivity_probe_service,
     get_clawhub_config_service,
     get_clawhub_skill_service,
     get_config_status_service,
     get_environment_variable_service,
     get_external_agent_config_service,
+    get_github_connectivity_probe_service,
     get_github_config_service,
+    get_github_webhook_connectivity_probe_service,
     get_localhost_run_tunnel_service,
     get_github_trigger_service,
     get_mcp_config_reload_service,
@@ -61,6 +67,7 @@ from relay_teams.interfaces.server.deps import (
     get_skills_config_reload_service,
     get_ui_language_settings_service,
     get_web_config_service,
+    get_web_connectivity_probe_service,
 )
 from relay_teams.interfaces.server.ui_language_models import (
     UiLanguage,
@@ -646,6 +653,23 @@ class _FakeSystemService:
             }
         )
 
+    def probe(
+        self,
+        request: object,
+    ) -> (
+        ModelConnectivityProbeResult
+        | GitHubConnectivityProbeResult
+        | GitHubWebhookConnectivityProbeResult
+        | ClawHubConnectivityProbeResult
+        | WebConnectivityProbeResult
+        | SshProfileConnectivityProbeResult
+    ):
+        if isinstance(request, WebConnectivityProbeRequest):
+            return self.probe_web_connectivity(request)
+        if isinstance(request, GitHubWebhookConnectivityProbeRequest):
+            return self.probe_webhook_connectivity(request)
+        return self.probe_connectivity(request)
+
     def discover_models(
         self,
         _request: object,
@@ -789,6 +813,16 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_mcp_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_skills_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_proxy_config_service] = lambda: fake_service
+    app.dependency_overrides[get_web_connectivity_probe_service] = lambda: fake_service
+    app.dependency_overrides[get_github_connectivity_probe_service] = lambda: (
+        fake_service
+    )
+    app.dependency_overrides[get_github_webhook_connectivity_probe_service] = lambda: (
+        fake_service
+    )
+    app.dependency_overrides[get_clawhub_connectivity_probe_service] = lambda: (
+        fake_service
+    )
     app.dependency_overrides[get_ssh_profile_service] = lambda: fake_service
     app.dependency_overrides[get_ui_language_settings_service] = lambda: fake_service
     app.dependency_overrides[get_web_config_service] = lambda: fake_service

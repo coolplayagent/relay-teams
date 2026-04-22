@@ -14,12 +14,12 @@ from relay_teams.tools.office_tools import (
     SUPPORTED_OFFICE_EXTENSIONS,
     paginate_office_document_markdown,
 )
-from relay_teams.tools.runtime import (
+from relay_teams.tools.runtime.context import (
     ToolContext,
     ToolDeps,
-    ToolResultProjection,
-    execute_tool_call,
 )
+from relay_teams.tools.runtime.execution import execute_tool_call
+from relay_teams.tools.runtime.models import ToolResultProjection
 from relay_teams.tools.workspace_tools.edit_state import record_file_read
 from relay_teams.tools.workspace_tools.read_support import (
     DEFAULT_READ_LIMIT,

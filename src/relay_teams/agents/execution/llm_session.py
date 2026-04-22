@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from enum import StrEnum
 from json import dumps
-from typing import TYPE_CHECKING, Literal, Protocol, cast, runtime_checkable
+from typing import Literal, Protocol, cast, runtime_checkable
 
 from pydantic_ai._agent_graph import ModelRequestNode
 from pydantic_ai.exceptions import ModelAPIError
@@ -105,8 +105,9 @@ from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
 from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
-from relay_teams.agents.orchestration.task_orchestration_service import (
-    TaskOrchestrationService,
+from relay_teams.agents.orchestration.task_contracts import (
+    TaskExecutionServiceLike,
+    TaskOrchestrationServiceLike,
 )
 from relay_teams.agents.execution.coordination_agent_builder import (
     build_coordination_agent,
@@ -119,6 +120,7 @@ from relay_teams.agents.tasks.task_status_sanitizer import (
     sanitize_task_status_payload,
 )
 from relay_teams.computer import (
+    ComputerRuntime,
     ComputerActionDescriptor,
     build_computer_tool_payload,
     describe_builtin_tool,
@@ -137,11 +139,9 @@ from relay_teams.media import (
 )
 from relay_teams.monitors import MonitorService
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
-from relay_teams.tools.runtime import (
-    ToolApprovalManager,
-    ToolApprovalPolicy,
-    ToolDeps,
-)
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.context import ImToolServiceLike, ToolDeps
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.runtime.persisted_state import (
     PersistedToolCallState,
     ToolExecutionStatus,
@@ -156,6 +156,7 @@ from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.notifications import NotificationService
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.roles.memory_service import RoleMemoryService
+from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.workspace import (
@@ -170,14 +171,6 @@ from relay_teams.hooks import (
     PreCompactInput,
     UserPromptSubmitInput,
 )
-
-if TYPE_CHECKING:
-    from relay_teams.agents.orchestration.task_execution_service import (
-        TaskExecutionService,
-    )
-    from relay_teams.computer import ComputerRuntime
-    from relay_teams.roles.role_registry import RoleRegistry
-    from relay_teams.gateway.im import ImToolService
 
 LOGGER = get_logger(__name__)
 LLM_REQUEST_LIMIT = 500
@@ -325,7 +318,8 @@ class _AttemptRecoveryOutcome(BaseModel):
 
 class _AgentRunResult(Protocol):
     @property
-    def response(self) -> object: ...
+    def response(self) -> object:
+        raise NotImplementedError
 
     def new_messages(self) -> Sequence[ModelMessage]: ...
 
@@ -515,9 +509,9 @@ class AgentLlmSession:
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
         message_repo: MessageRepository,
-        role_registry: "RoleRegistry",
-        task_execution_service: "TaskExecutionService",
-        task_service: TaskOrchestrationService,
+        role_registry: RoleRegistry,
+        task_execution_service: TaskExecutionServiceLike,
+        task_service: TaskOrchestrationServiceLike,
         run_control_manager: RunControlManager,
         tool_approval_manager: ToolApprovalManager,
         user_question_manager: UserQuestionManager | None = None,
@@ -529,8 +523,8 @@ class AgentLlmSession:
         fallback_middleware: LlmFallbackMiddleware
         | DisabledLlmFallbackMiddleware
         | None = None,
-        im_tool_service: "ImToolService | None" = None,
-        computer_runtime: "ComputerRuntime | None" = None,
+        im_tool_service: ImToolServiceLike | None = None,
+        computer_runtime: ComputerRuntime | None = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
         hook_service: HookService | None = None,
     ) -> None:

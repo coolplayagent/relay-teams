@@ -12,7 +12,9 @@ import pytest
 
 from relay_teams.computer import ComputerActionRisk
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
-from relay_teams.tools.runtime import ToolApprovalPolicy, ToolDeps, ToolExecutionError
+from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.runtime.models import ToolExecutionError
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.web_tools import common, webfetch
 from relay_teams.tools.web_tools.preapproved import is_preapproved_webfetch_url
 
