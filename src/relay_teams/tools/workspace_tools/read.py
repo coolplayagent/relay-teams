@@ -16,12 +16,12 @@ from relay_teams.paths import (
     path_stat,
 )
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.runtime import (
+from relay_teams.tools.runtime.context import (
     ToolContext,
     ToolDeps,
-    ToolResultProjection,
-    execute_tool_call,
 )
+from relay_teams.tools.runtime.execution import execute_tool_call
+from relay_teams.tools.runtime.models import ToolResultProjection
 from relay_teams.tools.workspace_tools.edit_state import record_file_read
 from relay_teams.tools.workspace_tools.notebook import (
     read_notebook_for_tool,

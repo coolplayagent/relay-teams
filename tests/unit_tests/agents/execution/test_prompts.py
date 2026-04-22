@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
-from relay_teams.agents.execution import system_prompts
+import relay_teams.agents.execution.system_prompts as system_prompts
 from relay_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
     RuntimePromptBuildInput,
@@ -943,7 +943,7 @@ def test_runtime_system_prompt_loads_all_project_agents_files_before_fallback(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from relay_teams.agents.execution import prompt_instructions
+    import relay_teams.agents.execution.prompt_instructions as prompt_instructions
 
     project_root = tmp_path / "project"
     nested_dir = project_root / "src" / "feature"
@@ -995,7 +995,7 @@ def test_runtime_system_prompt_falls_back_to_global_claude_before_gemini(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    from relay_teams.agents.execution import prompt_instructions
+    import relay_teams.agents.execution.prompt_instructions as prompt_instructions
 
     config_dir = tmp_path / "config"
     home_dir = tmp_path / "home"

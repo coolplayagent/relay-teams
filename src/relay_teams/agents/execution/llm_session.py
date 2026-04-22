@@ -137,11 +137,9 @@ from relay_teams.media import (
 )
 from relay_teams.monitors import MonitorService
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
-from relay_teams.tools.runtime import (
-    ToolApprovalManager,
-    ToolApprovalPolicy,
-    ToolDeps,
-)
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.runtime.persisted_state import (
     PersistedToolCallState,
     ToolExecutionStatus,
@@ -177,7 +175,7 @@ if TYPE_CHECKING:
     )
     from relay_teams.computer import ComputerRuntime
     from relay_teams.roles.role_registry import RoleRegistry
-    from relay_teams.gateway.im import ImToolService
+    from relay_teams.gateway.im.service import ImToolService
 
 LOGGER = get_logger(__name__)
 LLM_REQUEST_LIMIT = 500

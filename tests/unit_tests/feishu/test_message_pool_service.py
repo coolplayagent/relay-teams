@@ -24,7 +24,9 @@ from relay_teams.gateway.feishu.models import (
 )
 from relay_teams.media import content_parts_from_text
 from relay_teams.providers.token_usage_repo import SessionTokenUsage
-from relay_teams.sessions import ExternalSessionBindingRepository
+from relay_teams.sessions.external_session_binding_repository import (
+    ExternalSessionBindingRepository,
+)
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult

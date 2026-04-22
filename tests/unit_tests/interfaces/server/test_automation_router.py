@@ -5,18 +5,18 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from relay_teams.automation import (
+from relay_teams.automation.automation_models import (
     AutomationDeliveryEvent,
     AutomationFeishuBinding,
     AutomationFeishuBindingCandidate,
     AutomationProjectCreateInput,
-    AutomationProjectNameConflictError,
     AutomationProjectRecord,
     AutomationProjectStatus,
     AutomationProjectUpdateInput,
     AutomationRunConfig,
     AutomationScheduleMode,
 )
+from relay_teams.automation.errors import AutomationProjectNameConflictError
 from relay_teams.interfaces.server.deps import get_automation_service
 from relay_teams.interfaces.server.routers import automation
 

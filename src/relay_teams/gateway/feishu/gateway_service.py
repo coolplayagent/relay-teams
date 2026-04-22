@@ -9,10 +9,8 @@ from uuid import uuid4
 from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
-from relay_teams.gateway.feishu.account_repository import (
-    FeishuAccountNameConflictError,
-    FeishuAccountRepository,
-)
+from relay_teams.gateway.feishu.account_repository import FeishuAccountRepository
+from relay_teams.gateway.feishu.errors import FeishuAccountNameConflictError
 from relay_teams.gateway.feishu.models import (
     FeishuEnvironment,
     FeishuGatewayAccountCreateInput,

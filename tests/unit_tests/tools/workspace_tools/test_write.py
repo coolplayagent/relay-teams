@@ -9,7 +9,8 @@ from typing import cast
 import pytest
 from pydantic_ai import Agent
 
-from relay_teams.tools.runtime import ToolDeps, ToolResultProjection
+from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.runtime.models import ToolResultProjection
 from relay_teams.tools.workspace_tools import register_write, register_write_tmp
 
 

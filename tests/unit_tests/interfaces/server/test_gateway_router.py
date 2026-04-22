@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from relay_teams.interfaces.server.deps import get_wechat_gateway_service
 from relay_teams.interfaces.server.routers import gateway
 from relay_teams.sessions.runs.run_models import RunThinkingConfig
-from relay_teams.gateway.wechat import (
+from relay_teams.gateway.wechat.models import (
     WeChatAccountRecord,
     WeChatAccountStatus,
     WeChatAccountUpdateInput,

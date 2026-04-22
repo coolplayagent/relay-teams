@@ -33,7 +33,7 @@ from relay_teams.gateway.wechat.inbound_queue_repository import (
 from relay_teams.logger import get_logger, log_event
 from relay_teams.media import content_parts_from_text
 from relay_teams.roles import RoleRegistry
-from relay_teams.sessions.runs import RunEventHub
+from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.run_models import (
@@ -46,8 +46,10 @@ from relay_teams.sessions.runs.terminal_payload import (
     extract_terminal_output,
     parse_terminal_payload_json,
 )
-from relay_teams.agents.orchestration import OrchestrationSettingsService
-from relay_teams.sessions import SessionService
+from relay_teams.agents.orchestration.settings_service import (
+    OrchestrationSettingsService,
+)
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.workspace import WorkspaceService
 from relay_teams.gateway.wechat.account_repository import WeChatAccountRepository
@@ -75,7 +77,8 @@ from relay_teams.gateway.wechat.secret_store import (
 )
 
 if TYPE_CHECKING:
-    from relay_teams.gateway.im import ImSessionCommandService, ImToolService
+    from relay_teams.gateway.im.command_service import ImSessionCommandService
+    from relay_teams.gateway.im.service import ImToolService
 
 _TERMINAL_EVENT_TYPES = {
     RunEventType.RUN_COMPLETED,

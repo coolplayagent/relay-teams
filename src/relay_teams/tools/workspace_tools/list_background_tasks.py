@@ -8,12 +8,12 @@ from relay_teams.sessions.runs.background_tasks.projection import (
     build_background_task_payload,
 )
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.runtime import (
+from relay_teams.tools.runtime.context import (
     ToolContext,
     ToolDeps,
-    ToolResultProjection,
-    execute_tool,
 )
+from relay_teams.tools.runtime.execution import execute_tool
+from relay_teams.tools.runtime.models import ToolResultProjection
 from relay_teams.tools.workspace_tools.background_task_tool_support import (
     require_background_task_service,
 )

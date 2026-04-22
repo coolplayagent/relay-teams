@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from relay_teams.gateway.feishu import (
-    FeishuAccountNameConflictError,
+from relay_teams.gateway.feishu.errors import FeishuAccountNameConflictError
+from relay_teams.gateway.feishu.models import (
     FeishuGatewayAccountCreateInput,
     FeishuGatewayAccountRecord,
     FeishuGatewayAccountStatus,

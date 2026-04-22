@@ -11,7 +11,7 @@ import pytest
 from pydantic import JsonValue
 
 from relay_teams.monitors import MonitorService
-from relay_teams.automation import AutomationService
+from relay_teams.automation.automation_service import AutomationService
 from relay_teams.env.github_config_models import GitHubConfig
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository

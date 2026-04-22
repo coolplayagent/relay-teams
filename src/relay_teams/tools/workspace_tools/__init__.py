@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from pydantic_ai import Agent
 
 if TYPE_CHECKING:
-    from relay_teams.tools.runtime import ToolDeps
+    from relay_teams.tools.runtime.context import ToolDeps
 
 
 _WORKSPACE_REGISTERED_ATTR = "_agent_teams_workspace_registered_names"

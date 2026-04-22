@@ -18,8 +18,8 @@ from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import (
     ToolAvailabilityRecord,
     ToolRegistry,
-    build_default_registry,
 )
+from relay_teams.tools.registry.defaults import build_default_registry
 
 SERVER_VERSION = "0.1.0"
 _DEEPRESEARCH_SKILL_NAME = "deepresearch"

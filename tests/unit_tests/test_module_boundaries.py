@@ -68,6 +68,40 @@ def test_gateway_does_not_depend_on_server_container() -> None:
     )
 
 
+def test_package_exports_do_not_use_implicit_lazy_imports() -> None:
+    violations: list[str] = []
+    for path in _iter_python_files(SRC_ROOT):
+        if path.name != "__init__.py":
+            continue
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "__getattr__":
+                violations.append(f"{path.relative_to(REPO_ROOT)} defines __getattr__")
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "_LAZY_IMPORTS":
+                        violations.append(
+                            f"{path.relative_to(REPO_ROOT)} defines _LAZY_IMPORTS"
+                        )
+            elif (
+                isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+                and node.target.id == "_LAZY_IMPORTS"
+            ):
+                violations.append(
+                    f"{path.relative_to(REPO_ROOT)} defines _LAZY_IMPORTS"
+                )
+        if "importlib.import_module" in source:
+            violations.append(
+                f"{path.relative_to(REPO_ROOT)} uses importlib.import_module"
+            )
+    assert not violations, (
+        "package __init__.py exports must use explicit imports:\n"
+        + "\n".join(sorted(violations))
+    )
+
+
 def _assert_no_forbidden_imports(
     scope: Path,
     is_forbidden: Callable[[str], bool],

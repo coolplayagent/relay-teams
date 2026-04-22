@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from relay_teams.automation import (
+from relay_teams.automation.automation_models import (
     AutomationProjectRecord,
-    AutomationProjectRepository,
     AutomationProjectStatus,
     AutomationScheduleMode,
 )
+from relay_teams.automation.automation_repository import AutomationProjectRepository
 
 
 def test_automation_project_repo_normalizes_legacy_optional_identifiers(

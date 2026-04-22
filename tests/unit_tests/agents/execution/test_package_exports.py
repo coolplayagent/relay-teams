@@ -11,8 +11,9 @@ def test_importing_skills_registry_does_not_trigger_coordination_cycle() -> None
     assert skill_registry is not None
 
 
-def test_orchestration_package_exports_build_coordination_agent_lazily() -> None:
-    module = import_module("relay_teams.agents.execution")
+def test_execution_package_requires_direct_coordination_agent_import() -> None:
+    package = import_module("relay_teams.agents.execution")
+    module = import_module("relay_teams.agents.execution.coordination_agent_builder")
 
-    exported = getattr(module, "build_coordination_agent", None)
-    assert callable(exported)
+    assert getattr(package, "build_coordination_agent", None) is None
+    assert callable(getattr(module, "build_coordination_agent", None))

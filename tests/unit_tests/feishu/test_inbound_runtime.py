@@ -14,7 +14,9 @@ from relay_teams.gateway.feishu.models import (
     FeishuTriggerTargetConfig,
 )
 from relay_teams.providers.token_usage_repo import SessionTokenUsage
-from relay_teams.sessions import ExternalSessionBindingRepository
+from relay_teams.sessions.external_session_binding_repository import (
+    ExternalSessionBindingRepository,
+)
 from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from relay_teams.sessions.session_metadata import (
     SESSION_METADATA_SOURCE_LABEL_KEY,

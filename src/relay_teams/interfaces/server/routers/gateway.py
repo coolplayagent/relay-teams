@@ -4,15 +4,15 @@ from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from relay_teams.gateway.wechat import (
+from relay_teams.gateway.wechat.models import (
     WeChatAccountRecord,
     WeChatAccountUpdateInput,
-    WeChatGatewayService,
     WeChatLoginStartRequest,
     WeChatLoginStartResponse,
     WeChatLoginWaitRequest,
     WeChatLoginWaitResponse,
 )
+from relay_teams.gateway.wechat.service import WeChatGatewayService
 from relay_teams.interfaces.server.deps import get_wechat_gateway_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.interfaces.server.write_models import DeleteRequest

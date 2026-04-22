@@ -6,19 +6,29 @@ from collections.abc import Callable
 from pathlib import Path
 
 from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
-from relay_teams.automation import (
+from relay_teams.automation.automation_bound_session_queue_repository import (
     AutomationBoundSessionQueueRepository,
+)
+from relay_teams.automation.automation_bound_session_queue_service import (
     AutomationBoundSessionQueueService,
     AutomationBoundSessionQueueWorker,
+)
+from relay_teams.automation.automation_delivery_repository import (
     AutomationDeliveryRepository,
-    AutomationEventRepository,
+)
+from relay_teams.automation.automation_delivery_service import (
     AutomationDeliveryService,
     AutomationDeliveryWorker,
-    AutomationFeishuBindingService,
-    AutomationProjectRepository,
-    AutomationSchedulerService,
-    AutomationService,
 )
+from relay_teams.automation.automation_event_repository import (
+    AutomationEventRepository,
+)
+from relay_teams.automation.automation_repository import AutomationProjectRepository
+from relay_teams.automation.automation_service import AutomationService
+from relay_teams.automation.feishu_binding_service import (
+    AutomationFeishuBindingService,
+)
+from relay_teams.automation.scheduler_service import AutomationSchedulerService
 from relay_teams.builtin import (
     ensure_app_config_bootstrap,
     get_builtin_roles_dir,
@@ -26,8 +36,10 @@ from relay_teams.builtin import (
 )
 from relay_teams.computer import build_default_computer_runtime
 from relay_teams.agents.orchestration.meta_agent import MetaAgent
-from relay_teams.agents.orchestration import (
+from relay_teams.agents.orchestration.settings_config_manager import (
     OrchestrationSettingsConfigManager,
+)
+from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
 from relay_teams.agents.orchestration.coordinator import CoordinatorGraph
@@ -48,25 +60,25 @@ from relay_teams.external_agents import (
     ExternalAgentSessionRepository,
 )
 from relay_teams.external_agents.provider import ExternalAcpSessionManager
-from relay_teams.gateway.feishu import (
-    FeishuAccountRepository,
-    FeishuClient,
-    FeishuGatewayService,
-    FeishuInboundRuntime,
+from relay_teams.gateway.feishu.account_repository import FeishuAccountRepository
+from relay_teams.gateway.feishu.client import FeishuClient
+from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
+from relay_teams.gateway.feishu.inbound_runtime import FeishuInboundRuntime
+from relay_teams.gateway.feishu.message_pool_repository import (
     FeishuMessagePoolRepository,
-    FeishuMessagePoolService,
-    FeishuNotificationDispatcher,
-    FeishuSubscriptionService,
-    FeishuTriggerHandler,
 )
+from relay_teams.gateway.feishu.message_pool_service import FeishuMessagePoolService
+from relay_teams.gateway.feishu.notification_delivery import (
+    FeishuNotificationDispatcher,
+)
+from relay_teams.gateway.feishu.subscription_service import FeishuSubscriptionService
+from relay_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
 from relay_teams.gateway.feishu.notification_delivery import (
     CompositeTerminalNotificationSuppressor,
 )
-from relay_teams.gateway.im import (
-    ImSessionCommandService,
-    ImToolContextResolver,
-    ImToolService,
-)
+from relay_teams.gateway.im.command_service import ImSessionCommandService
+from relay_teams.gateway.im.context import ImToolContextResolver
+from relay_teams.gateway.im.service import ImToolService
 from relay_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
 from relay_teams.gateway.session_ingress_service import GatewaySessionIngressService
@@ -136,11 +148,13 @@ from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig, load_runtime_config
-from relay_teams.sessions import (
+from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
-    SessionHistoryMarkerRepository,
-    SessionService,
 )
+from relay_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.skills.skill_registry import SkillRegistry
@@ -171,15 +185,10 @@ from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
-from relay_teams.tools.registry import (
-    ToolRegistry,
-    ToolResolutionContext,
-    build_default_registry,
-)
-from relay_teams.tools.runtime import (
-    ToolApprovalManager,
-    ToolApprovalPolicy,
-)
+from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
+from relay_teams.tools.registry.defaults import build_default_registry
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
 )
@@ -190,13 +199,13 @@ from relay_teams.triggers import (
     TriggerRepository,
     get_github_trigger_secret_store,
 )
-from relay_teams.gateway.wechat import (
-    WeChatAccountRepository,
-    WeChatClient,
-    WeChatGatewayService,
+from relay_teams.gateway.wechat.account_repository import WeChatAccountRepository
+from relay_teams.gateway.wechat.client import WeChatClient
+from relay_teams.gateway.wechat.inbound_queue_repository import (
     WeChatInboundQueueRepository,
-    get_wechat_secret_store,
 )
+from relay_teams.gateway.wechat.secret_store import get_wechat_secret_store
+from relay_teams.gateway.wechat.service import WeChatGatewayService
 from relay_teams.hooks import HookLoader, HookRuntimeState, HookService
 from relay_teams.hooks.executors.agent_executor import AgentHookExecutor
 from relay_teams.hooks.executors.command_executor import CommandHookExecutor

@@ -24,7 +24,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from relay_teams.builtin import (
     get_builtin_logger_ini_path,
 )
-from relay_teams.env import load_merged_env_vars
+from relay_teams.env.runtime_env import load_merged_env_vars
 from relay_teams.paths import get_app_config_dir
 
 from relay_teams.trace import get_trace_context

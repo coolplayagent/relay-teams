@@ -19,7 +19,11 @@ from relay_teams.env.web_config_models import (
     WebFallbackProvider,
     WebProvider,
 )
-from relay_teams.tools.runtime import ToolContext, ToolDeps, ToolExecutionError
+from relay_teams.tools.runtime.context import (
+    ToolContext,
+    ToolDeps,
+)
+from relay_teams.tools.runtime.models import ToolExecutionError
 from relay_teams.tools.web_tools import websearch
 
 RegisteredWebSearch = Callable[..., Awaitable[dict[str, JsonValue]]]

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from pydantic_ai import Agent
 
 if TYPE_CHECKING:
-    from relay_teams.tools.runtime import ToolDeps
+    from relay_teams.tools.runtime.context import ToolDeps
 
 _REGISTERED_AGENT_IDS: set[int] = set()
 

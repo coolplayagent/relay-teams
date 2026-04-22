@@ -44,6 +44,8 @@
 - Use `pathlib.Path`; do not use `os.path`.
 - For domain contracts, do not use loose `{}` structures, `typing.Any`, or `dataclass`. Prefer explicit types and Pydantic v2 models.
 - Keep imports at module top level.
+- Do not use implicit imports or lazy imports. Resolve dependency boundaries directly instead of deferring imports.
+- Do not use `TYPE_CHECKING`-only imports to hide circular dependencies. Fix the cycle in the module design instead.
 - Each module owns its own configuration. Do not centralize unrelated module config elsewhere.
 - Expose public package APIs through package-level `__init__.py`.
 - Use the project logger in production paths; do not use `print()`.

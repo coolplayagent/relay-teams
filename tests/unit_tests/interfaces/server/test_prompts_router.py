@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from relay_teams.agents.execution import system_prompts
+import relay_teams.agents.execution.system_prompts as system_prompts
 from relay_teams.interfaces.server.deps import (
     get_mcp_registry,
     get_role_registry,

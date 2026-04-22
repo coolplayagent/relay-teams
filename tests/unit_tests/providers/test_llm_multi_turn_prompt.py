@@ -80,7 +80,8 @@ from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.tools.registry import ToolRegistry
-from relay_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.workspace import WorkspaceManager, build_conversation_id
 
 

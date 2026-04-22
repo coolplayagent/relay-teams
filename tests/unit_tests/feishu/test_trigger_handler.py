@@ -23,9 +23,13 @@ from relay_teams.gateway.feishu.models import (
 )
 from relay_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
-from relay_teams.gateway.im import ImSessionCommandService, ImToolService
+from relay_teams.gateway.im.command_service import ImSessionCommandService
+from relay_teams.gateway.im.service import ImToolService
 from relay_teams.providers.token_usage_repo import SessionTokenUsage
-from relay_teams.sessions import ExternalSessionBindingRepository, SessionService
+from relay_teams.sessions.external_session_binding_repository import (
+    ExternalSessionBindingRepository,
+)
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from relay_teams.sessions.session_models import SessionMode, SessionRecord

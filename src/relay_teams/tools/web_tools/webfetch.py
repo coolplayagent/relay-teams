@@ -25,13 +25,15 @@ from relay_teams.net.clients import create_async_http_client
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.runtime import (
+from relay_teams.tools.runtime.context import (
     ToolContext,
     ToolDeps,
+)
+from relay_teams.tools.runtime.execution import execute_tool_call
+from relay_teams.tools.runtime.models import (
     ToolApprovalRequest,
     ToolExecutionError,
     ToolResultProjection,
-    execute_tool_call,
 )
 from relay_teams.tools.web_tools.preapproved import is_preapproved_webfetch_url
 from relay_teams.tools.web_tools.common import (

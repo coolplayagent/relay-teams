@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from relay_teams.env.github_config_models import (
@@ -20,10 +21,9 @@ from relay_teams.env.github_secret_store import (
     get_github_secret_store,
 )
 from relay_teams.env.runtime_env import load_env_file, sync_app_env_to_process_env
-from relay_teams.logger import get_logger
 
 _WEBHOOK_BASE_URL_ENV_KEY = "AGENT_TEAMS_GITHUB_WEBHOOK_BASE_URL"
-LOGGER = get_logger(__name__)
+LOGGER = logging.getLogger("relay_teams.backend.env.github_config_service")
 
 
 class GitHubConfigService:

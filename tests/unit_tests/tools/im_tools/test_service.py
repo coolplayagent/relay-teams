@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from relay_teams.automation import (
+from relay_teams.automation.automation_models import (
+    AutomationDeliveryStatus,
     AutomationFeishuBinding,
     AutomationProjectRecord,
     AutomationProjectStatus,
     AutomationRunDeliveryRecord,
     AutomationRunConfig,
     AutomationScheduleMode,
-    AutomationDeliveryStatus,
 )
 from relay_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
@@ -35,7 +35,8 @@ from relay_teams.sessions.runs.run_models import (
     RuntimePromptConversationContext,
 )
 from relay_teams.sessions.session_models import ProjectKind, SessionRecord
-from relay_teams.gateway.im import ImToolContextResolver, ImToolService
+from relay_teams.gateway.im.context import ImToolContextResolver
+from relay_teams.gateway.im.service import ImToolService
 from relay_teams.tools.registry import ToolResolutionContext
 from relay_teams.gateway.wechat.models import WeChatAccountRecord
 

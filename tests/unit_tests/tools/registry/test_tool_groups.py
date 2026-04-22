@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from relay_teams.tools.registry import build_default_registry
+from relay_teams.tools.registry.defaults import build_default_registry
 from relay_teams.tools.registry.tool_groups import list_default_tool_groups
 
 

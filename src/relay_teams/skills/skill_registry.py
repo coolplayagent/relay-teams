@@ -17,8 +17,12 @@ from relay_teams.skills.skill_models import (
     SkillOptionEntry,
     SkillSummaryEntry,
 )
-from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
 from relay_teams.trace import trace_span
+from relay_teams.tools.runtime.context import (
+    ToolContext,
+    ToolDeps,
+)
+from relay_teams.tools.runtime.execution import execute_tool
 
 LOGGER = get_logger(__name__)
 _SKILL_LOAD_MAX_PAYLOAD_CHARS = 120_000

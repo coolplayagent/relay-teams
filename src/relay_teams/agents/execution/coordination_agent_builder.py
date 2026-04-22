@@ -22,7 +22,7 @@ from relay_teams.providers.openai_support import build_openai_provider_for_endpo
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry
-from relay_teams.tools.runtime import ToolDeps
+from relay_teams.tools.runtime.context import ToolDeps
 
 
 def build_coordination_agent(

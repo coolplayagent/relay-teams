@@ -4,10 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 
-from relay_teams.mcp import (
-    McpConfigManager,
-    McpConfigReloadService,
-)
+from relay_teams.mcp.config_reload_service import McpConfigReloadService
+from relay_teams.mcp.mcp_config_manager import McpConfigManager
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition

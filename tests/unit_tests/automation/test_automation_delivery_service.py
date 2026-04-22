@@ -3,11 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from relay_teams.automation import (
+from relay_teams.automation.automation_delivery_repository import (
+    AutomationDeliveryRepository,
+)
+from relay_teams.automation.automation_delivery_service import AutomationDeliveryService
+from relay_teams.automation.automation_models import (
     AutomationCleanupStatus,
     AutomationDeliveryEvent,
-    AutomationDeliveryRepository,
-    AutomationDeliveryService,
     AutomationDeliveryStatus,
     AutomationFeishuBinding,
     AutomationProjectRecord,

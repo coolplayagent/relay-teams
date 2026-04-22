@@ -13,7 +13,7 @@ from relay_teams.providers.model_config import (
     DEFAULT_MAAS_BASE_URL,
 )
 from relay_teams.secrets import get_secret_store
-from relay_teams.sessions.runs import runtime_config
+import relay_teams.sessions.runs.runtime_config as runtime_config
 
 
 def test_load_runtime_config_uses_project_config_dir_by_default(

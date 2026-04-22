@@ -26,7 +26,9 @@ from relay_teams.logger import get_logger, log_event
 from relay_teams.media import content_parts_from_text
 from relay_teams.providers.token_usage_repo import SessionTokenUsage
 from relay_teams.sessions.runs.run_models import RuntimePromptConversationContext
-from relay_teams.sessions import ExternalSessionBindingRepository
+from relay_teams.sessions.external_session_binding_repository import (
+    ExternalSessionBindingRepository,
+)
 from relay_teams.sessions.runs.enums import ExecutionMode
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.session_metadata import (

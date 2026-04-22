@@ -78,15 +78,13 @@ if TYPE_CHECKING:
     from relay_teams.agents.tasks.task_repository import TaskRepository
     from relay_teams.providers.token_usage_repo import TokenUsageRepository
     from relay_teams.tools.registry import ToolRegistry
-    from relay_teams.tools.runtime import (
-        ToolApprovalManager,
-        ToolApprovalPolicy,
-    )
+    from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+    from relay_teams.tools.runtime.policy import ToolApprovalPolicy
     from relay_teams.tools.workspace_tools.shell_approval_repo import (
         ShellApprovalRepository,
     )
     from relay_teams.workspace import WorkspaceManager
-    from relay_teams.gateway.im import ImToolService
+    from relay_teams.gateway.im.service import ImToolService
     from relay_teams.hooks import HookService
 
 
