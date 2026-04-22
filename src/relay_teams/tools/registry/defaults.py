@@ -17,7 +17,11 @@ from relay_teams.tools.workspace_tools import TOOLS as WORKSPACE_TOOLS
 IM_TOOLS = {
     "im_send": register_im_send,
 }
-HIDDEN_FROM_ROLE_CONFIG: tuple[str, ...] = ("im_send", "tool_search")
+HIDDEN_FROM_ROLE_CONFIG: tuple[str, ...] = (
+    "im_send",
+    "tool_search",
+    "activate_tools",
+)
 
 
 def build_default_registry() -> ToolRegistry:

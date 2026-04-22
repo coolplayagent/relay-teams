@@ -4352,8 +4352,10 @@ class AgentLlmSession:
                             tool_call_id=part.tool_call_id,
                             content=build_tool_error_result(
                                 error_code="tool_input_validation_failed",
-                                message=str(part.content or "").strip()
-                                or "Tool input validation failed.",
+                                message=self._normalize_tool_retry_prompt_message(
+                                    tool_name=str(part.tool_name or ""),
+                                    message=str(part.content or "").strip(),
+                                ),
                             ),
                         )
                     )
@@ -4365,6 +4367,31 @@ class AgentLlmSession:
                 continue
             normalized.append(message)
         return normalized
+
+    def _normalize_tool_retry_prompt_message(
+        self,
+        *,
+        tool_name: str,
+        message: str,
+    ) -> str:
+        normalized_message = message.strip() or "Tool input validation failed."
+        lowered_message = normalized_message.casefold()
+        if any(
+            phrase in lowered_message
+            for phrase in (
+                "unknown tool",
+                "tool not found",
+                "not in the tool list",
+                "not a valid tool",
+                "tool is not available",
+            )
+        ):
+            return (
+                f"{normalized_message} If `{tool_name}` is an authorized local tool "
+                "that is currently deferred, use `tool_search` to inspect it and "
+                "`activate_tools` before retrying."
+            )
+        return normalized_message
 
     @staticmethod
     def _normalize_tool_call_args_for_replay(

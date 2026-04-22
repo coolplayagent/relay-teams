@@ -818,6 +818,11 @@ def test_build_runtime_tools_prompt_summarizes_authorized_tools() -> None:
             local_tools=(
                 RuntimeToolSnapshotEntry(
                     source="local",
+                    name="activate_tools",
+                    description="Activate tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
                     name="tool_search",
                     description="Discover tools.",
                 ),
@@ -842,17 +847,20 @@ def test_build_runtime_tools_prompt_summarizes_authorized_tools() -> None:
                     server_name="docs",
                 ),
             ),
-        )
+        ),
+        runtime_active_local_tools=("tool_search", "activate_tools"),
     )
 
     assert "## Authorized Runtime Tools" in prompt
+    assert "Active Local Tools: tool_search, activate_tools" in prompt
     assert "Use `tool_search` to discover authorized tools" in prompt
-    assert "Total Authorized Tools: 4" in prompt
-    assert "Local Tools: 2 authorized" in prompt
+    assert "call `activate_tools` before trying to use it" in prompt
+    assert "Total Authorized Tools: 5" in prompt
+    assert "Local Tools: 3 authorized" in prompt
     assert "Skill Tools: 1 authorized" in prompt
     assert "MCP Tools: 1 authorized across 1 server(s)" in prompt
     assert "MCP Tool Server: docs (1)" in prompt
-    assert "read, tool_search" not in prompt
+    assert "activate_tools, read, tool_search" not in prompt
 
 
 def test_build_runtime_tools_prompt_omits_tool_search_guidance_when_unavailable() -> (
@@ -886,6 +894,7 @@ def test_build_runtime_tools_prompt_omits_tool_search_guidance_when_unavailable(
     )
 
     assert "## Authorized Runtime Tools" in prompt
+    assert "Active Local Tools: none" in prompt
     assert "Total Authorized Tools: 3" in prompt
     assert "Local Tools: read" in prompt
     assert "Skill Tools: load_skill" in prompt

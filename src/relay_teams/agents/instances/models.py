@@ -65,6 +65,7 @@ class AgentRuntimeRecord(BaseModel):
     status: InstanceStatus
     runtime_system_prompt: str = ""
     runtime_tools_json: str = ""
+    runtime_active_tools_json: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 

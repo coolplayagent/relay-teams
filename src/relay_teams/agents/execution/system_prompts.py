@@ -132,6 +132,7 @@ class RuntimePromptBuildInput(BaseModel):
     ssh_profile_metadata: tuple[WorkspaceSshProfilePromptMetadata, ...] = ()
     conversation_context: RuntimePromptConversationContext | None = None
     runtime_tools: RuntimeToolsSnapshot | None = None
+    runtime_active_local_tools: tuple[str, ...] = ()
 
 
 class PromptSkillInstruction(BaseModel):
@@ -584,7 +585,10 @@ async def build_runtime_system_prompt_result(
     workspace_context_sections.extend(loaded_instructions.sections)
     if _is_feishu_group_conversation(data.conversation_context):
         workspace_context_sections.append(FEISHU_GROUP_CONTEXT_PROMPT)
-    runtime_tools_prompt = build_runtime_tools_prompt(data.runtime_tools)
+    runtime_tools_prompt = build_runtime_tools_prompt(
+        data.runtime_tools,
+        runtime_active_local_tools=data.runtime_active_local_tools,
+    )
     if runtime_tools_prompt:
         workspace_context_sections.append(runtime_tools_prompt)
 
@@ -718,7 +722,11 @@ def build_skill_instructions_prompt(
     )
 
 
-def build_runtime_tools_prompt(runtime_tools: RuntimeToolsSnapshot | None) -> str:
+def build_runtime_tools_prompt(
+    runtime_tools: RuntimeToolsSnapshot | None,
+    *,
+    runtime_active_local_tools: tuple[str, ...] = (),
+) -> str:
     if runtime_tools is None:
         return ""
     total_tools = (
@@ -726,13 +734,33 @@ def build_runtime_tools_prompt(runtime_tools: RuntimeToolsSnapshot | None) -> st
         + len(runtime_tools.skill_tools)
         + len(runtime_tools.mcp_tools)
     )
-    discovery_authorized = "tool_search" in set(_tool_names(runtime_tools.local_tools))
+    local_tool_names = _tool_names(runtime_tools.local_tools)
+    local_tool_name_set = set(local_tool_names)
+    active_local_tool_names = tuple(
+        tool_name
+        for tool_name in runtime_active_local_tools
+        if tool_name in local_tool_name_set
+    )
+    discovery_authorized = "tool_search" in local_tool_name_set
     lines = [AUTHORIZED_RUNTIME_TOOLS_HEADING]
     lines.append("- Only call tools that are authorized for this runtime.")
-    if discovery_authorized:
-        lines.append(
-            "- Use `tool_search` to discover authorized tools and inspect parameter schemas before calling unfamiliar tools."
+    lines.append(
+        "- Active Local Tools: "
+        + (
+            _format_names(active_local_tool_names)
+            if active_local_tool_names
+            else NONE_LABEL
         )
+    )
+    if discovery_authorized:
+        activation_authorized = "activate_tools" in local_tool_name_set
+        lines.append(
+            "- Use `tool_search` to discover authorized tools, inspect parameter schemas, and check whether local tools are currently active or deferred."
+        )
+        if activation_authorized:
+            lines.append(
+                "- If `tool_search` marks a local tool as `deferred`, call `activate_tools` before trying to use it."
+            )
         lines.append(
             "- Tool names and descriptions are intentionally summarized here to keep the prompt compact."
         )
@@ -740,9 +768,7 @@ def build_runtime_tools_prompt(runtime_tools: RuntimeToolsSnapshot | None) -> st
         lines.append(
             "- Discovery tooling is unavailable in this runtime, so explicit authorized tool names are listed below."
         )
-        lines.append(
-            "- Local Tools: " + _format_names(_tool_names(runtime_tools.local_tools))
-        )
+        lines.append("- Local Tools: " + _format_names(local_tool_names))
         lines.append(
             "- Skill Tools: " + _format_names(_tool_names(runtime_tools.skill_tools))
         )

@@ -6,6 +6,13 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from relay_teams.tools.registry.defaults import build_default_registry
+    from relay_teams.tools.registry.runtime_activation import (
+        ActivationApplyResult,
+        ActivationValidationResult,
+        build_initial_active_tools,
+        apply_tool_activation,
+        validate_activation_request,
+    )
     from relay_teams.tools.registry.registry import (
         ToolAvailabilityRecord,
         ToolImplicitResolver,
@@ -27,6 +34,11 @@ __all__ = [
     "ToolGroupDefinition",
     "build_default_registry",
     "list_default_tool_groups",
+    "ActivationApplyResult",
+    "ActivationValidationResult",
+    "apply_tool_activation",
+    "build_initial_active_tools",
+    "validate_activation_request",
 ]
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
@@ -55,6 +67,26 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "list_default_tool_groups": (
         "relay_teams.tools.registry.tool_groups",
         "list_default_tool_groups",
+    ),
+    "ActivationApplyResult": (
+        "relay_teams.tools.registry.runtime_activation",
+        "ActivationApplyResult",
+    ),
+    "ActivationValidationResult": (
+        "relay_teams.tools.registry.runtime_activation",
+        "ActivationValidationResult",
+    ),
+    "apply_tool_activation": (
+        "relay_teams.tools.registry.runtime_activation",
+        "apply_tool_activation",
+    ),
+    "build_initial_active_tools": (
+        "relay_teams.tools.registry.runtime_activation",
+        "build_initial_active_tools",
+    ),
+    "validate_activation_request": (
+        "relay_teams.tools.registry.runtime_activation",
+        "validate_activation_request",
     ),
 }
 

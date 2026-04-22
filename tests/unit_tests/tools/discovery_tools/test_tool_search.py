@@ -58,6 +58,7 @@ def _seed_runtime_snapshot(
     agent_repo: AgentInstanceRepository,
     instance_id: str,
     runtime_tools: RuntimeToolsSnapshot,
+    runtime_active_tools_json: str = "",
 ) -> None:
     agent_repo.upsert_instance(
         run_id="run-1",
@@ -73,6 +74,7 @@ def _seed_runtime_snapshot(
         instance_id,
         runtime_system_prompt="prompt",
         runtime_tools_json=json.dumps(runtime_tools.model_dump(mode="json")),
+        runtime_active_tools_json=runtime_active_tools_json,
     )
 
 
@@ -113,6 +115,7 @@ async def test_tool_search_keyword_search_returns_compact_matches(
                 ),
             ),
         ),
+        runtime_active_tools_json='["tool_search"]',
     )
     ctx = SimpleNamespace(
         deps=SimpleNamespace(
@@ -144,6 +147,7 @@ async def test_tool_search_keyword_search_returns_compact_matches(
     matches = cast(list[dict[str, object]], result["matches"])
     assert matches[0]["name"] == "docs_search"
     assert matches[0]["server_name"] == "docs"
+    assert matches[0]["activation_state"] == "active"
     assert "parameters_json_schema" not in matches[0]
 
 
@@ -177,6 +181,7 @@ async def test_tool_search_select_includes_schema(
                 ),
             ),
         ),
+        runtime_active_tools_json='["tool_search"]',
     )
     ctx = SimpleNamespace(
         deps=SimpleNamespace(
@@ -212,6 +217,7 @@ async def test_tool_search_select_includes_schema(
             "description": "Read a file or directory from disk.",
             "kind": "function",
             "sequential": False,
+            "activation_state": "deferred",
             "parameters_json_schema": {
                 "type": "object",
                 "properties": {

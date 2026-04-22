@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+import json
 import math
 import re
 from collections.abc import Iterable, Mapping
@@ -109,13 +110,18 @@ def _search_runtime_tools(
     query: str,
     max_results: int,
 ) -> dict[str, JsonValue]:
-    authorized_tools, total_authorized_tools = _load_authorized_tools(ctx)
+    (
+        authorized_tools,
+        total_authorized_tools,
+        active_local_tools,
+    ) = _load_authorized_tools(ctx)
     if authorized_tools is None:
         return _build_search_response(
             query=query,
             mode="keyword",
             matches=(),
             total_authorized_tools=0,
+            active_local_tools=(),
             warning="Runtime tool snapshot is unavailable for the current instance.",
         )
 
@@ -125,6 +131,7 @@ def _search_runtime_tools(
             mode="keyword",
             matches=(),
             total_authorized_tools=total_authorized_tools,
+            active_local_tools=active_local_tools,
             warning="Query must not be empty.",
         )
 
@@ -157,6 +164,7 @@ def _search_runtime_tools(
             mode="select",
             matches=matches,
             total_authorized_tools=total_authorized_tools,
+            active_local_tools=active_local_tools,
             include_schema=True,
             warning=warning,
         )
@@ -178,6 +186,7 @@ def _search_runtime_tools(
             mode="exact",
             matches=matches,
             total_authorized_tools=total_authorized_tools,
+            active_local_tools=active_local_tools,
             include_schema=True,
         )
 
@@ -191,19 +200,27 @@ def _search_runtime_tools(
         mode="keyword",
         matches=matches,
         total_authorized_tools=total_authorized_tools,
+        active_local_tools=active_local_tools,
     )
 
 
 def _load_authorized_tools(
     ctx: ToolContext,
-) -> tuple[tuple[RuntimeToolSnapshotEntry, ...], int] | tuple[None, int]:
+) -> (
+    tuple[tuple[RuntimeToolSnapshotEntry, ...], int, tuple[str, ...]]
+    | tuple[None, int, tuple[str, ...]]
+):
     try:
         runtime_record = ctx.deps.agent_repo.get_instance(ctx.deps.instance_id)
     except KeyError:
-        return None, 0
+        return None, 0, ()
     snapshot = _parse_runtime_tools_snapshot(runtime_record.runtime_tools_json)
     authorized_tools = _flatten_runtime_tools(snapshot)
-    return authorized_tools, len(authorized_tools)
+    return (
+        authorized_tools,
+        len(authorized_tools),
+        _parse_runtime_active_tools_json(runtime_record.runtime_active_tools_json),
+    )
 
 
 def _parse_runtime_tools_snapshot(raw_snapshot: str) -> RuntimeToolsSnapshot:
@@ -214,6 +231,19 @@ def _parse_runtime_tools_snapshot(raw_snapshot: str) -> RuntimeToolsSnapshot:
         return RuntimeToolsSnapshot.model_validate_json(normalized_snapshot)
     except (ValueError, TypeError):
         return RuntimeToolsSnapshot()
+
+
+def _parse_runtime_active_tools_json(raw_active_tools: str) -> tuple[str, ...]:
+    normalized_active_tools = raw_active_tools.strip()
+    if not normalized_active_tools:
+        return ()
+    try:
+        parsed = json.loads(normalized_active_tools)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    return tuple(item for item in parsed if isinstance(item, str))
 
 
 def _flatten_runtime_tools(
@@ -487,6 +517,7 @@ def _build_search_response(
     mode: str,
     matches: tuple[RuntimeToolSnapshotEntry, ...],
     total_authorized_tools: int,
+    active_local_tools: tuple[str, ...],
     include_schema: bool = False,
     warning: str | None = None,
 ) -> dict[str, JsonValue]:
@@ -495,7 +526,12 @@ def _build_search_response(
         "mode": mode,
         "total_authorized_tools": total_authorized_tools,
         "matches": [
-            _serialize_match(entry, include_schema=include_schema) for entry in matches
+            _serialize_match(
+                entry,
+                include_schema=include_schema,
+                active_local_tools=active_local_tools,
+            )
+            for entry in matches
         ],
     }
     if warning:
@@ -507,6 +543,7 @@ def _serialize_match(
     entry: RuntimeToolSnapshotEntry,
     *,
     include_schema: bool,
+    active_local_tools: tuple[str, ...],
 ) -> dict[str, JsonValue]:
     payload: dict[str, JsonValue] = {
         "name": entry.name,
@@ -514,6 +551,11 @@ def _serialize_match(
         "description": entry.description,
         "kind": entry.kind,
         "sequential": entry.sequential,
+        "activation_state": (
+            "deferred"
+            if entry.source == "local" and entry.name not in set(active_local_tools)
+            else "active"
+        ),
     }
     if entry.server_name:
         payload["server_name"] = entry.server_name

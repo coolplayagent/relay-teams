@@ -15,6 +15,7 @@ def test_registry_rejects_unknown_tools() -> None:
 def test_registry_contains_registered_local_tools() -> None:
     registry = build_default_registry()
     assert registry.list_names() == (
+        "activate_tools",
         "ask_question",
         "capture_screen",
         "click_at",
@@ -63,6 +64,7 @@ def test_registry_hides_im_send_from_manual_role_configuration() -> None:
 
     assert "im_send" not in registry.list_configurable_names()
     assert "tool_search" not in registry.list_configurable_names()
+    assert "activate_tools" not in registry.list_configurable_names()
 
 
 def test_default_registry_ignores_unknown_tools_for_runtime_resolution() -> None:
@@ -94,8 +96,12 @@ def test_default_registry_implicitly_adds_tool_search() -> None:
 
     context = ToolResolutionContext(session_id="session-1")
 
-    assert registry.resolve_names((), context=context) == ("tool_search",)
+    assert registry.resolve_names((), context=context) == (
+        "tool_search",
+        "activate_tools",
+    )
     assert registry.resolve_names(("read",), context=context) == (
         "read",
         "tool_search",
+        "activate_tools",
     )

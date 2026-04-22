@@ -156,6 +156,34 @@ def test_normalize_committable_messages_keeps_request_fields() -> None:
     assert normalized_request.metadata == {"source": "test"}
 
 
+def test_normalize_committable_messages_adds_deferred_tool_guidance() -> None:
+    session = object.__new__(AgentLlmSession)
+    request = ModelRequest(
+        parts=[
+            RetryPromptPart(
+                content="Unknown tool: read",
+                tool_name="read",
+                tool_call_id="call-1",
+            )
+        ]
+    )
+
+    normalized = AgentLlmSession._normalize_committable_messages(session, [request])
+
+    assert len(normalized) == 1
+    normalized_request = normalized[0]
+    assert isinstance(normalized_request, ModelRequest)
+    normalized_part = normalized_request.parts[0]
+    assert isinstance(normalized_part, ToolReturnPart)
+    assert isinstance(normalized_part.content, dict)
+    error_payload = cast(dict[str, object], normalized_part.content["error"])
+    assert error_payload["code"] == "tool_input_validation_failed"
+    message = cast(str, error_payload["message"])
+    assert "Unknown tool: read" in message
+    assert "`tool_search`" in message
+    assert "`activate_tools`" in message
+
+
 class _FakeMessageRepo:
     def __init__(self, history: list[ModelRequest | ModelResponse]) -> None:
         self._history = history

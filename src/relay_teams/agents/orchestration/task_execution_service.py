@@ -70,6 +70,10 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from relay_teams.tools.registry.registry import ToolResolutionContext
+from relay_teams.tools.registry.runtime_activation import (
+    build_initial_active_tools,
+    validate_activation_request,
+)
 
 if TYPE_CHECKING:
     from relay_teams.skills.skill_registry import SkillRegistry
@@ -230,10 +234,15 @@ class TaskExecutionService(BaseModel):
             role_id=role_id,
             workspace_id=workspace.ref.workspace_id,
         )
-        runner = SubAgentRunner(
+        role_for_execution = self._role_with_active_local_tools(
             role=role_for_run,
+            session_id=task.session_id,
+            runtime_active_tools_json=instance_record.runtime_active_tools_json,
+        )
+        runner = SubAgentRunner(
+            role=role_for_execution,
             prompt_builder=self.prompt_builder,
-            provider=self.provider_factory(role_for_run, task.session_id),
+            provider=self.provider_factory(role_for_execution, task.session_id),
         )
         snapshot = self._shared_state_snapshot(
             session_id=task.session_id,
@@ -251,6 +260,9 @@ class TaskExecutionService(BaseModel):
                 objective=self._resolve_turn_objective(
                     task=task,
                     user_prompt_override=user_prompt_override,
+                ),
+                existing_runtime_active_tools_json=(
+                    instance_record.runtime_active_tools_json
                 ),
             )
             self._ensure_committed_task_prompt(
@@ -273,6 +285,9 @@ class TaskExecutionService(BaseModel):
                 instance_id,
                 runtime_system_prompt=runtime_system_prompt,
                 runtime_tools_json=runtime_tools_json,
+                runtime_active_tools_json=(
+                    prepared_runtime_snapshot.runtime_active_tools_json
+                ),
             )
             provider_system_prompt = self._compose_provider_system_prompt(
                 role=role_for_run,
@@ -615,6 +630,7 @@ class TaskExecutionService(BaseModel):
         workspace: WorkspaceHandle | None,
         shared_state_snapshot: tuple[tuple[str, str], ...],
         objective: str,
+        existing_runtime_active_tools_json: str = "",
     ) -> PreparedRuntimeSnapshot:
         topology = self._topology_for_run(task.trace_id)
         conversation_context = self._conversation_context_for_run(task.trace_id)
@@ -644,6 +660,12 @@ class TaskExecutionService(BaseModel):
                 ),
                 conversation_context=conversation_context,
                 runtime_tools=runtime_tools,
+                runtime_active_local_tools=self._resolve_active_local_tools(
+                    authorized_local_tools=tuple(
+                        tool.name for tool in runtime_tools.local_tools
+                    ),
+                    runtime_active_tools_json=existing_runtime_active_tools_json,
+                ),
             )
         )
         record_prompt_instruction_paths_loaded(
@@ -660,6 +682,10 @@ class TaskExecutionService(BaseModel):
                 "" if topology is None else topology.orchestration_prompt
             ),
         )
+        runtime_active_tools_json = self._build_runtime_active_tools_json(
+            runtime_tools=runtime_tools,
+            existing_runtime_active_tools_json=existing_runtime_active_tools_json,
+        )
         return PreparedRuntimeSnapshot(
             prompt_sections=prompt_sections,
             runtime_tools_json=json.dumps(
@@ -667,6 +693,7 @@ class TaskExecutionService(BaseModel):
                 ensure_ascii=False,
                 indent=2,
             ),
+            runtime_active_tools_json=runtime_active_tools_json,
             user_prompt=user_prompt,
             skill_instructions=skill_instructions,
         )
@@ -820,6 +847,97 @@ class TaskExecutionService(BaseModel):
                 kind,
             )
         return "function"
+
+    def _build_runtime_active_tools_json(
+        self,
+        *,
+        runtime_tools: RuntimeToolsSnapshot,
+        existing_runtime_active_tools_json: str,
+    ) -> str:
+        authorized_local_tools = tuple(tool.name for tool in runtime_tools.local_tools)
+        initial_active_tools = build_initial_active_tools(authorized_local_tools)
+        existing_active_tools = self._parse_runtime_active_tools_json(
+            existing_runtime_active_tools_json
+        )
+        if existing_active_tools:
+            normalized_existing_active_tools = validate_activation_request(
+                authorized_tools=authorized_local_tools,
+                active_tools=existing_active_tools,
+                requested_tool_names=(),
+            ).active
+        else:
+            normalized_existing_active_tools = ()
+        active_tools = (
+            normalized_existing_active_tools
+            if normalized_existing_active_tools
+            else initial_active_tools
+        )
+        return json.dumps(list(active_tools), ensure_ascii=False, indent=2)
+
+    def _parse_runtime_active_tools_json(
+        self,
+        runtime_active_tools_json: str,
+    ) -> tuple[str, ...]:
+        raw_payload = runtime_active_tools_json.strip()
+        if not raw_payload:
+            return ()
+        try:
+            parsed = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            return ()
+        if not isinstance(parsed, list):
+            return ()
+        parsed_names: list[str] = []
+        for item in parsed:
+            if isinstance(item, str):
+                parsed_names.append(item)
+        return tuple(parsed_names)
+
+    def _role_with_active_local_tools(
+        self,
+        *,
+        role: RoleDefinition,
+        session_id: str,
+        runtime_active_tools_json: str,
+    ) -> RoleDefinition:
+        tool_registry = cast("ToolRegistry", self.tool_registry)
+        authorized_local_tools = tool_registry.resolve_names(
+            role.tools,
+            context=ToolResolutionContext(session_id=session_id),
+        )
+        active_local_tools = self._resolve_active_local_tools(
+            authorized_local_tools=authorized_local_tools,
+            runtime_active_tools_json=runtime_active_tools_json,
+        )
+        active_local_tool_set = set(active_local_tools)
+        return role.model_copy(
+            update={
+                "tools": tuple(
+                    tool_name
+                    for tool_name in role.tools
+                    if tool_name in active_local_tool_set
+                )
+            }
+        )
+
+    def _resolve_active_local_tools(
+        self,
+        *,
+        authorized_local_tools: tuple[str, ...],
+        runtime_active_tools_json: str,
+    ) -> tuple[str, ...]:
+        existing_active_tools = self._parse_runtime_active_tools_json(
+            runtime_active_tools_json
+        )
+        if existing_active_tools:
+            normalized_existing_active_tools = validate_activation_request(
+                authorized_tools=authorized_local_tools,
+                active_tools=existing_active_tools,
+                requested_tool_names=(),
+            ).active
+            if normalized_existing_active_tools:
+                return normalized_existing_active_tools
+        return build_initial_active_tools(authorized_local_tools)
 
     def _record_memory_if_needed(
         self,
@@ -1017,5 +1135,6 @@ class PreparedRuntimeSnapshot(BaseModel):
 
     prompt_sections: RuntimePromptSections
     runtime_tools_json: str
+    runtime_active_tools_json: str
     user_prompt: str
     skill_instructions: tuple[PromptSkillInstruction, ...] = ()
