@@ -83,23 +83,19 @@ def test_pr_checks_gate_changed_line_unit_coverage() -> None:
     assert "diff-cover coverage.xml --config-file pyproject.toml" in pr_workflow
 
 
-def test_qodana_configuration_upload_workflow_uses_cloud_uploader() -> None:
+def test_qodana_code_quality_workflow_uses_cloud_scan() -> None:
     project_root = _project_root()
     qodana_workflow = (
-        project_root / ".github" / "workflows" / "qodana-config-upload.yml"
+        project_root / ".github" / "workflows" / "code_quality.yml"
     ).read_text(encoding="utf-8")
-    global_config = (project_root / "qodana-global-configurations.yaml").read_text(
-        encoding="utf-8"
-    )
     qodana_config = (project_root / "qodana.yaml").read_text(encoding="utf-8")
 
-    assert "name: Qodana Configuration Upload" in qodana_workflow
-    assert "QODANA_CONFIGURATIONS_TOKEN" in qodana_workflow
-    assert "skipping upload" in qodana_workflow
-    assert "jetbrains/qodana-configuration-uploader:latest" in qodana_workflow
-    assert "--global-configs-file qodana-global-configurations.yaml" in qodana_workflow
-    assert "--qodana-endpoint https://qodana.cloud" in qodana_workflow
-    assert "qodanaYaml: qodana.yaml" in global_config
+    assert "name: Qodana" in qodana_workflow
+    assert "JetBrains/qodana-action@v2026.1" in qodana_workflow
+    assert "pr-mode: false" in qodana_workflow
+    assert "QODANA_TOKEN" in qodana_workflow
+    assert 'QODANA_ENDPOINT: "https://qodana.cloud"' in qodana_workflow
+    assert "fetch-depth: 0" in qodana_workflow
     assert "linter: qodana-python-community" in qodana_config
     assert "critical: 0" in qodana_config
     assert "high: 0" in qodana_config
