@@ -751,6 +751,21 @@ wheels = [
 ]
 
 [[package]]
+name = "diff-cover"
+version = "10.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "chardet" },
+    { name = "jinja2" },
+    { name = "pluggy" },
+    { name = "pygments" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/99/b4/eee71d1e338bc1f9bd3539b46b70e303dac061324b759c9a80fa3c96d90d/diff_cover-10.2.0.tar.gz", hash = "sha256:61bf83025f10510c76ef6a5820680cf61b9b974e8f81de70c57ac926fa63872a", size = 102473, upload-time = "2026-01-09T01:59:07.605Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b3/2c/61eeb887055a37150db824b6bf830e821a736580769ac2fea4eadb0d613f/diff_cover-10.2.0-py3-none-any.whl", hash = "sha256:59c328595e0b8948617cc5269af9e484c86462e2844bfcafa3fb37f8fca0af87", size = 56748, upload-time = "2026-01-09T01:59:06.028Z" },
+]
+
+[[package]]
 name = "dill"
 version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3679,6 +3694,7 @@ dependencies = [
 dev = [
     { name = "basedpyright" },
     { name = "coverage" },
+    { name = "diff-cover" },
     { name = "playwright" },
     { name = "pre-commit" },
     { name = "pyright" },
@@ -3703,6 +3719,7 @@ requires-dist = [
     { name = "basedpyright", marker = "extra == 'dev'", specifier = ">=1.36.2" },
     { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.8.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
+    { name = "diff-cover", marker = "extra == 'dev'", specifier = ">=9.0.0" },
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "json-repair", specifier = ">=0.58.7" },
