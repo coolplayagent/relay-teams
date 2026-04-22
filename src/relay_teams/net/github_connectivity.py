@@ -10,6 +10,7 @@ from pathlib import Path
 from time import perf_counter
 import re
 import subprocess
+from typing import Dict, Optional, Tuple
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,8 +39,8 @@ _LOCALHOST_RUN_INACTIVE_MARKERS = ("no tunnel here",)
 class GitHubConnectivityProbeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    token: str | None = None
-    timeout_ms: int | None = Field(
+    token: Optional[str] = None
+    timeout_ms: Optional[int] = Field(
         default=None,
         ge=1000,
         le=_MAX_GITHUB_PROBE_TIMEOUT_MS,
@@ -59,25 +60,25 @@ class GitHubConnectivityProbeResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ok: bool
-    username: str | None = None
+    username: Optional[str] = None
     host: str = "github.com"
-    gh_path: str | None = None
-    gh_version: str | None = None
-    status_code: int | None = Field(default=None, ge=100, le=599)
-    exit_code: int | None = None
+    gh_path: Optional[str] = None
+    gh_version: Optional[str] = None
+    status_code: Optional[int] = Field(default=None, ge=100, le=599)
+    exit_code: Optional[int] = None
     latency_ms: int = Field(ge=0)
     checked_at: datetime
     diagnostics: GitHubConnectivityProbeDiagnostics
     retryable: bool = False
-    error_code: str | None = None
-    error_message: str | None = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 class GitHubWebhookConnectivityProbeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    webhook_base_url: str | None = None
-    timeout_ms: int | None = Field(
+    webhook_base_url: Optional[str] = None
+    timeout_ms: Optional[int] = Field(
         default=None,
         ge=1000,
         le=_MAX_GITHUB_PROBE_TIMEOUT_MS,
@@ -96,17 +97,17 @@ class GitHubWebhookConnectivityProbeResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ok: bool
-    webhook_base_url: str | None = None
-    callback_url: str | None = None
-    health_url: str | None = None
-    final_url: str | None = None
-    status_code: int | None = Field(default=None, ge=100, le=599)
+    webhook_base_url: Optional[str] = None
+    callback_url: Optional[str] = None
+    health_url: Optional[str] = None
+    final_url: Optional[str] = None
+    status_code: Optional[int] = Field(default=None, ge=100, le=599)
     latency_ms: int = Field(ge=0)
     checked_at: datetime
     diagnostics: GitHubWebhookConnectivityProbeDiagnostics
     retryable: bool = False
-    error_code: str | None = None
-    error_message: str | None = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 class GitHubConnectivityProbeService:
@@ -252,8 +253,8 @@ class GitHubConnectivityProbeService:
             bundled_binary=_is_bundled_binary(gh_path),
         )
 
+    @staticmethod
     def _build_result(
-        self,
         *,
         ok: bool,
         checked_at: datetime,
@@ -262,14 +263,14 @@ class GitHubConnectivityProbeService:
         binary_available: bool,
         auth_valid: bool,
         bundled_binary: bool,
-        username: str | None = None,
-        gh_path: Path | None = None,
-        gh_version: str | None = None,
-        status_code: int | None = None,
-        exit_code: int | None = None,
+        username: Optional[str] = None,
+        gh_path: Optional[Path] = None,
+        gh_version: Optional[str] = None,
+        status_code: Optional[int] = None,
+        exit_code: Optional[int] = None,
         retryable: bool = False,
-        error_code: str | None = None,
-        error_message: str | None = None,
+        error_code: Optional[str] = None,
+        error_message: Optional[str] = None,
     ) -> GitHubConnectivityProbeResult:
         return GitHubConnectivityProbeResult(
             ok=ok,
@@ -387,8 +388,8 @@ class GitHubWebhookConnectivityProbeService:
             error_message=error_message,
         )
 
+    @staticmethod
     def _build_result(
-        self,
         *,
         ok: bool,
         checked_at: datetime,
@@ -396,14 +397,14 @@ class GitHubWebhookConnectivityProbeService:
         used_proxy: bool,
         redirected: bool,
         endpoint_reachable: bool,
-        webhook_base_url: str | None = None,
-        callback_url: str | None = None,
-        health_url: str | None = None,
-        final_url: str | None = None,
-        status_code: int | None = None,
+        webhook_base_url: Optional[str] = None,
+        callback_url: Optional[str] = None,
+        health_url: Optional[str] = None,
+        final_url: Optional[str] = None,
+        status_code: Optional[int] = None,
         retryable: bool = False,
-        error_code: str | None = None,
-        error_message: str | None = None,
+        error_code: Optional[str] = None,
+        error_message: Optional[str] = None,
     ) -> GitHubWebhookConnectivityProbeResult:
         return GitHubWebhookConnectivityProbeResult(
             ok=ok,
@@ -425,7 +426,7 @@ class GitHubWebhookConnectivityProbeService:
         )
 
 
-def _parse_username(stdout: str) -> str | None:
+def _parse_username(stdout: str) -> Optional[str]:
     try:
         payload = json.loads(stdout)
     except json.JSONDecodeError:
@@ -485,7 +486,7 @@ def _build_github_webhook_transport_error_result(
 
 def _classify_github_webhook_http_error(
     response: httpx.Response,
-) -> tuple[bool, bool, str, str]:
+) -> Tuple[bool, bool, str, str]:
     status_code = response.status_code
     response_text = response.text.lower()
     if status_code == 503 and any(
@@ -498,11 +499,11 @@ def _classify_github_webhook_http_error(
             "Temporary public URL is inactive. Create a new temporary URL and retry.",
         )
     if status_code >= 500:
-        return (True, True, "service_unavailable", f"HTTP {status_code}")
-    return (True, False, "http_error", f"HTTP {status_code}")
+        return True, True, "service_unavailable", f"HTTP {status_code}"
+    return True, False, "http_error", f"HTTP {status_code}"
 
 
-def _read_gh_version(gh_path: Path, *, env: dict[str, str]) -> str | None:
+def _read_gh_version(gh_path: Path, *, env: Dict[str, str]) -> Optional[str]:
     completed = subprocess.run(
         [str(gh_path), "--version"],
         capture_output=True,
@@ -524,7 +525,7 @@ def _read_gh_version(gh_path: Path, *, env: dict[str, str]) -> str | None:
     return first_line[0].strip() or None
 
 
-def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
+def _prepend_to_path(existing_path: Optional[str], directory: Path) -> str:
     path_parts = [str(directory)]
     if existing_path:
         path_parts.append(existing_path)
@@ -535,7 +536,7 @@ def _is_bundled_binary(gh_path: Path) -> bool:
     return gh_path.parent == BIN_DIR
 
 
-def _parse_status_code(value: str) -> int | None:
+def _parse_status_code(value: str) -> Optional[int]:
     match = _STATUS_CODE_RE.search(value)
     if match is None:
         return None

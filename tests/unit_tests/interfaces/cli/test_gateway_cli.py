@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Dict, Optional, Tuple
 
 import pytest
 
@@ -40,19 +41,21 @@ class _FakeContainer:
         self.role_registry = _FakeRoleRegistry()
         self.refreshed = False
 
-    def _refresh_coordinator_runtime(self) -> None:
+    def replace_mcp_registry(self, registry: object) -> None:
+        self.mcp_registry = registry
+        self.mcp_service.replace_registry(registry)
         self.refreshed = True
 
 
 class _FakeGatewaySessionService:
-    captured_kwargs: dict[str, object] | None = None
+    captured_kwargs: Optional[Dict[str, object]] = None
 
     def __init__(self, **kwargs: object) -> None:
         type(self).captured_kwargs = dict(kwargs)
 
 
 class _FakeRoleRegistry:
-    def resolve_normal_mode_role_id(self, role_id: str | None) -> str:
+    def resolve_normal_mode_role_id(self, role_id: Optional[str]) -> str:
         normalized = str(role_id or "").strip()
         if not normalized:
             return "MainAgent"
@@ -64,7 +67,7 @@ class _FakeRoleRegistry:
             return normalized
         raise ValueError(f"Unknown normal mode role: {normalized}")
 
-    def list_normal_mode_roles(self) -> tuple[object, ...]:
+    def list_normal_mode_roles(self) -> Tuple[object, ...]:
         return (
             type("RoleEntry", (), {"role_id": "MainAgent"})(),
             type("RoleEntry", (), {"role_id": "Crafter"})(),

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable
-from typing import Protocol
+from typing import Optional, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -14,14 +14,14 @@ class TaskDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     objective: str = Field(min_length=1)
-    title: str | None = None
+    title: Optional[str] = None
 
 
 class TaskUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    objective: str | None = None
-    title: str | None = None
+    objective: Optional[str] = None
+    title: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_non_empty_patch(self) -> TaskUpdate:
@@ -35,8 +35,8 @@ class TaskExecutionResult(BaseModel):
 
     output: str
     completion_reason: RunCompletionReason = RunCompletionReason.ASSISTANT_RESPONSE
-    error_code: str | None = None
-    error_message: str | None = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 class TaskOrchestrationServiceLike(Protocol):
@@ -50,7 +50,7 @@ class TaskOrchestrationServiceLike(Protocol):
     def update_task(
         self,
         *,
-        run_id: str | None,
+        run_id: Optional[str],
         task_id: str,
         update: TaskUpdate,
     ) -> dict[str, JsonValue]: ...
@@ -72,7 +72,7 @@ class TaskOrchestrationServiceLike(Protocol):
     def dispatch_task(
         self,
         *,
-        run_id: str | None,
+        run_id: Optional[str],
         task_id: str,
         role_id: str,
         prompt: str = "",
@@ -86,5 +86,5 @@ class TaskExecutionServiceLike(Protocol):
         instance_id: str,
         role_id: str,
         task: TaskEnvelope,
-        user_prompt_override: str | None = None,
+        user_prompt_override: Optional[str] = None,
     ) -> object: ...

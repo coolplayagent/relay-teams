@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ssl
+from typing import Optional
 
 from relay_teams.env.proxy_env import (
     ProxyEnvConfig,
@@ -14,8 +15,8 @@ from relay_teams.env.proxy_env import (
 def build_websocket_ssl_context(
     url: str,
     *,
-    proxy_config: ProxyEnvConfig | None = None,
-) -> ssl.SSLContext | None:
+    proxy_config: Optional[ProxyEnvConfig] = None,
+) -> Optional[ssl.SSLContext]:
     if not url.startswith("wss://"):
         return None
     resolved_proxy_config = _resolve_proxy_config(proxy_config)
@@ -30,8 +31,8 @@ def build_websocket_ssl_context(
 def resolve_websocket_proxy_url(
     url: str,
     *,
-    proxy_config: ProxyEnvConfig | None = None,
-) -> str | None:
+    proxy_config: Optional[ProxyEnvConfig] = None,
+) -> Optional[str]:
     resolved_proxy_config = _resolve_proxy_config(proxy_config)
     if not proxy_applies_to_url(_httpish_url_for_websocket(url), resolved_proxy_config):
         return None
@@ -46,7 +47,7 @@ def resolve_websocket_proxy_url(
     return None
 
 
-def _resolve_proxy_config(proxy_config: ProxyEnvConfig | None) -> ProxyEnvConfig:
+def _resolve_proxy_config(proxy_config: Optional[ProxyEnvConfig]) -> ProxyEnvConfig:
     return load_proxy_env_config() if proxy_config is None else proxy_config
 
 

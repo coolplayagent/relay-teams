@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
+from typing import FrozenSet, List, Optional, Tuple
 
 from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from relay_teams.automation.automation_bound_session_queue_repository import (
@@ -228,11 +229,12 @@ class ServerContainer:
         self,
         *,
         config_dir: Path,
-        roles_dir: Path | None = None,
-        db_path: Path | None = None,
+        roles_dir: Optional[Path] = None,
+        db_path: Optional[Path] = None,
         manage_runtime_state: bool = True,
-        session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
-        | None = None,
+        session_model_profile_lookup: Optional[
+            Callable[[str], Optional[ModelEndpointConfig]]
+        ] = None,
     ) -> None:
         runtime = load_runtime_config(
             config_dir=config_dir,
@@ -624,7 +626,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
         )
 
-        self._provider_factory: Callable[[RoleDefinition, str | None], LLMProvider]
+        self._provider_factory: Callable[[RoleDefinition, Optional[str]], LLMProvider]
         self.task_execution_service: TaskExecutionService
         self.task_service: TaskOrchestrationService
         self._build_runtime_services()
@@ -1002,14 +1004,14 @@ class ServerContainer:
             run_event_hub=self.run_event_hub,
         )
 
-    def _resolve_reflection_model_config(self) -> ModelEndpointConfig | None:
+    def _resolve_reflection_model_config(self) -> Optional[ModelEndpointConfig]:
         if self.runtime.default_model_profile is not None:
             return self.runtime.llm_profiles.get(self.runtime.default_model_profile)
         for profile in self.runtime.llm_profiles.values():
             return profile
         return None
 
-    def _resolve_reflection_model_profile_name(self) -> str | None:
+    def _resolve_reflection_model_profile_name(self) -> Optional[str]:
         if self.runtime.default_model_profile is not None:
             return self.runtime.default_model_profile
         for profile_name in self.runtime.llm_profiles.keys():
@@ -1018,8 +1020,8 @@ class ServerContainer:
 
     def _resolve_hook_model_config(
         self,
-        model_profile: str | None,
-    ) -> tuple[ModelEndpointConfig | None, str | None]:
+        model_profile: Optional[str],
+    ) -> Tuple[Optional[ModelEndpointConfig], Optional[str]]:
         profile_name = (
             model_profile.strip()
             if model_profile is not None and model_profile.strip()
@@ -1040,7 +1042,7 @@ class ServerContainer:
         self,
         role: RoleDefinition,
         request: LLMRequest,
-    ) -> ModelEndpointConfig | None:
+    ) -> Optional[ModelEndpointConfig]:
         runtime_to_use = self.runtime
         if (
             self._session_model_profile_lookup is not None
@@ -1058,7 +1060,7 @@ class ServerContainer:
 
     def _build_subagent_reflection_service(
         self,
-    ) -> SubagentReflectionService | None:
+    ) -> Optional[SubagentReflectionService]:
         reflection_config = self._resolve_reflection_model_config()
         if reflection_config is None:
             return None
@@ -1127,6 +1129,11 @@ class ServerContainer:
             )
         return sanitized_registry
 
+    def replace_mcp_registry(self, mcp_registry: McpRegistry) -> None:
+        self.mcp_registry = mcp_registry
+        self.mcp_service.replace_registry(mcp_registry)
+        self._refresh_coordinator_runtime()
+
     def _refresh_coordinator_runtime(self) -> None:
         self._build_runtime_services()
         self.meta_agent.coordinator.role_registry = self.role_registry
@@ -1182,9 +1189,7 @@ class ServerContainer:
         self._refresh_runtime_dependents()
 
     def _on_mcp_reloaded(self, mcp_registry: McpRegistry) -> None:
-        self.mcp_registry = mcp_registry
-        self.mcp_service.replace_registry(mcp_registry)
-        self._refresh_coordinator_runtime()
+        self.replace_mcp_registry(mcp_registry)
 
     def _reload_skills_config(self) -> None:
         self.skills_config_reload_service.reload_skills_config()
@@ -1222,7 +1227,7 @@ class ServerContainer:
                 exc,
             )
 
-    def _on_app_environment_changed(self, changed_keys: frozenset[str]) -> None:
+    def _on_app_environment_changed(self, changed_keys: FrozenSet[str]) -> None:
         self.model_config_service.reload_model_config()
         proxy_related_keys = {
             "HTTP_PROXY",
@@ -1248,7 +1253,7 @@ class ServerContainer:
 
     def _interrupt_transient_background_tasks(self) -> int:
         interrupted = self.background_task_repository.list_interruptible()
-        interrupted_ids: list[str] = []
+        interrupted_ids: List[str] = []
         for record in interrupted:
             if record.pid is None:
                 LOGGER.warning(

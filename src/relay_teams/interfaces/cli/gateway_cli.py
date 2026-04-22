@@ -5,6 +5,7 @@ import asyncio
 from collections.abc import Callable
 import json
 import sys
+from typing import Optional, Union
 
 from pydantic import JsonValue
 import typer
@@ -23,27 +24,27 @@ from relay_teams.interfaces.server.container import ServerContainer
 from relay_teams.logger import configure_logging
 from relay_teams.paths import get_app_config_dir
 
-type RequestJsonCallable = Callable[
-    [str, str, str, dict[str, object] | None],
-    dict[str, object] | list[object],
+RequestJsonCallable = Callable[
+    [str, str, str, Optional[dict[str, object]]],
+    Union[dict[str, object], list[object]],
 ]
-type AutoStartCallable = Callable[[str, bool], None]
+AutoStartCallable = Callable[[str, bool], None]
 
 
 def build_gateway_app(
     *,
-    request_json: RequestJsonCallable | None = None,
-    auto_start_if_needed: AutoStartCallable | None = None,
+    request_json: Optional[RequestJsonCallable] = None,
+    auto_start_if_needed: Optional[AutoStartCallable] = None,
     default_base_url: str = "http://127.0.0.1:8000",
 ) -> typer.Typer:
-    gateway_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+    root_gateway_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
     acp_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
     feishu_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
     wechat_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 
     @acp_app.command("stdio")
     def gateway_acp_stdio(
-        role: str | None = typer.Option(
+        role: Optional[str] = typer.Option(
             None,
             "--role",
             help=(
@@ -176,8 +177,8 @@ def build_gateway_app(
 
         @wechat_app.command("connect")
         def wechat_connect(
-            base_url_override: str | None = typer.Option(None, "--wechat-base-url"),
-            route_tag: str | None = typer.Option(None, "--route-tag"),
+            base_url_override: Optional[str] = typer.Option(None, "--wechat-base-url"),
+            route_tag: Optional[str] = typer.Option(None, "--route-tag"),
             bot_type: str = typer.Option("3", "--bot-type"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
@@ -292,13 +293,13 @@ def build_gateway_app(
             )
             typer.echo(json.dumps(result, ensure_ascii=False))
 
-    gateway_app.add_typer(acp_app, name="acp")
-    gateway_app.add_typer(feishu_app, name="feishu")
-    gateway_app.add_typer(wechat_app, name="wechat")
-    return gateway_app
+    root_gateway_app.add_typer(acp_app, name="acp")
+    root_gateway_app.add_typer(feishu_app, name="feishu")
+    root_gateway_app.add_typer(wechat_app, name="wechat")
+    return root_gateway_app
 
 
-def _build_acp_stdio_runtime(*, role_id: str | None = None) -> AcpStdioRuntime:
+def _build_acp_stdio_runtime(*, role_id: Optional[str] = None) -> AcpStdioRuntime:
     config_dir = get_app_config_dir()
     ensure_app_config_bootstrap(config_dir)
     sync_app_env_to_process_env(config_dir / ".env")
@@ -326,7 +327,7 @@ def _build_acp_stdio_runtime(*, role_id: str | None = None) -> AcpStdioRuntime:
 
     def lookup_gateway_session(
         gateway_session_id: str,
-    ) -> GatewaySessionRecord | None:
+    ) -> Optional[GatewaySessionRecord]:
         try:
             return gateway_session_service.get_session(gateway_session_id)
         except KeyError:
@@ -340,9 +341,7 @@ def _build_acp_stdio_runtime(*, role_id: str | None = None) -> AcpStdioRuntime:
         base_registry=container.mcp_registry,
         relay=mcp_relay,
     )
-    container.mcp_registry = gateway_mcp_registry
-    container.mcp_service.replace_registry(gateway_mcp_registry)
-    container._refresh_coordinator_runtime()
+    container.replace_mcp_registry(gateway_mcp_registry)
     server = AcpGatewayServer(
         gateway_session_service=gateway_session_service,
         session_service=container.session_service,
@@ -365,8 +364,8 @@ def _build_acp_stdio_runtime(*, role_id: str | None = None) -> AcpStdioRuntime:
 def _resolve_acp_stdio_role_id(
     *,
     container: ServerContainer,
-    role_id: str | None,
-) -> str | None:
+    role_id: Optional[str],
+) -> Optional[str]:
     normalized_role_id = str(role_id or "").strip() or None
     if normalized_role_id is None:
         return None
