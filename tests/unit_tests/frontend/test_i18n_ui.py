@@ -114,6 +114,10 @@ const afterInit = {
     settingsTitle: settingsButton.title,
     computerToolGroup: t('settings.roles.tool_group.computer.name'),
     webToolGroup: t('settings.roles.tool_group.web.name'),
+    fallbackSection: t('settings.model.fallback_section'),
+    fallbackStrategy: t('settings.model.fallback_strategy'),
+    fallbackDisabled: t('settings.model.fallback_disabled'),
+    fallbackSameProviderPolicy: t('settings.model.fallback_policy.same_provider_then_other_provider'),
 };
 
 await toggleLanguage();
@@ -125,6 +129,10 @@ const afterToggle = {
     placeholder: promptInput.placeholder,
     computerToolGroup: t('settings.roles.tool_group.computer.name'),
     webToolGroup: t('settings.roles.tool_group.web.name'),
+    fallbackSection: t('settings.model.fallback_section'),
+    fallbackStrategy: t('settings.model.fallback_strategy'),
+    fallbackDisabled: t('settings.model.fallback_disabled'),
+    fallbackSameProviderPolicy: t('settings.model.fallback_policy.same_provider_then_other_provider'),
     savedPayloads: globalThis.__savedPayloads,
 };
 
@@ -162,6 +170,10 @@ console.log(JSON.stringify({ afterInit, afterToggle }));
         "settingsTitle": "设置",
         "computerToolGroup": "Computer Use",
         "webToolGroup": "Web",
+        "fallbackSection": "回退",
+        "fallbackStrategy": "回退策略",
+        "fallbackDisabled": "未启用回退",
+        "fallbackSameProviderPolicy": "先同提供商，再其他提供商",
     }
     assert payload["afterToggle"] == {
         "language": "en-US",
@@ -171,5 +183,9 @@ console.log(JSON.stringify({ afterInit, afterToggle }));
         "placeholder": "What would you like the agents to do?",
         "computerToolGroup": "Computer Use",
         "webToolGroup": "Web",
+        "fallbackSection": "Fallback",
+        "fallbackStrategy": "Fallback Strategy",
+        "fallbackDisabled": "Fallback disabled",
+        "fallbackSameProviderPolicy": "Same Provider Then Other Provider",
         "savedPayloads": [{"language": "en-US"}],
     }

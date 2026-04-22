@@ -349,14 +349,14 @@ function createModal() {
                                             </div>
                                         </div>
                                         <div class="profile-editor-subsection">
-                                            <h5>Fallback</h5>
-                                            <div class="form-row">
+                                            <h5 data-i18n="settings.model.fallback_section">Fallback</h5>
+                                            <div class="form-row profile-fallback-row">
                                                 <div class="form-group">
-                                                    <label for="profile-fallback-policy">Fallback Strategy</label>
+                                                    <label for="profile-fallback-policy" data-i18n="settings.model.fallback_strategy">Fallback Strategy</label>
                                                     <select id="profile-fallback-policy"></select>
                                                 </div>
                                                 <div class="form-group">
-                                                    <label for="profile-fallback-priority">Fallback Priority</label>
+                                                    <label for="profile-fallback-priority" data-i18n="settings.model.fallback_priority">Fallback Priority</label>
                                                     <input type="number" id="profile-fallback-priority" value="0" min="0" max="1000000" autocomplete="off">
                                                 </div>
                                             </div>
