@@ -29,6 +29,9 @@ def test_default_tool_groups_include_expected_buckets() -> None:
     workspace_group = next(group for group in groups if group.group_id == "workspace")
     assert "shell" in workspace_group.tools
     assert "office_read_markdown" in workspace_group.tools
+    computer_group = next(group for group in groups if group.group_id == "computer")
+    assert computer_group.name == "Computer Use"
+    assert "capture_screen" in computer_group.tools
     orchestration_group = next(
         group for group in groups if group.group_id == "orchestration"
     )

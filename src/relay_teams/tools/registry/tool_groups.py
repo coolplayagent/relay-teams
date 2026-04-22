@@ -50,7 +50,7 @@ DEFAULT_TOOL_GROUPS: tuple[ToolGroupDefinition, ...] = (
     ),
     ToolGroupDefinition(
         group_id="computer",
-        name="Computer",
+        name="Computer Use",
         description="Desktop observation, input, and pointer tools.",
         tools=(
             "capture_screen",
