@@ -1,11 +1,21 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 
+from PIL import (
+    Image,
+    UnidentifiedImageError,
+)
 from pydantic import JsonValue
 from pydantic_ai import Agent
+from pydantic_ai.messages import ToolReturn
 
+from relay_teams.media import (
+    MediaModality,
+    infer_media_modality,
+)
 from relay_teams.paths import (
     iter_dir_paths,
     open_binary_file,
@@ -38,6 +48,9 @@ from relay_teams.tools.workspace_tools.read_support import (
 )
 
 DESCRIPTION = load_tool_description(__file__)
+_READ_TOOL_IMAGE_SOURCE = "read_tool"
+_READ_TOOL_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+_READ_TOOL_MAX_IMAGE_BYTES_LABEL = "10 MB"
 
 BINARY_EXTENSIONS = {
     ".zip",
@@ -194,7 +207,132 @@ def _inject_instruction_sections(
     return "\n".join([*instructions, output])
 
 
+def _detect_image_mime_type(file_path: Path) -> str | None:
+    try:
+        with open_binary_file(file_path) as handle:
+            with Image.open(handle) as image:
+                detected_format = image.format
+                image.verify()
+    except (OSError, UnidentifiedImageError):
+        return None
+    detected_mime_type = Image.MIME.get(detected_format or "")
+    guessed_mime_type, _ = mimetypes.guess_type(file_path.name, strict=False)
+    mime_type = (
+        detected_mime_type
+        if isinstance(detected_mime_type, str) and detected_mime_type.strip()
+        else guessed_mime_type
+    )
+    if not isinstance(mime_type, str) or not mime_type.strip():
+        return None
+    try:
+        modality = infer_media_modality(mime_type, file_path.name)
+    except ValueError:
+        return None
+    if modality != MediaModality.IMAGE:
+        return None
+    return mime_type
+
+
+# noinspection PyTypeHints
+def _read_image_capability_error(path: str, support: bool | None) -> str:
+    if support is True:
+        return ""
+    if support is False:
+        return (
+            "The current model does not have image input enabled for read(). "
+            "Enable image input in provider settings if this model supports vision, "
+            f"or switch to a vision-capable model, then retry: {path}"
+        )
+    return (
+        "Image input support for the current model is unknown, so read() cannot "
+        "attach this image yet. Enable image input in provider settings if this "
+        f"model supports vision, or switch to a vision-capable model, then retry: {path}"
+    )
+
+
+# noinspection PyTypeHints
+def _image_support(ctx: ToolContext) -> bool | None:
+    return ctx.deps.model_capabilities.input.image
+
+
+def _project_image_read_result(
+    *,
+    ctx: ToolContext,
+    file_path: Path,
+    path: str,
+) -> ToolResultProjection:
+    media_asset_service = ctx.deps.media_asset_service
+    if media_asset_service is None:
+        raise ValueError("Cannot read image file without media asset support.")
+    mime_type = _detect_image_mime_type(file_path)
+    if mime_type is None:
+        raise ValueError(f"Cannot read binary file: {path}")
+    support = _image_support(ctx)
+    if support is not True:
+        raise ValueError(_read_image_capability_error(path, support))
+    image_size_bytes = path_stat(file_path).st_size
+    if image_size_bytes > _READ_TOOL_MAX_IMAGE_BYTES:
+        raise ValueError(
+            "Image file is too large for read(). "
+            f"Maximum supported size is {_READ_TOOL_MAX_IMAGE_BYTES_LABEL}: {path}"
+        )
+
+    with open_binary_file(file_path) as handle:
+        data = handle.read()
+
+    record = media_asset_service.store_bytes(
+        session_id=ctx.deps.session_id,
+        workspace_id=ctx.deps.workspace_id,
+        modality=MediaModality.IMAGE,
+        mime_type=mime_type,
+        data=data,
+        name=file_path.name,
+        source=_READ_TOOL_IMAGE_SOURCE,
+    )
+    media_content_part = media_asset_service.to_content_part(record)
+    media_part = media_content_part.model_dump(mode="json")
+    record_file_read(
+        shared_store=ctx.deps.shared_store,
+        task_id=ctx.deps.task_id,
+        path=file_path,
+    )
+    output = "\n".join(
+        [
+            f"<path>{file_path}</path>",
+            "<type>image</type>",
+            "<content>",
+            f"[image: {file_path.name}]",
+            "</content>",
+        ]
+    )
+    return _project_read_result(
+        output=output,
+        truncated=False,
+        next_offset=None,
+        metadata={
+            "path": str(file_path),
+            "type": "image",
+            "mime_type": mime_type,
+            "content": [media_part],
+        },
+    ).model_copy(
+        update={
+            "internal_data": {
+                "output": output,
+                "truncated": False,
+                "next_offset": None,
+                "path": str(file_path),
+                "type": "image",
+                "mime_type": mime_type,
+                "content": [media_part],
+            },
+            "tool_content_parts": (media_content_part,),
+        }
+    )
+
+
 def register(agent: Agent[ToolDeps, str]) -> None:
+    # noinspection PyTypeHints
     @agent.tool(description=DESCRIPTION)
     async def read(
         ctx: ToolContext,
@@ -203,7 +341,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         limit: int = DEFAULT_READ_LIMIT,
         cell_id: str | None = None,
         include_outputs: bool = True,
-    ) -> dict[str, JsonValue]:
+    ) -> ToolReturn | dict[str, JsonValue]:
         """Read a file or directory content.
 
         Args:
@@ -284,7 +422,15 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     "include_outputs only applies to Jupyter notebooks (.ipynb)."
                 )
 
-            if is_binary_file(file_path, path_stat(file_path).st_size):
+            file_size = path_stat(file_path).st_size
+            if is_binary_file(file_path, file_size):
+                image_mime_type = _detect_image_mime_type(file_path)
+                if image_mime_type is not None:
+                    return _project_image_read_result(
+                        ctx=ctx,
+                        file_path=file_path,
+                        path=path,
+                    )
                 raise ValueError(f"Cannot read binary file: {path}")
 
             (
@@ -357,4 +503,5 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             },
             action=_action,
             raw_args=locals(),
+            allow_tool_return=True,
         )

@@ -2220,24 +2220,26 @@ def _emit_gateway_observability_probe() -> None:
     previous_computer_runtime = os.environ.get("AGENT_TEAMS_COMPUTER_RUNTIME")
     os.environ["AGENT_TEAMS_COMPUTER_RUNTIME"] = "fake"
     try:
-        runtime = _build_acp_stdio_runtime()
-        server = cast(AcpGatewayServer, getattr(runtime, "_server"))
-
-        async def discard_notify(_message: dict[str, JsonValue]) -> None:
-            return None
-
-        server.set_notify(discard_notify)
         failure: list[BaseException] = []
 
         def runner() -> None:
             try:
-                asyncio.run(_run_gateway_observability_probe(server))
+                runtime = _build_acp_stdio_runtime()
+                server = cast(AcpGatewayServer, getattr(runtime, "_server"))
+
+                async def discard_notify(_message: dict[str, JsonValue]) -> None:
+                    return None
+
+                server.set_notify(discard_notify)
+                asyncio.run(
+                    asyncio.wait_for(_run_gateway_observability_probe(server), 30.0)
+                )
             except BaseException as exc:  # pragma: no cover - re-raised below
                 failure.append(exc)
 
         thread = threading.Thread(target=runner, daemon=True)
         thread.start()
-        thread.join(timeout=30.0)
+        thread.join(timeout=35.0)
         if thread.is_alive():
             raise AssertionError(
                 "Timed out while emitting gateway observability probe."
@@ -2314,7 +2316,9 @@ async def _run_gateway_observability_probe(server: AcpGatewayServer) -> None:
     )
     assert isinstance(prompt_response, dict)
     prompt_result = prompt_response.get("result")
-    assert isinstance(prompt_result, dict)
+    assert isinstance(prompt_result, dict), (
+        f"unexpected ACP prompt response: {prompt_response!r}"
+    )
     assert prompt_result.get("runStatus") == "completed"
 
 

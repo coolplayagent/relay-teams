@@ -8,8 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from relay_teams.media import ContentPart
 from relay_teams.media import ContentPartsAdapter
+from relay_teams.media import UserPromptContent
 from relay_teams.media import content_parts_from_text
 from relay_teams.media import content_parts_to_text
+from relay_teams.media import user_prompt_content_to_text
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
 from relay_teams.sessions.runs.enums import (
     ExecutionMode,
@@ -154,11 +156,18 @@ class InjectionMessage(BaseModel):
     run_id: RequiredIdentifierStr
     recipient_instance_id: RequiredIdentifierStr
     source: InjectionSource
-    content: str = Field(min_length=1)
+    # noinspection PyTypeHints
+    content: UserPromptContent
     sender_instance_id: OptionalIdentifierStr = None
     sender_role_id: OptionalIdentifierStr = None
     priority: int = Field(ge=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+    @model_validator(mode="after")
+    def _validate_content(self) -> "InjectionMessage":
+        if not user_prompt_content_to_text(self.content):
+            raise ValueError("Injection content must not be empty")
+        return self
 
 
 class RunEvent(BaseModel):

@@ -848,12 +848,10 @@ function createModal() {
                                                         </button>
                                                     </div>
                                                 </div>
-                                                <div class="form-group form-group-span-2 workspace-auth-field workspace-auth-field-span-2">
-                                                    <div class="form-label-row workspace-private-key-label-row">
-                                                        <label for="workspace-ssh-profile-private-key" data-i18n="settings.workspace.private_key">Private Key</label>
-                                                        <div class="settings-inline-action-row">
-                                                            <button class="secondary-btn section-action-btn" id="workspace-ssh-profile-import-private-key-btn" type="button" data-i18n="settings.workspace.private_key_import">Import Private Key</button>
-                                                        </div>
+                                                <div class="form-group form-group-span-2 workspace-auth-field workspace-auth-field-span-2 workspace-private-key-field">
+                                                    <label class="workspace-private-key-label-row" for="workspace-ssh-profile-private-key" data-i18n="settings.workspace.private_key">Private Key</label>
+                                                    <div class="settings-inline-action-row workspace-private-key-action-row">
+                                                        <button class="secondary-btn section-action-btn" id="workspace-ssh-profile-import-private-key-btn" type="button" data-i18n="settings.workspace.private_key_import">Import Private Key</button>
                                                     </div>
                                                     <textarea class="config-textarea workspace-private-key-textarea" id="workspace-ssh-profile-private-key" placeholder="Paste a private key or import one from a file" data-i18n-placeholder="settings.workspace.private_key_placeholder" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
                                                     <input type="hidden" id="workspace-ssh-profile-private-key-name">

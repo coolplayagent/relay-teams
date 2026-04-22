@@ -165,19 +165,23 @@ export function updatePromptContentBlock(promptEl, promptPayload, options = {}) 
         previewEl.textContent = preview;
     }
     if (bodyEl) {
-        renderPromptContentParts(bodyEl, normalizedParts || []);
+        renderPromptContentParts(bodyEl, normalizedParts || [], options);
     }
     return promptEl;
 }
 
-export function renderPromptContentParts(targetEl, parts) {
+export function renderPromptContentParts(targetEl, parts, options = {}) {
     if (!targetEl) {
         return targetEl;
     }
     targetEl.replaceChildren();
     const normalizedParts = Array.isArray(parts) ? parts : [];
     normalizedParts.forEach(part => {
-        appendStructuredContentPart(targetEl, part);
+        appendStructuredContentPart(targetEl, part, {
+            richContent: {
+                enableWorkspaceImagePreview: options.enableWorkspaceImagePreview !== false,
+            },
+        });
     });
     return targetEl;
 }

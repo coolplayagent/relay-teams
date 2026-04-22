@@ -60,6 +60,7 @@ async def test_run_stdio_server_passes_todo_service_to_host_tool_bridge(
     config_dir.mkdir()
     fake_role = object()
     fake_todo_service = object()
+    fake_resolve_model_config = object()
     fake_container = SimpleNamespace(
         role_registry=SimpleNamespace(get=lambda role_id: fake_role),
         task_repo=object(),
@@ -93,6 +94,7 @@ async def test_run_stdio_server_passes_todo_service_to_host_tool_bridge(
         metric_recorder=object(),
         im_tool_service=object(),
         computer_runtime=object(),
+        resolve_external_agent_model_config=fake_resolve_model_config,
     )
 
     monkeypatch.setenv(stdio_server.HOST_TOOL_CONFIG_DIR_ENV, str(config_dir))
@@ -119,6 +121,7 @@ async def test_run_stdio_server_passes_todo_service_to_host_tool_bridge(
     bridge = _FakeBridge.last_instance
     assert bridge is not None
     assert bridge.init_kwargs["todo_service"] is fake_todo_service
+    assert bridge.init_kwargs["resolve_model_config"] is fake_resolve_model_config
     assert bridge.configure_calls[0]["role"] is fake_role
     assert bridge.configure_calls[0]["session_id"] == "session-1"
     assert len(bridge.bound_requests) == 1

@@ -211,7 +211,9 @@ export function appendThinkingText(contentEl, text, options = {}) {
 }
 
 export function updateMessageText(textEl, text, options = {}) {
-    renderRichContent(textEl, String(text || ''));
+    renderRichContent(textEl, String(text || ''), {
+        enableWorkspaceImagePreview: options.enableWorkspaceImagePreview !== false,
+    });
     syncStreamingCursor(textEl, options.streaming === true);
     return textEl;
 }
@@ -223,7 +225,10 @@ export function updateUserPromptText(promptEl, text) {
 }
 
 export function updateThinkingText(textEl, text, options = {}) {
-    updateMessageText(textEl, text, options);
+    updateMessageText(textEl, text, {
+        ...options,
+        enableWorkspaceImagePreview: false,
+    });
     const thinkingBlock = textEl?.closest?.('.thinking-block');
     if (thinkingBlock) {
         const liveEl = thinkingBlock.querySelector('.thinking-live');
