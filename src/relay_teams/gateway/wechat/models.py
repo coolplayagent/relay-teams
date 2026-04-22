@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from relay_teams.interfaces.server.api_write_validation import (
+from relay_teams.validation import (
     normalize_optional_string,
     require_non_empty_patch,
 )

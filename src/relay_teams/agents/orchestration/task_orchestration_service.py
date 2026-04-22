@@ -183,6 +183,9 @@ class TaskOrchestrationService:
     ) -> dict[str, JsonValue]:
         return self.list_delegated_tasks(run_id=run_id, include_root=include_root)
 
+    def list_tasks(self) -> tuple[TaskRecord, ...]:
+        return self._task_repo.list_all()
+
     async def dispatch_task(
         self,
         *,

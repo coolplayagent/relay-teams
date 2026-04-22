@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import JsonValue
 
-from relay_teams.interfaces.server.api_write_validation import (
+from relay_teams.validation import (
     require_cascade_delete,
     require_force_delete,
 )

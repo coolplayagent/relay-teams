@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import ssl
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import cast
@@ -15,7 +14,6 @@ from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.frames import Close
 from websockets.http11 import Response
 
-from relay_teams.env.proxy_env import ProxyEnvConfig
 from relay_teams.gateway.feishu.lark_ws_compat import (
     import_lark_module,
     import_lark_ws_client_module,
@@ -32,9 +30,7 @@ from relay_teams.gateway.feishu.subscription_service import (
     WsClientLike,
     _FeishuWsController,
     _FeishuWsHub,
-    _build_websocket_ssl_context,
     _parse_ws_conn_exception,
-    _resolve_websocket_proxy_url,
 )
 
 
@@ -476,50 +472,29 @@ def test_feishu_ws_controller_get_conn_url_uses_net_http_client(monkeypatch) -> 
     assert ws_client.configured_ping_interval == 45
 
 
-def test_build_websocket_ssl_context_respects_proxy_ssl_setting(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "relay_teams.gateway.feishu.subscription_service.load_proxy_env_config",
-        lambda: ProxyEnvConfig(ssl_verify=False),
-    )
-
-    ssl_context = _build_websocket_ssl_context("wss://open.feishu.cn/ws")
-
-    assert ssl_context is not None
-    assert ssl_context.verify_mode == ssl.CERT_NONE
-    assert ssl_context.check_hostname is False
-
-
-def test_resolve_websocket_proxy_url_uses_https_proxy_for_wss(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "relay_teams.gateway.feishu.subscription_service.load_proxy_env_config",
-        lambda: ProxyEnvConfig(
-            https_proxy="http://proxy.internal:8443",
-            http_proxy="http://proxy.internal:8080",
-            no_proxy="localhost,127.0.0.1",
+def test_feishu_ws_controller_http_client_uses_runtime_net_proxy_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _FeishuWsController(
+        runtime_config=_build_runtime(
+            trigger_id="trg_a",
+            name="bot_a",
+            app_id="cli_demo",
+            app_name="bot-a",
+            app_secret="secret-demo",
         ),
+        event_handler=_FakeHandler(),
     )
-
-    proxy_url = _resolve_websocket_proxy_url(
-        "wss://open.feishu.cn/ws?device_id=1&service_id=2"
-    )
-
-    assert proxy_url == "http://proxy.internal:8443"
-
-
-def test_resolve_websocket_proxy_url_respects_no_proxy(monkeypatch) -> None:
+    fake_http_client = httpx.Client(trust_env=False)
     monkeypatch.setattr(
-        "relay_teams.gateway.feishu.subscription_service.load_proxy_env_config",
-        lambda: ProxyEnvConfig(
-            https_proxy="http://proxy.internal:8443",
-            no_proxy="open.feishu.cn",
-        ),
+        "relay_teams.gateway.feishu.subscription_service.create_runtime_sync_http_client",
+        lambda: fake_http_client,
     )
 
-    proxy_url = _resolve_websocket_proxy_url(
-        "wss://open.feishu.cn/ws?device_id=1&service_id=2"
-    )
-
-    assert proxy_url is None
+    try:
+        assert controller._create_feishu_http_client() is fake_http_client
+    finally:
+        fake_http_client.close()
 
 
 def test_import_lark_ws_client_module_suppresses_known_deprecations(

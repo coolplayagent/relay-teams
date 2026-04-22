@@ -12,7 +12,7 @@ from pathlib import Path
 from relay_teams.logger import get_logger
 from relay_teams.net.clients import create_async_http_client
 from relay_teams.paths import get_app_bin_dir
-from relay_teams.tools.workspace_tools.github_cli_errors import (
+from relay_teams.net.github_cli_errors import (
     DownloadFailedError,
     ExtractionFailedError,
     GitHubCliNotFoundError,

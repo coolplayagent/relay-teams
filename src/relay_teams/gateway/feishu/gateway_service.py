@@ -29,7 +29,7 @@ from relay_teams.gateway.feishu.secret_store import (
     FeishuTriggerSecretStore,
     get_feishu_trigger_secret_store,
 )
-from relay_teams.interfaces.server.api_write_validation import require_force_delete
+from relay_teams.validation import require_force_delete
 from relay_teams.logger import get_logger, log_event
 from relay_teams.roles import RoleRegistry
 from relay_teams.sessions.external_session_binding_repository import (

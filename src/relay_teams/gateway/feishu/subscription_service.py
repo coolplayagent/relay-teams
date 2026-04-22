@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-import ssl
 from contextlib import suppress
 from threading import Event, Lock, Thread
 from typing import TYPE_CHECKING, NoReturn, Protocol, runtime_checkable
@@ -13,11 +12,6 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 
-from relay_teams.env.proxy_env import (
-    load_proxy_env_config,
-    proxy_applies_to_url,
-    resolve_ssl_verify,
-)
 from relay_teams.gateway.feishu.lark_ws_compat import (
     import_lark_module,
     import_lark_ws_client_module,
@@ -27,7 +21,11 @@ from relay_teams.gateway.feishu.models import (
     TriggerProcessingResult,
 )
 from relay_teams.logger import get_logger, log_event
-from relay_teams.net import create_sync_http_client
+from relay_teams.net import create_runtime_sync_http_client
+from relay_teams.net.websocket import (
+    build_websocket_ssl_context,
+    resolve_websocket_proxy_url,
+)
 
 logger = get_logger(__name__)
 
@@ -553,8 +551,8 @@ class _FeishuWsController:
         try:
             connection = await ws_client_module.websockets.connect(
                 conn_url,
-                proxy=_resolve_websocket_proxy_url(conn_url),
-                ssl=_build_websocket_ssl_context(conn_url),
+                proxy=resolve_websocket_proxy_url(conn_url),
+                ssl=build_websocket_ssl_context(conn_url),
             )
         except InvalidStatus as exc:
             _parse_ws_conn_exception(exc)
@@ -685,7 +683,7 @@ class _FeishuWsController:
         return endpoint_data.URL
 
     def _create_feishu_http_client(self) -> httpx.Client:
-        return create_sync_http_client(proxy_config=load_proxy_env_config())
+        return create_runtime_sync_http_client()
 
 
 def _create_ws_controller(
@@ -707,40 +705,6 @@ def _require_json_object(
     if not isinstance(value, dict):
         raise RuntimeError(f"{error_context}: invalid JSON response")
     return dict(value.items())
-
-
-def _build_websocket_ssl_context(url: str) -> ssl.SSLContext | None:
-    if not url.startswith("wss://"):
-        return None
-    ssl_context = ssl.create_default_context()
-    if resolve_ssl_verify(proxy_config=load_proxy_env_config()):
-        return ssl_context
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
-    return ssl_context
-
-
-def _resolve_websocket_proxy_url(url: str) -> str | None:
-    proxy_config = load_proxy_env_config()
-    if not proxy_applies_to_url(_httpish_url_for_websocket(url), proxy_config):
-        return None
-    if url.startswith("wss://"):
-        return (
-            proxy_config.https_proxy
-            or proxy_config.http_proxy
-            or proxy_config.all_proxy
-        )
-    if url.startswith("ws://"):
-        return proxy_config.http_proxy or proxy_config.all_proxy
-    return None
-
-
-def _httpish_url_for_websocket(url: str) -> str:
-    if url.startswith("wss://"):
-        return f"https://{url.removeprefix('wss://')}"
-    if url.startswith("ws://"):
-        return f"http://{url.removeprefix('ws://')}"
-    return url
 
 
 def _resolve_ws_exception_headers(exc: Exception) -> HeadersLike | None:

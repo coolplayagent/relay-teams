@@ -13,7 +13,7 @@ import pytest
 
 class TestGitHubCliPath:
     def test_platform_detection(self) -> None:
-        from relay_teams.tools.workspace_tools import github_cli
+        from relay_teams.net import github_cli
 
         key = github_cli._get_platform_key()
         assert key in github_cli.PLATFORM_MAP
@@ -29,10 +29,10 @@ class TestGitHubCliPath:
 
         with patch("shutil.which", return_value=None):
             with patch(
-                "relay_teams.tools.workspace_tools.github_cli.BIN_DIR",
+                "relay_teams.net.github_cli.BIN_DIR",
                 cache_dir,
             ):
-                from relay_teams.tools.workspace_tools import github_cli
+                from relay_teams.net import github_cli
 
                 github_cli.clear_gh_path_cache()
                 path = await github_cli.get_gh_path()
@@ -54,10 +54,10 @@ class TestGitHubCliPath:
 
         with patch("shutil.which", return_value=str(system_gh)):
             with patch(
-                "relay_teams.tools.workspace_tools.github_cli.BIN_DIR",
+                "relay_teams.net.github_cli.BIN_DIR",
                 cache_dir,
             ):
-                from relay_teams.tools.workspace_tools import github_cli
+                from relay_teams.net import github_cli
 
                 github_cli.clear_gh_path_cache()
                 path = await github_cli.get_gh_path()
@@ -77,10 +77,10 @@ class TestGitHubCliPath:
 
         with patch("shutil.which", return_value=None):
             with patch(
-                "relay_teams.tools.workspace_tools.github_cli.BIN_DIR",
+                "relay_teams.net.github_cli.BIN_DIR",
                 cache_dir,
             ):
-                from relay_teams.tools.workspace_tools import github_cli
+                from relay_teams.net import github_cli
 
                 async def fake_download(target: Path) -> None:
                     await asyncio.sleep(0.01)
@@ -88,7 +88,7 @@ class TestGitHubCliPath:
 
                 github_cli.clear_gh_path_cache()
                 with patch(
-                    "relay_teams.tools.workspace_tools.github_cli._download_gh",
+                    "relay_teams.net.github_cli._download_gh",
                     new=AsyncMock(side_effect=fake_download),
                 ) as mock_download:
                     first, second = await asyncio.gather(
@@ -113,14 +113,14 @@ class TestGitHubCliPath:
 
         with patch("shutil.which", return_value=str(system_gh)):
             with patch(
-                "relay_teams.tools.workspace_tools.github_cli.BIN_DIR",
+                "relay_teams.net.github_cli.BIN_DIR",
                 cache_dir,
             ):
-                from relay_teams.tools.workspace_tools import github_cli
+                from relay_teams.net import github_cli
 
                 github_cli.clear_gh_path_cache()
                 with patch(
-                    "relay_teams.tools.workspace_tools.github_cli._download_gh",
+                    "relay_teams.net.github_cli._download_gh",
                     new=AsyncMock(side_effect=RuntimeError("no network")),
                 ) as mock_download:
                     path = await github_cli.get_gh_path()
@@ -138,14 +138,14 @@ class TestGitHubCliPath:
 
         with patch("shutil.which", return_value=None):
             with patch(
-                "relay_teams.tools.workspace_tools.github_cli.BIN_DIR",
+                "relay_teams.net.github_cli.BIN_DIR",
                 cache_dir,
             ):
-                from relay_teams.tools.workspace_tools import github_cli
+                from relay_teams.net import github_cli
 
                 github_cli.clear_gh_path_cache()
                 with patch(
-                    "relay_teams.tools.workspace_tools.github_cli._download_gh",
+                    "relay_teams.net.github_cli._download_gh",
                     new=AsyncMock(side_effect=RuntimeError("no network")),
                 ) as mock_download:
                     path = github_cli.resolve_existing_gh_path()
@@ -161,10 +161,10 @@ class TestGitHubCliPath:
 
         with patch("shutil.which", return_value=None):
             with patch(
-                "relay_teams.tools.workspace_tools.github_cli.BIN_DIR",
+                "relay_teams.net.github_cli.BIN_DIR",
                 cache_dir,
             ):
-                from relay_teams.tools.workspace_tools import github_cli
+                from relay_teams.net import github_cli
 
                 github_cli.clear_gh_path_cache()
                 path = github_cli.resolve_existing_gh_path()
@@ -180,10 +180,10 @@ class TestGitHubCliPath:
 
         with patch("shutil.which", return_value=None):
             with patch(
-                "relay_teams.tools.workspace_tools.github_cli.BIN_DIR",
+                "relay_teams.net.github_cli.BIN_DIR",
                 cache_dir,
             ):
-                from relay_teams.tools.workspace_tools import github_cli
+                from relay_teams.net import github_cli
 
                 github_cli.clear_gh_path_cache()
                 with patch.object(
@@ -199,7 +199,7 @@ class TestGitHubCliPath:
 class TestGitHubCliDownload:
     @pytest.mark.asyncio
     async def test_download_enables_redirect_following(self, tmp_path: Path) -> None:
-        from relay_teams.tools.workspace_tools import github_cli
+        from relay_teams.net import github_cli
 
         target = tmp_path / "gh.exe"
         response = MagicMock(status_code=200, content=b"fake-zip")
@@ -210,17 +210,17 @@ class TestGitHubCliDownload:
         client_cm.__aexit__.return_value = None
 
         with patch(
-            "relay_teams.tools.workspace_tools.github_cli.create_async_http_client",
+            "relay_teams.net.github_cli.create_async_http_client",
             return_value=client_cm,
         ) as mock_client_cls:
             with patch(
-                "relay_teams.tools.workspace_tools.github_cli._get_platform_key",
+                "relay_teams.net.github_cli._get_platform_key",
                 return_value="x64-windows",
             ):
                 with patch(
-                    "relay_teams.tools.workspace_tools.github_cli._extract_zip"
+                    "relay_teams.net.github_cli._extract_zip"
                 ) as mock_extract_zip:
-                    with patch("relay_teams.tools.workspace_tools.github_cli.os.chmod"):
+                    with patch("relay_teams.net.github_cli.os.chmod"):
                         await github_cli._download_gh(target)
 
         mock_client_cls.assert_called_once_with(follow_redirects=True)
@@ -228,7 +228,7 @@ class TestGitHubCliDownload:
         mock_extract_zip.assert_called_once_with(b"fake-zip", target)
 
     def test_extract_zip_replaces_existing_target(self, tmp_path: Path) -> None:
-        from relay_teams.tools.workspace_tools import github_cli
+        from relay_teams.net import github_cli
 
         target = tmp_path / "gh.exe"
         target.write_bytes(b"old")

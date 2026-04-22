@@ -20,7 +20,7 @@ import qrcode
 import qrcode.image.svg
 
 from relay_teams.gateway.gateway_models import GatewayChannelType
-from relay_teams.interfaces.server.api_write_validation import require_force_delete
+from relay_teams.validation import require_force_delete
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
 from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressBusyPolicy,

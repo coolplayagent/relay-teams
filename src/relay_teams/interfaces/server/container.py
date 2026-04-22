@@ -105,6 +105,12 @@ from relay_teams.providers.model_fallback_config_manager import (
 )
 from relay_teams.providers.model_fallback import LlmFallbackMiddleware
 from relay_teams.net.llm_client import clear_llm_http_client_cache
+from relay_teams.net.clawhub_connectivity import ClawHubConnectivityProbeService
+from relay_teams.net.github_connectivity import (
+    GitHubConnectivityProbeService,
+    GitHubWebhookConnectivityProbeService,
+)
+from relay_teams.net.web_connectivity import WebConnectivityProbeService
 from relay_teams.providers.provider_factory import (
     apply_default_model_profile_override,
     create_provider_factory,
@@ -269,11 +275,27 @@ class ServerContainer:
         )
         self.github_config_service: GitHubConfigService = GitHubConfigService(
             config_dir=app_config_dir,
-            get_proxy_config=self.proxy_config_service.get_proxy_config,
         )
         self.localhost_run_tunnel_service = LocalhostRunTunnelService()
         self.clawhub_config_service: ClawHubConfigService = ClawHubConfigService(
             config_dir=app_config_dir
+        )
+        self.web_connectivity_probe_service = WebConnectivityProbeService(
+            get_proxy_config=self.proxy_config_service.get_proxy_config,
+        )
+        self.github_connectivity_probe_service = GitHubConnectivityProbeService(
+            get_github_config=self.github_config_service.get_github_config,
+            get_proxy_config=self.proxy_config_service.get_proxy_config,
+        )
+        self.github_webhook_connectivity_probe_service = (
+            GitHubWebhookConnectivityProbeService(
+                get_github_config=self.github_config_service.get_github_config,
+                get_proxy_config=self.proxy_config_service.get_proxy_config,
+            )
+        )
+        self.clawhub_connectivity_probe_service = ClawHubConnectivityProbeService(
+            config_dir=app_config_dir,
+            get_clawhub_config=self.clawhub_config_service.get_clawhub_config,
         )
         self.ui_language_settings_service = UiLanguageSettingsService(
             config_dir=app_config_dir

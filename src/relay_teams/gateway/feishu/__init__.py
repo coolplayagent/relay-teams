@@ -27,15 +27,6 @@ if TYPE_CHECKING:
         FEISHU_METADATA_TENANT_KEY,
         FEISHU_METADATA_TRIGGER_ID_KEY,
         FEISHU_PLATFORM,
-        SESSION_METADATA_SOURCE_ICON_KEY,
-        SESSION_METADATA_SOURCE_KIND_KEY,
-        SESSION_METADATA_SOURCE_LABEL_KEY,
-        SESSION_METADATA_SOURCE_PROVIDER_KEY,
-        SESSION_METADATA_TITLE_SOURCE_KEY,
-        SESSION_SOURCE_ICON_IM,
-        SESSION_SOURCE_KIND_IM,
-        SESSION_TITLE_SOURCE_AUTO,
-        SESSION_TITLE_SOURCE_MANUAL,
         FeishuChatQueueClearResult,
         FeishuChatQueueItemPreview,
         FeishuChatQueueSummary,
@@ -59,6 +50,17 @@ if TYPE_CHECKING:
         FeishuSubscriptionService,
     )
     from relay_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
+    from relay_teams.sessions.session_metadata import (
+        SESSION_METADATA_SOURCE_ICON_KEY,
+        SESSION_METADATA_SOURCE_KIND_KEY,
+        SESSION_METADATA_SOURCE_LABEL_KEY,
+        SESSION_METADATA_SOURCE_PROVIDER_KEY,
+        SESSION_METADATA_TITLE_SOURCE_KEY,
+        SESSION_SOURCE_ICON_IM,
+        SESSION_SOURCE_KIND_IM,
+        SESSION_TITLE_SOURCE_AUTO,
+        SESSION_TITLE_SOURCE_MANUAL,
+    )
 
 __all__ = [
     "FEISHU_METADATA_ACCOUNT_ID_KEY",
@@ -144,39 +146,39 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "FeishuInboundRuntime",
     ),
     "SESSION_METADATA_SOURCE_ICON_KEY": (
-        "relay_teams.gateway.feishu.models",
+        "relay_teams.sessions.session_metadata",
         "SESSION_METADATA_SOURCE_ICON_KEY",
     ),
     "SESSION_METADATA_SOURCE_KIND_KEY": (
-        "relay_teams.gateway.feishu.models",
+        "relay_teams.sessions.session_metadata",
         "SESSION_METADATA_SOURCE_KIND_KEY",
     ),
     "SESSION_METADATA_SOURCE_LABEL_KEY": (
-        "relay_teams.gateway.feishu.models",
+        "relay_teams.sessions.session_metadata",
         "SESSION_METADATA_SOURCE_LABEL_KEY",
     ),
     "SESSION_METADATA_SOURCE_PROVIDER_KEY": (
-        "relay_teams.gateway.feishu.models",
+        "relay_teams.sessions.session_metadata",
         "SESSION_METADATA_SOURCE_PROVIDER_KEY",
     ),
     "SESSION_METADATA_TITLE_SOURCE_KEY": (
-        "relay_teams.gateway.feishu.models",
+        "relay_teams.sessions.session_metadata",
         "SESSION_METADATA_TITLE_SOURCE_KEY",
     ),
     "SESSION_SOURCE_ICON_IM": (
-        "relay_teams.gateway.feishu.models",
+        "relay_teams.sessions.session_metadata",
         "SESSION_SOURCE_ICON_IM",
     ),
     "SESSION_SOURCE_KIND_IM": (
-        "relay_teams.gateway.feishu.models",
+        "relay_teams.sessions.session_metadata",
         "SESSION_SOURCE_KIND_IM",
     ),
     "SESSION_TITLE_SOURCE_AUTO": (
-        "relay_teams.gateway.feishu.models",
+        "relay_teams.sessions.session_metadata",
         "SESSION_TITLE_SOURCE_AUTO",
     ),
     "SESSION_TITLE_SOURCE_MANUAL": (
-        "relay_teams.gateway.feishu.models",
+        "relay_teams.sessions.session_metadata",
         "SESSION_TITLE_SOURCE_MANUAL",
     ),
     "FeishuClient": ("relay_teams.gateway.feishu.client", "FeishuClient"),

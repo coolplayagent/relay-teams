@@ -17,7 +17,7 @@ from relay_teams.env.web_config_models import (
     DEFAULT_SEARXNG_INSTANCE_URL,
 )
 from relay_teams.gateway.acp_stdio import AcpGatewayServer, _AcpRequestContext
-from relay_teams.gateway.gateway_cli import _build_acp_stdio_runtime
+from relay_teams.interfaces.cli.gateway_cli import _build_acp_stdio_runtime
 from pydantic import JsonValue
 from playwright.sync_api import Locator, Page
 from playwright.sync_api import expect

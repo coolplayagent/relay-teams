@@ -8,7 +8,7 @@ import subprocess
 from relay_teams.env.clawhub_auth import ClawHubCliLoginResult
 from relay_teams.env.clawhub_cli import ClawHubCliInstallResult
 from relay_teams.env.clawhub_config_models import ClawHubConfig
-from relay_teams.env.clawhub_connectivity import (
+from relay_teams.net.clawhub_connectivity import (
     ClawHubConnectivityProbeRequest,
     ClawHubConnectivityProbeService,
 )
@@ -16,7 +16,7 @@ from relay_teams.env.clawhub_connectivity import (
 
 def test_clawhub_probe_requires_token(monkeypatch) -> None:
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
+        "relay_teams.net.clawhub_connectivity.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
     )
     service = ClawHubConnectivityProbeService(
@@ -36,11 +36,11 @@ def test_clawhub_probe_requires_token(monkeypatch) -> None:
 
 def test_clawhub_probe_reports_missing_binary(monkeypatch) -> None:
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
+        "relay_teams.net.clawhub_connectivity.resolve_existing_clawhub_path",
         lambda: None,
     )
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.install_clawhub_via_npm",
+        "relay_teams.net.clawhub_connectivity.install_clawhub_via_npm",
         lambda *, timeout_seconds, base_env=None: ClawHubCliInstallResult(
             ok=False,
             attempted=False,
@@ -67,15 +67,15 @@ def test_clawhub_probe_validates_token_without_passing_it_on_cli(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
+        "relay_teams.net.clawhub_connectivity.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
     )
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.os.environ",
+        "relay_teams.net.clawhub_connectivity.os.environ",
         {"PATH": "/usr/bin"},
     )
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.ensure_clawhub_cli_login",
+        "relay_teams.net.clawhub_connectivity.ensure_clawhub_cli_login",
         lambda *args, **kwargs: ClawHubCliLoginResult(
             ok=True,
             env={
@@ -142,16 +142,16 @@ def test_clawhub_probe_uses_remaining_timeout_budget_for_each_step(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
+        "relay_teams.net.clawhub_connectivity.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
     )
     perf_counter_values = iter([100.0, 101.0, 104.0, 106.5, 107.0])
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.perf_counter",
+        "relay_teams.net.clawhub_connectivity.perf_counter",
         lambda: next(perf_counter_values),
     )
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.ensure_clawhub_cli_login",
+        "relay_teams.net.clawhub_connectivity.ensure_clawhub_cli_login",
         lambda *args, **kwargs: ClawHubCliLoginResult(
             ok=True,
             env={
@@ -207,15 +207,15 @@ def test_clawhub_probe_rejects_invalid_token_when_auth_validation_fails(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
+        "relay_teams.net.clawhub_connectivity.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
     )
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.os.environ",
+        "relay_teams.net.clawhub_connectivity.os.environ",
         {"PATH": "/usr/bin"},
     )
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.ensure_clawhub_cli_login",
+        "relay_teams.net.clawhub_connectivity.ensure_clawhub_cli_login",
         lambda *args, **kwargs: ClawHubCliLoginResult(
             ok=False,
             env={
@@ -258,11 +258,11 @@ def test_clawhub_probe_rejects_invalid_token_when_auth_validation_fails(
 def test_clawhub_probe_installs_missing_binary(monkeypatch) -> None:
     installed_clawhub_path = Path("/opt/tools/clawhub/bin/clawhub")
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
+        "relay_teams.net.clawhub_connectivity.resolve_existing_clawhub_path",
         lambda: None,
     )
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.install_clawhub_via_npm",
+        "relay_teams.net.clawhub_connectivity.install_clawhub_via_npm",
         lambda *, timeout_seconds, base_env=None: ClawHubCliInstallResult(
             ok=True,
             attempted=True,
@@ -272,11 +272,11 @@ def test_clawhub_probe_installs_missing_binary(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.os.environ",
+        "relay_teams.net.clawhub_connectivity.os.environ",
         {"PATH": "/usr/bin"},
     )
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.ensure_clawhub_cli_login",
+        "relay_teams.net.clawhub_connectivity.ensure_clawhub_cli_login",
         lambda *args, **kwargs: ClawHubCliLoginResult(
             ok=True,
             env={
@@ -337,15 +337,15 @@ def test_clawhub_probe_retries_without_endpoint_overrides_for_invalid_user_paylo
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.resolve_existing_clawhub_path",
+        "relay_teams.net.clawhub_connectivity.resolve_existing_clawhub_path",
         lambda: Path("/usr/bin/clawhub"),
     )
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.os.environ",
+        "relay_teams.net.clawhub_connectivity.os.environ",
         {"LANG": "zh_CN.UTF-8", "PATH": "/usr/bin"},
     )
     monkeypatch.setattr(
-        "relay_teams.env.clawhub_connectivity.ensure_clawhub_cli_login",
+        "relay_teams.net.clawhub_connectivity.ensure_clawhub_cli_login",
         lambda *args, **kwargs: ClawHubCliLoginResult(
             ok=True,
             env={

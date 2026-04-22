@@ -14,7 +14,7 @@ from pydantic import (
     model_validator,
 )
 
-from relay_teams.interfaces.server.api_write_validation import (
+from relay_teams.validation import (
     normalize_optional_string,
     reject_empty_mapping_patch,
     require_non_empty_patch,
@@ -33,16 +33,6 @@ FEISHU_METADATA_ACCOUNT_ID_KEY = "feishu_account_id"
 FEISHU_METADATA_MESSAGE_ID_KEY = "feishu_message_id"
 FEISHU_METADATA_SENDER_NAME_KEY = "feishu_sender_name"
 FEISHU_METADATA_SENDER_OPEN_ID_KEY = "feishu_sender_open_id"
-SESSION_METADATA_SOURCE_KIND_KEY = "source_kind"
-SESSION_METADATA_SOURCE_PROVIDER_KEY = "source_provider"
-SESSION_METADATA_SOURCE_LABEL_KEY = "source_label"
-SESSION_METADATA_SOURCE_ICON_KEY = "source_icon"
-SESSION_METADATA_TITLE_SOURCE_KEY = "title_source"
-
-SESSION_SOURCE_KIND_IM = "im"
-SESSION_SOURCE_ICON_IM = "im"
-SESSION_TITLE_SOURCE_AUTO = "auto"
-SESSION_TITLE_SOURCE_MANUAL = "manual"
 
 
 class FeishuMessageFormat(str, Enum):

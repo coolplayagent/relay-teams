@@ -26,8 +26,8 @@ from relay_teams.env.proxy_env import (
     proxy_applies_to_url,
 )
 from relay_teams.net.clients import create_sync_http_client
-from relay_teams.tools.workspace_tools.github_cli import BIN_DIR, get_gh_path
-from relay_teams.tools.workspace_tools.github_cli_errors import GitHubCliNotFoundError
+from relay_teams.net.github_cli import BIN_DIR, get_gh_path
+from relay_teams.net.github_cli_errors import GitHubCliNotFoundError
 
 _MAX_GITHUB_PROBE_TIMEOUT_MS = 300_000
 _DEFAULT_TIMEOUT_SECONDS = 15.0

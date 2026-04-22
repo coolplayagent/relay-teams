@@ -9,7 +9,6 @@ from relay_teams.agents.orchestration.task_orchestration_service import (
 from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
-from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.environment_variable_service import EnvironmentVariableService
 from relay_teams.env.github_config_service import GitHubConfigService
@@ -21,6 +20,12 @@ from relay_teams.env.web_config_service import WebConfigService
 from relay_teams.interfaces.server.config_status_service import ConfigStatusService
 from relay_teams.interfaces.server.container import ServerContainer
 from relay_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
+from relay_teams.net.clawhub_connectivity import ClawHubConnectivityProbeService
+from relay_teams.net.github_connectivity import (
+    GitHubConnectivityProbeService,
+    GitHubWebhookConnectivityProbeService,
+)
+from relay_teams.net.web_connectivity import WebConnectivityProbeService
 from relay_teams.gateway.feishu import (
     FeishuGatewayService,
     FeishuSubscriptionService,
@@ -120,6 +125,28 @@ def get_proxy_config_service(request: Request) -> ProxyConfigService:
     return get_container(request).proxy_config_service
 
 
+def get_web_connectivity_probe_service(request: Request) -> WebConnectivityProbeService:
+    return get_container(request).web_connectivity_probe_service
+
+
+def get_github_connectivity_probe_service(
+    request: Request,
+) -> GitHubConnectivityProbeService:
+    return get_container(request).github_connectivity_probe_service
+
+
+def get_github_webhook_connectivity_probe_service(
+    request: Request,
+) -> GitHubWebhookConnectivityProbeService:
+    return get_container(request).github_webhook_connectivity_probe_service
+
+
+def get_clawhub_connectivity_probe_service(
+    request: Request,
+) -> ClawHubConnectivityProbeService:
+    return get_container(request).clawhub_connectivity_probe_service
+
+
 def get_environment_variable_service(request: Request) -> EnvironmentVariableService:
     return get_container(request).environment_variable_service
 
@@ -146,10 +173,6 @@ def get_localhost_run_tunnel_service(request: Request) -> LocalhostRunTunnelServ
 
 def get_ui_language_settings_service(request: Request) -> UiLanguageSettingsService:
     return get_container(request).ui_language_settings_service
-
-
-def get_task_repo(request: Request) -> TaskRepository:
-    return get_container(request).task_repo
 
 
 def get_role_registry(request: Request) -> RoleRegistry:

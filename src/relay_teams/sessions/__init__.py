@@ -29,6 +29,17 @@ if TYPE_CHECKING:
         SessionMode,
         SessionRecord,
     )
+    from relay_teams.sessions.session_metadata import (
+        SESSION_METADATA_SOURCE_ICON_KEY,
+        SESSION_METADATA_SOURCE_KIND_KEY,
+        SESSION_METADATA_SOURCE_LABEL_KEY,
+        SESSION_METADATA_SOURCE_PROVIDER_KEY,
+        SESSION_METADATA_TITLE_SOURCE_KEY,
+        SESSION_SOURCE_ICON_IM,
+        SESSION_SOURCE_KIND_IM,
+        SESSION_TITLE_SOURCE_AUTO,
+        SESSION_TITLE_SOURCE_MANUAL,
+    )
     from relay_teams.sessions.session_repository import SessionRepository
     from relay_teams.sessions.session_service import SessionService
 
@@ -43,6 +54,15 @@ __all__ = [
     "SessionHistoryMarkerType",
     "SessionRepository",
     "SessionService",
+    "SESSION_METADATA_SOURCE_ICON_KEY",
+    "SESSION_METADATA_SOURCE_KIND_KEY",
+    "SESSION_METADATA_SOURCE_LABEL_KEY",
+    "SESSION_METADATA_SOURCE_PROVIDER_KEY",
+    "SESSION_METADATA_TITLE_SOURCE_KEY",
+    "SESSION_SOURCE_ICON_IM",
+    "SESSION_SOURCE_KIND_IM",
+    "SESSION_TITLE_SOURCE_AUTO",
+    "SESSION_TITLE_SOURCE_MANUAL",
     "approvals_to_projection",
     "build_session_rounds",
     "find_round_by_run_id",
@@ -53,6 +73,42 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "ProjectKind": ("relay_teams.sessions.session_models", "ProjectKind"),
     "SessionRecord": ("relay_teams.sessions.session_models", "SessionRecord"),
     "SessionMode": ("relay_teams.sessions.session_models", "SessionMode"),
+    "SESSION_METADATA_SOURCE_ICON_KEY": (
+        "relay_teams.sessions.session_metadata",
+        "SESSION_METADATA_SOURCE_ICON_KEY",
+    ),
+    "SESSION_METADATA_SOURCE_KIND_KEY": (
+        "relay_teams.sessions.session_metadata",
+        "SESSION_METADATA_SOURCE_KIND_KEY",
+    ),
+    "SESSION_METADATA_SOURCE_LABEL_KEY": (
+        "relay_teams.sessions.session_metadata",
+        "SESSION_METADATA_SOURCE_LABEL_KEY",
+    ),
+    "SESSION_METADATA_SOURCE_PROVIDER_KEY": (
+        "relay_teams.sessions.session_metadata",
+        "SESSION_METADATA_SOURCE_PROVIDER_KEY",
+    ),
+    "SESSION_METADATA_TITLE_SOURCE_KEY": (
+        "relay_teams.sessions.session_metadata",
+        "SESSION_METADATA_TITLE_SOURCE_KEY",
+    ),
+    "SESSION_SOURCE_ICON_IM": (
+        "relay_teams.sessions.session_metadata",
+        "SESSION_SOURCE_ICON_IM",
+    ),
+    "SESSION_SOURCE_KIND_IM": (
+        "relay_teams.sessions.session_metadata",
+        "SESSION_SOURCE_KIND_IM",
+    ),
+    "SESSION_TITLE_SOURCE_AUTO": (
+        "relay_teams.sessions.session_metadata",
+        "SESSION_TITLE_SOURCE_AUTO",
+    ),
+    "SESSION_TITLE_SOURCE_MANUAL": (
+        "relay_teams.sessions.session_metadata",
+        "SESSION_TITLE_SOURCE_MANUAL",
+    ),
     "ExternalSessionBinding": (
         "relay_teams.sessions.external_session_binding_models",
         "ExternalSessionBinding",
