@@ -86,7 +86,7 @@ from relay_teams.skills.clawhub_models import (
     ClawHubSkillSummary,
     ClawHubSkillWriteRequest,
 )
-from relay_teams.skills.skill_models import SkillScope
+from relay_teams.skills.skill_models import SkillSource
 from relay_teams.notifications.models import NotificationConfig
 from relay_teams.agents.orchestration.settings_models import OrchestrationSettings
 from relay_teams.workspace import (
@@ -139,8 +139,8 @@ class _FakeSystemService:
                 skill_id="skill-creator-2",
                 runtime_name="skill-creator",
                 description="Create Codex skills.",
-                ref="app:skill-creator",
-                scope=SkillScope.APP,
+                ref="skill-creator",
+                source=SkillSource.USER_RELAY_TEAMS,
                 directory="/tmp/.relay-teams/skills/skill-creator-2",
                 manifest_path="/tmp/.relay-teams/skills/skill-creator-2/SKILL.md",
                 valid=True,
@@ -411,7 +411,7 @@ class _FakeSystemService:
                 runtime_name=skill.runtime_name,
                 description=skill.description,
                 ref=skill.ref,
-                scope=skill.scope,
+                source=skill.source,
                 directory=skill.directory,
                 manifest_path=skill.manifest_path,
                 valid=skill.valid,
@@ -432,8 +432,8 @@ class _FakeSystemService:
             skill_id=skill_id,
             runtime_name=request.runtime_name,
             description=request.description,
-            ref=f"app:{request.runtime_name}",
-            scope=SkillScope.APP,
+            ref=request.runtime_name,
+            source=SkillSource.USER_RELAY_TEAMS,
             directory=f"/tmp/.relay-teams/skills/{skill_id}",
             manifest_path=f"/tmp/.relay-teams/skills/{skill_id}/SKILL.md",
             valid=True,
@@ -821,7 +821,7 @@ def test_health_check_returns_runtime_identity_and_skill_sanity() -> None:
     assert role_registry_sanity["has_builtin_main_agent"] is True
     skill_registry_sanity = payload["skill_registry_sanity"]
     assert skill_registry_sanity["builtin_skill_count"] >= 1
-    assert "builtin:deepresearch" in skill_registry_sanity["builtin_skill_refs"]
+    assert "deepresearch" in skill_registry_sanity["builtin_skill_names"]
     assert skill_registry_sanity["has_builtin_deepresearch"] is True
     tool_registry_sanity = payload["tool_registry_sanity"]
     assert tool_registry_sanity["available_tool_count"] >= 1
@@ -1306,8 +1306,8 @@ def test_list_clawhub_skills() -> None:
             "skill_id": "skill-creator-2",
             "runtime_name": "skill-creator",
             "description": "Create Codex skills.",
-            "ref": "app:skill-creator",
-            "scope": "app",
+            "ref": "skill-creator",
+            "source": "user_relay_teams",
             "directory": "/tmp/.relay-teams/skills/skill-creator-2",
             "manifest_path": "/tmp/.relay-teams/skills/skill-creator-2/SKILL.md",
             "valid": True,

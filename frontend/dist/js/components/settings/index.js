@@ -349,8 +349,8 @@ function createModal() {
                                             </div>
                                         </div>
                                         <div class="profile-editor-subsection">
-                                            <h5 data-i18n="settings.model.fallback_section">Fallback</h5>
-                                            <div class="form-row profile-fallback-row">
+                                            <h5 data-i18n="settings.model.fallback">Fallback</h5>
+                                            <div class="form-row">
                                                 <div class="form-group">
                                                     <label for="profile-fallback-policy" data-i18n="settings.model.fallback_strategy">Fallback Strategy</label>
                                                     <select id="profile-fallback-policy"></select>

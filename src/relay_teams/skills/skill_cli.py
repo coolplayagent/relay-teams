@@ -11,7 +11,7 @@ import typer
 from relay_teams.skills.skill_models import (
     Skill,
     SkillResource,
-    SkillScope,
+    SkillSource,
     SkillScript,
 )
 from relay_teams.skills.skill_registry import SkillRegistry
@@ -20,15 +20,17 @@ skills_app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_enable=False,
     help=(
-        "Inspect skills discovered from built-in defaults and the app directory.\n\n"
+        "Inspect skills discovered from built-in, user, and project directories.\n\n"
         "Load order:\n"
-        "1. built-in skills (builtin scope)\n"
-        "2. ~/.relay-teams/skills (app scope)\n\n"
-        "If both scopes define the same skill name, both entries are kept and can "
-        "be distinguished by canonical ref.\n\n"
+        "1. built-in skills\n"
+        "2. ~/.relay-teams/skills\n"
+        "3. ~/.agents/skills\n"
+        "4. project .relay-teams/skills from cwd up to git root\n"
+        "5. project .agents/skills from cwd up to git root\n\n"
+        "If multiple sources define the same skill name, the later source wins.\n\n"
         "Common usage:\n"
         "- relay-teams skills list\n"
-        "- relay-teams skills list --source app --format json\n"
+        "- relay-teams skills list --source project_agents --format json\n"
         "- relay-teams skills show time"
     ),
 )
@@ -42,7 +44,10 @@ class SkillOutputFormat(str, Enum):
 class SkillSourceFilter(str, Enum):
     ALL = "all"
     BUILTIN = "builtin"
-    APP = "app"
+    USER_RELAY_TEAMS = "user_relay_teams"
+    USER_AGENTS = "user_agents"
+    PROJECT_RELAY_TEAMS = "project_relay_teams"
+    PROJECT_AGENTS = "project_agents"
 
 
 class SkillListEntry(TypedDict):
@@ -57,7 +62,7 @@ class SkillListEntry(TypedDict):
     "list",
     help=(
         "List all discovered skills across builtin and app scopes.\n\n"
-        "If the same skill exists in both places, both entries are shown.\n\n"
+        "If the same skill exists in multiple places, only the final winning entry is shown.\n\n"
         "Examples:\n"
         "- relay-teams skills list\n"
         "- relay-teams skills list --source builtin\n"
@@ -94,18 +99,14 @@ def skills_list(
     "show",
     help=(
         "Show a single skill definition.\n\n"
-        "The argument can be a canonical ref such as app:time or builtin:time, "
-        "or a unique plain skill name.\n\n"
+        "The argument is the skill name.\n\n"
         "Examples:\n"
         "- relay-teams skills show time\n"
-        "- relay-teams skills show builtin:time\n"
         "- relay-teams skills show time --format json"
     ),
 )
 def skills_show(
-    name: str = typer.Argument(
-        ..., help="Skill canonical ref or unique plain name to inspect."
-    ),
+    name: str = typer.Argument(..., help="Skill name to inspect."),
     output_format: SkillOutputFormat = typer.Option(
         SkillOutputFormat.TABLE,
         "--format",
@@ -124,7 +125,7 @@ def skills_show(
 
 
 def load_skill_registry() -> SkillRegistry:
-    return SkillRegistry.from_default_scopes()
+    return SkillRegistry.from_default_scopes(start_dir=Path.cwd())
 
 
 def render_skill_list_table(skills: tuple[Skill, ...]) -> None:
@@ -167,7 +168,7 @@ def render_skill_detail_table(skill: Skill) -> None:
     summary_rows = [
         ("Ref", skill.ref),
         ("Name", skill.metadata.name),
-        ("Source", skill.scope.value),
+        ("Source", skill.source.value),
         ("Directory", _to_path_text(skill.directory)),
         ("Manifest", _to_path_text(skill.directory / "SKILL.md")),
         ("Description", skill.metadata.description),
@@ -242,15 +243,15 @@ def _filter_skills(
 ) -> tuple[Skill, ...]:
     if source == SkillSourceFilter.ALL:
         return skills
-    requested_scope = SkillScope(source.value)
-    return tuple(skill for skill in skills if skill.scope == requested_scope)
+    requested_source = SkillSource(source.value)
+    return tuple(skill for skill in skills if skill.source == requested_source)
 
 
 def _to_skill_list_entry(skill: Skill) -> SkillListEntry:
     return SkillListEntry(
         ref=skill.ref,
         name=skill.metadata.name,
-        source=skill.scope.value,
+        source=skill.source.value,
         directory=_to_path_text(skill.directory),
         description=skill.metadata.description,
     )
@@ -264,7 +265,7 @@ def _to_skill_json(skill: Skill) -> dict[str, object]:
         "manifest_path": _to_path_text(skill.directory / "SKILL.md"),
         "manifest_content": (skill.directory / "SKILL.md").read_text(encoding="utf-8"),
         "instructions": skill.metadata.instructions,
-        "source": skill.scope.value,
+        "source": skill.source.value,
         "directory": _to_path_text(skill.directory),
         "resources": [
             {

@@ -625,6 +625,60 @@ console.log(JSON.stringify({
     assert "APP" in skills_html
 
 
+def test_role_settings_accepts_bare_skill_refs_and_new_source_field(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    skills: [
+        { ref: "diff", name: "diff", description: "Inspect file changes before replying.", source: "builtin" },
+        { ref: "time", name: "time", description: "Read project time.", source: "project_agents" },
+    ],
+};
+globalThis.__roleRecordsOverride = {
+    reviewer: {
+        source_role_id: "reviewer",
+        role_id: "reviewer",
+        name: "Reviewer",
+        description: "Reviews delivered work.",
+        version: "1.1.0",
+        bound_agent_id: null,
+        execution_surface: "browser",
+        tools: ["read_file", "office_read_markdown"],
+        mcp_servers: [],
+        skills: ["diff", "time"],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Review the delivered work.",
+        file_name: "reviewer.md",
+        content: "---\\nrole_id: reviewer\\n---\\n\\nReview the delivered work.\\n",
+        deletable: true,
+    },
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    skillsHtml: document.getElementById("role-skills-picker").innerHTML,
+    savePayload: globalThis.__saveCalls[0].payload,
+}));
+""".strip(),
+    )
+
+    save_payload = cast(dict[str, JsonValue], payload["savePayload"])
+    assert "Unavailable" not in cast(str, payload["skillsHtml"])
+    assert save_payload["skills"] == ["diff", "time"]
+
+
 def test_role_settings_render_default_alias_with_current_profile_name(
     tmp_path: Path,
 ) -> None:

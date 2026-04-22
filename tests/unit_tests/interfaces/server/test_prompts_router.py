@@ -89,8 +89,8 @@ class _FakeWorkspaceManager:
 class _FakeSkillRegistry:
     def __init__(self) -> None:
         self._known = {
-            "time": "builtin:time",
-            "planner": "builtin:planner",
+            "time": "time",
+            "planner": "planner",
         }
 
     def validate_known(self, skill_names: tuple[str, ...]) -> None:
@@ -131,10 +131,10 @@ class _FakeSkillRegistry:
         resolved_names = self.resolve_known(skill_names)
         return tuple(
             SkillInstructionEntry(
-                name=resolved_name.removeprefix("builtin:"),
+                name=resolved_name,
                 description=(
                     "Normalize all times to UTC."
-                    if resolved_name.endswith(":time")
+                    if resolved_name == "time"
                     else "Break objectives into executable plans."
                 ),
             )
@@ -159,10 +159,7 @@ class _FakeSkillRuntimeService:
     ) -> SkillPromptResult:
         _ = conversation_context
         resolved_skills = role.skills if skill_names is None else skill_names
-        visible_skills = tuple(
-            name.removeprefix("builtin:").removeprefix("app:")
-            for name in resolved_skills
-        )
+        visible_skills = tuple(resolved_skills)
         self.calls.append(
             {
                 "role_id": role.role_id,

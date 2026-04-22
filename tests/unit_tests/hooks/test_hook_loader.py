@@ -8,7 +8,7 @@ from relay_teams.hooks import HookLoader, HookEventName
 from relay_teams.hooks.hook_models import HooksConfig
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
-from relay_teams.skills.skill_models import Skill, SkillMetadata, SkillScope
+from relay_teams.skills.skill_models import Skill, SkillMetadata, SkillSource
 
 
 def test_hook_loader_merges_user_project_and_local_precedence(tmp_path: Path) -> None:
@@ -118,7 +118,7 @@ def test_hook_loader_includes_role_and_skill_hooks(tmp_path: Path) -> None:
                         ),
                     ),
                     directory=tmp_path / "skills" / "guardrail",
-                    scope=SkillScope.APP,
+                    source=SkillSource.USER_RELAY_TEAMS,
                 ),
             )
 

@@ -43,6 +43,7 @@ from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.skills.discovery import SkillsDirectory
+from relay_teams.skills.skill_models import SkillSource
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
@@ -72,6 +73,12 @@ class _CapturingOpenAICompatibleProvider:
     def __init__(self, config: ModelEndpointConfig, **kwargs: object) -> None:
         self.config = config
         self.kwargs = kwargs
+
+
+def _missing_skill_directory() -> SkillsDirectory:
+    return SkillsDirectory(
+        sources=((SkillSource.USER_RELAY_TEAMS, Path.cwd() / ".missing-skills"),)
+    )
 
 
 def _build_runtime(
@@ -133,9 +140,7 @@ def _build_factory(
         media_asset_service=cast(MediaAssetService, object()),
         tool_registry=ToolRegistry({}),
         mcp_registry=McpRegistry(),
-        skill_registry=SkillRegistry(
-            directory=SkillsDirectory(base_dir=Path.cwd() / ".missing-skills")
-        ),
+        skill_registry=SkillRegistry(directory=_missing_skill_directory()),
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
         role_registry=cast(RoleRegistry, object()),
@@ -285,9 +290,7 @@ def test_create_provider_factory_uses_session_override_for_default_profile(
         media_asset_service=cast(MediaAssetService, object()),
         tool_registry=ToolRegistry({}),
         mcp_registry=McpRegistry(),
-        skill_registry=SkillRegistry(
-            directory=SkillsDirectory(base_dir=Path.cwd() / ".missing-skills")
-        ),
+        skill_registry=SkillRegistry(directory=_missing_skill_directory()),
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
         role_registry=cast(RoleRegistry, object()),
@@ -359,9 +362,7 @@ def test_create_provider_factory_keeps_fallback_middleware_for_session_override(
         media_asset_service=cast(MediaAssetService, object()),
         tool_registry=ToolRegistry({}),
         mcp_registry=McpRegistry(),
-        skill_registry=SkillRegistry(
-            directory=SkillsDirectory(base_dir=Path.cwd() / ".missing-skills")
-        ),
+        skill_registry=SkillRegistry(directory=_missing_skill_directory()),
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
         role_registry=cast(RoleRegistry, object()),
@@ -446,9 +447,7 @@ def test_create_provider_factory_scopes_cooldown_registry_to_effective_profiles(
         media_asset_service=cast(MediaAssetService, object()),
         tool_registry=ToolRegistry({}),
         mcp_registry=McpRegistry(),
-        skill_registry=SkillRegistry(
-            directory=SkillsDirectory(base_dir=Path.cwd() / ".missing-skills")
-        ),
+        skill_registry=SkillRegistry(directory=_missing_skill_directory()),
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
         role_registry=cast(RoleRegistry, object()),
@@ -562,7 +561,9 @@ def test_create_provider_factory_filters_unknown_runtime_capabilities(
         encoding="utf-8",
     )
     skill_registry = SkillRegistry(
-        directory=SkillsDirectory(base_dir=tmp_path / "skills")
+        directory=SkillsDirectory(
+            sources=((SkillSource.USER_RELAY_TEAMS, tmp_path / "skills"),)
+        )
     )
     monkeypatch.setattr(
         runtime_factory_module,
@@ -629,7 +630,7 @@ def test_create_provider_factory_filters_unknown_runtime_capabilities(
     assert isinstance(provider, _CapturingOpenAICompatibleProvider)
     assert provider.kwargs["allowed_tools"] == ("read",)
     assert provider.kwargs["allowed_mcp_servers"] == ("docs",)
-    assert provider.kwargs["allowed_skills"] == ("app:time",)
+    assert provider.kwargs["allowed_skills"] == ("time",)
 
 
 def test_create_provider_factory_passes_background_task_service_to_provider(
@@ -674,9 +675,7 @@ def test_create_provider_factory_passes_background_task_service_to_provider(
         media_asset_service=cast(MediaAssetService, object()),
         tool_registry=ToolRegistry({}),
         mcp_registry=McpRegistry(),
-        skill_registry=SkillRegistry(
-            directory=SkillsDirectory(base_dir=Path.cwd() / ".missing-skills")
-        ),
+        skill_registry=SkillRegistry(directory=_missing_skill_directory()),
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
         role_registry=cast(RoleRegistry, object()),

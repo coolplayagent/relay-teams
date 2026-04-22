@@ -162,7 +162,7 @@ class RoleSkillOption(BaseModel):
     ref: str = Field(min_length=1)
     name: str = Field(min_length=1)
     description: str = ""
-    scope: str = Field(pattern="^(builtin|app)$")
+    source: str = Field(min_length=1)
 
 
 class RoleToolGroupOption(BaseModel):

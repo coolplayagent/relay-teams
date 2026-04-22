@@ -16,7 +16,7 @@ from relay_teams.sessions.runs.runtime_config import (
     RuntimeConfig,
     RuntimePaths,
 )
-from relay_teams.skills.skill_models import SkillScope, SkillSummaryEntry
+from relay_teams.skills.skill_models import SkillSource, SkillSummaryEntry
 from relay_teams.skills.skill_registry import SkillRegistry
 
 
@@ -24,10 +24,10 @@ class _FakeSkillRegistry:
     def list_skill_summaries(self) -> tuple[SkillSummaryEntry, ...]:
         return (
             SkillSummaryEntry(
-                ref="builtin:diff",
+                ref="diff",
                 name="diff",
                 description="Inspect changes between files.",
-                scope=SkillScope.BUILTIN,
+                source=SkillSource.BUILTIN,
             ),
         )
 
@@ -87,10 +87,10 @@ def test_get_config_status_only_exposes_app_scoped_mcp_servers() -> None:
         "loaded": True,
         "skills": [
             {
-                "ref": "builtin:diff",
+                "ref": "diff",
                 "name": "diff",
                 "description": "Inspect changes between files.",
-                "scope": "builtin",
+                "source": "builtin",
             }
         ],
     }

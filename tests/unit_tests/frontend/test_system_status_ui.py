@@ -393,6 +393,65 @@ console.log(JSON.stringify({
     assert "APP" in html
 
 
+def test_skills_status_panel_accepts_new_source_field_and_bare_refs(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const status = {
+    mcp: {
+        servers: [],
+    },
+    skills: {
+        skills: [
+            { ref: 'diff', name: 'diff', description: 'Inspect file changes before replying.', source: 'builtin' },
+            { ref: 'time', name: 'time', description: 'Project time.', source: 'project_agents' },
+        ],
+    },
+};
+
+export async function fetchConfigStatus() {
+    globalThis.__fetchConfigStatusCalls += 1;
+    return status;
+}
+
+export async function fetchMcpServerTools(serverName) {
+    globalThis.__toolFetchCalls.push(serverName);
+    return { source: 'project', transport: 'stdio', tools: [] };
+}
+
+export async function reloadMcpConfig() {
+    globalThis.__reloadMcpCalls += 1;
+    return { status: 'ok' };
+}
+
+export async function reloadSkillsConfig() {
+    globalThis.__reloadSkillsCalls += 1;
+    return { status: 'ok' };
+}
+""".strip(),
+        runner_source="""
+const { bindSystemStatusHandlers, loadSkillsStatusPanel } = await import('./systemStatus.mjs');
+
+installGlobals(createElements());
+bindSystemStatusHandlers();
+await loadSkillsStatusPanel();
+
+console.log(JSON.stringify({
+    html: document.getElementById('skills-status').innerHTML,
+}));
+""".strip(),
+    )
+
+    html = cast(str, payload["html"])
+    assert "diff" in html
+    assert "Inspect file changes before replying." in html
+    assert "time" in html
+    assert "Project time." in html
+    assert "PROJECT_AGENTS" not in html
+
+
 def test_system_status_styles_include_mcp_tool_list_tokens() -> None:
     components_css = load_components_css()
 

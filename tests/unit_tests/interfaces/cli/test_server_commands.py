@@ -58,11 +58,11 @@ def _health_payload(
         builtin_skills_dir=builtin_skills_dir,
         skill_registry_sanity=SkillRegistrySanity(
             builtin_skill_count=4,
-            builtin_skill_refs=(
-                "builtin:deepresearch",
-                "builtin:pptx-craft",
-                "builtin:skill-installer",
-                "builtin:time",
+            builtin_skill_names=(
+                "deepresearch",
+                "pptx-craft",
+                "skill-installer",
+                "time",
             ),
             has_builtin_deepresearch=True,
         ),

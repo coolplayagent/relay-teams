@@ -228,6 +228,7 @@ class ServerContainer:
         ensure_app_config_bootstrap(app_config_dir)
         self.config_dir: Path = app_config_dir
         self.runtime: RuntimeConfig = runtime
+        self._project_start_dir = Path.cwd().resolve()
         self._session_model_profile_lookup = session_model_profile_lookup
 
         self.model_config_manager: ModelConfigManager = ModelConfigManager(
@@ -293,7 +294,8 @@ class ServerContainer:
         self.mcp_registry: McpRegistry = self.mcp_config_manager.load_registry()
         self.mcp_service: McpService = McpService(registry=self.mcp_registry)
         self.skill_registry: SkillRegistry = SkillRegistry.from_config_dirs(
-            app_config_dir=app_config_dir
+            app_config_dir=app_config_dir,
+            project_start_dir=self._project_start_dir,
         )
         self.role_registry = self._sanitize_role_registry(
             RoleLoader().load_builtin_and_app(
@@ -873,6 +875,7 @@ class ServerContainer:
         self.skills_config_reload_service: SkillsConfigReloadService = (
             SkillsConfigReloadService(
                 config_dir=app_config_dir,
+                project_start_dir=self._project_start_dir,
                 role_registry=self.role_registry,
                 on_skill_reloaded=self._on_skill_reloaded,
             )
@@ -1136,6 +1139,7 @@ class ServerContainer:
         )
         self.skills_config_reload_service = SkillsConfigReloadService(
             config_dir=self.runtime.paths.config_dir,
+            project_start_dir=self._project_start_dir,
             role_registry=self.role_registry,
             on_skill_reloaded=self._on_skill_reloaded,
         )

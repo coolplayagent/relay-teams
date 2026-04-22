@@ -13,7 +13,7 @@ from relay_teams.roles.role_registry import (
     is_main_agent_role_definition,
 )
 from relay_teams.paths import get_app_config_dir
-from relay_teams.skills.skill_models import SkillScope
+from relay_teams.skills.skill_models import SkillSource
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import (
     ToolAvailabilityRecord,
@@ -22,7 +22,7 @@ from relay_teams.tools.registry import (
 )
 
 SERVER_VERSION = "0.1.0"
-_DEEPRESEARCH_SKILL_REF = "builtin:deepresearch"
+_DEEPRESEARCH_SKILL_NAME = "deepresearch"
 
 
 class ServerRuntimeIdentity(BaseModel):
@@ -39,7 +39,7 @@ class SkillRegistrySanity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     builtin_skill_count: int
-    builtin_skill_refs: tuple[str, ...] = Field(default_factory=tuple)
+    builtin_skill_names: tuple[str, ...] = Field(default_factory=tuple)
     has_builtin_deepresearch: bool
 
 
@@ -112,15 +112,15 @@ def build_skill_registry_sanity(
         if skill_registry is not None
         else SkillRegistry.from_config_dirs(app_config_dir=resolved_config_dir)
     )
-    builtin_skill_refs = tuple(
-        skill.ref
+    builtin_skill_names = tuple(
+        skill.metadata.name
         for skill in registry.list_skill_definitions()
-        if skill.scope == SkillScope.BUILTIN
+        if skill.source == SkillSource.BUILTIN
     )
     return SkillRegistrySanity(
-        builtin_skill_count=len(builtin_skill_refs),
-        builtin_skill_refs=builtin_skill_refs,
-        has_builtin_deepresearch=_DEEPRESEARCH_SKILL_REF in builtin_skill_refs,
+        builtin_skill_count=len(builtin_skill_names),
+        builtin_skill_names=builtin_skill_names,
+        has_builtin_deepresearch=_DEEPRESEARCH_SKILL_NAME in builtin_skill_names,
     )
 
 

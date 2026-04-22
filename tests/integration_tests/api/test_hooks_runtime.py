@@ -652,7 +652,7 @@ Use this skill only for integration tests.
         for skill in updated_record.get("skills", [])
         if isinstance(skill, str) and skill
     }
-    updated_skills.add("app:hook-skill")
+    updated_skills.add("hook-skill")
     updated_record["skills"] = sorted(updated_skills)
 
     save_response = api_client.put(
@@ -660,7 +660,7 @@ Use this skill only for integration tests.
         json=_role_draft_payload(updated_record),
     )
     save_response.raise_for_status()
-    _wait_for_role_skills(api_client, "MainAgent", {"app:hook-skill"})
+    _wait_for_role_skills(api_client, "MainAgent", {"hook-skill"})
 
     try:
         session_id = create_session(
