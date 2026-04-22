@@ -15,7 +15,3 @@ exclude:
       - frontend/dist
       - openspec
       - src/relay_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx
-failureConditions:
-  severityThresholds:
-    critical: 0
-    high: 0

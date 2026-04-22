@@ -97,8 +97,7 @@ def test_qodana_code_quality_workflow_uses_cloud_scan() -> None:
     assert 'QODANA_ENDPOINT: "https://qodana.cloud"' in qodana_workflow
     assert "fetch-depth: 0" in qodana_workflow
     assert "linter: qodana-python-community" in qodana_config
-    assert "critical: 0" in qodana_config
-    assert "high: 0" in qodana_config
+    assert "failureConditions" not in qodana_config
 
 
 def test_pptx_craft_package_metadata_preserves_esm_runtime_contract() -> None:
