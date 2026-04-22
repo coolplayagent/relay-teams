@@ -95,9 +95,10 @@ def test_qodana_configuration_upload_workflow_uses_cloud_uploader() -> None:
 
     assert "name: Qodana Configuration Upload" in qodana_workflow
     assert "QODANA_CONFIGURATIONS_TOKEN" in qodana_workflow
+    assert "skipping upload" in qodana_workflow
     assert "jetbrains/qodana-configuration-uploader:latest" in qodana_workflow
     assert "--global-configs-file qodana-global-configurations.yaml" in qodana_workflow
-    assert "--qodana-host https://qodana.cloud" in qodana_workflow
+    assert "--qodana-endpoint https://qodana.cloud" in qodana_workflow
     assert "qodanaYaml: qodana.yaml" in global_config
     assert "linter: qodana-python-community" in qodana_config
     assert "critical: 0" in qodana_config

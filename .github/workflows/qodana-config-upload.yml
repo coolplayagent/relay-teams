@@ -16,14 +16,19 @@ permissions:
 jobs:
   upload-qodana-config:
     runs-on: ubuntu-latest
+    env:
+      QODANA_CONFIGURATIONS_TOKEN: ${{ secrets.QODANA_CONFIGURATIONS_TOKEN }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Skip upload when token is unavailable
+        if: env.QODANA_CONFIGURATIONS_TOKEN == ''
+        run: echo "QODANA_CONFIGURATIONS_TOKEN is not configured; skipping upload."
+
       - name: Run Qodana Configuration Uploader
-        env:
-          QODANA_CONFIGURATIONS_TOKEN: ${{ secrets.QODANA_CONFIGURATIONS_TOKEN }}
+        if: env.QODANA_CONFIGURATIONS_TOKEN != ''
         run: |
           docker run --rm \
             -v "$(pwd):/workspace" \
@@ -31,4 +36,4 @@ jobs:
             -e QODANA_CONFIGURATIONS_TOKEN="${QODANA_CONFIGURATIONS_TOKEN}" \
             jetbrains/qodana-configuration-uploader:latest \
             --global-configs-file qodana-global-configurations.yaml \
-            --qodana-host https://qodana.cloud
+            --qodana-endpoint https://qodana.cloud
