@@ -362,6 +362,64 @@ console.log(JSON.stringify({
     assert 'data-group-toggle-id="workspace"' in cast(str, payload["toolsHtml"])
 
 
+def test_role_settings_tool_groups_localize_computer_group_name(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleRecordsOverride = {
+    writer: {
+        source_role_id: "writer",
+        role_id: "writer",
+        name: "Writer",
+        description: "Drafts user-facing content.",
+        version: "1.0.0",
+        bound_agent_id: null,
+        execution_surface: "desktop",
+        tools: ["capture_screen"],
+        mcp_servers: [],
+        skills: [],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Use computer tools.",
+        file_name: "writer.md",
+        content: "---\\nrole_id: writer\\n---\\n\\nUse computer tools.\\n",
+        deletable: true,
+    },
+};
+
+globalThis.__roleConfigOptionsOverride = {
+    tool_groups: [
+        {
+            id: "computer",
+            name: "Desktop",
+            description: "Desktop tools.",
+            tools: ["capture_screen"],
+        },
+    ],
+    tools: ["capture_screen"],
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+const groupsHtml = document.getElementById("role-tool-groups-picker").innerHTML;
+
+console.log(JSON.stringify({
+    groupsHtml,
+}));
+""".strip(),
+    )
+
+    assert "Computer Use" in cast(str, payload["groupsHtml"])
+    assert ">Desktop<" not in cast(str, payload["groupsHtml"])
+
+
 def test_role_settings_lists_delete_actions_and_deletes_deletable_role(
     tmp_path: Path,
 ) -> None:
@@ -1798,6 +1856,8 @@ const translations = {
     "settings.roles.other_tools_description": "Tools that are available but not assigned to a named group yet.",
     "settings.roles.unavailable_tools": "Unavailable Tools",
     "settings.roles.unavailable_tools_description": "Previously selected tools that are not available in the current registry.",
+    "settings.roles.tool_group.computer.name": "Computer Use",
+    "settings.roles.tool_group.computer.description": "Desktop observation, input, and pointer tools.",
     "settings.roles.save_failed": "Save Failed",
     "settings.roles.save_failed_message": "Save failed.",
     "settings.roles.save_failed_toast": "Failed to save role config.",
