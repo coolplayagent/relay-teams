@@ -108,18 +108,8 @@ def _search_runtime_tools(
     query: str,
     max_results: int,
 ) -> dict[str, JsonValue]:
-    if not query:
-        return _build_search_response(
-            query=query,
-            mode="keyword",
-            matches=(),
-            total_authorized_tools=0,
-            warning="Query must not be empty.",
-        )
-
-    try:
-        runtime_record = ctx.deps.agent_repo.get_instance(ctx.deps.instance_id)
-    except KeyError:
+    authorized_tools, total_authorized_tools = _load_authorized_tools(ctx)
+    if authorized_tools is None:
         return _build_search_response(
             query=query,
             mode="keyword",
@@ -128,28 +118,39 @@ def _search_runtime_tools(
             warning="Runtime tool snapshot is unavailable for the current instance.",
         )
 
-    snapshot = _parse_runtime_tools_snapshot(runtime_record.runtime_tools_json)
-    authorized_tools = _flatten_runtime_tools(snapshot)
-    total_authorized_tools = len(authorized_tools)
+    if not query:
+        return _build_search_response(
+            query=query,
+            mode="keyword",
+            matches=(),
+            total_authorized_tools=total_authorized_tools,
+            warning="Query must not be empty.",
+        )
 
     if query.casefold().startswith(_SELECT_PREFIX):
         requested_names = _parse_select_query(query)
-        matches = tuple(
+        requested_matches = tuple(
             entry
             for name in requested_names
             if (entry := _find_tool_by_name(authorized_tools, name)) is not None
         )
+        matches = requested_matches[:max_results]
         missing_names = tuple(
             name
             for name in requested_names
             if _find_tool_by_name(authorized_tools, name) is None
         )
-        warning = (
-            "Some requested tools were not authorized for this runtime: "
-            + ", ".join(missing_names)
-            if missing_names
-            else None
-        )
+        warning_parts: list[str] = []
+        if missing_names:
+            warning_parts.append(
+                "Some requested tools were not authorized for this runtime: "
+                + ", ".join(missing_names)
+            )
+        if len(requested_matches) > max_results:
+            warning_parts.append(
+                f"Only the first {max_results} matched tools were returned due to max_results."
+            )
+        warning = " ".join(warning_parts) if warning_parts else None
         return _build_search_response(
             query=query,
             mode="select",
@@ -190,6 +191,18 @@ def _search_runtime_tools(
         matches=matches,
         total_authorized_tools=total_authorized_tools,
     )
+
+
+def _load_authorized_tools(
+    ctx: ToolContext,
+) -> tuple[tuple[RuntimeToolSnapshotEntry, ...], int] | tuple[None, int]:
+    try:
+        runtime_record = ctx.deps.agent_repo.get_instance(ctx.deps.instance_id)
+    except KeyError:
+        return None, 0
+    snapshot = _parse_runtime_tools_snapshot(runtime_record.runtime_tools_json)
+    authorized_tools = _flatten_runtime_tools(snapshot)
+    return authorized_tools, len(authorized_tools)
 
 
 def _parse_runtime_tools_snapshot(raw_snapshot: str) -> RuntimeToolsSnapshot:

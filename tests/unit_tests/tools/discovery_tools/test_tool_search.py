@@ -199,6 +199,65 @@ async def test_tool_search_select_includes_schema(
 
 
 @pytest.mark.asyncio
+async def test_tool_search_select_respects_max_results(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_tool_search(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["tool_search"],
+    )
+    agent_repo = AgentInstanceRepository(tmp_path / "instances.db")
+    _seed_runtime_snapshot(
+        agent_repo=agent_repo,
+        instance_id="instance-1",
+        runtime_tools=RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read a file or directory from disk.",
+                    parameters_json_schema={"type": "object"},
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="write",
+                    description="Write full file contents.",
+                    parameters_json_schema={"type": "object"},
+                ),
+            ),
+        ),
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            agent_repo=agent_repo,
+            instance_id="instance-1",
+        )
+    )
+
+    async def _fake_execute_tool(ctx, **kwargs: object) -> dict[str, object]:
+        del ctx
+        return cast(
+            dict[str, object],
+            _invoke_tool_action(cast(Callable[..., object], kwargs["action"])),
+        )
+
+    monkeypatch.setattr(tool_search_module, "execute_tool", _fake_execute_tool)
+
+    result = await tool(ctx, query="select:read,write", max_results=1)
+
+    assert result["mode"] == "select"
+    assert (
+        result["warning"]
+        == "Only the first 1 matched tools were returned due to max_results."
+    )
+    matches = cast(list[dict[str, object]], result["matches"])
+    assert [match["name"] for match in matches] == ["read"]
+
+
+@pytest.mark.asyncio
 async def test_tool_search_exact_name_returns_schema_without_select_prefix(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -423,3 +482,66 @@ async def test_tool_search_keyword_search_matches_compound_tool_names(
     assert result["mode"] == "keyword"
     matches = cast(list[dict[str, object]], result["matches"])
     assert [match["name"] for match in matches] == ["webfetch"]
+
+
+@pytest.mark.asyncio
+async def test_tool_search_empty_query_reports_actual_authorized_count(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_tool_search(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["tool_search"],
+    )
+    agent_repo = AgentInstanceRepository(tmp_path / "instances.db")
+    _seed_runtime_snapshot(
+        agent_repo=agent_repo,
+        instance_id="instance-1",
+        runtime_tools=RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read a file or directory from disk.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="tool_search",
+                    description="Discover tools.",
+                ),
+            ),
+            mcp_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="mcp",
+                    name="docs_search",
+                    description="Search developer documentation.",
+                    server_name="docs",
+                ),
+            ),
+        ),
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            agent_repo=agent_repo,
+            instance_id="instance-1",
+        )
+    )
+
+    async def _fake_execute_tool(ctx, **kwargs: object) -> dict[str, object]:
+        del ctx
+        return cast(
+            dict[str, object],
+            _invoke_tool_action(cast(Callable[..., object], kwargs["action"])),
+        )
+
+    monkeypatch.setattr(tool_search_module, "execute_tool", _fake_execute_tool)
+
+    result = await tool(ctx, query="   ")
+
+    assert result["mode"] == "keyword"
+    assert result["warning"] == "Query must not be empty."
+    assert result["total_authorized_tools"] == 3
+    matches = cast(list[dict[str, object]], result["matches"])
+    assert matches == []
