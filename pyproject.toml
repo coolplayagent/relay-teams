@@ -32,6 +32,7 @@ dev = [
   "pytest-timeout >= 2.1.0",
   "pytest-asyncio >= 1.2.0",
   "coverage >= 7.8.0",
+  "diff-cover>=9.0.0",
   "pytest-cov>=6.0.0",
   "pytest-html>=4.1.1",
   "playwright>=1.49.0",
@@ -51,6 +52,26 @@ pythonpath = ["src", "tests", "."]
 markers = [
   "timeout: override per-test timeout budget",
 ]
+
+[tool.coverage.run]
+source = [
+  "src/relay_teams",
+  "src/relay_teams_evals",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = true
+
+[tool.diff_cover]
+compare_branch = "origin/main"
+fail_under = 90
+include = [
+  "src/relay_teams/**/*.py",
+  "src/relay_teams_evals/**/*.py",
+]
+show_uncovered = true
 
 [tool.setuptools.packages.find]
 where = ["src"]

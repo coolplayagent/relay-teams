@@ -185,6 +185,60 @@ def test_create_workspace_with_mounts_and_mount_scoped_tree_query(
     assert [item["path"] for item in tree_payload["children"]] == ["deploy.sh"]
 
 
+def test_create_workspace_returns_mounts_in_provider_then_name_order(
+    tmp_path: Path,
+) -> None:
+    client, _ = _create_test_client(tmp_path)
+    app_root = tmp_path / "app-root"
+    ops_root = tmp_path / "ops-root"
+    app_root.mkdir()
+    ops_root.mkdir()
+
+    response = client.post(
+        "/api/workspaces",
+        json={
+            "workspace_id": "project-alpha",
+            "default_mount_name": "prod",
+            "mounts": [
+                {
+                    "mount_name": "prod",
+                    "provider": "ssh",
+                    "provider_config": {
+                        "ssh_profile_id": "prod",
+                        "remote_root": "/srv/prod",
+                    },
+                },
+                {
+                    "mount_name": "ops",
+                    "provider": "local",
+                    "provider_config": {"root_path": str(ops_root)},
+                },
+                {
+                    "mount_name": "app",
+                    "provider": "local",
+                    "provider_config": {"root_path": str(app_root)},
+                },
+                {
+                    "mount_name": "stage",
+                    "provider": "ssh",
+                    "provider_config": {
+                        "ssh_profile_id": "stage",
+                        "remote_root": "/srv/stage",
+                    },
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert [item["mount_name"] for item in response.json()["mounts"]] == [
+        "app",
+        "ops",
+        "prod",
+        "stage",
+    ]
+
+
 def test_create_workspace_rejects_missing_ssh_profile_as_client_error(
     tmp_path: Path,
 ) -> None:

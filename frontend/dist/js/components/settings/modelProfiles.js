@@ -144,6 +144,10 @@ export function bindModelProfileHandlers() {
     if (imageCapabilityInput) {
         imageCapabilityInput.onchange = syncDraftImageCapabilityMode;
     }
+
+    if (typeof document?.addEventListener === 'function') {
+        document.addEventListener('agent-teams-language-changed', handleModelProfileLanguageChanged);
+    }
 }
 
 export async function loadModelProfilesPanel() {
@@ -710,6 +714,24 @@ function renderDraftProbeState() {
     statusEl.className = `profile-probe-status probe-status probe-status-${draftProbeState.status}`;
     testBtn.disabled = draftProbeState.status === 'probing';
     testBtn.textContent = draftProbeState.status === 'probing' ? t('settings.model.testing') : t('settings.action.test');
+}
+
+function handleModelProfileLanguageChanged() {
+    const modelPanel = document.getElementById('model-panel');
+    if (modelPanel && modelPanel.style.display === 'none') {
+        return;
+    }
+
+    renderFallbackPolicyOptions();
+    renderProfileEditorTitle();
+    renderDraftProbeState();
+    renderDraftModelDiscoveryState();
+    renderDiscoveredModels();
+
+    const listEl = document.getElementById('profiles-list');
+    if (listEl && listEl.style.display !== 'none') {
+        renderProfiles();
+    }
 }
 
 function renderDraftModelDiscoveryState() {
@@ -1523,7 +1545,7 @@ function renderProfileCard(name, profile, index) {
     const baseUrlLabel = profile.base_url || t('settings.model.no_endpoint');
     const fallbackLabel = profile.fallback_policy_id
         ? formatFallbackPolicyLabel(profile.fallback_policy_id)
-        : 'Fallback disabled';
+        : t('settings.model.fallback_disabled');
     const fallbackPriority = Number(profile.fallback_priority || 0);
 
     return `
@@ -1547,7 +1569,7 @@ function renderProfileCard(name, profile, index) {
                         <div class="profile-record-summary" title="${escapeHtml(fallbackLabel)}">
                             <span class="profile-record-summary-primary">${escapeHtml(fallbackLabel)}</span>
                             <span class="profile-record-summary-separator">/</span>
-                            <span class="profile-record-summary-secondary">Priority ${escapeHtml(String(fallbackPriority))}</span>
+                            <span class="profile-record-summary-secondary">${escapeHtml(formatMessage('settings.model.fallback_priority_value', { priority: fallbackPriority }))}</span>
                         </div>
                     </div>
                 </div>
@@ -1725,19 +1747,32 @@ function renderFallbackPolicyOptions() {
     if (!select) {
         return;
     }
+    const selectedValue = String(select.value || '');
     const policies = Array.isArray(fallbackConfig?.policies) ? fallbackConfig.policies : [];
     const options = [
-        '<option value="">Disabled</option>',
+        `<option value="">${escapeHtml(t('settings.model.fallback_disabled_option'))}</option>`,
         ...policies.map(policy => (
-            `<option value="${escapeHtml(policy.policy_id)}">${escapeHtml(policy.name || policy.policy_id)}</option>`
+            `<option value="${escapeHtml(policy.policy_id)}">${escapeHtml(formatFallbackPolicyLabel(policy.policy_id, policy.name))}</option>`
         )),
     ];
     select.innerHTML = options.join('');
+    if (selectedValue) {
+        select.value = selectedValue;
+    }
 }
 
-function formatFallbackPolicyLabel(policyId) {
+function formatFallbackPolicyLabel(policyId, fallbackName = '') {
     const policies = Array.isArray(fallbackConfig?.policies) ? fallbackConfig.policies : [];
     const matched = policies.find(policy => policy?.policy_id === policyId);
+    const normalizedPolicyId = String(policyId || '').trim();
+    const translationKey = `settings.model.fallback_policy.${normalizedPolicyId}`;
+    const translatedLabel = t(translationKey);
+    if (translatedLabel !== translationKey) {
+        return translatedLabel;
+    }
+    if (fallbackName) {
+        return fallbackName;
+    }
     if (matched?.name) {
         return matched.name;
     }

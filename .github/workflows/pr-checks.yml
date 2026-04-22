@@ -26,6 +26,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -54,8 +56,15 @@ jobs:
       - name: basedpyright
         run: uv run --extra dev basedpyright
 
-      - name: Unit tests
-        run: uv run --extra dev pytest -q tests/unit_tests
+      - name: Unit tests with coverage
+        run: >
+          uv run --extra dev pytest -q tests/unit_tests
+          --cov=src/relay_teams
+          --cov=src/relay_teams_evals
+          --cov-report=xml:coverage.xml
+
+      - name: Enforce changed-line unit coverage
+        run: uv run --extra dev diff-cover coverage.xml --config-file pyproject.toml
 
       - name: Install Playwright Chromium
         run: uv run --extra dev python -m playwright install --with-deps chromium

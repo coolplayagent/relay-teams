@@ -243,6 +243,48 @@ console.log(JSON.stringify({
     assert saved_profile_body["fallback_priority"] == 9
 
 
+def test_model_fallback_labels_use_i18n_translations(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+console.log(JSON.stringify({
+    optionsHtml: document.getElementById("profile-fallback-policy").innerHTML,
+    renderedHtml: document.getElementById("profiles-list").innerHTML,
+}));
+""".strip(),
+        mock_api_source=DEFAULT_MOCK_API_SOURCE.replace(
+            'input_modalities: ["image"],\n        },',
+            (
+                'input_modalities: ["image"],\n'
+                '            fallback_policy_id: "same_provider_then_other_provider",\n'
+                "            fallback_priority: 7,\n"
+                "        },"
+            ),
+            1,
+        ),
+    )
+
+    options_html = cast(str, payload["optionsHtml"])
+    rendered_html = cast(str, payload["renderedHtml"])
+    assert '<option value="">No fallback</option>' in options_html
+    assert "Same provider, then other providers" in options_html
+    assert "Other providers only" in options_html
+    assert "Same Provider Then Other Provider" not in options_html
+    assert "Same provider, then other providers" in rendered_html
+    assert "Fallback priority 7" in rendered_html
+    assert "No fallback" in rendered_html
+    assert "Fallback disabled" not in rendered_html
+
+
 def test_draft_probe_updates_inline_status_and_payload(tmp_path: Path) -> None:
     payload = _run_model_profiles_script(
         tmp_path=tmp_path,
@@ -2127,6 +2169,14 @@ const translations = {
     "settings.model.hide_api_key": "Hide API key",
     "settings.model.show_password": "Show password",
     "settings.model.hide_password": "Hide password",
+    "settings.model.fallback_section": "Fallback",
+    "settings.model.fallback_strategy": "Fallback strategy",
+    "settings.model.fallback_priority": "Fallback priority",
+    "settings.model.fallback_disabled": "No fallback",
+    "settings.model.fallback_disabled_option": "No fallback",
+    "settings.model.fallback_priority_value": "Fallback priority {priority}",
+    "settings.model.fallback_policy.same_provider_then_other_provider": "Same provider, then other providers",
+    "settings.model.fallback_policy.other_provider_only": "Other providers only",
     "settings.model.default_badge": "Default",
     "settings.model.capability_image_input": "Image input",
     "settings.model.capability_text_only": "Text only",

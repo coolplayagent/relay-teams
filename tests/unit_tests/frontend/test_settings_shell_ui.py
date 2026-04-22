@@ -270,6 +270,12 @@ console.log(JSON.stringify({
     assert "Context Window" in modal_html
     assert 'id="profile-name"' in modal_html
     assert 'id="profile-provider"' in modal_html
+    assert 'id="profile-fallback-policy"' in modal_html
+    assert 'id="profile-fallback-priority"' in modal_html
+    assert 'data-i18n="settings.model.fallback_section"' in modal_html
+    assert 'data-i18n="settings.model.fallback_strategy"' in modal_html
+    assert 'data-i18n="settings.model.fallback_priority"' in modal_html
+    assert 'class="form-row profile-fallback-row"' in modal_html
     assert 'id="profile-is-default"' in modal_html
     assert '<select id="profile-provider">' in modal_html
     assert 'value="openai_compatible"' in modal_html
@@ -360,6 +366,18 @@ console.log(JSON.stringify({
     assert "notification-toggle-check" in modal_html
     assert "notification-toggle-label" in modal_html
     assert '<select id="role-model-profile-input"></select>' in modal_html
+
+
+def test_model_profile_fallback_row_uses_wider_strategy_layout() -> None:
+    components_css = load_components_css()
+
+    fallback_start = components_css.index(".profile-fallback-row {")
+    fallback_end = components_css.index(".trigger-settings-form-row {", fallback_start)
+    fallback_rule = components_css[fallback_start:fallback_end]
+
+    assert "grid-template-columns: minmax(280px, 2.35fr) minmax(180px, 1fr);" in (
+        fallback_rule
+    )
 
 
 def test_settings_action_button_order_keeps_cancel_on_far_right() -> None:
