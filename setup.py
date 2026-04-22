@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pyright: reportMissingModuleSource=false
 from __future__ import annotations
 
 import importlib.util
