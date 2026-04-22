@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 import asyncio
 from html import unescape
@@ -71,6 +71,10 @@ FALLBACK_USER_AGENT = "agent-teams"
 READER_FALLBACK_BASE_URL = "https://r.jina.ai/"
 ANTI_BOT_STATUS_CODES = {403, 429, 503}
 TEXTUAL_CHALLENGE_CONTENT_TYPES = {"text/html", "application/xhtml+xml", "text/plain"}
+MARKDOWN_CONTENT_TYPES = {"text/markdown", "text/x-markdown"}
+MARKDOWN_TOKENS_HEADER = "x-markdown-tokens"
+ORIGINAL_TOKENS_HEADER = "x-original-tokens"
+CONTENT_SIGNAL_HEADER = "content-signal"
 ENTERPRISE_PROXY_BLOCK_URL_MARKERS = ("proxycontrolwarn", "httpwarning_2907")
 ENTERPRISE_PROXY_BLOCK_MARKERS = (
     "his proxy notification",
@@ -398,6 +402,7 @@ async def fetch_webfetch_projection(
             final_url=resolve_webfetch_response_url(response),
             response_format=response_format,
             content_type=content_type,
+            response_headers=response.headers,
             body=body,
             extract=extract,
             item_limit=item_limit,
@@ -1032,6 +1037,7 @@ def build_webfetch_projection(
     final_url: str,
     response_format: str,
     content_type: str,
+    response_headers: Mapping[str, str] | None = None,
     body: bytes,
     extract: WebFetchExtractMode,
     item_limit: int,
@@ -1080,6 +1086,7 @@ def build_webfetch_projection(
         final_url=final_url,
         content_type=content_type,
         output=rendered_output,
+        metadata=build_text_result_metadata(response_headers),
     )
 
 
@@ -1091,6 +1098,8 @@ def is_binary_response(content_type: str) -> bool:
 
 def is_textual_content_type(content_type: str) -> bool:
     if not content_type:
+        return True
+    if is_markdown_content_type(content_type):
         return True
     if content_type.startswith("text/"):
         return True
@@ -1104,6 +1113,10 @@ def is_textual_content_type(content_type: str) -> bool:
     return content_type.endswith("+xml") or content_type.endswith("+json")
 
 
+def is_markdown_content_type(content_type: str) -> bool:
+    return content_type in MARKDOWN_CONTENT_TYPES
+
+
 def render_text_output(
     *,
     response_format: str,
@@ -1113,11 +1126,72 @@ def render_text_output(
 ) -> str:
     if response_format == "html":
         return body
+    if is_markdown_content_type(content_type):
+        return body
     if content_type == "text/html" or content_type == "application/xhtml+xml":
         if response_format == "text":
             return extract_text_from_html(body)
         return convert_html_to_markdown(body, base_url=final_url)
     return body
+
+
+def build_text_result_metadata(
+    response_headers: Mapping[str, str] | None,
+) -> dict[str, JsonValue]:
+    if response_headers is None:
+        return {}
+
+    metadata: dict[str, JsonValue] = {}
+    markdown_tokens = parse_non_negative_int_header(
+        response_headers,
+        MARKDOWN_TOKENS_HEADER,
+    )
+    if markdown_tokens is not None:
+        metadata["markdown_tokens"] = markdown_tokens
+
+    original_tokens = parse_non_negative_int_header(
+        response_headers,
+        ORIGINAL_TOKENS_HEADER,
+    )
+    if original_tokens is not None:
+        metadata["original_tokens"] = original_tokens
+
+    content_signal = get_header_value(response_headers, CONTENT_SIGNAL_HEADER)
+    if content_signal is not None:
+        stripped_content_signal = content_signal.strip()
+        if stripped_content_signal:
+            metadata["content_signal"] = stripped_content_signal
+    return metadata
+
+
+def parse_non_negative_int_header(
+    response_headers: Mapping[str, str],
+    header_name: str,
+) -> int | None:
+    value = get_header_value(response_headers, header_name)
+    if value is None:
+        return None
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return None
+    if parsed < 0:
+        return None
+    return parsed
+
+
+def get_header_value(
+    response_headers: Mapping[str, str],
+    header_name: str,
+) -> str | None:
+    value = response_headers.get(header_name)
+    if value is not None:
+        return value
+    normalized_name = header_name.lower()
+    for candidate_name, candidate_value in response_headers.items():
+        if candidate_name.lower() == normalized_name:
+            return candidate_value
+    return None
 
 
 def finalize_text_result(
@@ -1128,6 +1202,7 @@ def finalize_text_result(
     final_url: str,
     content_type: str,
     output: str,
+    metadata: dict[str, JsonValue] | None = None,
 ) -> ToolResultProjection:
     visible_data: dict[str, JsonValue] = {
         "output": output,
@@ -1135,6 +1210,8 @@ def finalize_text_result(
         "content_type": content_type,
         "truncated": False,
     }
+    if metadata:
+        visible_data.update(metadata)
     if len(output) <= MAX_TEXT_OUTPUT_CHARS:
         return ToolResultProjection(
             visible_data=visible_data,
