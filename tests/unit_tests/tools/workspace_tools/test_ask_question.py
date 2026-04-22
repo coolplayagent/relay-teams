@@ -11,7 +11,7 @@ from typing import cast
 import pytest
 from pydantic_ai import Agent
 
-import relay_teams.tools.workspace_tools.ask_question as ask_question_module
+import relay_teams.tools.task_tools.ask_question as ask_question_module
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_models import RunEvent
@@ -37,7 +37,7 @@ from relay_teams.sessions.runs.user_question_repository import (
     UserQuestionStatusConflictError,
 )
 from relay_teams.tools.runtime import ToolContext, ToolDeps, ToolResultProjection
-from relay_teams.tools.workspace_tools.ask_question import register
+from relay_teams.tools.task_tools.ask_question import register
 
 
 async def _invoke_tool_action(

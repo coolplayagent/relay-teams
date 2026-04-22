@@ -13,6 +13,10 @@ if TYPE_CHECKING:
         ToolRegistry,
         ToolResolutionContext,
     )
+    from relay_teams.tools.registry.tool_groups import (
+        ToolGroupDefinition,
+        list_default_tool_groups,
+    )
 
 __all__ = [
     "ToolAvailabilityRecord",
@@ -20,7 +24,9 @@ __all__ = [
     "ToolRegister",
     "ToolRegistry",
     "ToolResolutionContext",
+    "ToolGroupDefinition",
     "build_default_registry",
+    "list_default_tool_groups",
 ]
 
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
@@ -38,9 +44,17 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "relay_teams.tools.registry.registry",
         "ToolResolutionContext",
     ),
+    "ToolGroupDefinition": (
+        "relay_teams.tools.registry.tool_groups",
+        "ToolGroupDefinition",
+    ),
     "build_default_registry": (
         "relay_teams.tools.registry.defaults",
         "build_default_registry",
+    ),
+    "list_default_tool_groups": (
+        "relay_teams.tools.registry.tool_groups",
+        "list_default_tool_groups",
     ),
 }
 

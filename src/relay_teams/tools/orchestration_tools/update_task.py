@@ -15,7 +15,7 @@ DESCRIPTION = load_tool_description(__file__)
 
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
-    async def update_task(
+    async def orch_update_task(
         ctx: ToolContext,
         task_id: str,
         objective: str | None = None,
@@ -39,7 +39,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
 
         return await execute_tool_call(
             ctx,
-            tool_name="update_task",
+            tool_name="orch_update_task",
             args_summary={
                 "task_id": task_id,
                 "has_objective": objective is not None,

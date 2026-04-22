@@ -66,13 +66,13 @@ def test_list_sessions_includes_active_run_overlay(tmp_path: Path) -> None:
         phase=RunRuntimePhase.COORDINATOR_RUNNING,
     )
     ApprovalTicketRepository(db_path).upsert_requested(
-        tool_call_id="dispatch_task:1",
+        tool_call_id="orch_dispatch_task:1",
         run_id="run-active",
         session_id="session-active",
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="dispatch_task",
+        tool_name="orch_dispatch_task",
         args_preview='{"task_id":"task-1"}',
     )
 
@@ -182,18 +182,18 @@ def test_list_sessions_skips_invalid_persisted_approval_ticket_rows(
     )
     approval_repo = ApprovalTicketRepository(db_path)
     approval_repo.upsert_requested(
-        tool_call_id="dispatch_task:1",
+        tool_call_id="orch_dispatch_task:1",
         run_id="run-active",
         session_id="session-active",
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="dispatch_task",
+        tool_name="orch_dispatch_task",
         args_preview='{"task_id":"task-1"}',
     )
     _insert_invalid_approval_ticket_row(
         db_path,
-        tool_call_id="dispatch_task:invalid",
+        tool_call_id="orch_dispatch_task:invalid",
         run_id="run-active",
         session_id="session-active",
     )
@@ -287,7 +287,7 @@ def _insert_invalid_approval_ticket_row(
             "task-root-1",
             "inst-1",
             "Coordinator",
-            "dispatch_task",
+            "orch_dispatch_task",
             "{}",
             "requested",
             "",

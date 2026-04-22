@@ -5,6 +5,11 @@ Use this for:
 - Downloading network files such as PDFs, images, archives, and other binary payloads.
 - Extracting structured data from RSS/Atom feeds and OPML subscription lists.
 
+Markdown behavior:
+- The default `format="markdown"` sends an `Accept` preference for `text/markdown`.
+- If the origin returns `text/markdown` or `text/x-markdown`, the upstream Markdown is returned directly.
+- If the origin returns HTML, `webfetch` converts the cleaned page body to Markdown locally.
+
 Binary download behavior:
 - Binary responses are streamed to the workspace temp directory and returned as `saved_path`; they are not inlined into the conversation.
 - Large binary downloads are supported up to 512 MiB.

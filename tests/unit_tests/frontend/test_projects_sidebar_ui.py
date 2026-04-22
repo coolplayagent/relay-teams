@@ -348,7 +348,7 @@ export async function runAutomationProject() {
     }
 
 
-def test_projects_sidebar_prefetches_visible_normal_session_subagent_counts_and_hides_zero_toggle(
+def test_projects_sidebar_uses_session_summary_for_subagent_toggle_without_prefetch(
     tmp_path: Path,
 ) -> None:
     payload = _run_sidebar_script(
@@ -372,8 +372,6 @@ globalThis.__sessionSubagentFetchResults = {
     "session-2": [],
 };
 
-await loadProjects();
-await flushTasks();
 await loadProjects();
 
 const projectsList = document.getElementById("projects-list");
@@ -407,6 +405,7 @@ const sessions = [
         session_mode: "normal",
         updated_at: "2026-03-14T10:11:00Z",
         pending_tool_approval_count: 0,
+        subagent_session_count: 1,
         metadata: { title: "Root session 1" },
     },
     {
@@ -415,6 +414,7 @@ const sessions = [
         session_mode: "normal",
         updated_at: "2026-03-14T10:10:00Z",
         pending_tool_approval_count: 0,
+        subagent_session_count: 0,
         metadata: { title: "Root session 2" },
     },
     {
@@ -495,13 +495,129 @@ export async function runAutomationProject() {
     ).read_text(encoding="utf-8")
 
     ensure_calls = cast(list[str], payload["ensureCalls"])
-    assert sorted(set(ensure_calls)) == ["session-1", "session-2"]
+    assert ensure_calls == []
     assert payload["toggleCount"] == 1
     assert payload["firstToggleSessionId"] == "session-1"
     assert (
         "${renderSubagentToggle(session)}\n"
         '                                            <span class="session-id">'
     ) in sidebar_script
+
+
+def test_projects_sidebar_hides_stale_summary_toggle_after_empty_subagent_list_load(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+globalThis.__sessionSubagentSessionsMap = {
+    "session-1": [],
+};
+globalThis.__expandedSubagentSessionIds.add("session-1");
+
+await loadProjects();
+
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const toggles = firstProject.querySelectorAll(".session-subagents-toggle");
+
+console.log(JSON.stringify({
+    toggleCount: toggles.length,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        session_mode: "normal",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        subagent_session_count: 1,
+        metadata: { title: "Root session 1" },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    assert payload["toggleCount"] == 0
 
 
 def test_projects_sidebar_deletes_subagent_child_session_and_returns_to_parent(
@@ -2737,6 +2853,14 @@ export function getActiveSubagentSession() {
 
 export function getSessionSubagentSessions(sessionId) {
     return readRows(String(sessionId || "").trim());
+}
+
+export function hasLoadedSessionSubagents(sessionId) {
+    const safeSessionId = String(sessionId || "").trim();
+    return Object.prototype.hasOwnProperty.call(
+        globalThis.__sessionSubagentSessionsMap || {},
+        safeSessionId,
+    );
 }
 
 export async function ensureSessionSubagents(sessionId) {

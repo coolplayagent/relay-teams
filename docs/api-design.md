@@ -1725,7 +1725,7 @@ Rules:
 
 There is no public manual dispatch endpoint for delegated tasks.
 
-Delegated task dispatch is performed internally by the Coordinator through the `dispatch_task` tool.
+Delegated task dispatch is performed internally by the Coordinator through the `orch_dispatch_task` tool.
 
 Internal dispatch rules:
 - `created`: bind the task to the provided `role_id`, create or reuse the session-level subagent instance for that role, then execute.
@@ -1777,6 +1777,11 @@ Response fields:
   - `capabilities`
   - `input_modalities[]`
 - `role_modes[]`: `primary | subagent | all`
+- `tool_groups[]`
+  - `id`
+  - `name`
+  - `description`
+  - `tools[]`
 - `tools`
 - `mcp_servers`
 - `skills[]`
@@ -1796,6 +1801,8 @@ Notes:
 - `capabilities.input/output.*` is the canonical multimodal contract for a role's
   resolved runtime model profile. `input_modalities[]` is derived from
   `capabilities.input` for compatibility with existing consumers.
+- `tool_groups[]` is an editor convenience for bulk selection only. Role
+  documents and validation/save requests still persist plain `tools[]`.
 - `normal_mode_roles[]` contains non-system roles whose `mode` is `primary` or `all`.
 - `subagent_roles[]` contains non-system roles whose `mode` is `subagent` or `all`.
 - Returns `503` when required builtin/system roles such as `Coordinator` or
@@ -2190,7 +2197,7 @@ Request:
     "source_kind": "im",
     "feishu_chat_type": "group"
   },
-  "tools": ["dispatch_task"],
+  "tools": ["orch_dispatch_task"],
   "skills": ["time"]
 }
 ```
@@ -2225,7 +2232,7 @@ Response:
 {
   "role_id": "Coordinator",
   "objective": "Draft release note",
-  "tools": ["dispatch_task"],
+  "tools": ["orch_dispatch_task"],
   "skills": ["time"],
   "runtime_system_prompt": "...",
   "provider_system_prompt": "...",

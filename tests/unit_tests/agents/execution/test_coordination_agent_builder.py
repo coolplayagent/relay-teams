@@ -170,7 +170,7 @@ def test_build_coordination_agent_passes_proxy_http_client(
         base_url="https://example.test/v1",
         api_key="secret",
         system_prompt="system",
-        allowed_tools=("dispatch_task",),
+        allowed_tools=("orch_dispatch_task",),
         connect_timeout_seconds=22.0,
         tool_registry=cast(ToolRegistry, fake_tool_registry),
     )
@@ -184,10 +184,10 @@ def test_build_coordination_agent_passes_proxy_http_client(
     assert captured["connect_timeout_seconds"] == 22.0
     assert captured["cache_scope"] is None
     assert captured["ssl_verify"] is None
-    assert fake_tool_registry.required == ("dispatch_task",)
+    assert fake_tool_registry.required == ("orch_dispatch_task",)
     assert fake_tool_registry.calls == [
         (
-            ("dispatch_task",),
+            ("orch_dispatch_task",),
             None,
             False,
             "agents.execution.coordination_agent_builder",
@@ -288,7 +288,7 @@ def test_build_coordination_agent_ignores_unknown_tools_and_mcp_servers(
         base_url="https://example.test/v1",
         api_key="secret",
         system_prompt="system",
-        allowed_tools=("dispatch_task", "missing_tool"),
+        allowed_tools=("orch_dispatch_task", "missing_tool"),
         allowed_mcp_servers=("docs", "missing_server"),
         tool_registry=cast(ToolRegistry, fake_tool_registry),
         mcp_registry=cast(McpRegistry, fake_mcp_registry),
@@ -296,7 +296,7 @@ def test_build_coordination_agent_ignores_unknown_tools_and_mcp_servers(
 
     built_agent = cast(_FakeAgent, captured["agent"])
     assert len(cast(list[object], built_agent.kwargs["toolsets"])) == 1
-    assert fake_tool_registry.required == ("dispatch_task",)
+    assert fake_tool_registry.required == ("orch_dispatch_task",)
     assert fake_mcp_registry.calls == [
         (
             ("docs", "missing_server"),

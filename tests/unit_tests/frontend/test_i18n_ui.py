@@ -101,7 +101,7 @@ globalThis.document = {
     },
 };
 
-const { getCurrentLanguage, initializeLanguage, toggleLanguage } = await import('./i18n.mjs');
+const { getCurrentLanguage, initializeLanguage, toggleLanguage, t } = await import('./i18n.mjs');
 
 await initializeLanguage();
 const afterInit = {
@@ -112,6 +112,8 @@ const afterInit = {
     backendLabel: backendLabel.textContent,
     placeholder: promptInput.placeholder,
     settingsTitle: settingsButton.title,
+    computerToolGroup: t('settings.roles.tool_group.computer.name'),
+    webToolGroup: t('settings.roles.tool_group.web.name'),
 };
 
 await toggleLanguage();
@@ -121,6 +123,8 @@ const afterToggle = {
     buttonText: languageButton.textContent,
     backendLabel: backendLabel.textContent,
     placeholder: promptInput.placeholder,
+    computerToolGroup: t('settings.roles.tool_group.computer.name'),
+    webToolGroup: t('settings.roles.tool_group.web.name'),
     savedPayloads: globalThis.__savedPayloads,
 };
 
@@ -156,6 +160,8 @@ console.log(JSON.stringify({ afterInit, afterToggle }));
         "backendLabel": "正在检查后端...",
         "placeholder": "你希望这些代理帮你做什么？",
         "settingsTitle": "设置",
+        "computerToolGroup": "Computer Use",
+        "webToolGroup": "Web",
     }
     assert payload["afterToggle"] == {
         "language": "en-US",
@@ -163,5 +169,7 @@ console.log(JSON.stringify({ afterInit, afterToggle }));
         "buttonText": "EN",
         "backendLabel": "Checking backend...",
         "placeholder": "What would you like the agents to do?",
+        "computerToolGroup": "Computer Use",
+        "webToolGroup": "Web",
         "savedPayloads": [{"language": "en-US"}],
     }

@@ -31,6 +31,7 @@ from relay_teams.roles import (
     RoleMode,
     RoleRegistry,
     RoleSkillOption,
+    RoleToolGroupOption,
     SystemRolesUnavailableError,
     RoleValidationResult,
 )
@@ -64,7 +65,7 @@ class _FakeRoleSettingsService:
             name="Writer",
             description="Drafts user-facing content.",
             version="1.0.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             mcp_servers=(),
             skills=(),
             model_profile="default",
@@ -105,7 +106,7 @@ class _FakeRoleSettingsService:
 
 class _FakeToolRegistry:
     def list_names(self) -> tuple[str, ...]:
-        return ("create_tasks", "dispatch_task")
+        return ("orch_create_tasks", "orch_dispatch_task")
 
     def list_configurable_names(self) -> tuple[str, ...]:
         return self.list_names()
@@ -209,7 +210,7 @@ def _create_test_client(
                 name="Coordinator",
                 description="Coordinates the run.",
                 version="1.0.0",
-                tools=("dispatch_task",),
+                tools=("orch_dispatch_task",),
                 model_profile="default",
                 mode=RoleMode.PRIMARY,
                 system_prompt="Coordinate the run.",
@@ -221,7 +222,7 @@ def _create_test_client(
                 name="Main Agent",
                 description="Executes normal-mode runs.",
                 version="1.0.0",
-                tools=("dispatch_task",),
+                tools=("orch_dispatch_task",),
                 model_profile="default",
                 mode=RoleMode.PRIMARY,
                 system_prompt="Handle the run directly.",
@@ -233,7 +234,7 @@ def _create_test_client(
                 name="Writer",
                 description="Drafts user-facing content.",
                 version="1.0.0",
-                tools=("dispatch_task",),
+                tools=("orch_dispatch_task",),
                 model_profile="default",
                 mode=RoleMode.SUBAGENT,
                 system_prompt="Write clearly.",
@@ -306,7 +307,7 @@ def test_validate_role_config() -> None:
             "name": "Writer",
             "description": "Drafts user-facing content.",
             "version": "1.0.0",
-            "tools": ["dispatch_task"],
+            "tools": ["orch_dispatch_task"],
             "mcp_servers": [],
             "skills": [],
             "model_profile": "default",
@@ -329,7 +330,7 @@ def test_get_role_config_options_returns_503_when_system_roles_are_missing() -> 
             name="Writer",
             description="Drafts user-facing content.",
             version="1.0.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             model_profile="default",
             system_prompt="Write clearly.",
         )
@@ -427,7 +428,15 @@ def test_get_role_config_options() -> None:
                 input_modalities=(MediaModality.IMAGE,),
             ),
         ),
-        tools=("create_tasks", "dispatch_task"),
+        tool_groups=(
+            RoleToolGroupOption(
+                id="orchestration",
+                name="Orchestration",
+                description="Coordinator-only orchestration tools for delegated task management.",
+                tools=("orch_create_tasks", "orch_dispatch_task"),
+            ),
+        ),
+        tools=("orch_create_tasks", "orch_dispatch_task"),
         mcp_servers=("docs",),
         skills=(
             RoleSkillOption(
@@ -463,7 +472,7 @@ def test_get_role_config_options_reloads_missing_builtin_skills() -> None:
             name="Coordinator",
             description="Coordinates the run.",
             version="1.0.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             model_profile="default",
             system_prompt="Coordinate the run.",
         )
@@ -474,7 +483,7 @@ def test_get_role_config_options_reloads_missing_builtin_skills() -> None:
             name="Main Agent",
             description="Executes normal-mode runs.",
             version="1.0.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             skills=("builtin:skill-installer",),
             model_profile="default",
             system_prompt="Handle the run directly.",
@@ -532,7 +541,7 @@ def test_get_role_config_options_returns_503_when_builtin_skills_still_missing()
             name="Coordinator",
             description="Coordinates the run.",
             version="1.0.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             model_profile="default",
             system_prompt="Coordinate the run.",
         )
@@ -543,7 +552,7 @@ def test_get_role_config_options_returns_503_when_builtin_skills_still_missing()
             name="Main Agent",
             description="Executes normal-mode runs.",
             version="1.0.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             skills=("builtin:skill-installer",),
             model_profile="default",
             system_prompt="Handle the run directly.",

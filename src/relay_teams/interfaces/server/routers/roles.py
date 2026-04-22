@@ -27,6 +27,7 @@ from relay_teams.roles import (
     RoleDocumentSummary,
     RoleRegistry,
     RoleSkillOption,
+    RoleToolGroupOption,
     SystemRolesUnavailableError,
     RoleValidationResult,
     ensure_required_system_roles,
@@ -36,7 +37,7 @@ from relay_teams.interfaces.server.router_error_mapping import http_exception_fo
 from relay_teams.roles.settings_service import RoleSettingsService
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
 from relay_teams.skills.skill_registry import SkillRegistry
-from relay_teams.tools.registry import ToolRegistry
+from relay_teams.tools.registry import ToolRegistry, list_default_tool_groups
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/roles", tags=["Roles"])
@@ -95,6 +96,15 @@ def get_role_config_options(
             main_agent_role=main_agent_role,
             normal_mode_roles=normal_mode_roles,
             subagent_roles=subagent_roles,
+            tool_groups=tuple(
+                RoleToolGroupOption(
+                    id=group.group_id,
+                    name=group.name,
+                    description=group.description,
+                    tools=group.tools,
+                )
+                for group in list_default_tool_groups(tool_registry)
+            ),
             tools=tool_registry.list_configurable_names(),
             mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
             skills=skill_options,

@@ -441,7 +441,7 @@ def _recover_call_state(
     shared_store: SharedStateRepository,
     task_repo: TaskRepository | None,
 ) -> dict[str, JsonValue]:
-    if tool_name != "dispatch_task" or task_repo is None:
+    if tool_name != "orch_dispatch_task" or task_repo is None:
         return {}
     return _recover_dispatch_task_call_state(
         trace_id=trace_id,
@@ -464,7 +464,7 @@ def _recover_dispatch_task_call_state(
         return {}
     prompt = str(tool_args.get("prompt") or "")
     return {
-        "kind": "dispatch_task",
+        "kind": "orch_dispatch_task",
         "task_id": dispatched_task_id,
         "prompt": prompt,
         "role_id": str(tool_args.get("role_id") or record.envelope.role_id or ""),

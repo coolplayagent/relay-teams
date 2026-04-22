@@ -901,7 +901,7 @@ def test_create_run_blocks_when_tool_approval_pending(tmp_path: Path) -> None:
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="create_tasks",
+        tool_name="orch_create_tasks",
         args_preview="{}",
     )
     manager._active_run_registry.remember_active_run(
@@ -1210,7 +1210,7 @@ def test_resolve_tool_approval_requires_resume_for_stopped_run(
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="create_tasks",
+        tool_name="orch_create_tasks",
         args_preview="{}",
     )
     manager._active_run_registry.remember_active_run(
@@ -1222,7 +1222,7 @@ def test_resolve_tool_approval_requires_resume_for_stopped_run(
         tool_call_id="call-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="create_tasks",
+        tool_name="orch_create_tasks",
         args_preview="{}",
     )
 
@@ -1387,7 +1387,7 @@ def test_resume_run_allows_stopped_run_with_pending_tool_approval(
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="create_tasks",
+        tool_name="orch_create_tasks",
         args_preview="{}",
     )
     manager._active_run_registry.remember_active_run(
@@ -1555,7 +1555,7 @@ def test_resolve_tool_approval_tolerates_publish_failure(tmp_path: Path) -> None
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="create_tasks",
+        tool_name="orch_create_tasks",
         args_preview="{}",
     )
     manager._tool_approval_manager.open_approval(
@@ -1563,7 +1563,7 @@ def test_resolve_tool_approval_tolerates_publish_failure(tmp_path: Path) -> None
         tool_call_id="call-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="create_tasks",
+        tool_name="orch_create_tasks",
         args_preview="{}",
     )
 
@@ -1606,7 +1606,7 @@ def test_resolve_tool_approval_returns_conflict_when_ticket_was_resolved_mid_sub
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="create_tasks",
+        tool_name="orch_create_tasks",
         args_preview="{}",
     )
     original_resolve = ticket_repo.resolve
@@ -1658,7 +1658,7 @@ def test_resolve_tool_approval_tolerates_missing_in_memory_entry_after_persist(
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="create_tasks",
+        tool_name="orch_create_tasks",
         args_preview="{}",
     )
     manager._tool_approval_manager.open_approval(
@@ -1666,7 +1666,7 @@ def test_resolve_tool_approval_tolerates_missing_in_memory_entry_after_persist(
         tool_call_id="call-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="create_tasks",
+        tool_name="orch_create_tasks",
         args_preview="{}",
     )
 

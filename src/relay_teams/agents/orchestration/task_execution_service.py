@@ -20,6 +20,7 @@ from relay_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
     RuntimePromptBuilder,
     RuntimePromptSections,
+    build_workspace_ssh_profile_prompt_metadata,
     compose_provider_system_prompt,
     compose_runtime_system_prompt,
 )
@@ -79,7 +80,7 @@ if TYPE_CHECKING:
     from relay_teams.tools.registry import ToolRegistry
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
-from relay_teams.workspace import WorkspaceManager
+from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
 
 LOGGER = get_logger(__name__)
 ProviderUserPromptContent = str | tuple[UserContent, ...]
@@ -249,6 +250,7 @@ class TaskExecutionService(BaseModel):
                 task=task,
                 working_directory=workspace.resolve_workdir(),
                 worktree_root=workspace.scope_root,
+                workspace=workspace,
                 shared_state_snapshot=snapshot,
                 objective=self._resolve_turn_objective(
                     task=task,
@@ -648,6 +650,7 @@ class TaskExecutionService(BaseModel):
         task: TaskEnvelope,
         working_directory: Path | None,
         worktree_root: Path | None,
+        workspace: WorkspaceHandle | None,
         shared_state_snapshot: tuple[tuple[str, str], ...],
         objective: str,
     ) -> PreparedRuntimeSnapshot:
@@ -662,6 +665,21 @@ class TaskExecutionService(BaseModel):
                 shared_state_snapshot=shared_state_snapshot,
                 working_directory=working_directory,
                 worktree_root=worktree_root,
+                workspace=workspace,
+                ssh_profile_metadata=(
+                    ()
+                    if workspace is None
+                    else build_workspace_ssh_profile_prompt_metadata(
+                        workspace=workspace,
+                        ssh_profile_service=(
+                            self.workspace_manager.ssh_profile_service
+                        ),
+                        consumer=(
+                            "agents.orchestration.task_execution_service"
+                            ".prepare_runtime_snapshot"
+                        ),
+                    )
+                ),
                 conversation_context=conversation_context,
                 runtime_tools=runtime_tools,
             )

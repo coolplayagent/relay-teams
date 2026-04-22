@@ -21,6 +21,7 @@ from relay_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
     RuntimePromptBuildInput,
     RuntimePromptBuilder,
+    build_workspace_ssh_profile_prompt_metadata,
     compose_provider_system_prompt,
     compose_runtime_system_prompt,
 )
@@ -38,7 +39,7 @@ from relay_teams.sessions.runs.run_models import RunTopologySnapshot
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
-from relay_teams.workspace import WorkspaceManager, WorkspaceService
+from relay_teams.workspace import WorkspaceHandle, WorkspaceManager, WorkspaceService
 
 router = APIRouter(prefix="/prompts", tags=["Prompts"])
 
@@ -142,6 +143,7 @@ async def preview_prompts(
 
     working_directory = None
     worktree_root = None
+    workspace: WorkspaceHandle | None = None
     if req.workspace_id is not None:
         try:
             workspace_service.require_workspace(req.workspace_id)
@@ -173,6 +175,16 @@ async def preview_prompts(
             shared_state_snapshot=shared_state_snapshot,
             working_directory=working_directory,
             worktree_root=worktree_root,
+            workspace=workspace,
+            ssh_profile_metadata=(
+                ()
+                if workspace is None
+                else build_workspace_ssh_profile_prompt_metadata(
+                    workspace=workspace,
+                    ssh_profile_service=workspace_manager.ssh_profile_service,
+                    consumer="interfaces.server.routers.prompts.preview",
+                )
+            ),
             conversation_context=req.conversation_context,
         )
     )

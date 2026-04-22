@@ -22,4 +22,4 @@ def test_yolo_policy_disables_approval_for_all_tools() -> None:
     assert not policy.requires_approval("edit")
     assert not policy.requires_approval("write")
     assert not policy.requires_approval("write_tmp")
-    assert not policy.requires_approval("create_tasks")
+    assert not policy.requires_approval("orch_create_tasks")

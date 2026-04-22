@@ -92,9 +92,11 @@ bindRoleSettingsHandlers();
 await loadRoleSettingsPanel();
 
 await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
-const toolOptions = document.getElementById("role-tools-picker").querySelectorAll('input[type="checkbox"]');
-toolOptions[1].checked = true;
-toolOptions[1].onchange();
+const toolOptions = Array.from(
+    document.getElementById("role-tool-groups-picker").querySelectorAll('input[type="checkbox"]')
+).filter(input => input.dataset.toolValue);
+toolOptions.find(input => input.dataset.toolValue === "write_file").checked = true;
+await toolOptions.find(input => input.dataset.toolValue === "write_file").onchange();
 
 document.getElementById("role-model-profile-input").value = "editor";
 document.getElementById("role-execution-surface-input").value = "desktop";
@@ -115,9 +117,11 @@ document.getElementById("role-model-profile-input").value = "default";
 document.getElementById("role-execution-surface-input").value = "hybrid";
 document.getElementById("role-system-prompt-input").value = "Start from a blank role.";
 
-const newToolOptions = document.getElementById("role-tools-picker").querySelectorAll('input[type="checkbox"]');
-newToolOptions[0].checked = true;
-newToolOptions[0].onchange();
+const newToolOptions = Array.from(
+    document.getElementById("role-tool-groups-picker").querySelectorAll('input[type="checkbox"]')
+).filter(input => input.dataset.toolValue);
+newToolOptions.find(input => input.dataset.toolValue === "read_file").checked = true;
+await newToolOptions.find(input => input.dataset.toolValue === "read_file").onchange();
 
 await document.getElementById("save-role-btn").onclick();
 
@@ -186,6 +190,234 @@ console.log(JSON.stringify({
             "tone": "success",
         },
     ]
+
+
+def test_role_settings_tool_groups_show_partial_selection_state(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+const groupOptions = Array.from(
+    document.getElementById("role-tool-groups-picker").querySelectorAll('input[type="checkbox"]')
+).filter(input => input.dataset.groupId);
+const toggleButtons = document.getElementById("role-tool-groups-picker").querySelectorAll(".role-tool-group-toggle");
+
+console.log(JSON.stringify({
+    groupCount: groupOptions.length,
+    firstGroupValue: groupOptions[0].dataset.optionValue,
+    firstGroupChecked: groupOptions[0].checked,
+    firstGroupIndeterminate: groupOptions[0].indeterminate === true,
+    toggleCount: toggleButtons.length,
+    groupsHtml: document.getElementById("role-tool-groups-picker").innerHTML,
+}));
+""".strip(),
+    )
+
+    assert payload["groupCount"] == 1
+    assert payload["firstGroupValue"] == "workspace"
+    assert payload["firstGroupChecked"] is False
+    assert payload["firstGroupIndeterminate"] is True
+    assert payload["toggleCount"] == 1
+    assert "Workspace" in cast(str, payload["groupsHtml"])
+    assert 'role-tool-group-toggle-label">Expand<' in cast(str, payload["groupsHtml"])
+    assert "role-tool-group-tools-collapsed" in cast(str, payload["groupsHtml"])
+
+
+def test_role_settings_tool_groups_toggle_expansion_state(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+const beforeToggleHtml = document.getElementById("role-tool-groups-picker").innerHTML;
+const toggleButtons = document.getElementById("role-tool-groups-picker").querySelectorAll(".role-tool-group-toggle");
+await toggleButtons[0].onclick();
+const afterToggleHtml = document.getElementById("role-tool-groups-picker").innerHTML;
+
+console.log(JSON.stringify({
+    beforeToggleHtml,
+    afterToggleHtml,
+}));
+""".strip(),
+    )
+
+    assert 'role-tool-group-toggle-label">Expand<' in cast(
+        str, payload["beforeToggleHtml"]
+    )
+    assert 'role-tool-group-toggle-label">Collapse<' in cast(
+        str, payload["afterToggleHtml"]
+    )
+
+
+def test_role_settings_tool_groups_show_full_selection_state(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleRecordsOverride = {
+    writer: {
+        source_role_id: "writer",
+        role_id: "writer",
+        name: "Writer",
+        description: "Drafts user-facing content.",
+        version: "1.0.0",
+        bound_agent_id: null,
+        execution_surface: "api",
+        tools: ["read_file", "write_file", "shell", "office_read_markdown"],
+        mcp_servers: [],
+        skills: [],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Write the first draft.",
+        file_name: "writer.md",
+        content: "---\\nrole_id: writer\\n---\\n\\nWrite the first draft.\\n",
+        deletable: true,
+    },
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+const groupOptions = Array.from(
+    document.getElementById("role-tool-groups-picker").querySelectorAll('input[type="checkbox"]')
+).filter(input => input.dataset.groupId);
+
+console.log(JSON.stringify({
+    groupCount: groupOptions.length,
+    firstGroupValue: groupOptions[0].dataset.optionValue,
+    firstGroupChecked: groupOptions[0].checked,
+    firstGroupIndeterminate: groupOptions[0].indeterminate === true,
+    groupsHtml: document.getElementById("role-tool-groups-picker").innerHTML,
+}));
+""".strip(),
+    )
+
+    assert payload["groupCount"] == 1
+    assert payload["firstGroupValue"] == "workspace"
+    assert payload["firstGroupChecked"] is True
+    assert payload["firstGroupIndeterminate"] is False
+    assert 'data-option-value="workspace"' in cast(str, payload["groupsHtml"])
+    assert 'data-group-id="workspace"' in cast(str, payload["groupsHtml"])
+    assert "checked" in cast(str, payload["groupsHtml"])
+
+
+def test_role_settings_tool_group_selection_expands_to_tools_on_save(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+const groupOptions = Array.from(
+    document.getElementById("role-tool-groups-picker").querySelectorAll('input[type="checkbox"]')
+).filter(input => input.dataset.groupId);
+groupOptions[0].checked = true;
+await groupOptions[0].onchange();
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    saveCall: globalThis.__saveCalls[0],
+    toolsHtml: document.getElementById("role-tool-groups-picker").innerHTML,
+}));
+""".strip(),
+    )
+
+    save_call = cast(dict[str, JsonValue], payload["saveCall"])
+    save_payload = cast(dict[str, JsonValue], save_call["payload"])
+    assert save_call["roleId"] == "writer"
+    assert save_payload["tools"] == [
+        "read_file",
+        "write_file",
+        "shell",
+        "office_read_markdown",
+    ]
+    assert 'data-tool-value="shell"' in cast(str, payload["toolsHtml"])
+    assert 'data-group-toggle-id="workspace"' in cast(str, payload["toolsHtml"])
+
+
+def test_role_settings_tool_groups_localize_computer_group_name(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleRecordsOverride = {
+    writer: {
+        source_role_id: "writer",
+        role_id: "writer",
+        name: "Writer",
+        description: "Drafts user-facing content.",
+        version: "1.0.0",
+        bound_agent_id: null,
+        execution_surface: "desktop",
+        tools: ["capture_screen"],
+        mcp_servers: [],
+        skills: [],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Use computer tools.",
+        file_name: "writer.md",
+        content: "---\\nrole_id: writer\\n---\\n\\nUse computer tools.\\n",
+        deletable: true,
+    },
+};
+
+globalThis.__roleConfigOptionsOverride = {
+    tool_groups: [
+        {
+            id: "computer",
+            name: "Desktop",
+            description: "Desktop tools.",
+            tools: ["capture_screen"],
+        },
+    ],
+    tools: ["capture_screen"],
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+const groupsHtml = document.getElementById("role-tool-groups-picker").innerHTML;
+
+console.log(JSON.stringify({
+    groupsHtml,
+}));
+""".strip(),
+    )
+
+    assert "Computer Use" in cast(str, payload["groupsHtml"])
+    assert ">Desktop<" not in cast(str, payload["groupsHtml"])
 
 
 def test_role_settings_lists_delete_actions_and_deletes_deletable_role(
@@ -294,9 +526,11 @@ await loadRoleSettingsPanel();
 
 await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
 const advisoryBefore = document.getElementById("role-skills-picker").innerHTML;
-const toolOptions = document.getElementById("role-tools-picker").querySelectorAll('input[type="checkbox"]');
-toolOptions[2].checked = true;
-toolOptions[2].onchange();
+const toolOption = Array.from(
+    document.getElementById("role-tool-groups-picker").querySelectorAll('input[type="checkbox"]')
+).find(input => input.dataset.toolValue === "shell");
+toolOption.checked = true;
+await toolOption.onchange();
 const advisoryAfter = document.getElementById("role-skills-picker").innerHTML;
 
 console.log(JSON.stringify({
@@ -690,9 +924,11 @@ bindRoleSettingsHandlers();
 await loadRoleSettingsPanel();
 
 await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
-const toolOptions = document.getElementById("role-tools-picker").querySelectorAll('input[type="checkbox"]');
-toolOptions[2].checked = true;
-await toolOptions[2].onchange();
+const toolOption = Array.from(
+    document.getElementById("role-tool-groups-picker").querySelectorAll('input[type="checkbox"]')
+).find(input => input.dataset.toolValue === "shell");
+toolOption.checked = true;
+await toolOption.onchange();
 const advisoryRemoved = !document.getElementById("role-skills-picker").innerHTML.includes(
     "Roles that use skills usually work better with the exec command tool enabled."
 );
@@ -787,7 +1023,7 @@ globalThis.__roleRecordsOverride = {
         version: "1.0.0",
         bound_agent_id: null,
         execution_surface: "api",
-        tools: ["create_tasks", "dispatch_task"],
+        tools: ["orch_create_tasks", "orch_dispatch_task"],
         mcp_servers: [],
         skills: [],
         model_profile: "default",
@@ -882,10 +1118,10 @@ bindRoleSettingsHandlers();
 await loadRoleSettingsPanel();
 
 await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
-const staleToolsHtml = document.getElementById("role-tools-picker").innerHTML;
+const staleToolsHtml = document.getElementById("role-tool-groups-picker").innerHTML;
 const invalidToolOption = Array.from(
-    document.getElementById("role-tools-picker").querySelectorAll('input[type="checkbox"]')
-).find(input => input.dataset.optionValue === "read_file");
+    document.getElementById("role-tool-groups-picker").querySelectorAll('input[type="checkbox"]')
+).find(input => input.dataset.toolValue === "read_file");
 invalidToolOption.checked = false;
 await invalidToolOption.onchange();
 
@@ -893,7 +1129,7 @@ await document.getElementById("save-role-btn").onclick();
 
 console.log(JSON.stringify({
     staleToolsHtml,
-    refreshedToolsHtml: document.getElementById("role-tools-picker").innerHTML,
+    refreshedToolsHtml: document.getElementById("role-tool-groups-picker").innerHTML,
     savePayload: globalThis.__saveCalls[0].payload,
 }));
 """.strip(),
@@ -1277,7 +1513,7 @@ await document.getElementById("roles-list").querySelectorAll(".role-record-edit-
 console.log(JSON.stringify({
     initialListHtml,
     editorDisplay: document.getElementById("role-editor-panel").style.display,
-    roleToolsHtml: document.getElementById("role-tools-picker").innerHTML,
+    roleToolsHtml: document.getElementById("role-tool-groups-picker").innerHTML,
     roleSkillsHtml: document.getElementById("role-skills-picker").innerHTML,
     roleConfigOptionsCalls: globalThis.__fetchRoleConfigOptionsCount,
     modelProfileCalls: globalThis.__fetchModelProfilesCount,
@@ -1411,7 +1647,7 @@ const defaultRoleRecords = {
         version: "1.0.0",
         bound_agent_id: null,
         execution_surface: "api",
-        tools: ["create_tasks", "dispatch_task"],
+        tools: ["orch_create_tasks", "orch_dispatch_task"],
         mcp_servers: [],
         skills: [],
         model_profile: "default",
@@ -1449,6 +1685,20 @@ export async function fetchRoleConfigOptions() {
     const defaults = {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
+        tool_groups: [
+            {
+                id: "workspace",
+                name: "Workspace",
+                description: "File and shell tools.",
+                tools: ["read_file", "write_file", "shell", "office_read_markdown"],
+            },
+            {
+                id: "orchestration",
+                name: "Orchestration",
+                description: "Coordinator-only orchestration tools.",
+                tools: ["orch_dispatch_task"],
+            },
+        ],
         tools: ["read_file", "write_file", "shell", "office_read_markdown"],
         mcp_servers: ["docs"],
         skills: [
@@ -1595,6 +1845,19 @@ const translations = {
     "settings.roles.saved": "Role Saved",
     "settings.roles.saved_message": "Saved and validated.",
     "settings.roles.saved_toast": "{role_id} saved and reloaded.",
+    "settings.roles.tool_groups": "Tool Groups",
+    "settings.roles.expand": "Expand",
+    "settings.roles.collapse": "Collapse",
+    "settings.roles.expand_group": "Expand tool group",
+    "settings.roles.collapse_group": "Collapse tool group",
+    "settings.roles.tool_count_one": "1 tool",
+    "settings.roles.tool_count_many": "{count} tools",
+    "settings.roles.other_tools": "Other Tools",
+    "settings.roles.other_tools_description": "Tools that are available but not assigned to a named group yet.",
+    "settings.roles.unavailable_tools": "Unavailable Tools",
+    "settings.roles.unavailable_tools_description": "Previously selected tools that are not available in the current registry.",
+    "settings.roles.tool_group.computer.name": "Computer Use",
+    "settings.roles.tool_group.computer.description": "Desktop observation, input, and pointer tools.",
     "settings.roles.save_failed": "Save Failed",
     "settings.roles.save_failed_message": "Save failed.",
     "settings.roles.save_failed_toast": "Failed to save role config.",
@@ -1602,6 +1865,7 @@ const translations = {
     "settings.roles.options_stale_message": "Role options refresh failed. Used cached role options.",
     "settings.roles.options_required_message": "Role options could not be refreshed and no cached options are available.",
     "settings.roles.default_current": "default (current: {profile})",
+    "settings.roles.no_tool_groups": "No tool groups loaded.",
     "settings.roles.main_agent_only": "Main Agent only",
     "settings.roles.coordinator_root": "Coordinator root",
     "settings.roles.main_agent_fixed": "Main Agent keeps a fixed identity. Its base prompt is edited here and is only used in normal mode.",
@@ -1612,6 +1876,7 @@ const translations = {
     "settings.roles.no_mcp": "No MCP servers loaded.",
     "settings.roles.no_skills": "No skills loaded.",
     "settings.roles.skills_shell_advisory": "Roles that use skills usually work better with the exec command tool enabled.",
+    "settings.system.unavailable_state": "Unavailable",
 };
 
 export function t(key) {
@@ -1687,6 +1952,8 @@ function createElement(initialDisplay = "block") {{
     let cachedRoleEditButtonsSource = "";
     let cachedRoleDeleteButtons = [];
     let cachedRoleDeleteButtonsSource = "";
+    let cachedToolGroupToggleButtons = [];
+    let cachedToolGroupToggleButtonsSource = "";
     let cachedInputs = [];
     let cachedInputsSource = "";
 
@@ -1733,14 +2000,37 @@ function createElement(initialDisplay = "block") {{
         return matches;
     }}
 
-    function buildCheckboxes(source) {{
+    function buildToolGroupToggleButtons(source) {{
         const matches = [];
-        const pattern = /<input type="checkbox" data-option-value="([^"]+)"( checked)?>/g;
+        const pattern = /class="[^"]*role-tool-group-toggle[^"]*"[^>]*data-group-toggle-id="([^"]+)"/g;
         let match = pattern.exec(source);
         while (match) {{
             matches.push({{
-                dataset: {{ optionValue: match[1] }},
-                checked: Boolean(match[2]),
+                dataset: {{ groupToggleId: match[1] }},
+                onclick: null,
+            }});
+            match = pattern.exec(source);
+        }}
+        return matches;
+    }}
+
+    function buildCheckboxes(source) {{
+        const matches = [];
+        const pattern = /<input[\\s\\S]*?type="checkbox"[\\s\\S]*?>/g;
+        let match = pattern.exec(source);
+        while (match) {{
+            const tag = match[0];
+            const optionValue = tag.match(/data-option-value="([^"]+)"/);
+            const groupId = tag.match(/data-group-id="([^"]+)"/);
+            const toolValue = tag.match(/data-tool-value="([^"]+)"/);
+            matches.push({{
+                dataset: {{
+                    optionValue: optionValue ? optionValue[1] : "",
+                    groupId: groupId ? groupId[1] : "",
+                    toolValue: toolValue ? toolValue[1] : "",
+                }},
+                checked: tag.includes(" checked"),
+                indeterminate: false,
                 onchange: null,
             }});
             match = pattern.exec(source);
@@ -1769,6 +2059,7 @@ function createElement(initialDisplay = "block") {{
             cachedRoleRecordsSource = html;
             cachedRoleEditButtonsSource = html;
             cachedRoleDeleteButtonsSource = html;
+            cachedToolGroupToggleButtonsSource = html;
             if (appendedHtml.includes("role-option-advisory")) {{
                 cachedInputsSource = html;
             }} else {{
@@ -1822,6 +2113,13 @@ function createElement(initialDisplay = "block") {{
                 }}
                 return cachedRoleDeleteButtons;
                 }}
+                if (selector === ".role-tool-group-toggle") {{
+                    if (cachedToolGroupToggleButtonsSource !== html) {{
+                        cachedToolGroupToggleButtons = buildToolGroupToggleButtons(html);
+                        cachedToolGroupToggleButtonsSource = html;
+                    }}
+                    return cachedToolGroupToggleButtons;
+                }}
                 if (selector === 'input[type="checkbox"]') {{
                     if (cachedInputsSource !== html) {{
                         cachedInputs = buildCheckboxes(html);
@@ -1849,6 +2147,7 @@ function createElement(initialDisplay = "block") {{
             cachedRoleRecordsSource = "";
             cachedRoleEditButtonsSource = "";
             cachedRoleDeleteButtonsSource = "";
+            cachedToolGroupToggleButtonsSource = "";
             cachedInputs = buildCheckboxes(html);
             cachedInputsSource = html;
         }},
@@ -1871,7 +2170,7 @@ function createElements() {{
         ["role-model-profile-input", createElement("block")],
         ["role-execution-surface-input", createElement("block")],
         ["role-bound-agent-input", createElement("block")],
-        ["role-tools-picker", createElement("block")],
+        ["role-tool-groups-picker", createElement("block")],
         ["role-mcp-picker", createElement("block")],
         ["role-skills-picker", createElement("block")],
         ["role-memory-enabled-input", createElement("block")],

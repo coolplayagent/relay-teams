@@ -458,7 +458,7 @@ def test_get_recovery_snapshot_prefers_approval_phase(tmp_path: Path) -> None:
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="dispatch_task",
+        tool_name="orch_dispatch_task",
         args_preview='{"task_id":"task-1"}',
     )
 
@@ -503,7 +503,7 @@ def test_get_recovery_snapshot_keeps_approval_phase_for_stopped_recoverable_run(
         task_id="task-root-1",
         instance_id="inst-1",
         role_id="Coordinator",
-        tool_name="dispatch_task",
+        tool_name="orch_dispatch_task",
         args_preview='{"task_id":"task-1"}',
     )
 
@@ -1200,7 +1200,7 @@ def test_get_recovery_snapshot_round_snapshot_keeps_tool_results(
             ModelResponse(
                 parts=[
                     ToolCallPart(
-                        tool_name="list_available_roles",
+                        tool_name="orch_list_available_roles",
                         args={},
                         tool_call_id="call-1",
                     )
@@ -1209,7 +1209,7 @@ def test_get_recovery_snapshot_round_snapshot_keeps_tool_results(
             ModelRequest(
                 parts=[
                     ToolReturnPart(
-                        tool_name="list_available_roles",
+                        tool_name="orch_list_available_roles",
                         tool_call_id="call-1",
                         content={"ok": True, "data": {"roles": ["time"]}},
                     )

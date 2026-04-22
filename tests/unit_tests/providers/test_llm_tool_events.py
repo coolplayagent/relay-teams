@@ -200,7 +200,7 @@ def test_publish_tool_events_emits_call_validation_failure_and_result() -> None:
         ModelResponse(
             parts=[
                 ToolCallPart(
-                    tool_name="create_tasks",
+                    tool_name="orch_create_tasks",
                     args={"objective": "x"},
                     tool_call_id="call-1",
                 )
@@ -209,8 +209,8 @@ def test_publish_tool_events_emits_call_validation_failure_and_result() -> None:
         ModelRequest(
             parts=[
                 RetryPromptPart(
-                    content="Invalid arguments for tool create_tasks",
-                    tool_name="create_tasks",
+                    content="Invalid arguments for tool orch_create_tasks",
+                    tool_name="orch_create_tasks",
                     tool_call_id="call-1",
                 )
             ]
@@ -218,7 +218,7 @@ def test_publish_tool_events_emits_call_validation_failure_and_result() -> None:
         ModelRequest(
             parts=[
                 ToolReturnPart(
-                    tool_name="create_tasks",
+                    tool_name="orch_create_tasks",
                     content={"ok": True},
                     tool_call_id="call-2",
                 )
@@ -243,19 +243,21 @@ def test_publish_tool_events_emits_call_validation_failure_and_result() -> None:
     ]
 
     tool_call_payload = json.loads(hub.events[0].payload_json)
-    assert tool_call_payload["tool_name"] == "create_tasks"
+    assert tool_call_payload["tool_name"] == "orch_create_tasks"
     assert tool_call_payload["tool_call_id"] == "call-1"
 
     validation_payload = json.loads(hub.events[1].payload_json)
-    assert validation_payload["tool_name"] == "create_tasks"
+    assert validation_payload["tool_name"] == "orch_create_tasks"
     assert validation_payload["tool_call_id"] == "call-1"
     assert (
         validation_payload["reason"] == "Input validation failed before tool execution."
     )
-    assert validation_payload["details"] == "Invalid arguments for tool create_tasks"
+    assert (
+        validation_payload["details"] == "Invalid arguments for tool orch_create_tasks"
+    )
 
     tool_result_payload = json.loads(hub.events[2].payload_json)
-    assert tool_result_payload["tool_name"] == "create_tasks"
+    assert tool_result_payload["tool_name"] == "orch_create_tasks"
     assert tool_result_payload["tool_call_id"] == "call-2"
     assert tool_result_payload["error"] is False
 
@@ -277,7 +279,7 @@ def test_commit_ready_messages_defers_tool_call_event_until_safe_commit() -> Non
                 ModelResponse(
                     parts=[
                         ToolCallPart(
-                            tool_name="create_tasks",
+                            tool_name="orch_create_tasks",
                             args={"objective": "x"},
                             tool_call_id="call-unsafe",
                         )
@@ -311,7 +313,7 @@ def test_commit_ready_messages_publishes_only_tool_outcomes_after_safe_commit() 
                 ModelResponse(
                     parts=[
                         ToolCallPart(
-                            tool_name="create_tasks",
+                            tool_name="orch_create_tasks",
                             args={"objective": "x"},
                             tool_call_id="call-safe",
                         )
@@ -320,7 +322,7 @@ def test_commit_ready_messages_publishes_only_tool_outcomes_after_safe_commit() 
                 ModelRequest(
                     parts=[
                         ToolReturnPart(
-                            tool_name="create_tasks",
+                            tool_name="orch_create_tasks",
                             content={"ok": True},
                             tool_call_id="call-safe",
                         )
@@ -348,7 +350,7 @@ def test_publish_tool_call_events_deduplicates_published_tool_call_ids() -> None
             ModelResponse(
                 parts=[
                     ToolCallPart(
-                        tool_name="create_tasks",
+                        tool_name="orch_create_tasks",
                         args={"objective": "x"},
                         tool_call_id="call-live",
                     )
@@ -363,7 +365,7 @@ def test_publish_tool_call_events_deduplicates_published_tool_call_ids() -> None
             ModelResponse(
                 parts=[
                     ToolCallPart(
-                        tool_name="create_tasks",
+                        tool_name="orch_create_tasks",
                         args={"objective": "x"},
                         tool_call_id="call-live",
                     )
@@ -397,8 +399,8 @@ def test_publish_tool_events_skips_tool_result_already_emitted_from_runtime() ->
     merge_tool_call_state(
         shared_store=provider._session._shared_store,
         task_id=request.task_id,
-        tool_call_id="dispatch_task:1",
-        tool_name="dispatch_task",
+        tool_call_id="orch_dispatch_task:1",
+        tool_name="orch_dispatch_task",
         run_id=request.run_id,
         session_id=request.session_id,
         instance_id=request.instance_id,
@@ -415,8 +417,8 @@ def test_publish_tool_events_skips_tool_result_already_emitted_from_runtime() ->
             ModelRequest(
                 parts=[
                     ToolReturnPart(
-                        tool_name="dispatch_task",
-                        tool_call_id="dispatch_task:1",
+                        tool_name="orch_dispatch_task",
+                        tool_call_id="orch_dispatch_task:1",
                         content={"ok": True, "data": {"status": "queued"}},
                     )
                 ]
@@ -437,8 +439,8 @@ def test_publish_tool_events_sanitizes_stale_task_status_error() -> None:
             ModelRequest(
                 parts=[
                     ToolReturnPart(
-                        tool_name="dispatch_task",
-                        tool_call_id="dispatch_task:1",
+                        tool_name="orch_dispatch_task",
+                        tool_call_id="orch_dispatch_task:1",
                         content={
                             "ok": True,
                             "data": {

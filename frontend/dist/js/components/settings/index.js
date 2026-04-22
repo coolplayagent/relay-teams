@@ -536,8 +536,8 @@ function createModal() {
                                                 </div>
                                             </section>
                                             <section class="role-editor-section">
-                                                <h5 data-i18n="settings.roles.allowed_tools">Allowed Tools</h5>
-                                                <div class="role-option-picker role-option-picker-tools" id="role-tools-picker"></div>
+                                                <h5 data-i18n="settings.roles.tool_groups">Tool Groups</h5>
+                                                <div class="role-option-picker role-option-picker-single" id="role-tool-groups-picker"></div>
                                             </section>
                                             <section class="role-editor-section">
                                                 <h5 data-i18n="settings.roles.mcp_servers">MCP Servers</h5>

@@ -225,7 +225,7 @@ def _build_role_registry() -> RoleRegistry:
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             mcp_servers=("docs",),
             skills=("time",),
             model_profile="default",
@@ -238,7 +238,7 @@ def _build_role_registry() -> RoleRegistry:
             name="Writer",
             description="Drafts release notes and summaries.",
             version="1.0",
-            tools=("dispatch_task",),
+            tools=("orch_dispatch_task",),
             mcp_servers=("docs",),
             skills=("planner",),
             model_profile="default",
@@ -249,7 +249,7 @@ def _build_role_registry() -> RoleRegistry:
 
 
 def _build_tool_registry() -> ToolRegistry:
-    return ToolRegistry(tools={"dispatch_task": (lambda _agent: None)})
+    return ToolRegistry(tools={"orch_dispatch_task": (lambda _agent: None)})
 
 
 class _FakeMcpRegistry(McpRegistry):
@@ -308,7 +308,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
             "role_id": "Coordinator",
             "objective": "Deliver summary",
             "shared_state": {"priority": 1},
-            "tools": ["dispatch_task"],
+            "tools": ["orch_dispatch_task"],
             "skills": ["time"],
         },
     )
@@ -316,7 +316,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["role_id"] == "Coordinator"
-    assert payload["tools"] == ["dispatch_task"]
+    assert payload["tools"] == ["orch_dispatch_task"]
     assert payload["skills"] == ["time"]
     assert payload["runtime_system_prompt"].startswith("You are coordinator.")
     assert "## Runtime Rules" in payload["runtime_system_prompt"]
@@ -326,7 +326,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
         in payload["runtime_system_prompt"]
     )
     assert (
-        "If no existing role is a good fit, create a run-scoped role with `create_temporary_role` before dispatch."
+        "If no existing role is a good fit, create a run-scoped role with `orch_create_temporary_role` before dispatch."
         in payload["runtime_system_prompt"]
     )
     assert (
@@ -339,7 +339,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
         "- Description: Drafts release notes and summaries."
         in payload["runtime_system_prompt"]
     )
-    assert "- Tools: dispatch_task" in payload["runtime_system_prompt"]
+    assert "- Tools: orch_dispatch_task" in payload["runtime_system_prompt"]
     assert (
         "- MCP Tools: docs_read_file, docs_search_docs"
         in payload["runtime_system_prompt"]
@@ -432,6 +432,9 @@ def test_prompts_preview_uses_workspace_execution_root_when_workspace_is_provide
         f"- Working Directory: {workspace_root.resolve()}"
         in payload["runtime_system_prompt"]
     )
+    assert "## Workspace Environments" in payload["runtime_system_prompt"]
+    assert "- Workspace ID: preview-workspace" in payload["runtime_system_prompt"]
+    assert "### Mount: default (default)" in payload["runtime_system_prompt"]
 
 
 def test_prompts_preview_includes_project_instruction_files(tmp_path: Path) -> None:

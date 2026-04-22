@@ -299,11 +299,26 @@ def test_build_accept_header_changes_by_format() -> None:
     assert "text/html" in webfetch.build_accept_header("html")
 
 
+def test_build_accept_header_prefers_markdown_for_markdown_format() -> None:
+    header = webfetch.build_accept_header("markdown")
+
+    assert header.startswith("text/markdown;q=1.0, text/x-markdown;q=0.9")
+    assert header.index("text/markdown") < header.index("text/plain")
+    assert header.index("text/markdown") < header.index("text/html")
+
+
 def test_is_textual_content_type_supports_feed_media_types() -> None:
     assert webfetch.is_textual_content_type("application/rss+xml") is True
     assert webfetch.is_textual_content_type("application/atom+xml") is True
     assert webfetch.is_textual_content_type("application/opml+xml") is True
     assert webfetch.is_binary_response("application/rss+xml") is False
+
+
+def test_is_textual_content_type_supports_markdown_media_types() -> None:
+    assert webfetch.is_textual_content_type("text/markdown") is True
+    assert webfetch.is_textual_content_type("text/x-markdown") is True
+    assert webfetch.is_markdown_content_type("text/markdown") is True
+    assert webfetch.is_markdown_content_type("text/x-markdown") is True
 
 
 def test_preapproved_webfetch_url_honors_path_boundaries() -> None:
@@ -328,6 +343,33 @@ def test_build_webfetch_approval_request_marks_preapproved_hosts_safe() -> None:
     assert request.target_summary == "docs.python.org"
     assert request.source == "https://docs.python.org/3/"
     assert decision.required is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_sends_markdown_accept_header() -> None:
+    accept_headers: list[str] = []
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        accept_headers.append(request.headers["Accept"])
+        return httpx.Response(
+            200,
+            request=request,
+            text="# Upstream Markdown",
+            headers={"content-type": "text/markdown; charset=utf-8"},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    try:
+        response = await webfetch.fetch_url(
+            client=client,
+            url="https://example.com/docs",
+            response_format="markdown",
+        )
+    finally:
+        await client.aclose()
+
+    assert accept_headers == [webfetch.build_accept_header("markdown")]
+    await response.aclose()
 
 
 @pytest.mark.asyncio
@@ -1876,6 +1918,54 @@ def test_build_webfetch_projection_uses_absolute_markdown_links(tmp_path: Path) 
     data = projection.visible_data
     assert isinstance(data, dict)
     assert data["output"] == "[Install](https://example.com/install)"
+
+
+def test_build_webfetch_projection_preserves_upstream_markdown(
+    tmp_path: Path,
+) -> None:
+    projection = webfetch.build_webfetch_projection(
+        workspace_dir=tmp_path,
+        tool_call_id="call_8",
+        requested_url="https://example.com/docs",
+        final_url="https://example.com/docs",
+        response_format="markdown",
+        content_type="text/markdown",
+        response_headers={
+            "x-markdown-tokens": "2882",
+            "x-original-tokens": "55237",
+            "content-signal": "ai-train=yes, search=yes, ai-input=yes",
+        },
+        body=b"# Guide\n\nSee [Install](../install).",
+        extract=webfetch.WebFetchExtractMode.NONE,
+        item_limit=webfetch.DEFAULT_ITEM_LIMIT,
+    )
+
+    assert projection.visible_data is not None
+    visible_data = projection.visible_data
+    assert isinstance(visible_data, dict)
+    assert visible_data["output"] == "# Guide\n\nSee [Install](../install)."
+    assert visible_data["content_type"] == "text/markdown"
+    assert visible_data["markdown_tokens"] == 2882
+    assert visible_data["original_tokens"] == 55237
+    assert visible_data["content_signal"] == "ai-train=yes, search=yes, ai-input=yes"
+    assert projection.internal_data is not None
+    internal_data = projection.internal_data
+    assert isinstance(internal_data, dict)
+    assert internal_data["markdown_tokens"] == 2882
+    assert internal_data["original_tokens"] == 55237
+    assert internal_data["requested_url"] == "https://example.com/docs"
+
+
+def test_build_text_result_metadata_ignores_invalid_markdown_headers() -> None:
+    metadata = webfetch.build_text_result_metadata(
+        {
+            "X-Markdown-Tokens": "not-a-number",
+            "X-Original-Tokens": "-1",
+            "Content-Signal": "  ",
+        }
+    )
+
+    assert metadata == {}
 
 
 @pytest.mark.asyncio

@@ -2211,17 +2211,17 @@ function renderApprovalItem(activeRun, approval) {
 function approvalTitle(approval) {
     const toolName = String(approval?.tool_name || '');
     const args = parseApprovalArgs(approval?.args_preview);
-    if (toolName === 'list_available_roles') {
-        return t('recovery.tool.list_available_roles');
+    if (toolName === 'orch_list_available_roles') {
+        return t('recovery.tool.orch_list_available_roles');
     }
-    if (toolName === 'create_tasks') {
+    if (toolName === 'orch_create_tasks') {
         const taskCount = normalizeCount(args.task_count);
         return taskCount > 0
-            ? formatMessage('recovery.tool.create_tasks_count', { count: taskCount })
-            : t('recovery.tool.create_tasks');
+            ? formatMessage('recovery.tool.orch_create_tasks_count', { count: taskCount })
+            : t('recovery.tool.orch_create_tasks');
     }
-    if (toolName === 'dispatch_task') {
-        return t('recovery.tool.dispatch_task');
+    if (toolName === 'orch_dispatch_task') {
+        return t('recovery.tool.orch_dispatch_task');
     }
     return formatMessage('recovery.tool.run', { tool: humanizeToolName(toolName || 'tool') });
 }

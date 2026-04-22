@@ -2,9 +2,9 @@ from __future__ import annotations
 
 COORDINATOR_REQUIRED_TOOLS = frozenset(
     (
-        "create_tasks",
-        "update_task",
-        "dispatch_task",
+        "orch_create_tasks",
+        "orch_update_task",
+        "orch_dispatch_task",
     )
 )
 COORDINATOR_IDENTIFIERS = frozenset(("coordinator",))

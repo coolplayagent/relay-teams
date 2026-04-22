@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
+import logging
 import os
 import platform
 from collections.abc import Sequence
@@ -17,6 +18,7 @@ from relay_teams.agents.execution.prompt_instructions import (
     PromptInstructionResolver,
 )
 from relay_teams.agents.tasks.models import TaskEnvelope
+from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import (
@@ -30,6 +32,16 @@ from relay_teams.sessions.runs.run_models import (
     RunTopologySnapshot,
 )
 from relay_teams.sessions.session_models import SessionMode
+from relay_teams.workspace import (
+    WorkspaceHandle,
+    WorkspaceMountCapabilities,
+    WorkspaceMountProvider,
+    WorkspaceRemoteMountRoot,
+    WorkspaceSshMountConfig,
+)
+from relay_teams.workspace.ssh_profile_service import SshProfileService
+
+LOGGER = get_logger(__name__)
 
 COMMON_MODE_PROMPT = (
     "## Runtime Rules\n"
@@ -43,12 +55,12 @@ ORCHESTRATION_USAGE_PROMPT = (
     "- Orchestrate delegated work and avoid implementing the task directly.\n"
     "- Delegate only when another role is a better fit than continuing yourself.\n"
     "- Choose roles by their Description, Tools, MCP Tools, and Skills.\n"
-    "- Inspect the current worker pool with `list_available_roles` when selecting or reusing a dispatch target.\n"
-    "- If no existing role is a good fit, create a run-scoped role with `create_temporary_role` before dispatch.\n"
+    "- Inspect the current worker pool with `orch_list_available_roles` when selecting or reusing a dispatch target.\n"
+    "- If no existing role is a good fit, create a run-scoped role with `orch_create_temporary_role` before dispatch.\n"
     "- Prefer `template_role_id` when creating a temporary role so it inherits the closest existing capabilities.\n"
     "- Reuse an existing temporary role when it already matches the delegated work.\n"
     "- Create tasks as durable contracts with concrete outcomes and constraints.\n"
-    "- Choose the executing role in `dispatch_task`.\n"
+    "- Choose the executing role in `orch_dispatch_task`.\n"
     "- Use the dispatch prompt to pass stage-specific instructions and upstream context.\n"
     "- The roles listed below are dispatch targets, not your own capabilities."
 )
@@ -88,12 +100,23 @@ AVAILABLE_SKILLS_HEADING = "## Available Skills"
 AVAILABLE_SKILL_ITEM_PREFIX = "- "
 NONE_LABEL = "none"
 AUTHORIZED_RUNTIME_TOOLS_HEADING = "## Authorized Runtime Tools"
+WORKSPACE_ENVIRONMENTS_HEADING = "## Workspace Environments"
 TIME_TRUST_RULE = (
     "- Time Trust Rule: Do not trust your internal knowledge for the current date or "
     "time. When the user asks about today, current, recent, yesterday, tomorrow, or "
     "this week, use the runtime date in this section as the default source of truth "
     "and verify with tools when higher precision is needed."
 )
+
+
+class WorkspaceSshProfilePromptMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ssh_profile_id: str = Field(min_length=1)
+    host: str = Field(min_length=1)
+    username: str | None = None
+    port: int | None = Field(default=None, ge=1, le=65535)
+    remote_shell: str | None = None
 
 
 class RuntimePromptBuildInput(BaseModel):
@@ -105,6 +128,8 @@ class RuntimePromptBuildInput(BaseModel):
     shared_state_snapshot: tuple[tuple[str, str], ...]
     working_directory: Path | None = None
     worktree_root: Path | None = None
+    workspace: WorkspaceHandle | None = None
+    ssh_profile_metadata: tuple[WorkspaceSshProfilePromptMetadata, ...] = ()
     conversation_context: RuntimePromptConversationContext | None = None
     runtime_tools: RuntimeToolsSnapshot | None = None
 
@@ -172,6 +197,224 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
         lines.append(clawhub_line)
     lines.extend(_build_python_package_environment_lines())
     return "\n".join(lines)
+
+
+def build_workspace_environments_prompt(
+    *,
+    workspace: WorkspaceHandle | None,
+    ssh_profile_metadata: tuple[WorkspaceSshProfilePromptMetadata, ...] = (),
+) -> str:
+    if workspace is None:
+        return ""
+
+    profile_by_id = {
+        profile.ssh_profile_id: profile for profile in ssh_profile_metadata
+    }
+    lines = [
+        WORKSPACE_ENVIRONMENTS_HEADING,
+        f"- Workspace ID: {workspace.ref.workspace_id}",
+        f"- Default Mount: {workspace.default_mount_name}",
+        f"- Active Execution Mount: {workspace.locations.mount_name}",
+        f"- Workspace Temp Root: {workspace.tmp_root.resolve()}",
+        (
+            "- Path Syntax: unprefixed paths use the default mount; use "
+            "`<mount_name>:/path` for non-default mounts; use `tmp/...` for "
+            "workspace temp files."
+        ),
+        "- Authentication: handled by backend workspace tools.",
+    ]
+    for mount in workspace.mounts:
+        lines.append("")
+        lines.extend(
+            _build_workspace_mount_environment_lines(
+                workspace=workspace,
+                profile_by_id=profile_by_id,
+                mount_name=mount.mount_name,
+            )
+        )
+    return "\n".join(lines)
+
+
+def build_workspace_ssh_profile_prompt_metadata(
+    *,
+    workspace: WorkspaceHandle,
+    ssh_profile_service: SshProfileService | None,
+    consumer: str,
+) -> tuple[WorkspaceSshProfilePromptMetadata, ...]:
+    if ssh_profile_service is None:
+        return ()
+    profile_ids = _workspace_ssh_profile_ids(workspace)
+    metadata: list[WorkspaceSshProfilePromptMetadata] = []
+    for ssh_profile_id in profile_ids:
+        try:
+            record = ssh_profile_service.get_profile(ssh_profile_id)
+        except KeyError:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="workspace.ssh_profile_prompt_metadata_missing",
+                message="Workspace SSH profile metadata was unavailable for prompt context",
+                payload={
+                    "consumer": consumer,
+                    "workspace_id": workspace.ref.workspace_id,
+                    "ssh_profile_id": ssh_profile_id,
+                },
+            )
+            continue
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="workspace.ssh_profile_prompt_metadata_failed",
+                message="Workspace SSH profile metadata lookup failed for prompt context",
+                payload={
+                    "consumer": consumer,
+                    "workspace_id": workspace.ref.workspace_id,
+                    "ssh_profile_id": ssh_profile_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            continue
+        metadata.append(
+            WorkspaceSshProfilePromptMetadata(
+                ssh_profile_id=record.ssh_profile_id,
+                host=record.host,
+                username=record.username,
+                port=record.port,
+                remote_shell=record.remote_shell,
+            )
+        )
+    return tuple(metadata)
+
+
+def _workspace_ssh_profile_ids(workspace: WorkspaceHandle) -> tuple[str, ...]:
+    profile_ids: list[str] = []
+    seen: set[str] = set()
+    for mount in workspace.mounts:
+        if mount.provider != WorkspaceMountProvider.SSH:
+            continue
+        provider_config = mount.provider_config
+        if not isinstance(provider_config, WorkspaceSshMountConfig):
+            continue
+        ssh_profile_id = provider_config.ssh_profile_id
+        if ssh_profile_id in seen:
+            continue
+        profile_ids.append(ssh_profile_id)
+        seen.add(ssh_profile_id)
+    return tuple(profile_ids)
+
+
+def _build_workspace_mount_environment_lines(
+    *,
+    workspace: WorkspaceHandle,
+    profile_by_id: dict[str, WorkspaceSshProfilePromptMetadata],
+    mount_name: str,
+) -> list[str]:
+    mount = workspace.mount_by_name(mount_name)
+    default_suffix = (
+        " (default)" if mount.mount_name == workspace.default_mount_name else ""
+    )
+    lines = [
+        f"### Mount: {mount.mount_name}{default_suffix}",
+        f"- Provider: {mount.provider.value}",
+        f"- Root: {mount.root_reference}",
+        f"- Working Directory: {mount.working_directory}",
+        "- Readable Paths: " + _format_scope_paths(mount.readable_paths),
+        "- Writable Paths: " + _format_scope_paths(mount.writable_paths),
+        "- Capabilities: " + _format_mount_capabilities(mount.capabilities),
+    ]
+    if mount.provider == WorkspaceMountProvider.SSH:
+        lines.extend(
+            _build_ssh_mount_environment_lines(
+                workspace=workspace,
+                profile_by_id=profile_by_id,
+                mount_name=mount.mount_name,
+            )
+        )
+    return lines
+
+
+def _build_ssh_mount_environment_lines(
+    *,
+    workspace: WorkspaceHandle,
+    profile_by_id: dict[str, WorkspaceSshProfilePromptMetadata],
+    mount_name: str,
+) -> list[str]:
+    mount = workspace.mount_by_name(mount_name)
+    provider_config = mount.provider_config
+    if not isinstance(provider_config, WorkspaceSshMountConfig):
+        return ["- SSH Metadata: unavailable"]
+    metadata = profile_by_id.get(provider_config.ssh_profile_id)
+    lines = [
+        f"- SSH Profile ID: {provider_config.ssh_profile_id}",
+        f"- Remote Root: {provider_config.remote_root}",
+    ]
+    if metadata is None:
+        lines.append("- SSH Metadata: unavailable")
+    else:
+        lines.extend(
+            [
+                f"- SSH Host: {metadata.host}",
+                "- SSH Username: " + _format_optional_text(metadata.username),
+                "- SSH Port: " + _format_optional_number(metadata.port),
+                "- SSH Remote Shell: " + _format_optional_text(metadata.remote_shell),
+            ]
+        )
+    remote_mount_root = _remote_mount_root_for(
+        workspace=workspace,
+        mount_name=mount_name,
+    )
+    if remote_mount_root is None:
+        lines.append("- Materialized Local Root: not materialized in this run")
+    else:
+        lines.append(
+            f"- Materialized Local Root: {remote_mount_root.local_root.resolve()}"
+        )
+    return lines
+
+
+def _remote_mount_root_for(
+    *,
+    workspace: WorkspaceHandle,
+    mount_name: str,
+) -> WorkspaceRemoteMountRoot | None:
+    for remote_mount_root in workspace.locations.remote_mount_roots:
+        if remote_mount_root.mount_name == mount_name:
+            return remote_mount_root
+    return None
+
+
+def _format_scope_paths(paths: tuple[str, ...]) -> str:
+    if not paths:
+        return NONE_LABEL
+    return ", ".join(paths)
+
+
+def _format_mount_capabilities(capabilities: WorkspaceMountCapabilities | None) -> str:
+    if capabilities is None:
+        return "not declared"
+    fields = (
+        ("read", capabilities.can_read),
+        ("write", capabilities.can_write),
+        ("search", capabilities.can_search),
+        ("shell", capabilities.can_shell),
+        ("diff", capabilities.can_diff),
+        ("preview", capabilities.can_preview),
+    )
+    return ", ".join(f"{name}={'yes' if enabled else 'no'}" for name, enabled in fields)
+
+
+def _format_optional_text(value: str | None) -> str:
+    if value is None:
+        return NONE_LABEL
+    normalized = value.strip()
+    return normalized or NONE_LABEL
+
+
+def _format_optional_number(value: int | None) -> str:
+    if value is None:
+        return NONE_LABEL
+    return str(value)
 
 
 def _get_runtime_date_context() -> tuple[str, str]:
@@ -322,6 +565,12 @@ async def build_runtime_system_prompt_result(
 
     env_prompt = build_environment_info_prompt(working_directory=data.working_directory)
     workspace_context_sections.append(env_prompt)
+    workspace_environments_prompt = build_workspace_environments_prompt(
+        workspace=data.workspace,
+        ssh_profile_metadata=data.ssh_profile_metadata,
+    )
+    if workspace_environments_prompt:
+        workspace_context_sections.append(workspace_environments_prompt)
     workspace_context_sections.append(
         "## Execution Surface\n"
         f"- Declared surface: {data.role.execution_surface.value}\n"

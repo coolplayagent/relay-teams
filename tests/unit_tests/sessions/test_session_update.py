@@ -41,7 +41,7 @@ def _build_service(
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1.0.0",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
             system_prompt="Coordinate tasks.",
         )
     )
@@ -163,7 +163,7 @@ def test_create_session_raises_when_main_agent_role_is_unavailable(
             name="Coordinator",
             description="Coordinates delegated work.",
             version="1.0.0",
-            tools=("create_tasks", "update_task", "dispatch_task"),
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
             system_prompt="Coordinate tasks.",
         )
     )
