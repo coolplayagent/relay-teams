@@ -6,6 +6,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from relay_teams.hooks.hook_models import HooksConfig
+
 
 class SkillScope(str, Enum):
     BUILTIN = "builtin"
@@ -55,6 +57,7 @@ class SkillMetadata(BaseModel):
     instructions: str
     resources: dict[str, SkillResource] = Field(default_factory=dict)
     scripts: dict[str, SkillScript] = Field(default_factory=dict)
+    hooks: HooksConfig = Field(default_factory=HooksConfig)
 
 
 class Skill(BaseModel):

@@ -13,11 +13,13 @@ from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
     TaskUpdate,
 )
+from relay_teams.hooks import HookService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
@@ -47,6 +49,20 @@ class _FakeTaskExecutionService:
             result=result,
         )
         return result
+
+
+class _CapturingHookService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, object | None]] = []
+
+    async def execute(
+        self,
+        *,
+        event_input: object,
+        run_event_hub: object | None,
+    ) -> object:
+        self.calls.append((event_input, run_event_hub))
+        return object()
 
 
 def _build_role_registry() -> RoleRegistry:
@@ -159,6 +175,47 @@ async def test_create_tasks_creates_unassigned_task_contracts(tmp_path: Path) ->
     assert record.assigned_instance_id is None
     assert created_task["assigned_role_id"] is None
     assert created_task["assigned_instance_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_emits_task_created_hooks_with_created_task_identity(
+    tmp_path: Path,
+) -> None:
+    task_repo = TaskRepository(tmp_path / "task_orchestration_hooks.db")
+    agent_repo = AgentInstanceRepository(tmp_path / "task_orchestration_hooks.db")
+    message_repo = MessageRepository(tmp_path / "task_orchestration_hooks.db")
+    session_repo = SessionRepository(tmp_path / "task_orchestration_hooks.db")
+    execution_service = _FakeTaskExecutionService(task_repo)
+    hook_service = _CapturingHookService()
+    run_event_hub = cast(RunEventHub, object())
+    _seed_root_task(task_repo)
+    _ = session_repo.create(session_id="session-1", workspace_id="default")
+    service = TaskOrchestrationService(
+        task_repo=task_repo,
+        role_registry=_build_role_registry(),
+        agent_repo=agent_repo,
+        task_execution_service=cast(TaskExecutionService, execution_service),
+        message_repo=message_repo,
+        session_repo=session_repo,
+        hook_service=cast(HookService, hook_service),
+        run_event_hub=run_event_hub,
+    )
+
+    payload = await service.create_tasks(
+        run_id="run-1",
+        tasks=[TaskDraft(objective="Implement the endpoint")],
+    )
+
+    created_task = cast(
+        dict[str, JsonValue], cast(list[JsonValue], payload["tasks"])[0]
+    )
+    created_task_id = str(created_task["task_id"])
+    assert len(hook_service.calls) == 1
+    event_input, captured_run_event_hub = hook_service.calls[0]
+    assert getattr(event_input, "created_task_id") == created_task_id
+    assert getattr(event_input, "task_id") == created_task_id
+    assert getattr(event_input, "parent_task_id") == "task-root"
+    assert captured_run_event_hub is run_event_hub
 
 
 def test_update_task_allows_created_only(tmp_path: Path) -> None:

@@ -51,6 +51,14 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.workspace import WorkspaceHandle
+from relay_teams.hooks import (
+    HookEventName,
+    HookRuntimeSnapshot,
+    HookService,
+    SubagentStartInput,
+    SubagentStopInput,
+    TaskCreatedInput,
+)
 from relay_teams.tools.runtime.hook_runtime_env import merge_tool_hook_runtime_env
 
 LOGGER = get_logger(__name__)
@@ -183,6 +191,7 @@ class _PreparedSubagentLaunch(BaseModel):
     normalized_title: str = Field(min_length=1)
     subagent_run_id: str = Field(min_length=1)
     subagent_role_id: str = Field(min_length=1)
+    suppress_hooks: bool = False
     subagent_instance: SubAgentInstance
     subagent_task: TaskEnvelope
 
@@ -200,6 +209,7 @@ class BackgroundTaskService:
         run_intent_repo: _BackgroundTaskIntentRepository | None = None,
         run_control_manager: _BackgroundTaskRunController | None = None,
         run_runtime_repo: _BackgroundTaskRunRuntimeRepository | None = None,
+        hook_service: HookService | None = None,
     ) -> None:
         self._background_task_manager = background_task_manager
         self._repository = repository
@@ -210,6 +220,7 @@ class BackgroundTaskService:
         self._run_intent_repo = run_intent_repo
         self._run_control_manager = run_control_manager
         self._run_runtime_repo = run_runtime_repo
+        self._hook_service = hook_service
         self._completion_sink: BackgroundTaskCompletionSink | None = None
         self._completion_retry_tasks: dict[str, asyncio.Task[None]] = {}
         self._subagent_runtimes: dict[str, _ManagedSubagentTaskRuntime] = {}
@@ -356,6 +367,11 @@ class BackgroundTaskService:
                 subagent_instance_id=prepared.subagent_instance.instance_id,
             )
         )
+        await self._execute_subagent_start_hooks(
+            run_id=run_id,
+            session_id=session_id,
+            prepared=prepared,
+        )
 
         async def run_worker() -> None:
             try:
@@ -421,6 +437,7 @@ class BackgroundTaskService:
         subagent_role_id: str,
         title: str,
         prompt: str,
+        suppress_hooks: bool = False,
     ) -> SynchronousSubagentResult:
         task_execution_service = self._require_task_execution_service()
         run_control_manager = self._require_run_control_manager()
@@ -431,6 +448,14 @@ class BackgroundTaskService:
             subagent_role_id=subagent_role_id,
             title=title,
             prompt=prompt,
+            suppress_hooks=suppress_hooks,
+        )
+        if suppress_hooks:
+            self._prime_subagent_hook_snapshot(subagent_run_id=prepared.subagent_run_id)
+        await self._execute_subagent_start_hooks(
+            run_id=run_id,
+            session_id=session_id,
+            prepared=prepared,
         )
 
         result_holder: dict[str, SynchronousSubagentResult] = {}
@@ -447,18 +472,34 @@ class BackgroundTaskService:
                 stopped = run_control_manager.is_run_stop_requested(
                     prepared.subagent_run_id
                 )
+                status = (
+                    BackgroundTaskStatus.STOPPED
+                    if stopped
+                    else BackgroundTaskStatus.FAILED
+                )
+                output = "Task cancelled"
+                await self._execute_subagent_stop_hooks_for_launch(
+                    run_id=run_id,
+                    session_id=session_id,
+                    prepared=prepared,
+                    status=status,
+                    output_text=output,
+                )
                 self._finalize_subagent_run_runtime(
                     subagent_run_id=prepared.subagent_run_id,
-                    status=(
-                        BackgroundTaskStatus.STOPPED
-                        if stopped
-                        else BackgroundTaskStatus.FAILED
-                    ),
-                    output="Task cancelled",
+                    status=status,
+                    output=output,
                 )
                 raise
             except Exception as exc:
                 output = str(exc)
+                await self._execute_subagent_stop_hooks_for_launch(
+                    run_id=run_id,
+                    session_id=session_id,
+                    prepared=prepared,
+                    status=BackgroundTaskStatus.FAILED,
+                    output_text=output,
+                )
                 self._finalize_subagent_run_runtime(
                     subagent_run_id=prepared.subagent_run_id,
                     status=BackgroundTaskStatus.FAILED,
@@ -468,6 +509,13 @@ class BackgroundTaskService:
 
             status, _ = _status_from_execution_result(result)
             output = result.output.strip()
+            await self._execute_subagent_stop_hooks_for_launch(
+                run_id=run_id,
+                session_id=session_id,
+                prepared=prepared,
+                status=status,
+                output_text=output,
+            )
             self._finalize_subagent_run_runtime(
                 subagent_run_id=prepared.subagent_run_id,
                 status=status,
@@ -622,6 +670,10 @@ class BackgroundTaskService:
                     "completed_at": completed_at,
                 }
             )
+        )
+        await self._execute_subagent_stop_hooks(
+            record=record,
+            output_text=summarized_output,
         )
         runtime = self._subagent_runtimes.pop(background_task_id, None)
         if runtime is not None:
@@ -829,6 +881,7 @@ class BackgroundTaskService:
         subagent_role_id: str,
         title: str,
         prompt: str,
+        suppress_hooks: bool = False,
     ) -> _PreparedSubagentLaunch:
         agent_repo = self._require_agent_repo()
         task_repo = self._require_task_repo()
@@ -879,6 +932,10 @@ class BackgroundTaskService:
             status=InstanceStatus.IDLE,
         )
         task_repo.create(subagent_task)
+        self._record_subagent_task_created(
+            task=subagent_task,
+            suppress_hooks=suppress_hooks,
+        )
         task_repo.update_status(
             subagent_task.task_id,
             TaskStatus.ASSIGNED,
@@ -914,8 +971,128 @@ class BackgroundTaskService:
             normalized_title=normalized_title,
             subagent_run_id=subagent_run_id,
             subagent_role_id=subagent_role_id,
+            suppress_hooks=suppress_hooks,
             subagent_instance=subagent_instance,
             subagent_task=subagent_task,
+        )
+
+    def _prime_subagent_hook_snapshot(self, *, subagent_run_id: str) -> None:
+        if self._hook_service is None:
+            return
+        self._hook_service.set_run_snapshot(subagent_run_id, HookRuntimeSnapshot())
+
+    def _record_subagent_task_created(
+        self,
+        *,
+        task: TaskEnvelope,
+        suppress_hooks: bool,
+    ) -> None:
+        if self._hook_service is None or suppress_hooks or task.parent_task_id is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(
+            self._hook_service.execute(
+                event_input=TaskCreatedInput(
+                    event_name=HookEventName.TASK_CREATED,
+                    session_id=task.session_id,
+                    run_id=task.trace_id,
+                    trace_id=task.trace_id,
+                    task_id=task.task_id,
+                    role_id=task.role_id,
+                    created_task_id=task.task_id,
+                    parent_task_id=task.parent_task_id,
+                    title=task.title or "",
+                    objective=task.objective,
+                ),
+                run_event_hub=self._run_event_hub,
+            )
+        )
+
+    async def _execute_subagent_start_hooks(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        prepared: _PreparedSubagentLaunch,
+    ) -> None:
+        if self._hook_service is None or prepared.suppress_hooks:
+            return
+        _ = await self._hook_service.execute(
+            event_input=SubagentStartInput(
+                event_name=HookEventName.SUBAGENT_START,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                role_id=prepared.subagent_role_id,
+                parent_run_id=run_id,
+                subagent_run_id=prepared.subagent_run_id,
+                subagent_task_id=prepared.subagent_task.task_id,
+                subagent_instance_id=prepared.subagent_instance.instance_id,
+                subagent_role_id=prepared.subagent_role_id,
+                title=prepared.normalized_title,
+                prompt=prepared.normalized_prompt,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+
+    async def _execute_subagent_stop_hooks(
+        self,
+        *,
+        record: BackgroundTaskRecord,
+        output_text: str,
+    ) -> None:
+        if self._hook_service is None:
+            return
+        _ = await self._hook_service.execute(
+            event_input=SubagentStopInput(
+                event_name=HookEventName.SUBAGENT_STOP,
+                session_id=record.session_id,
+                run_id=record.run_id,
+                trace_id=record.run_id,
+                role_id=record.subagent_role_id,
+                parent_run_id=record.run_id,
+                subagent_run_id=record.subagent_run_id or "",
+                subagent_task_id=record.subagent_task_id or "",
+                subagent_instance_id=record.subagent_instance_id or "",
+                subagent_role_id=record.subagent_role_id or "",
+                title=record.title,
+                status=record.status.value,
+                output_text=output_text,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
+
+    async def _execute_subagent_stop_hooks_for_launch(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        prepared: _PreparedSubagentLaunch,
+        status: BackgroundTaskStatus,
+        output_text: str,
+    ) -> None:
+        if self._hook_service is None or prepared.suppress_hooks:
+            return
+        _ = await self._hook_service.execute(
+            event_input=SubagentStopInput(
+                event_name=HookEventName.SUBAGENT_STOP,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                role_id=prepared.subagent_role_id,
+                parent_run_id=run_id,
+                subagent_run_id=prepared.subagent_run_id,
+                subagent_task_id=prepared.subagent_task.task_id,
+                subagent_instance_id=prepared.subagent_instance.instance_id,
+                subagent_role_id=prepared.subagent_role_id,
+                title=prepared.normalized_title,
+                status=status.value,
+                output_text=output_text,
+            ),
+            run_event_hub=self._run_event_hub,
         )
 
     def _require_manager(self) -> BackgroundTaskManager:
@@ -950,6 +1127,8 @@ class BackgroundTaskService:
         status: BackgroundTaskStatus,
         output: str,
     ) -> None:
+        if self._hook_service is not None:
+            self._hook_service.clear_run(subagent_run_id)
         run_runtime_repo = self._run_runtime_repo
         if run_runtime_repo is None:
             return

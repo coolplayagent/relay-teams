@@ -6,10 +6,12 @@ from enum import Enum
 from relay_teams.computer import ExecutionSurface
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from relay_teams.hooks.hook_models import HooksConfig
 from relay_teams.media import MediaModality
 from relay_teams.providers.model_config import ModelCapabilities
 from relay_teams.roles.memory_models import MemoryProfile, default_memory_profile
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
+from pathlib import Path
 
 
 class RoleConfigSource(str, Enum):
@@ -38,6 +40,8 @@ class RoleDefinition(BaseModel):
     execution_surface: ExecutionSurface = ExecutionSurface.API
     mode: RoleMode = RoleMode.PRIMARY
     memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
+    hooks: HooksConfig = Field(default_factory=HooksConfig)
+    source_path: Path | None = None
     system_prompt: str = Field(min_length=1)
 
 

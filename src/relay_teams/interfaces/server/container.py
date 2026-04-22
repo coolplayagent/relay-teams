@@ -109,6 +109,7 @@ from relay_teams.providers.provider_factory import (
     apply_default_model_profile_override,
     create_provider_factory,
     resolve_model_profile_config,
+    resolve_model_profile_name,
 )
 from relay_teams.agents.orchestration.task_execution_service_factory import (
     create_task_execution_service,
@@ -191,8 +192,10 @@ from relay_teams.gateway.wechat import (
     get_wechat_secret_store,
 )
 from relay_teams.hooks import HookLoader, HookRuntimeState, HookService
+from relay_teams.hooks.executors.agent_executor import AgentHookExecutor
 from relay_teams.hooks.executors.command_executor import CommandHookExecutor
 from relay_teams.hooks.executors.http_executor import HttpHookExecutor
+from relay_teams.hooks.executors.prompt_executor import PromptHookExecutor
 from relay_teams.workspace import (
     SshProfileRepository,
     SshProfileService,
@@ -244,11 +247,20 @@ class ServerContainer:
             on_proxy_reloaded=self._on_proxy_reloaded,
         )
         self.hook_service = HookService(
-            loader=HookLoader(app_config_dir=app_config_dir, project_root=Path.cwd()),
+            loader=HookLoader(
+                app_config_dir=app_config_dir,
+                project_root=Path.cwd(),
+                get_role_registry=lambda: self.role_registry,
+                get_skill_registry=lambda: self.skill_registry,
+            ),
             runtime_state=HookRuntimeState(),
             command_executor=CommandHookExecutor(),
             http_executor=HttpHookExecutor(
                 get_proxy_config=self.proxy_config_service.get_proxy_config
+            ),
+            prompt_executor=PromptHookExecutor(
+                resolve_model_config=self._resolve_hook_model_config,
+                retry_config=runtime.llm_retry,
             ),
         )
         self.web_config_service: WebConfigService = WebConfigService(
@@ -464,6 +476,13 @@ class ServerContainer:
             background_task_manager=self.background_task_manager,
             repository=self.background_task_repository,
             run_event_hub=self.run_event_hub,
+            hook_service=self.hook_service,
+        )
+        self.hook_service.set_agent_executor(
+            AgentHookExecutor(
+                background_task_service=self.background_task_service,
+                session_repo=self.session_repo,
+            )
         )
         self.todo_service = TodoService(
             repository=self.todo_repository,
@@ -603,6 +622,7 @@ class ServerContainer:
             task_execution_service=self.task_execution_service,
             run_runtime_repo=self.run_runtime_repo,
             run_control_manager=self.run_control_manager,
+            hook_service=self.hook_service,
             session_repo=self.session_repo,
             gate_manager=self.gate_manager,
             run_event_hub=self.run_event_hub,
@@ -919,6 +939,7 @@ class ServerContainer:
             message_repo=self.message_repo,
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
+            run_event_hub=self.run_event_hub,
             run_intent_repo=self.run_intent_repo,
             workspace_manager=self.workspace_manager,
             media_asset_service=self.media_asset_service,
@@ -933,6 +954,7 @@ class ServerContainer:
             run_control_manager=self.run_control_manager,
             role_memory_service=self.role_memory_service,
             runtime_role_resolver=self.runtime_role_resolver,
+            hook_service=self.hook_service,
         )
         self.task_service = TaskOrchestrationService(
             task_repo=self.task_repo,
@@ -942,6 +964,8 @@ class ServerContainer:
             message_repo=self.message_repo,
             session_repo=self.session_repo,
             runtime_role_resolver=self.runtime_role_resolver,
+            hook_service=self.hook_service,
+            run_event_hub=self.run_event_hub,
         )
 
     def _resolve_reflection_model_config(self) -> ModelEndpointConfig | None:
@@ -957,6 +981,26 @@ class ServerContainer:
         for profile_name in self.runtime.llm_profiles.keys():
             return profile_name
         return None
+
+    def _resolve_hook_model_config(
+        self,
+        model_profile: str | None,
+    ) -> tuple[ModelEndpointConfig | None, str | None]:
+        profile_name = (
+            model_profile.strip()
+            if model_profile is not None and model_profile.strip()
+            else "default"
+        )
+        return (
+            resolve_model_profile_config(
+                runtime=self.runtime,
+                profile_name=profile_name,
+            ),
+            resolve_model_profile_name(
+                runtime=self.runtime,
+                profile_name=profile_name,
+            ),
+        )
 
     def _resolve_external_agent_model_config(
         self,

@@ -14,6 +14,7 @@ from relay_teams.agents.execution.conversation_compaction import (
     build_conversation_compaction_budget,
     ConversationCompactionBudget,
     ConversationCompactionPlan,
+    ConversationCompactionResult,
     ConversationCompactionService,
     ConversationCompactionStrategy,
     DefaultConversationCompactionStrategy,
@@ -113,6 +114,14 @@ class _FakeModelRequestNode:
     @asynccontextmanager
     async def stream(self, _ctx: object) -> AsyncIterator[_FakeStream]:
         yield _FakeStream(self._stream_events)
+
+
+def _fake_async_summary(summary: str):
+    async def _rewrite_summary(**kwargs: object) -> str:
+        _ = kwargs
+        return summary
+
+    return _rewrite_summary
 
 
 def test_default_conversation_compaction_strategy_respects_threshold_and_tail() -> None:
@@ -763,6 +772,366 @@ async def test_conversation_compaction_service_skips_invalid_nonreplayable_suffi
         marker_type=SessionHistoryMarkerType.COMPACTION,
     )
     assert latest_marker is None
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_with_result_returns_adjusted_plan_when_suffix_is_coerced(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "conversation_compaction_result_plan.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    message_repo = MessageRepository(
+        db_path,
+        session_history_marker_repo=marker_repo,
+    )
+    conversation_id = build_conversation_id("session-1", "writer")
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="turn-0")]),
+        ModelRequest(parts=[UserPromptPart(content="turn-1")]),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read_file",
+                    args='{"path":"README.md"}',
+                    tool_call_id="call-1",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read_file",
+                    tool_call_id="call-1",
+                    content="[Compacted tool result]\ntool: read_file",
+                )
+            ]
+        ),
+    ]
+    message_repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="writer",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=history,
+    )
+    service = ConversationCompactionService(
+        config=ModelEndpointConfig(
+            model="gpt-test",
+            base_url="https://example.test/v1",
+            api_key="secret",
+            context_window=100,
+        ),
+        retry_config=LlmRetryConfig(),
+        message_repo=message_repo,
+        session_history_marker_repo=marker_repo,
+        strategy=_FixedStrategy(
+            ConversationCompactionPlan(
+                should_compact=True,
+                estimated_tokens_before=120,
+                estimated_tokens_after=40,
+                threshold_tokens=80,
+                target_tokens=40,
+                compacted_message_count=2,
+                kept_message_count=2,
+                protected_tail_messages=2,
+                source_char_budget=12000,
+            )
+        ),
+    )
+    monkeypatch.setattr(compaction_module, "Agent", _FakeAgent)
+    monkeypatch.setattr(compaction_module, "ModelRequestNode", _FakeModelRequestNode)
+    monkeypatch.setattr(service, "_build_model", lambda: object())
+
+    result = await service.maybe_compact_with_result(
+        session_id="session-1",
+        role_id="writer",
+        conversation_id=conversation_id,
+        history=history,
+        budget=ConversationCompactionBudget(
+            context_window=100,
+            history_trigger_tokens=80,
+            history_target_tokens=40,
+        ),
+    )
+
+    assert isinstance(result, ConversationCompactionResult)
+    assert result.applied is True
+    assert len(result.messages) == 3
+    assert result.plan.compacted_message_count == 1
+    assert result.plan.kept_message_count == 3
+    assert result.plan.estimated_tokens_after > 0
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_with_result_returns_not_applied_when_plan_skips_compaction(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "conversation_compaction_result_skip.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    service = ConversationCompactionService(
+        config=ModelEndpointConfig(
+            model="gpt-test",
+            base_url="https://example.test/v1",
+            api_key="secret",
+            context_window=100,
+        ),
+        retry_config=LlmRetryConfig(),
+        message_repo=MessageRepository(
+            db_path,
+            session_history_marker_repo=marker_repo,
+        ),
+        session_history_marker_repo=marker_repo,
+        strategy=_FixedStrategy(
+            ConversationCompactionPlan(
+                should_compact=False,
+                estimated_tokens_before=12,
+                estimated_tokens_after=12,
+                threshold_tokens=80,
+                target_tokens=40,
+            )
+        ),
+    )
+    history = [ModelRequest(parts=[UserPromptPart(content="turn-0")])]
+
+    result = await service.maybe_compact_with_result(
+        session_id="session-1",
+        role_id="writer",
+        conversation_id="conv-1",
+        history=history,
+        budget=ConversationCompactionBudget(
+            context_window=100,
+            history_trigger_tokens=80,
+            history_target_tokens=40,
+        ),
+    )
+
+    assert result.applied is False
+    assert list(result.messages) == history
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_with_result_returns_not_applied_when_summary_source_is_empty(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "conversation_compaction_result_empty_source.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    service = ConversationCompactionService(
+        config=ModelEndpointConfig(
+            model="gpt-test",
+            base_url="https://example.test/v1",
+            api_key="secret",
+            context_window=100,
+        ),
+        retry_config=LlmRetryConfig(),
+        message_repo=MessageRepository(
+            db_path,
+            session_history_marker_repo=marker_repo,
+        ),
+        session_history_marker_repo=marker_repo,
+        strategy=_FixedStrategy(
+            ConversationCompactionPlan(
+                should_compact=True,
+                estimated_tokens_before=90,
+                estimated_tokens_after=30,
+                threshold_tokens=80,
+                target_tokens=40,
+                compacted_message_count=1,
+                kept_message_count=0,
+                source_char_budget=12000,
+            )
+        ),
+    )
+    history = [ModelRequest(parts=[UserPromptPart(content="turn-0")])]
+
+    result = await service.maybe_compact_with_result(
+        session_id="session-1",
+        role_id="writer",
+        conversation_id="conv-1",
+        history=history,
+        source_history=[],
+        budget=ConversationCompactionBudget(
+            context_window=100,
+            history_trigger_tokens=80,
+            history_target_tokens=40,
+        ),
+    )
+
+    assert result.applied is False
+    assert list(result.messages) == history
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_with_result_returns_not_applied_when_compacted_count_is_zero(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "conversation_compaction_result_zero_count.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    service = ConversationCompactionService(
+        config=ModelEndpointConfig(
+            model="gpt-test",
+            base_url="https://example.test/v1",
+            api_key="secret",
+            context_window=100,
+        ),
+        retry_config=LlmRetryConfig(),
+        message_repo=MessageRepository(
+            db_path,
+            session_history_marker_repo=marker_repo,
+        ),
+        session_history_marker_repo=marker_repo,
+        strategy=_FixedStrategy(
+            ConversationCompactionPlan(
+                should_compact=True,
+                estimated_tokens_before=90,
+                estimated_tokens_after=90,
+                threshold_tokens=80,
+                target_tokens=40,
+                compacted_message_count=0,
+                kept_message_count=1,
+                source_char_budget=12000,
+            )
+        ),
+    )
+    history = [ModelRequest(parts=[UserPromptPart(content="turn-0")])]
+
+    result = await service.maybe_compact_with_result(
+        session_id="session-1",
+        role_id="writer",
+        conversation_id="conv-1",
+        history=history,
+        source_history=history,
+        budget=ConversationCompactionBudget(
+            context_window=100,
+            history_trigger_tokens=80,
+            history_target_tokens=40,
+        ),
+    )
+
+    assert result.applied is False
+    assert list(result.messages) == history
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_with_result_returns_not_applied_when_summary_is_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "conversation_compaction_result_empty_summary.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    service = ConversationCompactionService(
+        config=ModelEndpointConfig(
+            model="gpt-test",
+            base_url="https://example.test/v1",
+            api_key="secret",
+            context_window=100,
+        ),
+        retry_config=LlmRetryConfig(),
+        message_repo=MessageRepository(
+            db_path,
+            session_history_marker_repo=marker_repo,
+        ),
+        session_history_marker_repo=marker_repo,
+        strategy=_FixedStrategy(
+            ConversationCompactionPlan(
+                should_compact=True,
+                estimated_tokens_before=90,
+                estimated_tokens_after=30,
+                threshold_tokens=80,
+                target_tokens=40,
+                compacted_message_count=1,
+                kept_message_count=1,
+                source_char_budget=12000,
+            )
+        ),
+    )
+    monkeypatch.setattr(service, "_rewrite_summary", _fake_async_summary(""))
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="turn-0")]),
+        ModelRequest(parts=[UserPromptPart(content="turn-1")]),
+    ]
+
+    result = await service.maybe_compact_with_result(
+        session_id="session-1",
+        role_id="writer",
+        conversation_id="conv-1",
+        history=history,
+        budget=ConversationCompactionBudget(
+            context_window=100,
+            history_trigger_tokens=80,
+            history_target_tokens=40,
+        ),
+    )
+
+    assert result.applied is False
+    assert list(result.messages) == history
+
+
+@pytest.mark.asyncio
+async def test_maybe_compact_with_result_returns_not_applied_when_hide_count_is_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "conversation_compaction_result_hidden_zero.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    service = ConversationCompactionService(
+        config=ModelEndpointConfig(
+            model="gpt-test",
+            base_url="https://example.test/v1",
+            api_key="secret",
+            context_window=100,
+        ),
+        retry_config=LlmRetryConfig(),
+        message_repo=MessageRepository(
+            db_path,
+            session_history_marker_repo=marker_repo,
+        ),
+        session_history_marker_repo=marker_repo,
+        strategy=_FixedStrategy(
+            ConversationCompactionPlan(
+                should_compact=True,
+                estimated_tokens_before=90,
+                estimated_tokens_after=30,
+                threshold_tokens=80,
+                target_tokens=40,
+                compacted_message_count=1,
+                kept_message_count=1,
+                source_char_budget=12000,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        service._message_repo,
+        "hide_conversation_messages_for_compaction",
+        lambda **kwargs: 0,
+    )
+    monkeypatch.setattr(
+        service,
+        "_rewrite_summary",
+        _fake_async_summary("## Active summary\n- keep this"),
+    )
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="turn-0")]),
+        ModelRequest(parts=[UserPromptPart(content="turn-1")]),
+    ]
+
+    result = await service.maybe_compact_with_result(
+        session_id="session-1",
+        role_id="writer",
+        conversation_id="conv-1",
+        history=history,
+        budget=ConversationCompactionBudget(
+            context_window=100,
+            history_trigger_tokens=80,
+            history_target_tokens=40,
+        ),
+    )
+
+    assert result.applied is False
+    assert list(result.messages) == history
 
 
 def test_compaction_prompt_section_ignores_summaries_before_latest_clear(

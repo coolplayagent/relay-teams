@@ -52,6 +52,7 @@ from relay_teams.agents.tasks.models import (
     VerificationResult,
 )
 from relay_teams.sessions.session_models import SessionMode
+from relay_teams.hooks import HookEventName, HookService, TaskCreatedInput
 
 MAX_ORCHESTRATION_CYCLES = 8
 LOGGER = get_logger(__name__)
@@ -84,6 +85,7 @@ class CoordinatorGraph(BaseModel):
     session_repo: SessionRepository | None = None
     gate_manager: GateManager = Field(default_factory=GateManager)
     run_event_hub: RunEventHub | None = None
+    hook_service: HookService | None = None
 
     async def run(
         self,
@@ -120,6 +122,7 @@ class CoordinatorGraph(BaseModel):
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
         _ = self.task_repo.create(root_task)
+        await self._execute_task_created_hooks(root_task=root_task)
         self.event_bus.emit(
             EventEnvelope(
                 event_type=EventType.TASK_CREATED,
@@ -334,6 +337,25 @@ class CoordinatorGraph(BaseModel):
             payload={"root_task_id": root_task.task_id},
         )
         return result
+
+    async def _execute_task_created_hooks(self, *, root_task: TaskEnvelope) -> None:
+        if self.hook_service is None or root_task.parent_task_id is None:
+            return
+        _ = await self.hook_service.execute(
+            event_input=TaskCreatedInput(
+                event_name=HookEventName.TASK_CREATED,
+                session_id=root_task.session_id,
+                run_id=root_task.trace_id,
+                trace_id=root_task.trace_id,
+                task_id=root_task.task_id,
+                role_id=root_task.role_id,
+                created_task_id=root_task.task_id,
+                parent_task_id=root_task.parent_task_id,
+                title=root_task.title or "",
+                objective=root_task.objective,
+            ),
+            run_event_hub=self.run_event_hub,
+        )
 
     async def _run_ai_mode(
         self,

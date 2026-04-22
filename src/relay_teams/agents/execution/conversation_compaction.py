@@ -100,6 +100,14 @@ class ConversationCompactionPlan(BaseModel):
     source_char_budget: int = Field(default=0, ge=0)
 
 
+class ConversationCompactionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    messages: tuple[ModelRequest | ModelResponse, ...] = ()
+    applied: bool = False
+    plan: ConversationCompactionPlan
+
+
 class ConversationCompactionStrategy:
     def plan(
         self,
@@ -326,7 +334,18 @@ class ConversationCompactionService:
             strategy=self._strategy,
         )
 
-    async def maybe_compact(
+    def plan_compaction(
+        self,
+        *,
+        history: Sequence[ModelRequest | ModelResponse],
+        budget: ConversationCompactionBudget,
+    ) -> ConversationCompactionPlan:
+        return self._strategy.plan(
+            history=history,
+            budget=budget,
+        )
+
+    async def maybe_compact_with_result(
         self,
         *,
         session_id: str,
@@ -337,22 +356,52 @@ class ConversationCompactionService:
         budget: ConversationCompactionBudget,
         estimated_tokens_before_microcompact: int | None = None,
         estimated_tokens_after_microcompact: int | None = None,
-    ) -> list[ModelRequest | ModelResponse]:
+        plan: ConversationCompactionPlan | None = None,
+    ) -> ConversationCompactionResult:
+        return await self._maybe_compact_result(
+            session_id=session_id,
+            role_id=role_id,
+            conversation_id=conversation_id,
+            history=history,
+            source_history=source_history,
+            budget=budget,
+            estimated_tokens_before_microcompact=estimated_tokens_before_microcompact,
+            estimated_tokens_after_microcompact=estimated_tokens_after_microcompact,
+            plan=plan,
+        )
+
+    async def _maybe_compact_result(
+        self,
+        *,
+        session_id: str,
+        role_id: str,
+        conversation_id: str,
+        history: Sequence[ModelRequest | ModelResponse],
+        source_history: Sequence[ModelRequest | ModelResponse] | None = None,
+        budget: ConversationCompactionBudget,
+        estimated_tokens_before_microcompact: int | None = None,
+        estimated_tokens_after_microcompact: int | None = None,
+        plan: ConversationCompactionPlan | None = None,
+    ) -> ConversationCompactionResult:
         summary_history = _resolve_summary_source_history(
             history=history,
             source_history=source_history,
         )
-        plan = self._strategy.plan(
+        resolved_plan = plan or self.plan_compaction(
             history=history,
             budget=budget,
         )
-        if not plan.should_compact:
-            return list(history)
+        if not resolved_plan.should_compact:
+            return ConversationCompactionResult(
+                messages=tuple(history),
+                applied=False,
+                plan=resolved_plan,
+            )
         compacted_message_count = coerce_replayable_compaction_count(
             history=history,
-            proposed_count=plan.compacted_message_count,
+            proposed_count=resolved_plan.compacted_message_count,
         )
-        if compacted_message_count != plan.compacted_message_count:
+        if compacted_message_count != resolved_plan.compacted_message_count:
             if compacted_message_count <= 0:
                 log_event(
                     LOGGER,
@@ -365,12 +414,16 @@ class ConversationCompactionService:
                     payload={
                         "role_id": role_id,
                         "conversation_id": conversation_id,
-                        "proposed_compacted_message_count": plan.compacted_message_count,
+                        "proposed_compacted_message_count": resolved_plan.compacted_message_count,
                     },
                 )
-                return list(history)
+                return ConversationCompactionResult(
+                    messages=tuple(history),
+                    applied=False,
+                    plan=resolved_plan,
+                )
             estimator = ConversationTokenEstimator()
-            plan = plan.model_copy(
+            resolved_plan = resolved_plan.model_copy(
                 update={
                     "compacted_message_count": compacted_message_count,
                     "kept_message_count": len(history) - compacted_message_count,
@@ -380,9 +433,15 @@ class ConversationCompactionService:
                 }
             )
 
-        compacted_source_history = list(summary_history[: plan.compacted_message_count])
+        compacted_source_history = list(
+            summary_history[: resolved_plan.compacted_message_count]
+        )
         if not compacted_source_history:
-            return list(history)
+            return ConversationCompactionResult(
+                messages=tuple(history),
+                applied=False,
+                plan=resolved_plan,
+            )
         existing_summary = self.get_latest_summary(
             session_id=session_id,
             conversation_id=conversation_id,
@@ -391,10 +450,14 @@ class ConversationCompactionService:
             role_id=role_id,
             existing_summary=existing_summary,
             source_history=compacted_source_history,
-            source_char_budget=plan.source_char_budget,
+            source_char_budget=resolved_plan.source_char_budget,
         )
         if not summary:
-            return list(history)
+            return ConversationCompactionResult(
+                messages=tuple(history),
+                applied=False,
+                plan=resolved_plan,
+            )
 
         marker = self._session_history_marker_repo.create(
             session_id=session_id,
@@ -407,28 +470,34 @@ class ConversationCompactionService:
                 "estimated_tokens_before": str(
                     estimated_tokens_before_microcompact
                     if estimated_tokens_before_microcompact is not None
-                    else plan.estimated_tokens_before
+                    else resolved_plan.estimated_tokens_before
                 ),
                 "estimated_tokens_after_microcompact": str(
                     estimated_tokens_after_microcompact
                     if estimated_tokens_after_microcompact is not None
-                    else plan.estimated_tokens_before
+                    else resolved_plan.estimated_tokens_before
                 ),
-                "estimated_tokens_after_compact": str(plan.estimated_tokens_after),
-                "threshold_tokens": str(plan.threshold_tokens),
-                "target_tokens": str(plan.target_tokens),
-                "compacted_message_count": str(plan.compacted_message_count),
-                "kept_message_count": str(plan.kept_message_count),
-                "protected_tail_messages": str(plan.protected_tail_messages),
+                "estimated_tokens_after_compact": str(
+                    resolved_plan.estimated_tokens_after
+                ),
+                "threshold_tokens": str(resolved_plan.threshold_tokens),
+                "target_tokens": str(resolved_plan.target_tokens),
+                "compacted_message_count": str(resolved_plan.compacted_message_count),
+                "kept_message_count": str(resolved_plan.kept_message_count),
+                "protected_tail_messages": str(resolved_plan.protected_tail_messages),
             },
         )
         hidden_count = self._message_repo.hide_conversation_messages_for_compaction(
             conversation_id=conversation_id,
-            hide_message_count=plan.compacted_message_count,
+            hide_message_count=resolved_plan.compacted_message_count,
             hidden_marker_id=marker.marker_id,
         )
         if hidden_count <= 0:
-            return list(history)
+            return ConversationCompactionResult(
+                messages=tuple(history),
+                applied=False,
+                plan=resolved_plan,
+            )
 
         log_event(
             LOGGER,
@@ -438,17 +507,47 @@ class ConversationCompactionService:
             payload={
                 "role_id": role_id,
                 "conversation_id": conversation_id,
-                "estimated_tokens_before": plan.estimated_tokens_before,
-                "estimated_tokens_after_compact": plan.estimated_tokens_after,
-                "threshold_tokens": plan.threshold_tokens,
-                "target_tokens": plan.target_tokens,
+                "estimated_tokens_before": resolved_plan.estimated_tokens_before,
+                "estimated_tokens_after_compact": resolved_plan.estimated_tokens_after,
+                "threshold_tokens": resolved_plan.threshold_tokens,
+                "target_tokens": resolved_plan.target_tokens,
                 "compacted_message_count": hidden_count,
-                "kept_message_count": plan.kept_message_count,
-                "protected_tail_messages": plan.protected_tail_messages,
+                "kept_message_count": resolved_plan.kept_message_count,
+                "protected_tail_messages": resolved_plan.protected_tail_messages,
                 "marker_id": marker.marker_id,
             },
         )
-        return list(history[hidden_count:])
+        return ConversationCompactionResult(
+            messages=tuple(history[hidden_count:]),
+            applied=True,
+            plan=resolved_plan,
+        )
+
+    async def maybe_compact(
+        self,
+        *,
+        session_id: str,
+        role_id: str,
+        conversation_id: str,
+        history: Sequence[ModelRequest | ModelResponse],
+        source_history: Sequence[ModelRequest | ModelResponse] | None = None,
+        budget: ConversationCompactionBudget,
+        estimated_tokens_before_microcompact: int | None = None,
+        estimated_tokens_after_microcompact: int | None = None,
+        plan: ConversationCompactionPlan | None = None,
+    ) -> list[ModelRequest | ModelResponse]:
+        result = await self._maybe_compact_result(
+            session_id=session_id,
+            role_id=role_id,
+            conversation_id=conversation_id,
+            history=history,
+            source_history=source_history,
+            budget=budget,
+            estimated_tokens_before_microcompact=estimated_tokens_before_microcompact,
+            estimated_tokens_after_microcompact=estimated_tokens_after_microcompact,
+            plan=plan,
+        )
+        return list(result.messages)
 
     def get_latest_summary(
         self,
