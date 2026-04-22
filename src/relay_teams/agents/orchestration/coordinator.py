@@ -339,7 +339,7 @@ class CoordinatorGraph(BaseModel):
         return result
 
     async def _execute_task_created_hooks(self, *, root_task: TaskEnvelope) -> None:
-        if self.hook_service is None:
+        if self.hook_service is None or root_task.parent_task_id is None:
             return
         _ = await self.hook_service.execute(
             event_input=TaskCreatedInput(

@@ -9,6 +9,7 @@ import time
 import httpx
 
 from integration_tests.support.api_helpers import (
+    create_task_batch,
     create_run,
     create_session,
     new_session_id,
@@ -422,7 +423,7 @@ print(json.dumps({
     )
 
     assert "[fake-llm] subagent lifecycle completed" in _text_output(events)
-    for hook_event in ("TaskCreated", "TaskCompleted", "SubagentStart", "SubagentStop"):
+    for hook_event in ("SubagentStart", "SubagentStop"):
         assert any(
             _hook_payload_has(
                 event,
@@ -431,6 +432,85 @@ print(json.dumps({
             )
             for event in persisted_events
         ), f"missing hook event {hook_event}"
+
+
+def test_phase2_explicit_task_created_hook_emits_run_events(
+    api_client: httpx.Client,
+    tmp_path: Path,
+) -> None:
+    script_path = _write_hook_script(
+        tmp_path / "phase2_explicit_task_lifecycle.py",
+        """
+import json
+import sys
+
+payload = json.load(sys.stdin)
+print(json.dumps({
+    "decision": "allow",
+    "reason": payload.get("event_name", ""),
+}))
+""",
+    )
+    _save_hooks(
+        api_client,
+        {
+            "hooks": {
+                "TaskCreated": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": _command_for_script(script_path),
+                            }
+                        ]
+                    }
+                ],
+                "TaskCompleted": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": _command_for_script(script_path),
+                            }
+                        ]
+                    }
+                ],
+            }
+        },
+    )
+
+    session_id = create_session(
+        api_client,
+        session_id=new_session_id("hook-explicit-task-lifecycle"),
+    )
+    run_id = create_run(
+        api_client,
+        session_id=session_id,
+        intent="[hook-subagent-lifecycle] spawn one synchronous subagent and finish",
+        execution_mode="ai",
+    )
+    _ = stream_run_until_terminal(api_client, run_id=run_id, timeout_seconds=80.0)
+    _ = create_task_batch(
+        api_client,
+        run_id=run_id,
+        objective="Create explicit child tasks for lifecycle hook validation",
+    )
+    task_events = _wait_for_run_events(
+        api_client,
+        session_id=session_id,
+        run_id=run_id,
+        required_event_type="hook_completed",
+        required_hook_event="TaskCreated",
+    )
+
+    assert any(
+        _hook_payload_has(
+            event,
+            hook_event="TaskCreated",
+            event_type="hook_completed",
+        )
+        for event in task_events
+    )
 
 
 def test_pre_and_post_compact_hooks_emit_events(

@@ -856,6 +856,48 @@ async def test_background_task_service_run_subagent_with_suppressed_hooks_skips_
 
 
 @pytest.mark.asyncio
+async def test_background_task_service_run_subagent_does_not_emit_task_created_for_internal_root_task(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-sync-no-task-created.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-sync-no-task-created.db"
+    )
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    hook_service = _CapturingHookService()
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+        hook_service=cast(HookService, hook_service),
+    )
+
+    result = await service.run_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        workspace_id="workspace-1",
+        subagent_role_id="Crafter",
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+
+    assert result.output == "analysis complete"
+    assert "TaskCreated" not in hook_service.executed_events
+
+
+@pytest.mark.asyncio
 async def test_background_task_service_stop_for_run_stops_subagent(
     tmp_path: Path,
 ) -> None:

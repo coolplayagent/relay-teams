@@ -23,6 +23,12 @@ class _SessionRepo:
         return _SessionRecord(workspace_id="default")
 
 
+class _EmptyWorkspaceSessionRepo:
+    def get(self, session_id: str) -> _SessionRecord:
+        assert session_id == "session-1"
+        return _SessionRecord(workspace_id="")
+
+
 class _Result:
     def __init__(self, output: str) -> None:
         self.output = output
@@ -49,6 +55,12 @@ class _BackgroundTaskService:
         return _Result('{"decision":"retry","additional_context":["keep going"]}')
 
 
+class _EmptyOutputBackgroundTaskService:
+    async def run_subagent(self, **kwargs: object) -> _Result:
+        _ = kwargs
+        return _Result("")
+
+
 @pytest.mark.asyncio
 async def test_agent_executor_runs_subagent_and_parses_decision() -> None:
     executor = AgentHookExecutor(
@@ -73,3 +85,93 @@ async def test_agent_executor_runs_subagent_and_parses_decision() -> None:
 
     assert result.decision == HookDecisionType.RETRY
     assert result.additional_context == ("keep going",)
+
+
+@pytest.mark.asyncio
+async def test_agent_executor_requires_role_id() -> None:
+    executor = AgentHookExecutor(
+        background_task_service=_BackgroundTaskService(),
+        session_repo=_SessionRepo(),
+    )
+
+    with pytest.raises(ValueError, match="role_id"):
+        await executor.execute(
+            handler=HookHandlerConfig(
+                type=HookHandlerType.AGENT,
+                prompt="Review: $ARGUMENTS",
+            ),
+            event_input=StopInput(
+                event_name=HookEventName.STOP,
+                session_id="session-1",
+                run_id="run-1",
+                trace_id="run-1",
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_executor_requires_prompt() -> None:
+    executor = AgentHookExecutor(
+        background_task_service=_BackgroundTaskService(),
+        session_repo=_SessionRepo(),
+    )
+
+    with pytest.raises(ValueError, match="prompt"):
+        await executor.execute(
+            handler=HookHandlerConfig(
+                type=HookHandlerType.AGENT,
+                role_id="Verifier",
+            ),
+            event_input=StopInput(
+                event_name=HookEventName.STOP,
+                session_id="session-1",
+                run_id="run-1",
+                trace_id="run-1",
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_executor_requires_workspace() -> None:
+    executor = AgentHookExecutor(
+        background_task_service=_BackgroundTaskService(),
+        session_repo=_EmptyWorkspaceSessionRepo(),
+    )
+
+    with pytest.raises(RuntimeError, match="workspace"):
+        await executor.execute(
+            handler=HookHandlerConfig(
+                type=HookHandlerType.AGENT,
+                role_id="Verifier",
+                prompt="Review: $ARGUMENTS",
+            ),
+            event_input=StopInput(
+                event_name=HookEventName.STOP,
+                session_id="session-1",
+                run_id="run-1",
+                trace_id="run-1",
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_agent_executor_requires_decision_payload() -> None:
+    executor = AgentHookExecutor(
+        background_task_service=_EmptyOutputBackgroundTaskService(),
+        session_repo=_SessionRepo(),
+    )
+
+    with pytest.raises(RuntimeError, match="decision payload"):
+        await executor.execute(
+            handler=HookHandlerConfig(
+                type=HookHandlerType.AGENT,
+                role_id="Verifier",
+                prompt="Review: $ARGUMENTS",
+            ),
+            event_input=StopInput(
+                event_name=HookEventName.STOP,
+                session_id="session-1",
+                run_id="run-1",
+                trace_id="run-1",
+            ),
+        )

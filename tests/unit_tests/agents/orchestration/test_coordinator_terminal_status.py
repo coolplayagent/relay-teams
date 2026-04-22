@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -40,6 +41,7 @@ from relay_teams.workspace import (
     build_conversation_id,
     build_instance_conversation_id,
 )
+from relay_teams.hooks import HookService
 
 
 class _RecordingTaskExecutionService:
@@ -60,6 +62,20 @@ class _RecordingTaskExecutionService:
             result=result,
         )
         return TaskExecutionResult(output=result)
+
+
+class _CapturingHookService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, object | None]] = []
+
+    async def execute(
+        self,
+        *,
+        event_input: object,
+        run_event_hub: object | None,
+    ) -> object:
+        self.calls.append((event_input, run_event_hub))
+        return object()
 
 
 def _build_coordinator(
@@ -190,6 +206,29 @@ def test_terminal_status_from_verification_completes_with_assistant_error(
 
     events = event_log.list_by_session("session-1")
     assert events == ()
+
+
+@pytest.mark.asyncio
+async def test_root_task_created_hook_is_not_emitted_for_normal_run(
+    tmp_path: Path,
+) -> None:
+    hook_service = _CapturingHookService()
+    coordinator = CoordinatorGraph.model_construct(
+        hook_service=cast(HookService, hook_service),
+        run_event_hub=RunEventHub(),
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        objective="do work",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+
+    await coordinator._execute_task_created_hooks(root_task=root_task)
+
+    assert hook_service.calls == []
 
 
 @pytest.mark.asyncio

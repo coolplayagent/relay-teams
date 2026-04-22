@@ -52,7 +52,7 @@ def test_hook_loader_tolerates_invalid_runtime_file(tmp_path: Path) -> None:
     snapshot = loader.load_snapshot()
 
     assert snapshot.hooks == {}
-    assert len(snapshot.sources) == 1
+    assert snapshot.sources == ()
 
 
 def test_hook_loader_includes_role_and_skill_hooks(tmp_path: Path) -> None:

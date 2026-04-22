@@ -3822,6 +3822,12 @@ class AgentLlmSession:
     ) -> list[ModelRequest | ModelResponse]:
         if self._conversation_compaction_service is None:
             return history
+        plan = self._conversation_compaction_service.plan_compaction(
+            history=history,
+            budget=budget,
+        )
+        if not plan.should_compact:
+            return history
         hook_service = getattr(self, "_hook_service", None)
         if hook_service is not None:
             _ = await hook_service.execute(
@@ -3840,12 +3846,12 @@ class AgentLlmSession:
                     estimated_tokens_after_microcompact=(
                         estimated_tokens_after_microcompact or 0
                     ),
-                    threshold_tokens=budget.history_trigger_tokens,
-                    target_tokens=budget.history_target_tokens,
+                    threshold_tokens=plan.threshold_tokens,
+                    target_tokens=plan.target_tokens,
                 ),
                 run_event_hub=self._run_event_hub,
             )
-        compacted_history = await self._conversation_compaction_service.maybe_compact(
+        compacted_result = await self._conversation_compaction_service.maybe_compact_with_result(
             session_id=request.session_id,
             role_id=request.role_id,
             conversation_id=conversation_id,
@@ -3854,8 +3860,10 @@ class AgentLlmSession:
             budget=budget,
             estimated_tokens_before_microcompact=estimated_tokens_before_microcompact,
             estimated_tokens_after_microcompact=estimated_tokens_after_microcompact,
+            plan=plan,
         )
-        if hook_service is not None:
+        compacted_history = list(compacted_result.messages)
+        if hook_service is not None and compacted_result.applied:
             _ = await hook_service.execute(
                 event_input=PostCompactInput(
                     event_name=HookEventName.POST_COMPACT,

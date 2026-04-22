@@ -515,7 +515,7 @@ class TaskExecutionService(BaseModel):
         role_id: str,
         output_text: str,
     ) -> None:
-        if self.hook_service is None:
+        if self.hook_service is None or task.parent_task_id is None:
             return
         _ = await self.hook_service.execute(
             event_input=TaskCompletedInput(

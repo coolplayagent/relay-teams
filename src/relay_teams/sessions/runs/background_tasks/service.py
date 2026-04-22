@@ -987,7 +987,7 @@ class BackgroundTaskService:
         task: TaskEnvelope,
         suppress_hooks: bool,
     ) -> None:
-        if self._hook_service is None or suppress_hooks:
+        if self._hook_service is None or suppress_hooks or task.parent_task_id is None:
             return
         try:
             loop = asyncio.get_running_loop()
