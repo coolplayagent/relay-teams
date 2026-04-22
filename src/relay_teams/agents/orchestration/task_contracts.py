@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable
-from typing import Optional, Protocol
+from typing import Dict, List, Optional, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -44,8 +44,8 @@ class TaskOrchestrationServiceLike(Protocol):
         self,
         *,
         run_id: str,
-        tasks: list[TaskDraft],
-    ) -> dict[str, JsonValue]: ...
+        tasks: List[TaskDraft],
+    ) -> Dict[str, JsonValue]: ...
 
     def update_task(
         self,
@@ -53,21 +53,21 @@ class TaskOrchestrationServiceLike(Protocol):
         run_id: Optional[str],
         task_id: str,
         update: TaskUpdate,
-    ) -> dict[str, JsonValue]: ...
+    ) -> Dict[str, JsonValue]: ...
 
     def list_delegated_tasks(
         self,
         *,
         run_id: str,
         include_root: bool = False,
-    ) -> dict[str, JsonValue]: ...
+    ) -> Dict[str, JsonValue]: ...
 
     def list_run_tasks(
         self,
         *,
         run_id: str,
         include_root: bool = False,
-    ) -> dict[str, JsonValue]: ...
+    ) -> Dict[str, JsonValue]: ...
 
     def dispatch_task(
         self,
@@ -76,7 +76,7 @@ class TaskOrchestrationServiceLike(Protocol):
         task_id: str,
         role_id: str,
         prompt: str = "",
-    ) -> Awaitable[dict[str, JsonValue]]: ...
+    ) -> Awaitable[Dict[str, JsonValue]]: ...
 
 
 class TaskExecutionServiceLike(Protocol):

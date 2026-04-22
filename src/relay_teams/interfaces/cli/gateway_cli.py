@@ -5,7 +5,7 @@ import asyncio
 from collections.abc import Callable
 import json
 import sys
-from typing import Optional, Union
+from typing import Dict, List, Optional, Union
 
 from pydantic import JsonValue
 import typer
@@ -25,8 +25,8 @@ from relay_teams.logger import configure_logging
 from relay_teams.paths import get_app_config_dir
 
 RequestJsonCallable = Callable[
-    [str, str, str, Optional[dict[str, object]]],
-    Union[dict[str, object], list[object]],
+    [str, str, str, Optional[Dict[str, object]]],
+    Union[Dict[str, object], List[object]],
 ]
 AutoStartCallable = Callable[[str, bool], None]
 
@@ -183,7 +183,7 @@ def build_gateway_app(
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
         ) -> None:
-            payload: dict[str, object] = {"bot_type": bot_type}
+            payload: Dict[str, object] = {"bot_type": bot_type}
             if base_url_override is not None:
                 payload["base_url"] = base_url_override
             if route_tag is not None:
@@ -381,7 +381,7 @@ def _resolve_acp_stdio_role_id(
         ) from exc
 
 
-async def _noop_notify(_message: dict[str, JsonValue]) -> None:
+async def _noop_notify(_message: Dict[str, JsonValue]) -> None:
     return None
 
 
@@ -389,7 +389,7 @@ def _parse_json_object_option(
     payload_json: str,
     *,
     option_name: str,
-) -> dict[str, object]:
+) -> Dict[str, object]:
     try:
         parsed = json.loads(payload_json)
     except json.JSONDecodeError as exc:
