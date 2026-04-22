@@ -59,10 +59,12 @@ from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.tools.registry import build_default_registry
+from relay_teams.tools.registry.registry import ToolRegistry
 from relay_teams.tools.discovery_tools.activate_tools import (
     _activate_runtime_tools as _activate_runtime_tools_for_test,
 )
 from relay_teams.tools.runtime import ToolContext
+from relay_teams.tools.workspace_tools.read import register as register_read
 from relay_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
@@ -762,6 +764,87 @@ async def test_execute_provider_uses_initial_active_local_tools_only(
         "tool_search",
         "activate_tools",
     ]
+
+
+@pytest.mark.asyncio
+async def test_execute_keeps_explicit_tools_callable_without_discovery_tools(
+    tmp_path: Path,
+) -> None:
+    provider_factory = _RoleCapturingProviderFactory()
+    role = RoleDefinition(
+        role_id="reader",
+        name="reader",
+        description="Reads workspace files.",
+        version="1",
+        tools=("read",),
+        system_prompt="You are the reader role.",
+    )
+    role_registry = RoleRegistry()
+    role_registry.register(role)
+
+    db_path = tmp_path / "task_execution_service_without_discovery_tools.db"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    shared_store = SharedStateRepository(db_path)
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        task_repo=task_repo,
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=Path("."), shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
+        provider_factory=provider_factory,
+        tool_registry=ToolRegistry({"read": register_read}),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
+        run_intent_repo=RunIntentRepository(db_path),
+    )
+    instance = create_subagent_instance(
+        "reader",
+        workspace_id="default",
+        conversation_id=build_conversation_id("session-1", "reader"),
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        objective="read a file",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="reader",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+
+    _ = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="reader",
+        task=task,
+    )
+
+    runtime_record = agent_repo.get_instance(instance.instance_id)
+    assert provider_factory.role_tools_seen == [("read",)]
+    assert json.loads(runtime_record.runtime_active_tools_json) == ["read"]
+    assert "Active Local Tools: read" in runtime_record.runtime_system_prompt
+    assert "Local Tools: read" in runtime_record.runtime_system_prompt
 
 
 @pytest.mark.asyncio

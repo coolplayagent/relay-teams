@@ -19,6 +19,10 @@ def test_build_initial_active_tools_keeps_implicit_tool_search_when_authorized()
     )
 
 
+def test_build_initial_active_tools_falls_back_to_all_authorized_tools() -> None:
+    assert build_initial_active_tools(("read", "write")) == ("read", "write")
+
+
 def test_validate_activation_request_separates_active_deferred_and_unknown() -> None:
     result = validate_activation_request(
         authorized_tools=("tool_search", "activate_tools", "read", "write"),
