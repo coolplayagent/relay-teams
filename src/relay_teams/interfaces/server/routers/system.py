@@ -454,7 +454,7 @@ async def probe_model_connectivity(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelConnectivityProbeResult:
     try:
-        return service.probe_connectivity(req)
+        return await asyncio.to_thread(service.probe_connectivity, req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -465,7 +465,7 @@ async def discover_model_catalog(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelDiscoveryResult:
     try:
-        return service.discover_models(req)
+        return await asyncio.to_thread(service.discover_models, req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -875,16 +875,20 @@ async def start_github_webhook_tunnel(
                 "local_port": req.local_port or request.url.port or 8000,
             }
         )
-        status = tunnel_service.start(effective_request)
-        if req.auto_save_webhook_base_url and status.public_url:
-            previous_config = github_config_service.get_github_config()
-            github_config_service.update_github_config(
-                GitHubConfigUpdate(webhook_base_url=status.public_url)
-            )
-            trigger_service.refresh_repo_callback_urls_from_system_config(
-                previous_webhook_base_url=previous_config.webhook_base_url
-            )
-        return status
+
+        def _start_tunnel() -> LocalhostRunTunnelStatus:
+            status = tunnel_service.start(effective_request)
+            if effective_request.auto_save_webhook_base_url and status.public_url:
+                previous_config = github_config_service.get_github_config()
+                github_config_service.update_github_config(
+                    GitHubConfigUpdate(webhook_base_url=status.public_url)
+                )
+                trigger_service.refresh_repo_callback_urls_from_system_config(
+                    previous_webhook_base_url=previous_config.webhook_base_url
+                )
+            return status
+
+        return await asyncio.to_thread(_start_tunnel)
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -904,17 +908,21 @@ async def stop_github_webhook_tunnel(
     trigger_service: GitHubTriggerService = Depends(get_github_trigger_service),
 ) -> LocalhostRunTunnelStatus:
     try:
-        status = tunnel_service.stop()
-        if req.clear_webhook_base_url_if_matching and status.public_url:
-            existing_config = github_config_service.get_github_config()
-            if existing_config.webhook_base_url == status.public_url:
-                github_config_service.update_github_config(
-                    GitHubConfigUpdate(webhook_base_url=None)
-                )
-                trigger_service.refresh_repo_callback_urls_from_system_config(
-                    previous_webhook_base_url=existing_config.webhook_base_url
-                )
-        return status
+
+        def _stop_tunnel() -> LocalhostRunTunnelStatus:
+            status = tunnel_service.stop()
+            if req.clear_webhook_base_url_if_matching and status.public_url:
+                existing_config = github_config_service.get_github_config()
+                if existing_config.webhook_base_url == status.public_url:
+                    github_config_service.update_github_config(
+                        GitHubConfigUpdate(webhook_base_url=None)
+                    )
+                    trigger_service.refresh_repo_callback_urls_from_system_config(
+                        previous_webhook_base_url=existing_config.webhook_base_url
+                    )
+            return status
+
+        return await asyncio.to_thread(_stop_tunnel)
     except Exception as exc:
         _raise_system_http_error(
             exc,

@@ -165,7 +165,14 @@ async def list_github_available_repositories(
     query: str | None = None,
 ) -> list[GitHubAvailableRepositoryRecord]:
     try:
-        return list(service.list_available_repositories(account_id, query=query))
+
+        def _list_available_repositories() -> tuple[
+            GitHubAvailableRepositoryRecord, ...
+        ]:
+            return service.list_available_repositories(account_id, query=query)
+
+        repositories = await run_in_threadpool(_list_available_repositories)
+        return list(repositories)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except GitHubApiError as exc:

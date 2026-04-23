@@ -336,6 +336,29 @@ def test_list_github_available_repositories_route_returns_records() -> None:
     ]
 
 
+def test_list_github_available_repositories_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[[], tuple[GitHubAvailableRepositoryRecord, ...]],
+    ) -> tuple[GitHubAvailableRepositoryRecord, ...]:
+        calls.append("list")
+        return func()
+
+    monkeypatch.setattr(triggers, "run_in_threadpool", fake_run_in_threadpool)
+    client = _client(_FakeGitHubTriggerService())
+
+    response = client.get(
+        "/api/triggers/github/accounts/ghta_1/repositories",
+        params={"query": "relay"},
+    )
+
+    assert response.status_code == 200
+    assert calls == ["list"]
+
+
 def test_create_github_repo_route_auto_generates_callback_url_when_missing() -> None:
     fake_service = _FakeGitHubTriggerService()
     client = _client(

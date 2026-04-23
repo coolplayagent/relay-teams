@@ -77,6 +77,7 @@ from relay_teams.interfaces.server.routers import system
 from relay_teams.providers.model_connectivity import (
     ModelConnectivityProbeRequest,
     ModelConnectivityProbeResult,
+    ModelDiscoveryRequest,
     ModelDiscoveryResult,
 )
 from relay_teams.providers.model_config import (
@@ -1332,6 +1333,31 @@ def test_start_github_webhook_tunnel_saves_webhook_base_url() -> None:
     assert service.refreshed_github_callback_previous_base_url is None
 
 
+def test_start_github_webhook_tunnel_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_to_thread(
+        func: Callable[[], LocalhostRunTunnelStatus],
+    ) -> LocalhostRunTunnelStatus:
+        calls.append("start")
+        return func()
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.post(
+        "/api/system/configs/github/webhook/tunnel:start",
+        json={"auto_save_webhook_base_url": True},
+    )
+
+    assert response.status_code == 200
+    assert calls == ["start"]
+    assert service.current_github_webhook_base_url == "https://demo-tunnel.lhr.life"
+
+
 def test_stop_github_webhook_tunnel_clears_matching_webhook_base_url() -> None:
     service = _FakeSystemService()
     service.current_github_webhook_base_url = "https://demo-tunnel.lhr.life"
@@ -1359,6 +1385,34 @@ def test_stop_github_webhook_tunnel_clears_matching_webhook_base_url() -> None:
         service.refreshed_github_callback_previous_base_url
         == "https://demo-tunnel.lhr.life"
     )
+
+
+def test_stop_github_webhook_tunnel_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_to_thread(
+        func: Callable[[], LocalhostRunTunnelStatus],
+    ) -> LocalhostRunTunnelStatus:
+        calls.append("stop")
+        return func()
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    service = _FakeSystemService()
+    service.tunnel_status = LocalhostRunTunnelStatus(
+        status="active",
+        public_url="https://demo-tunnel.lhr.life",
+    )
+    client = _create_test_client(service)
+
+    response = client.post(
+        "/api/system/configs/github/webhook/tunnel:stop",
+        json={"clear_webhook_base_url_if_matching": False},
+    )
+
+    assert response.status_code == 200
+    assert calls == ["stop"]
 
 
 def test_get_clawhub_config() -> None:
@@ -1769,6 +1823,33 @@ def test_probe_model_connectivity() -> None:
     assert payload["token_usage"]["total_tokens"] == 9
 
 
+def test_probe_model_connectivity_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[ModelConnectivityProbeRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[
+            [ModelConnectivityProbeRequest],
+            ModelConnectivityProbeResult,
+        ],
+        request: ModelConnectivityProbeRequest,
+    ) -> ModelConnectivityProbeResult:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/model:probe",
+        json={"profile_name": "default"},
+    )
+
+    assert response.status_code == 200
+    assert [call.profile_name for call in calls] == ["default"]
+
+
 def test_discover_model_catalog() -> None:
     client = _create_test_client(_FakeSystemService())
 
@@ -1787,6 +1868,30 @@ def test_discover_model_catalog() -> None:
     assert payload["ok"] is True
     assert payload["latency_ms"] == 37
     assert payload["models"] == ["fake-chat-model", "reasoning-model"]
+
+
+def test_discover_model_catalog_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[ModelDiscoveryRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[[ModelDiscoveryRequest], ModelDiscoveryResult],
+        request: ModelDiscoveryRequest,
+    ) -> ModelDiscoveryResult:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/model:discover",
+        json={"profile_name": "default"},
+    )
+
+    assert response.status_code == 200
+    assert [call.profile_name for call in calls] == ["default"]
 
 
 def test_reload_model_config_returns_bad_request_for_invalid_config() -> None:
