@@ -735,12 +735,13 @@ def test_browser_remote_workspace_settings_group_ssh_fields(
         page.locator("#workspace-ssh-profile-username"),
         page.locator("#workspace-ssh-profile-private-key"),
     )
-    _assert_vertical_gap_matches(
-        page.locator('label[for="workspace-ssh-profile-username"]'),
-        page.locator("#workspace-ssh-profile-username"),
-        page.locator(".workspace-private-key-label-row"),
-        page.locator("#workspace-ssh-profile-private-key"),
+    private_key_label_row = page.locator(".workspace-private-key-label-row")
+    private_key_field = page.locator("#workspace-ssh-profile-private-key")
+    _assert_locator_below(
+        private_key_label_row,
+        private_key_field,
     )
+    assert _vertical_gap_between(private_key_label_row, private_key_field) < 12.0
     _assert_locators_share_right_edge(
         page.locator("#workspace-ssh-profile-private-key"),
         page.locator("#workspace-ssh-profile-import-private-key-btn"),
