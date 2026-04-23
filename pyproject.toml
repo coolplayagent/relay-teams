@@ -24,6 +24,7 @@ dependencies = [
   "defusedxml>=0.7.1",
   "qrcode>=8.0",
   "pywinpty>=3.0.3; platform_system == 'Windows'",
+  "aiosqlite>=0.22.1",
 ]
 
 [project.optional-dependencies]

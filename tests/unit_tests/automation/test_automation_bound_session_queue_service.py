@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
@@ -9,6 +11,7 @@ from relay_teams.automation.automation_bound_session_queue_repository import (
 )
 from relay_teams.automation.automation_bound_session_queue_service import (
     AutomationBoundSessionQueueService,
+    AutomationBoundSessionQueueWorker,
 )
 from relay_teams.automation.automation_delivery_service import AutomationDeliveryService
 from relay_teams.automation.automation_models import (
@@ -93,6 +96,28 @@ class _FakeDeliveryService:
         terminal_message: str | None = None,
     ) -> None:
         self.skipped_terminal_runs.append((run_id, terminal_message))
+
+
+class _FakeBoundSessionQueueWorkerService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def process_pending(self) -> bool:
+        self.calls += 1
+        return self.calls == 1
+
+
+class _BlockingBoundSessionQueueWorkerService:
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.finished = threading.Event()
+
+    def process_pending(self) -> bool:
+        self.entered.set()
+        self.release.wait(timeout=2.0)
+        self.finished.set()
+        return False
 
 
 class _FakeRuntimeConfigLookup:
@@ -700,3 +725,66 @@ def test_direct_start_waiting_record_auto_resumes_recoverable_runtime(
     assert run_service.resume_run_ids == ["run-1"]
     assert updated.resume_attempts == 1
     assert updated.last_error is None
+
+
+def test_bound_session_queue_worker_start_wake_stop() -> None:
+    async def run_worker() -> None:
+        service = _FakeBoundSessionQueueWorkerService()
+        worker = AutomationBoundSessionQueueWorker(
+            queue_service=cast(AutomationBoundSessionQueueService, service),
+            poll_interval_seconds=0.01,
+        )
+
+        await worker.stop()
+        await worker.start()
+        await worker.start()
+        worker.wake()
+        await asyncio.sleep(0.03)
+        await worker.stop()
+
+        assert service.calls >= 2
+
+    asyncio.run(run_worker())
+
+
+def test_bound_session_queue_worker_stop_waits_for_inflight_processing() -> None:
+    async def run_worker() -> None:
+        service = _BlockingBoundSessionQueueWorkerService()
+        worker = AutomationBoundSessionQueueWorker(
+            queue_service=cast(AutomationBoundSessionQueueService, service),
+            poll_interval_seconds=0.01,
+        )
+
+        await worker.start()
+        assert await asyncio.to_thread(service.entered.wait, 1.0)
+
+        stop_task = asyncio.create_task(worker.stop())
+        await asyncio.sleep(0.03)
+        assert not stop_task.done()
+
+        service.release.set()
+        await asyncio.wait_for(stop_task, timeout=1.0)
+        assert service.finished.is_set()
+
+    asyncio.run(run_worker())
+
+
+def test_bound_session_queue_worker_stop_times_out_for_stalled_processing() -> None:
+    async def run_worker() -> None:
+        service = _BlockingBoundSessionQueueWorkerService()
+        worker = AutomationBoundSessionQueueWorker(
+            queue_service=cast(AutomationBoundSessionQueueService, service),
+            poll_interval_seconds=0.01,
+            stop_timeout_seconds=0.05,
+        )
+
+        await worker.start()
+        assert await asyncio.to_thread(service.entered.wait, 1.0)
+
+        await asyncio.wait_for(worker.stop(), timeout=1.0)
+        assert service.finished.is_set() is False
+
+        service.release.set()
+        assert await asyncio.to_thread(service.finished.wait, 1.0)
+
+    asyncio.run(run_worker())

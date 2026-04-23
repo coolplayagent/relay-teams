@@ -10,7 +10,7 @@ from pathlib import Path
 from time import perf_counter
 import re
 import subprocess
-from typing import Dict, Optional, Tuple
+from typing import Dict, NamedTuple, Optional, Tuple, Union
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,6 +34,13 @@ _MAX_GITHUB_PROBE_TIMEOUT_MS = 300_000
 _DEFAULT_TIMEOUT_SECONDS = 15.0
 _STATUS_CODE_RE = re.compile(r"\bHTTP (?P<status>\d{3})\b")
 _LOCALHOST_RUN_INACTIVE_MARKERS = ("no tunnel here",)
+
+
+class _GitHubProbeContext(NamedTuple):
+    checked_at: datetime
+    started: float
+    used_proxy: bool
+    token: str
 
 
 class GitHubConnectivityProbeRequest(BaseModel):
@@ -124,6 +131,63 @@ class GitHubConnectivityProbeService:
         self,
         request: GitHubConnectivityProbeRequest,
     ) -> GitHubConnectivityProbeResult:
+        context = self._build_probe_context(request)
+        if isinstance(context, GitHubConnectivityProbeResult):
+            return context
+
+        try:
+            gh_path = asyncio.run(get_gh_path())
+        except GitHubCliNotFoundError as exc:
+            return self._build_result(
+                ok=False,
+                checked_at=context.checked_at,
+                started=context.started,
+                used_proxy=context.used_proxy,
+                binary_available=False,
+                auth_valid=False,
+                bundled_binary=False,
+                error_code="gh_unavailable",
+                error_message=str(exc),
+            )
+
+        return self._probe_with_gh_path(
+            request=request, context=context, gh_path=gh_path
+        )
+
+    async def probe_async(
+        self,
+        request: GitHubConnectivityProbeRequest,
+    ) -> GitHubConnectivityProbeResult:
+        context = self._build_probe_context(request)
+        if isinstance(context, GitHubConnectivityProbeResult):
+            return context
+
+        try:
+            gh_path = await get_gh_path()
+        except GitHubCliNotFoundError as exc:
+            return self._build_result(
+                ok=False,
+                checked_at=context.checked_at,
+                started=context.started,
+                used_proxy=context.used_proxy,
+                binary_available=False,
+                auth_valid=False,
+                bundled_binary=False,
+                error_code="gh_unavailable",
+                error_message=str(exc),
+            )
+
+        return await asyncio.to_thread(
+            self._probe_with_gh_path,
+            request=request,
+            context=context,
+            gh_path=gh_path,
+        )
+
+    def _build_probe_context(
+        self,
+        request: GitHubConnectivityProbeRequest,
+    ) -> Union[_GitHubProbeContext, GitHubConnectivityProbeResult]:
         checked_at = datetime.now(timezone.utc)
         started = perf_counter()
         proxy_config = self._get_proxy_config()
@@ -141,22 +205,20 @@ class GitHubConnectivityProbeService:
                 error_code="missing_token",
                 error_message="Configure a GitHub token before testing the connection.",
             )
+        return _GitHubProbeContext(
+            checked_at=checked_at,
+            started=started,
+            used_proxy=used_proxy,
+            token=token,
+        )
 
-        try:
-            gh_path = asyncio.run(get_gh_path())
-        except GitHubCliNotFoundError as exc:
-            return self._build_result(
-                ok=False,
-                checked_at=checked_at,
-                started=started,
-                used_proxy=used_proxy,
-                binary_available=False,
-                auth_valid=False,
-                bundled_binary=False,
-                error_code="gh_unavailable",
-                error_message=str(exc),
-            )
-
+    def _probe_with_gh_path(
+        self,
+        *,
+        request: GitHubConnectivityProbeRequest,
+        context: _GitHubProbeContext,
+        gh_path: Path,
+    ) -> GitHubConnectivityProbeResult:
         timeout_seconds = (
             _DEFAULT_TIMEOUT_SECONDS
             if request.timeout_ms is None
@@ -164,7 +226,7 @@ class GitHubConnectivityProbeService:
         )
         env = build_subprocess_env(
             base_env=os.environ,
-            extra_env=build_github_cli_env(token),
+            extra_env=build_github_cli_env(context.token),
         )
         env["PATH"] = _prepend_to_path(env.get("PATH"), gh_path.parent)
         gh_version = _read_gh_version(gh_path, env=env)
@@ -183,9 +245,9 @@ class GitHubConnectivityProbeService:
         except subprocess.TimeoutExpired as exc:
             return self._build_result(
                 ok=False,
-                checked_at=checked_at,
-                started=started,
-                used_proxy=used_proxy,
+                checked_at=context.checked_at,
+                started=context.started,
+                used_proxy=context.used_proxy,
                 gh_path=gh_path,
                 gh_version=gh_version,
                 binary_available=True,
@@ -223,9 +285,9 @@ class GitHubConnectivityProbeService:
 
             return self._build_result(
                 ok=False,
-                checked_at=checked_at,
-                started=started,
-                used_proxy=used_proxy,
+                checked_at=context.checked_at,
+                started=context.started,
+                used_proxy=context.used_proxy,
                 gh_path=gh_path,
                 gh_version=gh_version,
                 status_code=status_code,
@@ -241,9 +303,9 @@ class GitHubConnectivityProbeService:
         username = _parse_username(completed.stdout)
         return self._build_result(
             ok=True,
-            checked_at=checked_at,
-            started=started,
-            used_proxy=used_proxy,
+            checked_at=context.checked_at,
+            started=context.started,
+            used_proxy=context.used_proxy,
             gh_path=gh_path,
             gh_version=gh_version,
             exit_code=completed.returncode,

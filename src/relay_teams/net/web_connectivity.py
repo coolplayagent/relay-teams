@@ -16,7 +16,7 @@ from relay_teams.env.proxy_env import (
     ProxyEnvInput,
     proxy_applies_to_url,
 )
-from relay_teams.net.clients import create_sync_http_client
+from relay_teams.net.clients import create_async_http_client
 
 _MAX_WEB_PROBE_TIMEOUT_MS = 300_000
 _HEAD_FALLBACK_STATUS_CODES = {405, 501}
@@ -69,7 +69,9 @@ class WebConnectivityProbeService:
     ) -> None:
         self._get_proxy_config: Callable[[], ProxyEnvConfig] = get_proxy_config
 
-    def probe(self, request: WebConnectivityProbeRequest) -> WebConnectivityProbeResult:
+    async def probe(
+        self, request: WebConnectivityProbeRequest
+    ) -> WebConnectivityProbeResult:
         parsed = urlsplit(request.url)
         scheme = parsed.scheme.strip().lower()
         if scheme not in {"http", "https"}:
@@ -87,17 +89,17 @@ class WebConnectivityProbeService:
         checked_at = datetime.now(timezone.utc)
         started = perf_counter()
 
-        with create_sync_http_client(
+        async with create_async_http_client(
             proxy_config=proxy_config,
             timeout_seconds=timeout_seconds,
             connect_timeout_seconds=timeout_seconds,
             follow_redirects=True,
         ) as client:
             try:
-                response = client.head(request.url)
+                response = await client.head(request.url)
                 method = WebProbeMethod.HEAD
                 if response.status_code in _HEAD_FALLBACK_STATUS_CODES:
-                    response = client.get(request.url)
+                    response = await client.get(request.url)
                     method = WebProbeMethod.GET
             except httpx.TimeoutException as exc:
                 return self._build_transport_error_result(

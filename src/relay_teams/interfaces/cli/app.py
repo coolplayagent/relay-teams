@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 import subprocess
 import sys
-import time
-from urllib.error import HTTPError, URLError
+from typing import Dict, List, Optional, Union
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
+import httpx
 import typer
 
 from relay_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
@@ -33,6 +33,7 @@ from relay_teams.interfaces.server.runtime_identity import (
     build_server_runtime_identity,
     raise_if_runtime_mismatch,
 )
+from relay_teams.net.clients import create_async_http_client
 from relay_teams.mcp.mcp_cli import mcp_app
 from relay_teams.paths import get_project_config_dir
 from relay_teams.roles.role_cli import build_roles_app
@@ -50,41 +51,62 @@ def _request_json(
     base_url: str,
     method: str,
     path: str,
-    payload: dict[str, object] | None = None,
-    extra_headers: dict[str, str] | None = None,
+    payload: Optional[Dict[str, object]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
     timeout_seconds: float = 30.0,
-) -> dict[str, object] | list[object]:
-    sync_proxy_env_to_process_env(load_proxy_env_config())
-    body = None
+) -> Union[Dict[str, object], List[object]]:
+    return asyncio.run(
+        _request_json_async(
+            base_url=base_url,
+            method=method,
+            path=path,
+            payload=payload,
+            extra_headers=extra_headers,
+            timeout_seconds=timeout_seconds,
+        )
+    )
+
+
+async def _request_json_async(
+    *,
+    base_url: str,
+    method: str,
+    path: str,
+    payload: Optional[Dict[str, object]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    timeout_seconds: float = 30.0,
+) -> Union[Dict[str, object], List[object]]:
     headers = {"Accept": "application/json"}
-    if payload is not None:
-        body = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
     if extra_headers is not None:
         headers.update(extra_headers)
 
-    request = Request(
-        url=f"{base_url.rstrip('/')}{path}",
-        method=method,
-        data=body,
-        headers=headers,
-    )
-
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
-            raw = response.read().decode("utf-8")
-            if not raw:
+        async with create_async_http_client(
+            proxy_config=load_proxy_env_config(),
+            timeout_seconds=timeout_seconds,
+            connect_timeout_seconds=timeout_seconds,
+        ) as client:
+            response = await client.request(
+                method,
+                f"{base_url.rstrip('/')}{path}",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            if not response.content:
                 return {}
-            data = json.loads(raw)
+            data = response.json()
             if isinstance(data, dict):
                 return data
             if isinstance(data, list):
                 return data
             return {"data": data}
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"HTTP {exc.code} {method} {path}: {detail}") from exc
-    except URLError as exc:
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text
+        raise RuntimeError(
+            f"HTTP {exc.response.status_code} {method} {path}: {detail}"
+        ) from exc
+    except (httpx.RequestError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Failed to connect to {base_url}: {exc}") from exc
 
 
@@ -93,10 +115,22 @@ def _is_server_healthy(base_url: str) -> bool:
     return health is not None and health.status == "ok"
 
 
-def _get_server_health(base_url: str) -> ServerHealthPayload | None:
+async def _is_server_healthy_async(base_url: str) -> bool:
+    health = await _get_server_health_async(base_url)
+    return health is not None and health.status == "ok"
+
+
+def _get_server_health(base_url: str) -> Optional[ServerHealthPayload]:
+    return asyncio.run(_get_server_health_async(base_url))
+
+
+async def _get_server_health_async(base_url: str) -> Optional[ServerHealthPayload]:
     try:
-        health_response = _request_json(
-            base_url, "GET", "/api/system/health", timeout_seconds=1.5
+        health_response = await _request_json_async(
+            base_url=base_url,
+            method="GET",
+            path="/api/system/health",
+            timeout_seconds=1.5,
         )
         health = _require_object_response(health_response, "/api/system/health")
         return ServerHealthPayload.model_validate(health)
@@ -147,11 +181,20 @@ def _start_server_daemon(host: str, port: int) -> None:
 
 
 def _wait_until_healthy(base_url: str, timeout_seconds: float = 20.0) -> bool:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        if _is_server_healthy(base_url):
+    return asyncio.run(
+        _wait_until_healthy_async(base_url, timeout_seconds=timeout_seconds)
+    )
+
+
+async def _wait_until_healthy_async(
+    base_url: str, timeout_seconds: float = 20.0
+) -> bool:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    while loop.time() < deadline:
+        if await _is_server_healthy_async(base_url):
             return True
-        time.sleep(0.25)
+        await asyncio.sleep(0.25)
     return False
 
 
@@ -190,8 +233,8 @@ def _module_request_json(
     base_url: str,
     method: str,
     path: str,
-    payload: dict[str, object] | None = None,
-) -> dict[str, object] | list[object]:
+    payload: Optional[Dict[str, object]] = None,
+) -> Union[Dict[str, object], List[object]]:
     return _request_json(
         base_url=base_url,
         method=method,

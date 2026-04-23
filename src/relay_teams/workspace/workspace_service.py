@@ -615,9 +615,23 @@ class WorkspaceService:
 
         repository_root = self._git_worktree_client.ensure_repository(source_root)
         if start_ref is None:
-            self._git_worktree_client.fetch_ref(
-                repository_root, remote="origin", ref="main"
-            )
+            try:
+                self._git_worktree_client.fetch_ref(
+                    repository_root, remote="origin", ref="main"
+                )
+            except ValueError as exc:
+                if "timed out" not in str(exc).lower():
+                    raise
+                log_event(
+                    _logger,
+                    30,
+                    event="workspace.fork.fetch_ref_timeout_fallback",
+                    message="Falling back to cached origin/main after git fetch timeout",
+                    payload={
+                        "repository_root": str(repository_root),
+                        "source_workspace_id": source_workspace_id,
+                    },
+                )
             resolved_start_ref = "origin/main"
         else:
             resolved_start_ref = start_ref

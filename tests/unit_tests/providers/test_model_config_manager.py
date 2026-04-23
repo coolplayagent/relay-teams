@@ -447,7 +447,10 @@ def test_save_model_profile_persists_inferred_context_window_when_missing(
 def test_save_model_profile_renames_and_preserves_existing_api_key(
     tmp_path: Path,
 ) -> None:
-    manager = ModelConfigManager(config_dir=tmp_path)
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
     model_file = tmp_path / "model.json"
     model_file.write_text(
         json.dumps(
@@ -489,7 +492,10 @@ def test_save_model_profile_renames_and_preserves_existing_api_key(
 
 
 def test_save_model_profile_can_switch_default_profile(tmp_path: Path) -> None:
-    manager = ModelConfigManager(config_dir=tmp_path)
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
     model_file = tmp_path / "model.json"
     model_file.write_text(
         json.dumps(

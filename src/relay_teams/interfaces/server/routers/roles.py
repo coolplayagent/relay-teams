@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from starlette.concurrency import run_in_threadpool
 
 from relay_teams.computer import ExecutionSurface
 from relay_teams.builtin import get_builtin_roles_dir
@@ -49,14 +50,14 @@ _CAPABILITY_WILDCARD = "*"
 
 
 @router.get("")
-def list_roles(
+async def list_roles(
     role_registry: RoleRegistry = Depends(get_role_registry),
 ) -> list[dict[str, object]]:
     return [role.model_dump() for role in role_registry.list_roles()]
 
 
 @router.get(":options", response_model=RoleConfigOptions)
-def get_role_config_options(
+async def get_role_config_options(
     role_registry: RoleRegistry = Depends(get_role_registry),
     model_config_service: ModelConfigService = Depends(get_model_config_service),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
@@ -70,58 +71,15 @@ def get_role_config_options(
     ),
 ) -> RoleConfigOptions:
     try:
-        ensure_required_system_roles(role_registry)
-        skill_options = _load_role_skill_options(
+        return await run_in_threadpool(
+            _build_role_config_options,
             role_registry=role_registry,
+            model_config_service=model_config_service,
+            tool_registry=tool_registry,
+            mcp_service=mcp_service,
             skill_registry=skill_registry,
             skills_reload_service=skills_reload_service,
-        )
-        normal_mode_roles = tuple(
-            _build_role_option(role=role, model_config_service=model_config_service)
-            for role in role_registry.list_normal_mode_roles()
-        )
-        subagent_roles = tuple(
-            _build_role_option(role=role, model_config_service=model_config_service)
-            for role in role_registry.list_subagent_roles()
-        )
-        coordinator_role = _build_role_option(
-            role=role_registry.get_coordinator(),
-            model_config_service=model_config_service,
-        )
-        main_agent_role = _build_role_option(
-            role=role_registry.get_main_agent(),
-            model_config_service=model_config_service,
-        )
-        coordinator_role_id = coordinator_role.role_id
-        main_agent_role_id = main_agent_role.role_id
-        return RoleConfigOptions(
-            coordinator_role_id=coordinator_role_id,
-            main_agent_role_id=main_agent_role_id,
-            coordinator_role=coordinator_role,
-            main_agent_role=main_agent_role,
-            normal_mode_roles=normal_mode_roles,
-            subagent_roles=subagent_roles,
-            tool_groups=tuple(
-                RoleToolGroupOption(
-                    id=group.group_id,
-                    name=group.name,
-                    description=group.description,
-                    tools=group.tools,
-                )
-                for group in list_default_tool_groups(tool_registry)
-            ),
-            tools=tool_registry.list_configurable_names(),
-            mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
-            skills=skill_options,
-            agents=tuple(
-                RoleAgentOption(
-                    agent_id=agent.agent_id,
-                    name=agent.name,
-                    transport=agent.transport.value,
-                )
-                for agent in external_agent_service.list_agent_options()
-            ),
-            execution_surfaces=tuple(surface for surface in ExecutionSurface),
+            external_agent_service=external_agent_service,
         )
     except (SystemRolesUnavailableError, ValueError) as exc:
         raise http_exception_for(
@@ -130,15 +88,80 @@ def get_role_config_options(
         ) from exc
 
 
+def _build_role_config_options(
+    *,
+    role_registry: RoleRegistry,
+    model_config_service: ModelConfigService,
+    tool_registry: ToolRegistry,
+    mcp_service: McpService,
+    skill_registry: SkillRegistry,
+    skills_reload_service: SkillsConfigReloadService,
+    external_agent_service: ExternalAgentConfigService,
+) -> RoleConfigOptions:
+    ensure_required_system_roles(role_registry)
+    skill_options = _load_role_skill_options(
+        role_registry=role_registry,
+        skill_registry=skill_registry,
+        skills_reload_service=skills_reload_service,
+    )
+    normal_mode_roles = tuple(
+        _build_role_option(role=role, model_config_service=model_config_service)
+        for role in role_registry.list_normal_mode_roles()
+    )
+    subagent_roles = tuple(
+        _build_role_option(role=role, model_config_service=model_config_service)
+        for role in role_registry.list_subagent_roles()
+    )
+    coordinator_role = _build_role_option(
+        role=role_registry.get_coordinator(),
+        model_config_service=model_config_service,
+    )
+    main_agent_role = _build_role_option(
+        role=role_registry.get_main_agent(),
+        model_config_service=model_config_service,
+    )
+    coordinator_role_id = coordinator_role.role_id
+    main_agent_role_id = main_agent_role.role_id
+    return RoleConfigOptions(
+        coordinator_role_id=coordinator_role_id,
+        main_agent_role_id=main_agent_role_id,
+        coordinator_role=coordinator_role,
+        main_agent_role=main_agent_role,
+        normal_mode_roles=normal_mode_roles,
+        subagent_roles=subagent_roles,
+        tool_groups=tuple(
+            RoleToolGroupOption(
+                id=group.group_id,
+                name=group.name,
+                description=group.description,
+                tools=group.tools,
+            )
+            for group in list_default_tool_groups(tool_registry)
+        ),
+        tools=tool_registry.list_configurable_names(),
+        mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
+        skills=skill_options,
+        agents=tuple(
+            RoleAgentOption(
+                agent_id=agent.agent_id,
+                name=agent.name,
+                transport=agent.transport.value,
+            )
+            for agent in external_agent_service.list_agent_options()
+        ),
+        execution_surfaces=tuple(surface for surface in ExecutionSurface),
+    )
+
+
 @router.get(
     "/configs",
     response_model=list[RoleDocumentSummary],
     response_model_exclude_none=True,
 )
-def list_role_configs(
+async def list_role_configs(
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> tuple[RoleDocumentSummary, ...]:
-    return service.list_role_documents()
+    return await run_in_threadpool(service.list_role_documents)
 
 
 @router.get(
@@ -146,12 +169,12 @@ def list_role_configs(
     response_model=RoleDocumentRecord,
     response_model_exclude_none=True,
 )
-def get_role_config(
+async def get_role_config(
     role_id: RequiredIdentifierStr,
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> RoleDocumentRecord:
     try:
-        return service.get_role_document(role_id)
+        return await run_in_threadpool(service.get_role_document, role_id)
     except ValueError as exc:
         raise http_exception_for(exc, mappings=((ValueError, 404),)) from exc
 
@@ -161,24 +184,24 @@ def get_role_config(
     response_model=RoleDocumentRecord,
     response_model_exclude_none=True,
 )
-def save_role_config(
+async def save_role_config(
     role_id: RequiredIdentifierStr,
     draft: RoleDocumentDraft,
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> RoleDocumentRecord:
     try:
-        return service.save_role_document(role_id, draft)
+        return await run_in_threadpool(service.save_role_document, role_id, draft)
     except ValueError as exc:
         raise http_exception_for(exc, mappings=((ValueError, 400),)) from exc
 
 
 @router.delete("/configs/{role_id}")
-def delete_role_config(
+async def delete_role_config(
     role_id: RequiredIdentifierStr,
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> dict[str, str]:
     try:
-        service.delete_role_document(role_id)
+        await run_in_threadpool(service.delete_role_document, role_id)
         return {"status": "ok"}
     except ValueError as exc:
         if str(exc).startswith("Role not found:"):
@@ -187,11 +210,11 @@ def delete_role_config(
 
 
 @router.post(":validate", response_model=dict[str, int | bool])
-def validate_roles(
+async def validate_roles(
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> dict[str, int | bool]:
     try:
-        return service.validate_all_roles()
+        return await run_in_threadpool(service.validate_all_roles)
     except (SystemRolesUnavailableError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -204,12 +227,12 @@ def validate_roles(
     response_model=RoleValidationResult,
     response_model_exclude_none=True,
 )
-def validate_role_config(
+async def validate_role_config(
     draft: RoleDocumentDraft,
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> RoleValidationResult:
     try:
-        return service.validate_role_document(draft)
+        return await run_in_threadpool(service.validate_role_document, draft)
     except ValueError as exc:
         raise http_exception_for(exc, mappings=((ValueError, 400),)) from exc
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -87,7 +88,8 @@ class _FakeWeChatGatewayService:
             }
         )
 
-    def delete_account(self, account_id: str) -> None:
+    def delete_account(self, account_id: str, *, force: bool = False) -> None:
+        _ = force
         if account_id == "missing":
             raise KeyError("Unknown account_id: missing")
         self.deleted_account_ids.append(account_id)
@@ -126,6 +128,29 @@ def test_list_wechat_accounts_route_returns_accounts() -> None:
     assert payload[0]["running"] is True
 
 
+def test_start_wechat_login_route_runs_service_call_in_threadpool(monkeypatch) -> None:
+    calls: list[WeChatLoginStartRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[[WeChatLoginStartRequest], WeChatLoginStartResponse],
+        request: WeChatLoginStartRequest,
+    ) -> WeChatLoginStartResponse:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(gateway.asyncio, "to_thread", fake_to_thread)
+    client = _client(_FakeWeChatGatewayService())
+
+    response = client.post(
+        "/api/gateway/wechat/login/start",
+        json={"bot_type": "lark"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["session_key"] == "wechat-login-1"
+    assert [call.bot_type for call in calls] == ["lark"]
+
+
 def test_wait_wechat_login_route_maps_missing_session_to_404() -> None:
     client = _client(_FakeWeChatGatewayService())
 
@@ -147,6 +172,65 @@ def test_wait_wechat_login_route_rejects_none_like_session_key() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_wait_wechat_login_route_runs_service_call_in_threadpool(monkeypatch) -> None:
+    calls: list[WeChatLoginWaitRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[[WeChatLoginWaitRequest], WeChatLoginWaitResponse],
+        request: WeChatLoginWaitRequest,
+    ) -> WeChatLoginWaitResponse:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(gateway.asyncio, "to_thread", fake_to_thread)
+    client = _client(_FakeWeChatGatewayService())
+
+    response = client.post(
+        "/api/gateway/wechat/login/wait",
+        json={"session_key": "wechat-login-1", "timeout_ms": 1000},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["connected"] is True
+    assert [call.session_key for call in calls] == ["wechat-login-1"]
+
+
+def test_wechat_account_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway.asyncio, "to_thread", fake_to_thread)
+    fake_service = _FakeWeChatGatewayService()
+    client = _client(fake_service)
+
+    requests = [
+        client.get("/api/gateway/wechat/accounts"),
+        client.patch("/api/gateway/wechat/accounts/wx_123", json={"route_tag": "ops"}),
+        client.post("/api/gateway/wechat/accounts/wx_123:enable"),
+        client.post("/api/gateway/wechat/accounts/wx_123:disable"),
+        client.delete("/api/gateway/wechat/accounts/wx_123"),
+        client.post("/api/gateway/wechat/reload"),
+    ]
+
+    assert [response.status_code for response in requests] == [200] * len(requests)
+    assert [call[0] for call in calls] == [
+        "list_accounts",
+        "update_account",
+        "set_account_enabled",
+        "set_account_enabled",
+        "delete_account",
+        "reload",
+    ]
 
 
 def test_update_wechat_account_route_maps_validation_error_to_422() -> None:

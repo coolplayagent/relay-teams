@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 import json
 from pathlib import Path
-from urllib.request import Request, urlopen
 
+import httpx
 import typer
 
+from relay_teams.env import load_proxy_env_config
+from relay_teams.net.clients import create_async_http_client
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.session_models import SessionMode
 
@@ -184,41 +187,68 @@ def execute_prompt(
 
 
 def stream_events(base_url: str, run_id: str, debug: bool) -> None:
-    request = Request(
-        url=f"{base_url.rstrip('/')}/api/runs/{run_id}/events",
-        method="GET",
-        headers={"Accept": "text/event-stream"},
+    asyncio.run(
+        stream_events_async(
+            base_url=base_url,
+            run_id=run_id,
+            debug=debug,
+        )
     )
 
-    with urlopen(request, timeout=600.0) as response:
-        for raw_line in response:
-            line = raw_line.decode("utf-8").strip()
-            if not line or not line.startswith("data:"):
-                continue
-            payload = line[5:].strip()
-            if not payload:
-                continue
 
-            event = json.loads(payload)
-            if "error" in event:
-                raise RuntimeError(str(event["error"]))
+async def stream_events_async(base_url: str, run_id: str, debug: bool) -> None:
+    try:
+        async with create_async_http_client(
+            proxy_config=load_proxy_env_config(),
+            timeout_seconds=600.0,
+        ) as client:
+            async with client.stream(
+                "GET",
+                f"{base_url.rstrip('/')}/api/runs/{run_id}/events",
+                headers={"Accept": "text/event-stream"},
+            ) as response:
+                response.raise_for_status()
+                async for raw_line in response.aiter_lines():
+                    line = raw_line.strip()
+                    if _handle_stream_line(line, debug=debug):
+                        return
+    except httpx.HTTPStatusError as exc:
+        body = (await exc.response.aread()).decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"HTTP {exc.response.status_code} while streaming run {run_id}: {body}"
+        ) from exc
+    except httpx.RequestError as exc:
+        raise RuntimeError(f"Failed to stream run {run_id}: {exc}") from exc
 
-            if debug:
-                typer.echo(json.dumps(event, ensure_ascii=False))
-                continue
 
-            event_type = event.get("event_type")
-            if event_type == RunEventType.TEXT_DELTA.value:
-                event_payload = json.loads(str(event.get("payload_json", "{}")))
-                if not isinstance(event_payload, dict):
-                    event_payload = {}
-                text = event_payload.get("text", event_payload.get("content", ""))
-                typer.echo(str(text), nl=False)
-            if event_type in {
-                RunEventType.RUN_COMPLETED.value,
-                RunEventType.RUN_FAILED.value,
-            }:
-                break
+def _handle_stream_line(line: str, *, debug: bool) -> bool:
+    if not line or not line.startswith("data:"):
+        return False
+    payload = line[5:].strip()
+    if not payload:
+        return False
+
+    event = json.loads(payload)
+    if "error" in event:
+        raise RuntimeError(str(event["error"]))
+
+    if debug:
+        typer.echo(json.dumps(event, ensure_ascii=False))
+        return False
+
+    event_type = event.get("event_type")
+    if event_type == RunEventType.TEXT_DELTA.value:
+        event_payload = json.loads(str(event.get("payload_json", "{}")))
+        if not isinstance(event_payload, dict):
+            event_payload = {}
+        text = event_payload.get("text", event_payload.get("content", ""))
+        typer.echo(str(text), nl=False)
+    if event_type in {
+        RunEventType.RUN_COMPLETED.value,
+        RunEventType.RUN_FAILED.value,
+    }:
+        return True
+    return False
 
 
 def _resolve_workspace_id(

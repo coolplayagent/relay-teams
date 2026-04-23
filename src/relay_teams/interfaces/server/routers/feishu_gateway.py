@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 from relay_teams.gateway.feishu.errors import FeishuAccountNameConflictError
 from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
@@ -25,14 +26,15 @@ router = APIRouter(prefix="/gateway/feishu", tags=["Gateway"])
 
 
 @router.get("/accounts", response_model=list[FeishuGatewayAccountRecord])
-def list_feishu_accounts(
+async def list_feishu_accounts(
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
 ) -> list[FeishuGatewayAccountRecord]:
-    return list(service.list_accounts())
+    accounts = await run_in_threadpool(service.list_accounts)
+    return list(accounts)
 
 
 @router.post("/accounts", response_model=FeishuGatewayAccountRecord)
-def create_feishu_account(
+async def create_feishu_account(
     req: FeishuGatewayAccountCreateInput,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
     subscription_service: Annotated[
@@ -41,9 +43,13 @@ def create_feishu_account(
     ],
 ) -> FeishuGatewayAccountRecord:
     try:
-        created = service.create_account(req)
-        subscription_service.reload()
-        return created
+
+        def _create_feishu_account() -> FeishuGatewayAccountRecord:
+            created = service.create_account(req)
+            subscription_service.reload()
+            return created
+
+        return await run_in_threadpool(_create_feishu_account)
     except (FeishuAccountNameConflictError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -52,7 +58,7 @@ def create_feishu_account(
 
 
 @router.patch("/accounts/{account_id}", response_model=FeishuGatewayAccountRecord)
-def update_feishu_account(
+async def update_feishu_account(
     account_id: RequiredIdentifierStr,
     req: FeishuGatewayAccountUpdateInput,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
@@ -62,16 +68,19 @@ def update_feishu_account(
     ],
 ) -> FeishuGatewayAccountRecord:
     try:
-        reload_required = False
-        existing = service.get_account(account_id)
-        reload_required = service.subscription_runtime_changed_for_update(
-            existing=existing,
-            request=req,
-        )
-        updated = service.update_account(account_id, req)
-        if reload_required:
-            subscription_service.reload()
-        return updated
+
+        def _update_feishu_account() -> FeishuGatewayAccountRecord:
+            existing = service.get_account(account_id)
+            reload_required = service.subscription_runtime_changed_for_update(
+                existing=existing,
+                request=req,
+            )
+            updated = service.update_account(account_id, req)
+            if reload_required:
+                subscription_service.reload()
+            return updated
+
+        return await run_in_threadpool(_update_feishu_account)
     except (KeyError, FeishuAccountNameConflictError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -80,7 +89,7 @@ def update_feishu_account(
 
 
 @router.post("/accounts/{account_id}:enable", response_model=FeishuGatewayAccountRecord)
-def enable_feishu_account(
+async def enable_feishu_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
     subscription_service: Annotated[
@@ -89,9 +98,13 @@ def enable_feishu_account(
     ],
 ) -> FeishuGatewayAccountRecord:
     try:
-        updated = service.set_account_enabled(account_id, True)
-        subscription_service.reload()
-        return updated
+
+        def _enable_feishu_account() -> FeishuGatewayAccountRecord:
+            updated = service.set_account_enabled(account_id, True)
+            subscription_service.reload()
+            return updated
+
+        return await run_in_threadpool(_enable_feishu_account)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -102,7 +115,7 @@ def enable_feishu_account(
 @router.post(
     "/accounts/{account_id}:disable", response_model=FeishuGatewayAccountRecord
 )
-def disable_feishu_account(
+async def disable_feishu_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
     subscription_service: Annotated[
@@ -111,15 +124,19 @@ def disable_feishu_account(
     ],
 ) -> FeishuGatewayAccountRecord:
     try:
-        updated = service.set_account_enabled(account_id, False)
-        subscription_service.reload()
-        return updated
+
+        def _disable_feishu_account() -> FeishuGatewayAccountRecord:
+            updated = service.set_account_enabled(account_id, False)
+            subscription_service.reload()
+            return updated
+
+        return await run_in_threadpool(_disable_feishu_account)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.delete("/accounts/{account_id}")
-def delete_feishu_account(
+async def delete_feishu_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
     subscription_service: Annotated[
@@ -129,10 +146,15 @@ def delete_feishu_account(
     req: DeleteRequest | None = Body(default=None),
 ) -> dict[str, str]:
     try:
-        service.delete_account(
-            account_id, force=req.force if req is not None else False
-        )
-        subscription_service.reload()
+
+        def _delete_feishu_account() -> None:
+            service.delete_account(
+                account_id,
+                force=req.force if req is not None else False,
+            )
+            subscription_service.reload()
+
+        await run_in_threadpool(_delete_feishu_account)
         return {"status": "ok"}
     except (KeyError, RuntimeError) as exc:
         raise http_exception_for(
@@ -142,11 +164,11 @@ def delete_feishu_account(
 
 
 @router.post("/reload")
-def reload_feishu_gateway(
+async def reload_feishu_gateway(
     subscription_service: Annotated[
         FeishuSubscriptionService,
         Depends(get_feishu_subscription_service),
     ],
 ) -> dict[str, str]:
-    subscription_service.reload()
+    await run_in_threadpool(subscription_service.reload)
     return {"status": "ok"}

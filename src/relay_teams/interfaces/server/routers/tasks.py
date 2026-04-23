@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
@@ -31,10 +33,10 @@ class UpdateTaskRequest(BaseModel):
 
 
 @router.get("", response_model=list[TaskRecord])
-def list_tasks(
+async def list_tasks(
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> list[TaskRecord]:
-    return list(service.list_tasks())
+    return list(await asyncio.to_thread(service.list_tasks))
 
 
 @router.post("/runs/{run_id}")
@@ -56,36 +58,41 @@ async def create_tasks_for_run(
 
 
 @router.get("/runs/{run_id}")
-def list_tasks_for_run(
+async def list_tasks_for_run(
     run_id: RequiredIdentifierStr,
     include_root: bool = False,
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> dict[str, JsonValue]:
     try:
-        return service.list_delegated_tasks(run_id=run_id, include_root=include_root)
+        return await asyncio.to_thread(
+            service.list_delegated_tasks,
+            run_id=run_id,
+            include_root=include_root,
+        )
     except KeyError as exc:
         raise http_exception_for(exc) from exc
 
 
 @router.get("/{task_id}", response_model=TaskRecord)
-def get_task(
+async def get_task(
     task_id: RequiredIdentifierStr,
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> TaskRecord:
     try:
-        return service.get_task(task_id=task_id)
+        return await asyncio.to_thread(service.get_task, task_id=task_id)
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Task not found") from exc
 
 
 @router.patch("/{task_id}")
-def update_task_by_id(
+async def update_task_by_id(
     task_id: RequiredIdentifierStr,
     req: UpdateTaskRequest,
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> dict[str, JsonValue]:
     try:
-        return service.update_task(
+        return await asyncio.to_thread(
+            service.update_task,
             run_id=None,
             task_id=task_id,
             update=TaskUpdate(

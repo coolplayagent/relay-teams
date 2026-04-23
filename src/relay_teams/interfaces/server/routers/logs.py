@@ -6,6 +6,7 @@ from typing import ClassVar
 
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from starlette.concurrency import run_in_threadpool
 
 from relay_teams.logger import get_logger, log_event
 from relay_teams.trace import bind_trace_context, generate_trace_id
@@ -43,7 +44,11 @@ class FrontendLogBatchRequest(BaseModel):
 
 
 @router.post("/frontend")
-def ingest_frontend_logs(req: FrontendLogBatchRequest) -> dict[str, int]:
+async def ingest_frontend_logs(req: FrontendLogBatchRequest) -> dict[str, int]:
+    return await run_in_threadpool(_ingest_frontend_logs, req)
+
+
+def _ingest_frontend_logs(req: FrontendLogBatchRequest) -> dict[str, int]:
     accepted = 0
     for item in req.events:
         with bind_trace_context(

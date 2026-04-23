@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from importlib import import_module
 from pathlib import Path
@@ -10,9 +11,8 @@ import subprocess
 import sys
 import time
 from typing import cast
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
+import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 import typer
 from typer.models import OptionInfo
@@ -23,6 +23,7 @@ from relay_teams.interfaces.server.runtime_identity import (
     build_server_runtime_identity,
     raise_if_runtime_mismatch,
 )
+from relay_teams.net.clients import create_async_http_client
 from relay_teams.paths import get_project_config_dir
 
 DEFAULT_SERVER_HOST = "127.0.0.1"
@@ -57,22 +58,56 @@ def _health_check_host(host: str) -> str:
 
 
 def get_server_health(base_url: str) -> ServerHealthPayload | None:
-    request = Request(
-        url=f"{base_url.rstrip('/')}{_SERVER_HEALTH_PATH}",
-        method="GET",
-        headers={"Accept": "application/json"},
-    )
+    return asyncio.run(get_server_health_async(base_url))
+
+
+async def get_server_health_async(base_url: str) -> ServerHealthPayload | None:
     try:
-        with urlopen(request, timeout=1.5) as response:
-            raw_payload = response.read().decode("utf-8")
-            return ServerHealthPayload.model_validate_json(raw_payload)
-    except (HTTPError, URLError, OSError, ValidationError, ValueError):
+        async with create_async_http_client(
+            timeout_seconds=1.5,
+            connect_timeout_seconds=1.5,
+        ) as client:
+            response = await client.get(
+                f"{base_url.rstrip('/')}{_SERVER_HEALTH_PATH}",
+                headers={"Accept": "application/json"},
+            )
+            response.raise_for_status()
+            return ServerHealthPayload.model_validate_json(response.text)
+    except (
+        httpx.HTTPError,
+        OSError,
+        ValidationError,
+        ValueError,
+    ):
         return None
+
+
+async def _is_server_healthy_async(base_url: str) -> bool:
+    health = await get_server_health_async(base_url)
+    return health is not None and health.status == "ok"
 
 
 def is_server_healthy(base_url: str) -> bool:
     health = get_server_health(base_url)
     return health is not None and health.status == "ok"
+
+
+async def _wait_until_healthy_async(
+    base_url: str, timeout_seconds: float = 20.0
+) -> bool:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    while loop.time() < deadline:
+        if await _is_server_healthy_async(base_url):
+            return True
+        await asyncio.sleep(0.25)
+    return False
+
+
+def wait_until_healthy(base_url: str, timeout_seconds: float = 20.0) -> bool:
+    return asyncio.run(
+        _wait_until_healthy_async(base_url, timeout_seconds=timeout_seconds)
+    )
 
 
 def start_server_daemon(host: str, port: int) -> None:
@@ -115,15 +150,6 @@ def start_server_daemon(host: str, port: int) -> None:
         stdin=subprocess.DEVNULL,
         start_new_session=True,
     )
-
-
-def wait_until_healthy(base_url: str, timeout_seconds: float = 20.0) -> bool:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        if is_server_healthy(base_url):
-            return True
-        time.sleep(0.25)
-    return False
 
 
 _DAEMON_START_TIMEOUT_SECONDS = 20.0

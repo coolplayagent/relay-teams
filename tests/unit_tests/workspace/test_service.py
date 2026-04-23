@@ -54,6 +54,7 @@ class FakeGitWorktreeClient(GitWorktreeClient):
         self.add_calls: list[tuple[Path, str, Path, str]] = []
         self.remove_calls: list[tuple[Path, Path]] = []
         self.prune_calls: list[Path] = []
+        self.fetch_error: ValueError | None = None
 
     def ensure_repository(self, repository_root: Path) -> Path:
         self.ensure_calls.append(repository_root)
@@ -71,6 +72,8 @@ class FakeGitWorktreeClient(GitWorktreeClient):
         ref: str = "main",
     ) -> None:
         self.fetch_calls.append((repository_root, remote, ref))
+        if self.fetch_error is not None:
+            raise self.fetch_error
 
     def resolve_ref(self, repository_root: Path, ref_name: str) -> str:
         self.resolve_ref_calls.append((repository_root, ref_name))
@@ -340,6 +343,41 @@ def test_workspace_service_forks_workspace_from_explicit_start_ref(
             "fork/release-fork",
             (tmp_path / "storage" / "release-fork" / "worktree").resolve(),
             "resolved:origin/release",
+        )
+    ]
+
+
+def test_workspace_service_fork_workspace_falls_back_to_cached_origin_main_after_fetch_timeout(
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    git_client = FakeGitWorktreeClient()
+    git_client.fetch_error = ValueError("Git command timed out")
+    service = StorageScopedWorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db"),
+        storage_root=tmp_path / "storage",
+        git_worktree_client=git_client,
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    created = service.fork_workspace(
+        source_workspace_id="project-alpha",
+        name="Alpha Project Fork",
+    )
+
+    assert created.workspace_id == "alpha-project-fork"
+    assert git_client.fetch_calls == [(root_path.resolve(), "origin", "main")]
+    assert git_client.resolve_ref_calls == [(root_path.resolve(), "origin/main")]
+    assert git_client.add_calls == [
+        (
+            root_path.resolve(),
+            "fork/alpha-project-fork",
+            (tmp_path / "storage" / "alpha-project-fork" / "worktree").resolve(),
+            "resolved:origin/main",
         )
     ]
 

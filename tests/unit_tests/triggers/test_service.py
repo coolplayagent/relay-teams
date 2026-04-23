@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
+import threading
 from pathlib import Path
 from typing import Callable, cast
 
@@ -43,6 +45,7 @@ from relay_teams.triggers import (
     TriggerRuleMatchConfig,
     TriggerTargetType,
 )
+from relay_teams.triggers.action_worker import GitHubTriggerActionWorker
 
 
 class _FakeGitHubTriggerSecretStore(GitHubTriggerSecretStore):
@@ -83,6 +86,28 @@ class _FakeGitHubTriggerSecretStore(GitHubTriggerSecretStore):
 
     def delete_webhook_secret(self, config_dir: Path, *, account_id: str) -> None:
         self._webhook_secrets.pop((str(config_dir.resolve()), account_id), None)
+
+
+class _FakeGitHubTriggerActionWorkerService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def process_pending_actions(self) -> bool:
+        self.calls += 1
+        return self.calls == 1
+
+
+class _BlockingGitHubTriggerActionWorkerService:
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.finished = threading.Event()
+
+    def process_pending_actions(self) -> bool:
+        self.entered.set()
+        self.release.wait(timeout=2.0)
+        self.finished.set()
+        return False
 
 
 class _FakeGitHubApiClient:
@@ -1045,3 +1070,66 @@ def test_refresh_repo_callback_urls_from_system_config_clears_old_generated_call
     assert len(updated) == 1
     assert updated[0].callback_url is None
     assert updated[0].webhook_status == GitHubWebhookStatus.UNREGISTERED
+
+
+def test_github_trigger_action_worker_start_wake_stop() -> None:
+    async def run_worker() -> None:
+        service = _FakeGitHubTriggerActionWorkerService()
+        worker = GitHubTriggerActionWorker(
+            trigger_service=cast(GitHubTriggerService, service),
+            poll_interval_seconds=0.01,
+        )
+
+        await worker.stop()
+        await worker.start()
+        await worker.start()
+        worker.wake()
+        await asyncio.sleep(0.03)
+        await worker.stop()
+
+        assert service.calls >= 2
+
+    asyncio.run(run_worker())
+
+
+def test_github_trigger_action_worker_stop_waits_for_inflight_processing() -> None:
+    async def run_worker() -> None:
+        service = _BlockingGitHubTriggerActionWorkerService()
+        worker = GitHubTriggerActionWorker(
+            trigger_service=cast(GitHubTriggerService, service),
+            poll_interval_seconds=0.01,
+        )
+
+        await worker.start()
+        assert await asyncio.to_thread(service.entered.wait, 1.0)
+
+        stop_task = asyncio.create_task(worker.stop())
+        await asyncio.sleep(0.03)
+        assert not stop_task.done()
+
+        service.release.set()
+        await asyncio.wait_for(stop_task, timeout=1.0)
+        assert service.finished.is_set()
+
+    asyncio.run(run_worker())
+
+
+def test_github_trigger_action_worker_stop_times_out_for_stalled_processing() -> None:
+    async def run_worker() -> None:
+        service = _BlockingGitHubTriggerActionWorkerService()
+        worker = GitHubTriggerActionWorker(
+            trigger_service=cast(GitHubTriggerService, service),
+            poll_interval_seconds=0.01,
+            stop_timeout_seconds=0.05,
+        )
+
+        await worker.start()
+        assert await asyncio.to_thread(service.entered.wait, 1.0)
+
+        await asyncio.wait_for(worker.stop(), timeout=1.0)
+        assert service.finished.is_set() is False
+
+        service.release.set()
+        assert await asyncio.to_thread(service.finished.wait, 1.0)
+
+    asyncio.run(run_worker())

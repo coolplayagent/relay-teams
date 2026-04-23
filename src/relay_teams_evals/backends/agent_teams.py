@@ -1,24 +1,31 @@
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import TYPE_CHECKING, Iterator
+from typing import (
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Iterable,
+    Iterator,
+    Mapping,
+    TypeVar,
+    Union,
+    cast,
+)
+from inspect import isawaitable
 
 import typer
 
+from relay_teams.interfaces.sdk.client import AsyncAgentTeamsClient
 from relay_teams_evals.backends.agent_teams_config import AgentTeamsConfig
 from relay_teams_evals.backends.base import AgentBackend, AgentEvent
 from relay_teams_evals.workspace.base import PreparedWorkspace
 
-if TYPE_CHECKING:
-    from relay_teams.interfaces.sdk.client import (
-        AgentTeamsClient as AgentTeamsClientType,
-    )
-else:
-    AgentTeamsClientType = object
-
-AgentTeamsClient: type[AgentTeamsClientType] | None = None
+AgentTeamsClient = AsyncAgentTeamsClient
 
 _TERMINAL_EVENTS = frozenset({"run_completed", "run_failed", "run_stopped"})
+T = TypeVar("T")
 
 
 def _log(item_id: str, msg: str) -> None:
@@ -348,20 +355,35 @@ def _log_run_event(
     _log(item_id, f"[event #{event_count}] {event_type}")
 
 
-def _try_delete_workspace(client: AgentTeamsClientType, workspace_id: str) -> None:
+async def _try_delete_workspace(
+    client: AsyncAgentTeamsClient, workspace_id: str
+) -> None:
     try:
-        client.delete_workspace(workspace_id)
+        await _maybe_await(client.delete_workspace(workspace_id))
     except Exception:
         pass
 
 
-def _get_agent_teams_client() -> type[AgentTeamsClientType]:
-    global AgentTeamsClient
-    if AgentTeamsClient is None:
-        from relay_teams.interfaces.sdk.client import AgentTeamsClient as _Client
-
-        AgentTeamsClient = _Client
+def _get_agent_teams_client() -> type[AsyncAgentTeamsClient]:
     return AgentTeamsClient
+
+
+# noinspection PyTypeHints
+async def _maybe_await(value: Union[T, Awaitable[T]]) -> T:
+    if isawaitable(value):
+        return await value
+    return value
+
+
+async def _iter_raw_events(
+    stream: Union[AsyncIterable[Mapping[str, object]], Iterable[Mapping[str, object]]],
+) -> AsyncIterator[Mapping[str, object]]:
+    if isinstance(stream, AsyncIterable):
+        async for raw_event in stream:
+            yield raw_event
+        return
+    for raw_event in stream:
+        yield raw_event
 
 
 class AgentTeamsBackend(AgentBackend):
@@ -374,6 +396,28 @@ class AgentTeamsBackend(AgentBackend):
         workspace: PreparedWorkspace,
         keep_workspace: bool = False,
     ) -> Iterator[AgentEvent]:
+        async_events = self.run_async(
+            intent=intent,
+            workspace=workspace,
+            keep_workspace=keep_workspace,
+        )
+
+        async def _next_event() -> AgentEvent:
+            return await anext(async_events)
+
+        with asyncio.Runner() as runner:
+            while True:
+                try:
+                    yield runner.run(_next_event())
+                except StopAsyncIteration:
+                    break
+
+    async def run_async(
+        self,
+        intent: str,
+        workspace: PreparedWorkspace,
+        keep_workspace: bool = False,
+    ) -> AsyncIterator[AgentEvent]:
         base_url = workspace.agent_base_url or self._config.base_url
         client_cls = _get_agent_teams_client()
         client = client_cls(
@@ -382,17 +426,23 @@ class AgentTeamsBackend(AgentBackend):
         )
 
         workspace_id = f"eval-{workspace.item_id}"
-        _try_delete_workspace(client, workspace_id)
+        await _try_delete_workspace(client, workspace_id)
         _log(workspace.item_id, f"registering workspace {workspace_id!r} ...")
         root_path = workspace.container_repo_path or str(workspace.repo_path.resolve())
-        client.create_workspace(
-            workspace_id=workspace_id,
-            root_path=root_path,
+        await _maybe_await(
+            client.create_workspace(
+                workspace_id=workspace_id,
+                root_path=root_path,
+            )
         )
 
         try:
             _log(workspace.item_id, "creating session ...")
-            session_data = client.create_session(workspace_id=workspace_id)
+            # noinspection PyTypeHints
+            session_data = cast(
+                dict[str, object],
+                await _maybe_await(client.create_session(workspace_id=workspace_id)),
+            )
             session_id = str(session_data.get("session_id", ""))
             _log(workspace.item_id, f"session: {session_id}")
             if self._config.session_mode == "orchestration":
@@ -402,18 +452,22 @@ class AgentTeamsBackend(AgentBackend):
                     workspace.item_id,
                     "configuring session mode: orchestration" + preset_suffix,
                 )
-                client.update_session_topology(
-                    session_id,
-                    session_mode="orchestration",
-                    orchestration_preset_id=preset_id,
+                await _maybe_await(
+                    client.update_session_topology(
+                        session_id,
+                        session_mode="orchestration",
+                        orchestration_preset_id=preset_id,
+                    )
                 )
 
             _log(workspace.item_id, "creating run ...")
-            run_handle = client.create_run(
-                input=intent,
-                session_id=session_id,
-                execution_mode=self._config.execution_mode,
-                yolo=self._config.yolo,
+            run_handle = await _maybe_await(
+                client.create_run(
+                    input=intent,
+                    session_id=session_id,
+                    execution_mode=self._config.execution_mode,
+                    yolo=self._config.yolo,
+                )
             )
             run_id = run_handle.run_id
             _log(workspace.item_id, f"run: {run_id}")
@@ -422,7 +476,8 @@ class AgentTeamsBackend(AgentBackend):
 
             _log(workspace.item_id, "streaming events ...")
             event_count = 0
-            for raw_event in client.stream_run_events(run_id):
+            stream = await _maybe_await(client.stream_run_events(run_id))
+            async for raw_event in _iter_raw_events(stream):
                 event_count += 1
                 event_type = raw_event.get("event_type")
                 payload_json = raw_event.get("payload_json", "{}")
@@ -480,4 +535,4 @@ class AgentTeamsBackend(AgentBackend):
 
         finally:
             if not keep_workspace:
-                _try_delete_workspace(client, workspace_id)
+                await _try_delete_workspace(client, workspace_id)

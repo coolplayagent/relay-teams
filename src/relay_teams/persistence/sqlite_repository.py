@@ -1,15 +1,22 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import sqlite3
-from collections.abc import Callable
 from pathlib import Path
 from threading import RLock
-from typing import TypeVar
+from typing import Awaitable, Callable, Optional, Self, TypeVar
 
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+import aiosqlite
 
-_ResultT = TypeVar("_ResultT")
+from relay_teams.persistence.db import (
+    open_async_sqlite,
+    open_sqlite,
+    run_async_sqlite_write_with_retry,
+    run_sqlite_write_with_retry,
+)
+
+ResultT = TypeVar("ResultT")
 
 
 class SharedSqliteRepository:
@@ -17,7 +24,7 @@ class SharedSqliteRepository:
         self,
         db_path: Path,
         *,
-        repository_name: str | None = None,
+        repository_name: Optional[str] = None,
     ) -> None:
         self._db_path = Path(db_path)
         self._conn = open_sqlite(self._db_path)
@@ -25,17 +32,80 @@ class SharedSqliteRepository:
         self._lock = RLock()
         self._repository_name = repository_name or type(self).__name__
 
-    def _run_read(self, operation: Callable[[], _ResultT]) -> _ResultT:
+    # noinspection PyTypeHints
+    def _run_read(self, operation: Callable[[], ResultT]) -> ResultT:
         with self._lock:
             return operation()
 
+    # noinspection PyTypeHints
     def _run_write(
         self,
         *,
         operation_name: str,
-        operation: Callable[[], _ResultT],
-    ) -> _ResultT:
+        operation: Callable[[], ResultT],
+    ) -> ResultT:
         return run_sqlite_write_with_retry(
+            conn=self._conn,
+            db_path=self._db_path,
+            operation=operation,
+            lock=self._lock,
+            repository_name=self._repository_name,
+            operation_name=operation_name,
+        )
+
+
+class AsyncSharedSqliteRepository:
+    def __init__(
+        self,
+        db_path: Path,
+        conn: aiosqlite.Connection,
+        *,
+        repository_name: Optional[str] = None,
+    ) -> None:
+        self._db_path = Path(db_path)
+        self._conn = conn
+        self._conn.row_factory = sqlite3.Row
+        self._lock = asyncio.Lock()
+        self._repository_name = repository_name or type(self).__name__
+
+    @classmethod
+    async def open(
+        cls,
+        db_path: Path,
+        *,
+        repository_name: Optional[str] = None,
+    ) -> Self:
+        repository = cls(
+            db_path,
+            await open_async_sqlite(db_path),
+            repository_name=repository_name,
+        )
+        await repository._initialize()
+        return repository
+
+    async def close(self) -> None:
+        await self._conn.close()
+
+    async def _initialize(self) -> None:
+        self._conn.row_factory = sqlite3.Row
+
+    # noinspection PyTypeHints
+    async def _run_read(
+        self,
+        operation: Callable[[], Awaitable[ResultT]],
+    ) -> ResultT:
+        async with self._lock:
+            return await operation()
+        raise RuntimeError("Async SQLite read helper exited without a result")
+
+    # noinspection PyTypeHints
+    async def _run_write(
+        self,
+        *,
+        operation_name: str,
+        operation: Callable[[], Awaitable[ResultT]],
+    ) -> ResultT:
+        return await run_async_sqlite_write_with_retry(
             conn=self._conn,
             db_path=self._db_path,
             operation=operation,

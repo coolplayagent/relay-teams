@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import cast
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Callable, cast
 
 from pydantic import JsonValue
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from relay_teams.env.proxy_env import ProxyEnvInput
 from relay_teams.external_agents import (
@@ -56,6 +59,7 @@ from relay_teams.interfaces.server.deps import (
     get_github_connectivity_probe_service,
     get_github_config_service,
     get_github_webhook_connectivity_probe_service,
+    get_hook_service,
     get_localhost_run_tunnel_service,
     get_github_trigger_service,
     get_mcp_config_reload_service,
@@ -77,6 +81,7 @@ from relay_teams.interfaces.server.routers import system
 from relay_teams.providers.model_connectivity import (
     ModelConnectivityProbeRequest,
     ModelConnectivityProbeResult,
+    ModelDiscoveryRequest,
     ModelDiscoveryResult,
 )
 from relay_teams.providers.model_config import (
@@ -94,6 +99,7 @@ from relay_teams.skills.clawhub_models import (
     ClawHubSkillWriteRequest,
 )
 from relay_teams.skills.skill_models import SkillSource
+from relay_teams.hooks import HookRuntimeView, HooksConfig
 from relay_teams.notifications.models import NotificationConfig
 from relay_teams.agents.orchestration.settings_models import OrchestrationSettings
 from relay_teams.workspace import (
@@ -128,6 +134,7 @@ class _FakeSystemService:
         self.started_tunnel_request: dict[str, object] | None = None
         self.stopped_tunnel_request: dict[str, object] | None = None
         self.saved_ui_language_settings: dict[str, object] | None = None
+        self.saved_hooks_config: dict[str, object] | None = None
         self.proxy_save_error: RuntimeError | None = None
         self.model_reload_error: Exception | None = None
         self.proxy_reload_error: Exception | None = None
@@ -513,6 +520,19 @@ class _FakeSystemService:
     def save_orchestration_config(self, config: OrchestrationSettings) -> None:
         self.saved_orchestration_config = config.model_dump(mode="json")
 
+    def get_user_config(self) -> HooksConfig:
+        return HooksConfig()
+
+    def get_runtime_view(self) -> HookRuntimeView:
+        return HookRuntimeView()
+
+    def save_user_config(self, config: HooksConfig) -> HooksConfig:
+        self.saved_hooks_config = config.model_dump(mode="json")
+        return config
+
+    def validate_config(self, config: HooksConfig) -> HooksConfig:
+        return config
+
     def get_provider_models(
         self,
         *,
@@ -670,6 +690,14 @@ class _FakeSystemService:
             return self.probe_webhook_connectivity(request)
         return self.probe_connectivity(request)
 
+    async def probe_async(
+        self,
+        request: GitHubConnectivityProbeRequest,
+    ) -> GitHubConnectivityProbeResult:
+        result = self.probe_connectivity(request)
+        assert isinstance(result, GitHubConnectivityProbeResult)
+        return result
+
     def discover_models(
         self,
         _request: object,
@@ -803,6 +831,18 @@ class _FakeSystemService:
         self.ssh_profile_passwords.pop(ssh_profile_id, None)
 
 
+class _AsyncWebProbeAdapter:
+    def __init__(self, delegate: _FakeSystemService) -> None:
+        self._delegate = delegate
+
+    async def probe(
+        self, request: WebConnectivityProbeRequest
+    ) -> WebConnectivityProbeResult:
+        result = self._delegate.probe(request)
+        assert isinstance(result, WebConnectivityProbeResult)
+        return result
+
+
 def _create_test_client(fake_service: object) -> TestClient:
     app = FastAPI()
     app.include_router(system.router, prefix="/api")
@@ -813,7 +853,11 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_mcp_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_skills_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_proxy_config_service] = lambda: fake_service
-    app.dependency_overrides[get_web_connectivity_probe_service] = lambda: fake_service
+    app.dependency_overrides[get_web_connectivity_probe_service] = lambda: (
+        _AsyncWebProbeAdapter(fake_service)
+        if isinstance(fake_service, _FakeSystemService)
+        else fake_service
+    )
     app.dependency_overrides[get_github_connectivity_probe_service] = lambda: (
         fake_service
     )
@@ -832,6 +876,7 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_localhost_run_tunnel_service] = lambda: fake_service
     app.dependency_overrides[get_github_trigger_service] = lambda: fake_service
     app.dependency_overrides[get_external_agent_config_service] = lambda: fake_service
+    app.dependency_overrides[get_hook_service] = lambda: fake_service
     return TestClient(app)
 
 
@@ -860,6 +905,42 @@ def test_health_check_returns_runtime_identity_and_skill_sanity() -> None:
     tool_registry_sanity = payload["tool_registry_sanity"]
     assert tool_registry_sanity["available_tool_count"] >= 1
     assert "write" in tool_registry_sanity["available_tool_names"]
+
+
+def test_health_check_builds_payload_in_worker_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+    app = cast(FastAPI, client.app)
+    app.state.container = SimpleNamespace(
+        config_dir=Path("/tmp/config"),
+        role_registry=None,
+        skill_registry=None,
+        tool_registry=None,
+    )
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    assert [call[0] for call in calls] == ["build_server_health_payload"]
+    assert calls[0][2] == {
+        "config_dir": Path("/tmp/config"),
+        "role_registry": None,
+        "skill_registry": None,
+        "tool_registry": None,
+    }
 
 
 def test_get_notification_config() -> None:
@@ -921,6 +1002,327 @@ def test_probe_ssh_profile_connectivity() -> None:
     assert payload["ssh_profile_id"] == "prod"
     assert payload["host"] == "prod-alias"
     assert payload["latency_ms"] == 44
+
+
+def test_probe_ssh_profile_connectivity_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[SshProfileConnectivityProbeRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[
+            [SshProfileConnectivityProbeRequest],
+            SshProfileConnectivityProbeResult,
+        ],
+        request: SshProfileConnectivityProbeRequest,
+    ) -> SshProfileConnectivityProbeResult:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/workspace/ssh-profiles:probe",
+        json={"ssh_profile_id": "prod"},
+    )
+
+    assert response.status_code == 200
+    assert [call.ssh_profile_id for call in calls] == ["prod"]
+
+
+def test_ssh_profile_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    responses = [
+        client.get("/api/system/configs/workspace/ssh-profiles"),
+        client.get("/api/system/configs/workspace/ssh-profiles/prod"),
+        client.post("/api/system/configs/workspace/ssh-profiles/prod:reveal-password"),
+        client.put(
+            "/api/system/configs/workspace/ssh-profiles/staging",
+            json={
+                "config": {
+                    "host": "staging-alias",
+                    "username": "ops",
+                    "password": "relay-secret",
+                    "port": 2222,
+                    "remote_shell": "/bin/bash",
+                    "connect_timeout_seconds": 15,
+                    "private_key": ("-----BEGIN KEY-----\ncontent\n-----END KEY-----"),
+                    "private_key_name": "id_rsa",
+                }
+            },
+        ),
+        client.delete("/api/system/configs/workspace/ssh-profiles/staging"),
+    ]
+
+    assert [response.status_code for response in responses] == [200] * len(responses)
+    assert [call[0] for call in calls] == [
+        "list_profiles",
+        "get_profile",
+        "reveal_password",
+        "save_profile",
+        "delete_profile",
+    ]
+
+
+def test_sync_system_read_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    responses = [
+        client.get("/api/system/configs"),
+        client.get("/api/system/configs/ui-language"),
+        client.get("/api/system/configs/model"),
+        client.get("/api/system/configs/model/profiles"),
+        client.get("/api/system/configs/model-fallback"),
+        client.get("/api/system/configs/model/providers/models"),
+        client.get("/api/system/configs/notifications"),
+        client.get("/api/system/configs/proxy"),
+        client.get("/api/system/configs/web"),
+        client.get("/api/system/configs/agents"),
+        client.get("/api/system/configs/agents/codex_local"),
+        client.get("/api/system/configs/github"),
+        client.post("/api/system/configs/github:reveal"),
+        client.get("/api/system/configs/clawhub"),
+        client.get("/api/system/configs/clawhub/skills"),
+        client.get("/api/system/configs/clawhub/skills/skill-creator-2"),
+        client.get("/api/system/configs/orchestration"),
+        client.get("/api/system/configs/github/webhook/tunnel"),
+        client.get("/api/system/configs/hooks"),
+        client.get("/api/system/configs/hooks/runtime"),
+    ]
+
+    assert [response.status_code for response in responses] == [200] * len(responses)
+    assert [call[0] for call in calls] == [
+        "get_config_status",
+        "get_ui_language_settings",
+        "get_model_config",
+        "get_model_profiles",
+        "get_model_fallback_config",
+        "get_provider_models",
+        "get_notification_config",
+        "get_saved_proxy_config",
+        "get_web_config",
+        "list_agents",
+        "get_agent",
+        "get_github_config_view",
+        "reveal_github_token",
+        "get_clawhub_config",
+        "list_skills",
+        "get_skill",
+        "get_orchestration_config",
+        "get_status",
+        "get_user_config",
+        "get_runtime_view",
+    ]
+
+
+def test_sync_system_write_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    async def fake_probe(_config: ExternalAgentConfig) -> ExternalAgentTestResult:
+        return ExternalAgentTestResult(
+            ok=True,
+            message="Connected",
+            agent_name="Codex",
+            agent_version="1.0.0",
+            protocol_version=1,
+        )
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "probe_acp_agent", fake_probe)
+    client = _create_test_client(_FakeSystemService())
+
+    responses = [
+        client.put("/api/system/configs/ui-language", json={"language": "en-US"}),
+        client.put(
+            "/api/system/configs/model/profiles/default",
+            json={
+                "provider": "openai_compatible",
+                "model": "gpt-4o-mini",
+                "base_url": "https://example.test/v1",
+                "temperature": 0.2,
+                "top_p": 1.0,
+                "connect_timeout_seconds": 25.0,
+            },
+        ),
+        client.delete("/api/system/configs/model/profiles/default"),
+        client.put(
+            "/api/system/configs/model",
+            json={
+                "default": {
+                    "provider": "openai_compatible",
+                    "model": "gpt-4o-mini",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "secret",
+                }
+            },
+        ),
+        client.put(
+            "/api/system/configs/model-fallback",
+            json={
+                "policies": [
+                    {
+                        "policy_id": "same_provider_then_other_provider",
+                        "name": "Same Provider Then Other Provider",
+                        "enabled": True,
+                        "trigger": "rate_limit_after_retries",
+                        "strategy": "same_provider_then_other_provider",
+                        "max_hops": 4,
+                        "cooldown_seconds": 90,
+                    }
+                ]
+            },
+        ),
+        client.put(
+            "/api/system/configs/notifications",
+            json={
+                "tool_approval_requested": {
+                    "enabled": True,
+                    "channels": ["browser", "toast"],
+                    "feishu_format": "text",
+                },
+                "run_completed": {
+                    "enabled": True,
+                    "channels": ["toast"],
+                    "feishu_format": "text",
+                },
+                "run_failed": {
+                    "enabled": True,
+                    "channels": ["browser", "toast"],
+                    "feishu_format": "text",
+                },
+                "run_stopped": {
+                    "enabled": False,
+                    "channels": ["toast"],
+                    "feishu_format": "text",
+                },
+            },
+        ),
+        client.put(
+            "/api/system/configs/proxy",
+            json={
+                "http_proxy": "http://proxy.example:8080",
+                "proxy_username": "alice",
+                "proxy_password": "secret",
+            },
+        ),
+        client.put(
+            "/api/system/configs/web",
+            json={
+                "provider": "exa",
+                "exa_api_key": "secret",
+                "fallback_provider": "searxng",
+                "searxng_instance_url": "https://search.example.test/",
+            },
+        ),
+        client.put(
+            "/api/system/configs/agents/claude_http",
+            json={
+                "agent_id": "claude_http",
+                "name": "Claude HTTP",
+                "description": "Runs Claude over HTTP",
+                "transport": {
+                    "transport": "streamable_http",
+                    "url": "http://127.0.0.1:4100/acp",
+                    "headers": [],
+                    "ssl_verify": True,
+                },
+            },
+        ),
+        client.delete("/api/system/configs/agents/claude_http"),
+        client.post("/api/system/configs/agents/codex_local:test"),
+        client.put("/api/system/configs/clawhub", json={"token": "ch_secret"}),
+        client.put(
+            "/api/system/configs/clawhub/skills/demo-skill",
+            json={
+                "runtime_name": "demo-skill",
+                "description": "Demo skill",
+                "instructions": "Use with care.",
+                "files": [],
+            },
+        ),
+        client.delete("/api/system/configs/clawhub/skills/demo-skill"),
+        client.put(
+            "/api/system/configs/orchestration",
+            json={
+                "default_orchestration_preset_id": "shipping",
+                "presets": [
+                    {
+                        "preset_id": "shipping",
+                        "name": "Shipping",
+                        "description": "Release work.",
+                        "role_ids": ["writer"],
+                        "orchestration_prompt": "Use writer for outward-facing updates.",
+                    }
+                ],
+            },
+        ),
+        client.post("/api/system/configs/model:reload"),
+        client.post("/api/system/configs/proxy:reload"),
+        client.post("/api/system/configs/mcp:reload"),
+        client.post("/api/system/configs/skills:reload"),
+        client.put("/api/system/configs/hooks", json={"hooks": {}}),
+        client.post("/api/system/configs/hooks:validate", json={"hooks": {}}),
+    ]
+
+    assert [response.status_code for response in responses] == [200] * len(responses)
+    assert [call[0] for call in calls] == [
+        "save_ui_language_settings",
+        "save_model_profile",
+        "delete_model_profile",
+        "save_model_config",
+        "save_model_fallback_config",
+        "save_notification_config",
+        "save_proxy_config",
+        "save_web_config",
+        "save_agent",
+        "delete_agent",
+        "resolve_runtime_agent",
+        "save_clawhub_config",
+        "save_skill",
+        "delete_skill",
+        "save_orchestration_config",
+        "reload_model_config",
+        "reload_proxy_config",
+        "reload_mcp_config",
+        "reload_skills_config",
+        "save_user_config",
+        "validate_config",
+    ]
 
 
 def test_save_and_delete_ssh_profile() -> None:
@@ -1139,6 +1541,27 @@ def test_save_github_config() -> None:
     assert service.refreshed_github_callback_previous_base_url is None
 
 
+def test_save_github_config_runs_refresh_in_threadpool(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_to_thread(func: Callable[[], None]) -> None:
+        calls.append("save")
+        func()
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/github",
+        json={"webhook_base_url": "https://agent-teams.example.com"},
+    )
+
+    assert response.status_code == 200
+    assert calls == ["save"]
+    assert service.current_github_webhook_base_url == "https://agent-teams.example.com"
+
+
 def test_save_github_config_rejects_removed_clear_token_field() -> None:
     client = _create_test_client(_FakeSystemService())
 
@@ -1204,6 +1627,36 @@ def test_probe_github_webhook_connectivity() -> None:
     }
 
 
+def test_probe_github_webhook_connectivity_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[GitHubWebhookConnectivityProbeRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[
+            [GitHubWebhookConnectivityProbeRequest],
+            GitHubWebhookConnectivityProbeResult,
+        ],
+        request: GitHubWebhookConnectivityProbeRequest,
+    ) -> GitHubWebhookConnectivityProbeResult:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/github/webhook:probe",
+        json={"webhook_base_url": "https://agent-teams.example.com"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert [call.webhook_base_url for call in calls] == [
+        "https://agent-teams.example.com"
+    ]
+
+
 def test_get_github_webhook_tunnel_status() -> None:
     service = _FakeSystemService()
     service.tunnel_status = LocalhostRunTunnelStatus(
@@ -1251,6 +1704,31 @@ def test_start_github_webhook_tunnel_saves_webhook_base_url() -> None:
     assert service.refreshed_github_callback_previous_base_url is None
 
 
+def test_start_github_webhook_tunnel_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_to_thread(
+        func: Callable[[], LocalhostRunTunnelStatus],
+    ) -> LocalhostRunTunnelStatus:
+        calls.append("start")
+        return func()
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.post(
+        "/api/system/configs/github/webhook/tunnel:start",
+        json={"auto_save_webhook_base_url": True},
+    )
+
+    assert response.status_code == 200
+    assert calls == ["start"]
+    assert service.current_github_webhook_base_url == "https://demo-tunnel.lhr.life"
+
+
 def test_stop_github_webhook_tunnel_clears_matching_webhook_base_url() -> None:
     service = _FakeSystemService()
     service.current_github_webhook_base_url = "https://demo-tunnel.lhr.life"
@@ -1278,6 +1756,34 @@ def test_stop_github_webhook_tunnel_clears_matching_webhook_base_url() -> None:
         service.refreshed_github_callback_previous_base_url
         == "https://demo-tunnel.lhr.life"
     )
+
+
+def test_stop_github_webhook_tunnel_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_to_thread(
+        func: Callable[[], LocalhostRunTunnelStatus],
+    ) -> LocalhostRunTunnelStatus:
+        calls.append("stop")
+        return func()
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    service = _FakeSystemService()
+    service.tunnel_status = LocalhostRunTunnelStatus(
+        status="active",
+        public_url="https://demo-tunnel.lhr.life",
+    )
+    client = _create_test_client(service)
+
+    response = client.post(
+        "/api/system/configs/github/webhook/tunnel:stop",
+        json={"clear_webhook_base_url_if_matching": False},
+    )
+
+    assert response.status_code == 200
+    assert calls == ["stop"]
 
 
 def test_get_clawhub_config() -> None:
@@ -1314,6 +1820,34 @@ def test_probe_clawhub_connectivity() -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["clawhub_version"] == "clawhub 0.4.2"
+
+
+def test_probe_clawhub_connectivity_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[ClawHubConnectivityProbeRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[
+            [ClawHubConnectivityProbeRequest],
+            ClawHubConnectivityProbeResult,
+        ],
+        request: ClawHubConnectivityProbeRequest,
+    ) -> ClawHubConnectivityProbeResult:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/clawhub:probe",
+        json={"token": "ch_secret", "timeout_ms": 2500},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert [call.token for call in calls] == ["ch_secret"]
 
 
 def test_probe_github_connectivity() -> None:
@@ -1660,6 +2194,33 @@ def test_probe_model_connectivity() -> None:
     assert payload["token_usage"]["total_tokens"] == 9
 
 
+def test_probe_model_connectivity_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[ModelConnectivityProbeRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[
+            [ModelConnectivityProbeRequest],
+            ModelConnectivityProbeResult,
+        ],
+        request: ModelConnectivityProbeRequest,
+    ) -> ModelConnectivityProbeResult:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/model:probe",
+        json={"profile_name": "default"},
+    )
+
+    assert response.status_code == 200
+    assert [call.profile_name for call in calls] == ["default"]
+
+
 def test_discover_model_catalog() -> None:
     client = _create_test_client(_FakeSystemService())
 
@@ -1678,6 +2239,30 @@ def test_discover_model_catalog() -> None:
     assert payload["ok"] is True
     assert payload["latency_ms"] == 37
     assert payload["models"] == ["fake-chat-model", "reasoning-model"]
+
+
+def test_discover_model_catalog_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[ModelDiscoveryRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[[ModelDiscoveryRequest], ModelDiscoveryResult],
+        request: ModelDiscoveryRequest,
+    ) -> ModelDiscoveryResult:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/model:discover",
+        json={"profile_name": "default"},
+    )
+
+    assert response.status_code == 200
+    assert [call.profile_name for call in calls] == ["default"]
 
 
 def test_reload_model_config_returns_bad_request_for_invalid_config() -> None:
@@ -2382,6 +2967,43 @@ def test_get_environment_variables() -> None:
     payload = response.json()
     assert payload["system"][0]["key"] == "ComSpec"
     assert payload["app"][0]["scope"] == "app"
+
+
+def test_environment_variable_routes_run_service_calls_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_env_test_client(_FakeEnvironmentVariableService())
+
+    responses = [
+        client.get("/api/system/configs/environment-variables"),
+        client.put(
+            "/api/system/configs/environment-variables/app/OPENAI_API_KEY",
+            json={
+                "source_key": "OPENAI_KEY",
+                "value": "updated-secret",
+            },
+        ),
+        client.delete("/api/system/configs/environment-variables/app/OPENAI_API_KEY"),
+    ]
+
+    assert [response.status_code for response in responses] == [200] * len(responses)
+    assert [call[0] for call in calls] == [
+        "list_environment_variables",
+        "save_environment_variable",
+        "delete_environment_variable",
+    ]
 
 
 def test_save_environment_variable() -> None:

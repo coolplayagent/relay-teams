@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+import threading
+from typing import cast
 
 from relay_teams.automation.automation_delivery_repository import (
     AutomationDeliveryRepository,
 )
-from relay_teams.automation.automation_delivery_service import AutomationDeliveryService
+from relay_teams.automation.automation_delivery_service import (
+    AutomationDeliveryService,
+    AutomationDeliveryWorker,
+)
 from relay_teams.automation.automation_models import (
     AutomationCleanupStatus,
     AutomationDeliveryEvent,
@@ -78,6 +84,28 @@ class _FakeFeishuClient:
         if self.fail_delete:
             raise RuntimeError("delete_failed")
         self.deleted_messages.append(message_id)
+
+
+class _FakeAutomationDeliveryWorkerService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def process_pending(self) -> bool:
+        self.calls += 1
+        return self.calls == 1
+
+
+class _BlockingAutomationDeliveryWorkerService:
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.finished = threading.Event()
+
+    def process_pending(self) -> bool:
+        self.entered.set()
+        _ = self.release.wait(timeout=2.0)
+        self.finished.set()
+        return False
 
 
 class _FakeNotificationService:
@@ -555,3 +583,66 @@ def test_delivery_service_emits_fallback_notification_after_terminal_delivery_fa
         }
     ]
     assert service.should_suppress_terminal_notification("run-1") is False
+
+
+def test_automation_delivery_worker_start_wake_stop() -> None:
+    async def run_worker() -> None:
+        service = _FakeAutomationDeliveryWorkerService()
+        worker = AutomationDeliveryWorker(
+            delivery_service=cast(AutomationDeliveryService, service),
+            poll_interval_seconds=0.01,
+        )
+
+        await worker.stop()
+        await worker.start()
+        await worker.start()
+        worker.wake()
+        await asyncio.sleep(0.03)
+        await worker.stop()
+
+        assert service.calls >= 2
+
+    asyncio.run(run_worker())
+
+
+def test_automation_delivery_worker_stop_waits_for_inflight_processing() -> None:
+    async def run_worker() -> None:
+        service = _BlockingAutomationDeliveryWorkerService()
+        worker = AutomationDeliveryWorker(
+            delivery_service=cast(AutomationDeliveryService, service),
+            poll_interval_seconds=0.01,
+        )
+
+        await worker.start()
+        assert await asyncio.to_thread(service.entered.wait, 1.0)
+        stop_task = asyncio.create_task(worker.stop())
+        await asyncio.sleep(0.03)
+        assert stop_task.done() is False
+
+        service.release.set()
+        await asyncio.wait_for(stop_task, timeout=1.0)
+
+        assert service.finished.is_set()
+
+    asyncio.run(run_worker())
+
+
+def test_automation_delivery_worker_stop_times_out_for_stalled_processing() -> None:
+    async def run_worker() -> None:
+        service = _BlockingAutomationDeliveryWorkerService()
+        worker = AutomationDeliveryWorker(
+            delivery_service=cast(AutomationDeliveryService, service),
+            poll_interval_seconds=0.01,
+            stop_timeout_seconds=0.05,
+        )
+
+        await worker.start()
+        assert await asyncio.to_thread(service.entered.wait, 1.0)
+
+        await asyncio.wait_for(worker.stop(), timeout=1.0)
+        assert service.finished.is_set() is False
+
+        service.release.set()
+        assert await asyncio.to_thread(service.finished.wait, 1.0)
+
+    asyncio.run(run_worker())

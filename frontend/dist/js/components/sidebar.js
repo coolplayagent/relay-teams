@@ -446,7 +446,7 @@ function formatProjectLabel(group) {
     if (group.kind === 'automation') {
         return String(group.project.display_name || group.project.name || group.id).trim() || group.id;
     }
-    return formatWorkspaceProjectLabel(group.workspace);
+    return String(group.displayLabel || formatWorkspaceProjectLabel(group.workspace)).trim() || group.id;
 }
 
 function formatWorkspaceOptionLabel(workspace) {
@@ -505,6 +505,40 @@ function groupKey(kind, id) {
     return `${kind}:${id}`;
 }
 
+function buildWorkspaceDisplayMetadata(workspaces) {
+    const labelCounts = new Map();
+    const pathCounts = new Map();
+    const safeWorkspaces = Array.isArray(workspaces) ? workspaces : [];
+
+    safeWorkspaces.forEach(workspace => {
+        const baseLabel = formatWorkspaceProjectLabel(workspace);
+        const rootPath = String(workspace?.root_path || '').trim();
+        labelCounts.set(baseLabel, (labelCounts.get(baseLabel) || 0) + 1);
+        if (rootPath) {
+            pathCounts.set(rootPath, (pathCounts.get(rootPath) || 0) + 1);
+        }
+    });
+
+    const metadata = new Map();
+    safeWorkspaces.forEach(workspace => {
+        const workspaceId = String(workspace?.workspace_id || '').trim();
+        if (!workspaceId) {
+            return;
+        }
+        const baseLabel = formatWorkspaceProjectLabel(workspace);
+        const rootPath = String(workspace?.root_path || '').trim();
+        const hasLabelCollision = (labelCounts.get(baseLabel) || 0) > 1;
+        const hasPathCollision = rootPath && (pathCounts.get(rootPath) || 0) > 1;
+        metadata.set(workspaceId, {
+            label: hasLabelCollision || hasPathCollision
+                ? workspaceId
+                : baseLabel,
+            pathHint: rootPath,
+        });
+    });
+    return metadata;
+}
+
 function sessionGroupKey(session) {
     const workspaceId = String(session?.workspace_id || '').trim();
     return workspaceId ? groupKey('workspace', workspaceId) : '';
@@ -512,6 +546,7 @@ function sessionGroupKey(session) {
 
 function buildProjectGroups(workspaces, sessions) {
     const sessionsByGroup = new Map();
+    const workspaceDisplayMetadata = buildWorkspaceDisplayMetadata(workspaces);
     sessionWorkspaceMap.clear();
 
     sessions.forEach(session => {
@@ -536,11 +571,14 @@ function buildProjectGroups(workspaces, sessions) {
             initializedProjectIds.add(key);
             expandedProjectIds.add(key);
         }
+        const displayMetadata = workspaceDisplayMetadata.get(id);
         groups.push({
             kind: 'workspace',
             id,
             key,
             workspace,
+            displayLabel: String(displayMetadata?.label || formatWorkspaceProjectLabel(workspace)).trim() || id,
+            pathHint: String(displayMetadata?.pathHint || workspace?.root_path || '').trim(),
             sessions: projectSessions,
             latestUpdatedAt: Math.max(timestampValue(workspace.updated_at), timestampValue(projectSessions[0]?.updated_at)),
         });
@@ -1049,7 +1087,7 @@ function renderProjectCard(group) {
     });
     const hasHiddenSessions = group.sessions.length > DEFAULT_VISIBLE_SESSION_COUNT;
     const projectViewActive = state.currentMainView === 'project' && state.currentProjectViewWorkspaceId === projectId;
-    const pathHint = String(group.workspace?.root_path || '').trim();
+    const pathHint = String(group.pathHint || group.workspace?.root_path || '').trim();
     const projectIcon = '<svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
     const card = document.createElement('section');
     card.className = 'project-card';

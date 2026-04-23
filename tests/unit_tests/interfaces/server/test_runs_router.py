@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import cast
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from relay_teams.interfaces.server.deps import get_run_service
 from relay_teams.interfaces.server.routers import runs
 from relay_teams.sessions.runs.run_models import IntentInput
+from relay_teams.sessions.runs.user_question_models import UserQuestionAnswer
 
 
 class _FakeRunService:
@@ -50,6 +54,9 @@ class _FakeRunService:
             "updated_by_role_id": "MainAgent",
             "updated_by_instance_id": "inst-1",
         }
+        self.answered_user_questions: list[
+            tuple[str, str, tuple[UserQuestionAnswer, ...]]
+        ] = []
 
     def create_run(self, intent_input) -> tuple[str, str]:
         self.created_run_inputs.append(intent_input)
@@ -170,6 +177,21 @@ class _FakeRunService:
         monitor = self.monitors[monitor_id]
         monitor["status"] = "stopped"
         return monitor
+
+    def answer_user_question(
+        self,
+        *,
+        run_id: str,
+        question_id: str,
+        answers,
+    ) -> dict[str, object]:
+        self.answered_user_questions.append((run_id, question_id, answers.answers))
+        return {
+            "status": "ok",
+            "run_id": run_id,
+            "question_id": question_id,
+            "answer_count": len(answers.answers),
+        }
 
 
 def _create_client(fake_service: _FakeRunService) -> TestClient:
@@ -490,3 +512,76 @@ def test_stop_monitor_route_returns_updated_monitor() -> None:
             "status": "stopped",
         }
     }
+
+
+def test_answer_user_question_route_offloads_service_call(monkeypatch) -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+    captured: dict[str, object] = {}
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        captured["func"] = func
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(runs.asyncio, "to_thread", fake_to_thread)
+
+    response = client.post(
+        "/api/runs/run-1/questions/question-1:answer",
+        json={"answers": [{"selections": [{"label": "A"}]}]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "run_id": "run-1",
+        "question_id": "question-1",
+        "answer_count": 1,
+    }
+    captured_kwargs = cast(dict[str, object], captured["kwargs"])
+    assert captured["func"] == fake_service.answer_user_question
+    assert captured["args"] == ()
+    assert captured_kwargs == {
+        "run_id": "run-1",
+        "question_id": "question-1",
+        "answers": captured_kwargs["answers"],
+    }
+    answered = fake_service.answered_user_questions
+    assert len(answered) == 1
+    assert answered[0][0] == "run-1"
+    assert answered[0][1] == "question-1"
+    assert len(answered[0][2]) == 1
+    assert answered[0][2][0].selections[0].label == "A"
+
+
+def test_list_monitors_route_offloads_service_call(monkeypatch) -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+    captured: dict[str, object] = {}
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        captured["func"] = func
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(runs.asyncio, "to_thread", fake_to_thread)
+
+    response = client.get("/api/runs/run-1/monitors")
+
+    assert response.status_code == 200
+    assert response.json() == {"items": [fake_service.monitors["mon-1"]]}
+    assert captured["func"] == fake_service.list_monitors
+    assert captured["args"] == ("run-1",)
+    assert captured["kwargs"] == {}

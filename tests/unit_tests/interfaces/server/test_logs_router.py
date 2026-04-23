@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from relay_teams.interfaces.server.routers import logs
 from relay_teams.logger import configure_logging, shutdown_logging
@@ -48,3 +50,40 @@ def test_frontend_logs_route_writes_frontend_log_only(tmp_path: Path) -> None:
     assert "event=frontend.ui.failure" not in backend_text
     assert "event=frontend.ui.failure" in frontend_text
     assert "browser_session_id" in frontend_text
+
+
+def test_frontend_logs_route_runs_batch_in_threadpool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(logs, "run_in_threadpool", fake_run_in_threadpool)
+    app = FastAPI()
+    app.include_router(logs.router, prefix="/api")
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/logs/frontend",
+        json={
+            "events": [
+                {
+                    "level": "info",
+                    "event": "ui.ready",
+                    "message": "frontend ready",
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"accepted": 1}
+    assert [call[0] for call in calls] == ["_ingest_frontend_logs"]

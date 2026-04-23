@@ -2,15 +2,15 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Generator
-from urllib.error import HTTPError, URLError
+from collections.abc import AsyncIterator
 from urllib.parse import quote
-from urllib.request import Request, urlopen
 
+import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from relay_teams.media import content_parts_from_text
-from relay_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
+from relay_teams.env import load_proxy_env_config
+from relay_teams.net import create_async_http_client
 
 
 class RunHandle(BaseModel):
@@ -20,7 +20,7 @@ class RunHandle(BaseModel):
     session_id: str
 
 
-class AgentTeamsClient:
+class AsyncAgentTeamsClient:
     """HTTP client for the Agent Teams server API."""
 
     def __init__(
@@ -33,74 +33,74 @@ class AgentTeamsClient:
         self._timeout_seconds = timeout_seconds
         self._stream_timeout_seconds = stream_timeout_seconds
 
-    def health(self) -> dict[str, JsonValue]:
-        return self._request_json("GET", "/api/system/health")
+    async def health(self) -> dict[str, JsonValue]:
+        return await self._request_json("GET", "/api/system/health")
 
-    def reload_proxy_config(self) -> dict[str, JsonValue]:
-        return self._request_json("POST", "/api/system/configs/proxy:reload")
+    async def reload_proxy_config(self) -> dict[str, JsonValue]:
+        return await self._request_json("POST", "/api/system/configs/proxy:reload")
 
-    def get_proxy_config(self) -> dict[str, JsonValue]:
-        return self._request_json("GET", "/api/system/configs/proxy")
+    async def get_proxy_config(self) -> dict[str, JsonValue]:
+        return await self._request_json("GET", "/api/system/configs/proxy")
 
-    def list_external_agents(self) -> list[dict[str, JsonValue]]:
-        data = self._request_json("GET", "/api/system/configs/agents")
+    async def list_external_agents(self) -> list[dict[str, JsonValue]]:
+        data = await self._request_json("GET", "/api/system/configs/agents")
         if isinstance(data, list):
             return [item for item in data if isinstance(item, dict)]
         return []
 
-    def get_external_agent(self, agent_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def get_external_agent(self, agent_id: str) -> dict[str, JsonValue]:
+        return await self._request_json(
             "GET",
             f"/api/system/configs/agents/{quote(agent_id, safe='')}",
         )
 
-    def save_external_agent(
+    async def save_external_agent(
         self,
         agent_id: str,
         payload: dict[str, JsonValue],
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "PUT",
             f"/api/system/configs/agents/{quote(agent_id, safe='')}",
             payload,
         )
 
-    def delete_external_agent(self, agent_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def delete_external_agent(self, agent_id: str) -> dict[str, JsonValue]:
+        return await self._request_json(
             "DELETE",
             f"/api/system/configs/agents/{quote(agent_id, safe='')}",
         )
 
-    def test_external_agent(self, agent_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def test_external_agent(self, agent_id: str) -> dict[str, JsonValue]:
+        return await self._request_json(
             "POST",
             f"/api/system/configs/agents/{quote(agent_id, safe='')}:test",
             {},
         )
 
-    def get_web_config(self) -> dict[str, JsonValue]:
-        return self._request_json("GET", "/api/system/configs/web")
+    async def get_web_config(self) -> dict[str, JsonValue]:
+        return await self._request_json("GET", "/api/system/configs/web")
 
-    def get_github_config(self) -> dict[str, JsonValue]:
-        return self._request_json("GET", "/api/system/configs/github")
+    async def get_github_config(self) -> dict[str, JsonValue]:
+        return await self._request_json("GET", "/api/system/configs/github")
 
-    def get_clawhub_config(self) -> dict[str, JsonValue]:
-        return self._request_json("GET", "/api/system/configs/clawhub")
+    async def get_clawhub_config(self) -> dict[str, JsonValue]:
+        return await self._request_json("GET", "/api/system/configs/clawhub")
 
-    def list_clawhub_skills(self) -> list[dict[str, JsonValue]]:
-        data = self._request_json("GET", "/api/system/configs/clawhub/skills")
+    async def list_clawhub_skills(self) -> list[dict[str, JsonValue]]:
+        data = await self._request_json("GET", "/api/system/configs/clawhub/skills")
         raw = data.get("data")
         if isinstance(raw, list):
             return [item for item in raw if isinstance(item, dict)]
         return []
 
-    def get_clawhub_skill(self, skill_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def get_clawhub_skill(self, skill_id: str) -> dict[str, JsonValue]:
+        return await self._request_json(
             "GET",
             f"/api/system/configs/clawhub/skills/{quote(skill_id, safe='')}",
         )
 
-    def save_proxy_config(
+    async def save_proxy_config(
         self,
         *,
         http_proxy: str | None = None,
@@ -120,9 +120,9 @@ class AgentTeamsClient:
             "proxy_password": proxy_password,
             "ssl_verify": ssl_verify,
         }
-        return self._request_json("PUT", "/api/system/configs/proxy", payload)
+        return await self._request_json("PUT", "/api/system/configs/proxy", payload)
 
-    def save_web_config(
+    async def save_web_config(
         self,
         *,
         provider: str = "exa",
@@ -136,42 +136,42 @@ class AgentTeamsClient:
             "fallback_provider": fallback_provider,
             "searxng_instance_url": searxng_instance_url,
         }
-        return self._request_json("PUT", "/api/system/configs/web", payload)
+        return await self._request_json("PUT", "/api/system/configs/web", payload)
 
-    def save_github_config(
+    async def save_github_config(
         self,
         *,
         token: str | None = None,
     ) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {"token": token}
-        return self._request_json("PUT", "/api/system/configs/github", payload)
+        return await self._request_json("PUT", "/api/system/configs/github", payload)
 
-    def save_clawhub_config(
+    async def save_clawhub_config(
         self,
         *,
         token: str | None = None,
     ) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {"token": token}
-        return self._request_json("PUT", "/api/system/configs/clawhub", payload)
+        return await self._request_json("PUT", "/api/system/configs/clawhub", payload)
 
-    def save_clawhub_skill(
+    async def save_clawhub_skill(
         self,
         skill_id: str,
         payload: dict[str, JsonValue],
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "PUT",
             f"/api/system/configs/clawhub/skills/{quote(skill_id, safe='')}",
             payload,
         )
 
-    def delete_clawhub_skill(self, skill_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def delete_clawhub_skill(self, skill_id: str) -> dict[str, JsonValue]:
+        return await self._request_json(
             "DELETE",
             f"/api/system/configs/clawhub/skills/{quote(skill_id, safe='')}",
         )
 
-    def probe_web_connectivity(
+    async def probe_web_connectivity(
         self,
         *,
         url: str,
@@ -208,9 +208,11 @@ class AgentTeamsClient:
                 "proxy_password": proxy_password,
                 "ssl_verify": ssl_verify,
             }
-        return self._request_json("POST", "/api/system/configs/web:probe", payload)
+        return await self._request_json(
+            "POST", "/api/system/configs/web:probe", payload
+        )
 
-    def probe_github_connectivity(
+    async def probe_github_connectivity(
         self,
         *,
         token: str | None = None,
@@ -221,9 +223,11 @@ class AgentTeamsClient:
             payload["token"] = token
         if timeout_ms is not None:
             payload["timeout_ms"] = timeout_ms
-        return self._request_json("POST", "/api/system/configs/github:probe", payload)
+        return await self._request_json(
+            "POST", "/api/system/configs/github:probe", payload
+        )
 
-    def probe_clawhub_connectivity(
+    async def probe_clawhub_connectivity(
         self,
         *,
         token: str | None = None,
@@ -234,9 +238,11 @@ class AgentTeamsClient:
             payload["token"] = token
         if timeout_ms is not None:
             payload["timeout_ms"] = timeout_ms
-        return self._request_json("POST", "/api/system/configs/clawhub:probe", payload)
+        return await self._request_json(
+            "POST", "/api/system/configs/clawhub:probe", payload
+        )
 
-    def create_session(
+    async def create_session(
         self,
         *,
         workspace_id: str,
@@ -251,13 +257,13 @@ class AgentTeamsClient:
             "workspace_id": workspace_id,
             "metadata": metadata_payload,
         }
-        return self._request_json(
+        return await self._request_json(
             "POST",
             "/api/sessions",
             payload,
         )
 
-    def update_session_topology(
+    async def update_session_topology(
         self,
         session_id: str,
         *,
@@ -270,13 +276,13 @@ class AgentTeamsClient:
             "normal_root_role_id": normal_root_role_id,
             "orchestration_preset_id": orchestration_preset_id,
         }
-        return self._request_json(
+        return await self._request_json(
             "PATCH",
             f"/api/sessions/{session_id}/topology",
             payload,
         )
 
-    def create_run(
+    async def create_run(
         self,
         input: str | list[JsonValue],
         session_id: str,
@@ -296,82 +302,89 @@ class AgentTeamsClient:
             "yolo": yolo,
             "target_role_id": target_role_id,
         }
-        data = self._request_json("POST", "/api/runs", payload)
+        data = await self._request_json("POST", "/api/runs", payload)
         return RunHandle(
             run_id=_expect_str(data.get("run_id"), "run_id"),
             session_id=_expect_str(data.get("session_id"), "session_id"),
         )
 
-    def stream_run_events(
+    async def stream_run_events(
         self, run_id: str
-    ) -> Generator[dict[str, JsonValue], None, None]:
-        sync_proxy_env_to_process_env(load_proxy_env_config())
+    ) -> AsyncIterator[dict[str, JsonValue]]:
         url = f"{self._base_url}/api/runs/{run_id}/events"
-        request = Request(
-            url=url, method="GET", headers={"Accept": "text/event-stream"}
-        )
+        async with create_async_http_client(
+            proxy_config=load_proxy_env_config(),
+            timeout_seconds=self._stream_timeout_seconds,
+            connect_timeout_seconds=self._stream_timeout_seconds,
+        ) as client:
+            try:
+                async with client.stream(
+                    "GET",
+                    url,
+                    headers={"Accept": "text/event-stream"},
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        line = line.strip()
+                        if not line or not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        if not payload:
+                            continue
+                        parsed = json.loads(payload)
+                        if isinstance(parsed, dict):
+                            yield parsed
+            except httpx.HTTPStatusError as exc:
+                body = (await exc.response.aread()).decode("utf-8", errors="replace")
+                raise RuntimeError(
+                    f"HTTP {exc.response.status_code} while streaming run events: {body}"
+                ) from exc
+            except httpx.TimeoutException as exc:
+                raise RuntimeError(
+                    f"Stream timed out after {self._stream_timeout_seconds}s"
+                ) from exc
+            except httpx.RequestError as exc:
+                raise RuntimeError(f"Failed to connect to server: {exc}") from exc
 
-        try:
-            with urlopen(request, timeout=self._stream_timeout_seconds) as response:
-                for raw_line in response:
-                    line = raw_line.decode("utf-8").strip()
-                    if not line or not line.startswith("data:"):
-                        continue
-                    payload = line[5:].strip()
-                    if not payload:
-                        continue
-                    yield json.loads(payload)
-        except HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(
-                f"HTTP {exc.code} while streaming run events: {body}"
-            ) from exc
-        except URLError as exc:
-            raise RuntimeError(f"Failed to connect to server: {exc}") from exc
-        except TimeoutError as exc:
-            raise RuntimeError(
-                f"Stream timed out after {self._stream_timeout_seconds}s"
-            ) from exc
-
-    def list_tool_approvals(self, run_id: str) -> list[dict[str, JsonValue]]:
-        data = self._request_json("GET", f"/api/runs/{run_id}/tool-approvals")
+    async def list_tool_approvals(self, run_id: str) -> list[dict[str, JsonValue]]:
+        data = await self._request_json("GET", f"/api/runs/{run_id}/tool-approvals")
         items = data.get("data", [])
         if isinstance(items, list):
             return [item for item in items if isinstance(item, dict)]
         return []
 
-    def get_run_todo(self, run_id: str) -> dict[str, JsonValue]:
-        return self._request_json("GET", f"/api/runs/{run_id}/todo")
+    async def get_run_todo(self, run_id: str) -> dict[str, JsonValue]:
+        return await self._request_json("GET", f"/api/runs/{run_id}/todo")
 
-    def resolve_tool_approval(
+    async def resolve_tool_approval(
         self, run_id: str, tool_call_id: str, action: str, feedback: str = ""
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "POST",
             f"/api/runs/{run_id}/tool-approvals/{tool_call_id}/resolve",
             {"action": action, "feedback": feedback},
         )
 
-    def list_user_questions(self, run_id: str) -> list[dict[str, JsonValue]]:
-        data = self._request_json("GET", f"/api/runs/{run_id}/questions")
+    async def list_user_questions(self, run_id: str) -> list[dict[str, JsonValue]]:
+        data = await self._request_json("GET", f"/api/runs/{run_id}/questions")
         items = data.get("data", data)
         if isinstance(items, list):
             return [item for item in items if isinstance(item, dict)]
         return []
 
-    def answer_user_question(
+    async def answer_user_question(
         self,
         run_id: str,
         question_id: str,
         answers: list[dict[str, JsonValue]],
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "POST",
             f"/api/runs/{run_id}/questions/{question_id}:answer",
             {"answers": answers},
         )
 
-    def create_tasks(
+    async def create_tasks(
         self,
         run_id: str,
         tasks: list[dict[str, JsonValue]] | None = None,
@@ -382,26 +395,26 @@ class AgentTeamsClient:
         payload: dict[str, JsonValue] = {
             "tasks": tasks_payload,
         }
-        return self._request_json(
+        return await self._request_json(
             "POST",
             f"/api/tasks/runs/{run_id}",
             payload,
         )
 
-    def list_delegated_tasks(
+    async def list_delegated_tasks(
         self, run_id: str, include_root: bool = False
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "GET",
             f"/api/tasks/runs/{run_id}?include_root={'true' if include_root else 'false'}",
         )
 
-    def list_run_tasks(
+    async def list_run_tasks(
         self, run_id: str, include_root: bool = False
     ) -> dict[str, JsonValue]:
-        return self.list_delegated_tasks(run_id, include_root=include_root)
+        return await self.list_delegated_tasks(run_id, include_root=include_root)
 
-    def update_task(
+    async def update_task(
         self,
         task_id: str,
         *,
@@ -412,41 +425,43 @@ class AgentTeamsClient:
             "objective": objective,
             "title": title,
         }
-        return self._request_json(
+        return await self._request_json(
             "PATCH",
             f"/api/tasks/{task_id}",
             payload,
         )
 
-    def inject_message(self, run_id: str, content: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def inject_message(self, run_id: str, content: str) -> dict[str, JsonValue]:
+        return await self._request_json(
             "POST",
             f"/api/runs/{run_id}/inject",
             {"content": content},
         )
 
-    def stop_run(self, run_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def stop_run(self, run_id: str) -> dict[str, JsonValue]:
+        return await self._request_json(
             "POST",
             f"/api/runs/{run_id}/stop",
             {"scope": "main"},
         )
 
-    def resume_run(self, run_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def resume_run(self, run_id: str) -> dict[str, JsonValue]:
+        return await self._request_json(
             "POST",
             f"/api/runs/{run_id}:resume",
             {},
         )
 
-    def stop_subagent(self, run_id: str, instance_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def stop_subagent(
+        self, run_id: str, instance_id: str
+    ) -> dict[str, JsonValue]:
+        return await self._request_json(
             "POST",
             f"/api/runs/{run_id}/stop",
             {"scope": "subagent", "instance_id": instance_id},
         )
 
-    def create_feishu_gateway_account(
+    async def create_feishu_gateway_account(
         self,
         *,
         name: str,
@@ -470,56 +485,60 @@ class AgentTeamsClient:
             payload["secret_config"] = {
                 key: value for key, value in secret_config.items()
             }
-        return self._request_json("POST", "/api/gateway/feishu/accounts", payload)
+        return await self._request_json("POST", "/api/gateway/feishu/accounts", payload)
 
-    def list_feishu_gateway_accounts(self) -> list[dict[str, JsonValue]]:
-        data = self._request_json("GET", "/api/gateway/feishu/accounts")
+    async def list_feishu_gateway_accounts(self) -> list[dict[str, JsonValue]]:
+        data = await self._request_json("GET", "/api/gateway/feishu/accounts")
         items = data.get("data", data)
         if isinstance(items, list):
             return [item for item in items if isinstance(item, dict)]
         return []
 
-    def update_feishu_gateway_account(
+    async def update_feishu_gateway_account(
         self,
         account_id: str,
         payload: dict[str, JsonValue],
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "PATCH",
             f"/api/gateway/feishu/accounts/{quote(account_id, safe='')}",
             payload,
         )
 
-    def enable_feishu_gateway_account(self, account_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def enable_feishu_gateway_account(
+        self, account_id: str
+    ) -> dict[str, JsonValue]:
+        return await self._request_json(
             "POST",
             f"/api/gateway/feishu/accounts/{quote(account_id, safe='')}:enable",
             {},
         )
 
-    def disable_feishu_gateway_account(self, account_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def disable_feishu_gateway_account(
+        self, account_id: str
+    ) -> dict[str, JsonValue]:
+        return await self._request_json(
             "POST",
             f"/api/gateway/feishu/accounts/{quote(account_id, safe='')}:disable",
             {},
         )
 
-    def delete_feishu_gateway_account(
+    async def delete_feishu_gateway_account(
         self,
         account_id: str,
         *,
         force: bool = True,
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "DELETE",
             f"/api/gateway/feishu/accounts/{quote(account_id, safe='')}",
             {"force": force},
         )
 
-    def reload_feishu_gateway(self) -> dict[str, JsonValue]:
-        return self._request_json("POST", "/api/gateway/feishu/reload", {})
+    async def reload_feishu_gateway(self) -> dict[str, JsonValue]:
+        return await self._request_json("POST", "/api/gateway/feishu/reload", {})
 
-    def create_trigger(
+    async def create_trigger(
         self,
         *,
         name: str,
@@ -532,7 +551,7 @@ class AgentTeamsClient:
         enabled: bool = True,
     ) -> dict[str, JsonValue]:
         _ = (source_type, auth_policies, public_token)
-        return self.create_feishu_gateway_account(
+        return await self.create_feishu_gateway_account(
             name=name,
             display_name=display_name,
             source_config=source_config,
@@ -540,8 +559,8 @@ class AgentTeamsClient:
             enabled=enabled,
         )
 
-    def list_triggers(self) -> list[dict[str, JsonValue]]:
-        accounts = self.list_feishu_gateway_accounts()
+    async def list_triggers(self) -> list[dict[str, JsonValue]]:
+        accounts = await self.list_feishu_gateway_accounts()
         normalized: list[dict[str, JsonValue]] = []
         for account in accounts:
             normalized.append(
@@ -561,7 +580,7 @@ class AgentTeamsClient:
             )
         return normalized
 
-    def ingest_trigger_webhook(
+    async def ingest_trigger_webhook(
         self, public_token: str, payload: dict[str, JsonValue]
     ) -> dict[str, JsonValue]:
         _ = (public_token, payload)
@@ -569,52 +588,52 @@ class AgentTeamsClient:
             "Trigger webhooks were removed. Use the gateway-specific IM integrations instead."
         )
 
-    def inject_subagent_message(
+    async def inject_subagent_message(
         self,
         run_id: str,
         instance_id: str,
         content: str,
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "POST",
             f"/api/runs/{run_id}/subagents/{instance_id}/inject",
             {"content": content},
         )
 
-    def get_subagent_reflection(
+    async def get_subagent_reflection(
         self,
         session_id: str,
         instance_id: str,
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "GET",
             f"/api/sessions/{session_id}/agents/{instance_id}/reflection",
         )
 
-    def refresh_subagent_reflection(
+    async def refresh_subagent_reflection(
         self,
         session_id: str,
         instance_id: str,
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "POST",
             f"/api/sessions/{session_id}/agents/{instance_id}/reflection:refresh",
             {},
         )
 
-    def update_subagent_reflection(
+    async def update_subagent_reflection(
         self,
         session_id: str,
         instance_id: str,
         summary: str,
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "PATCH",
             f"/api/sessions/{session_id}/agents/{instance_id}/reflection",
             {"summary": summary},
         )
 
-    def create_workspace(
+    async def create_workspace(
         self,
         *,
         workspace_id: str,
@@ -629,20 +648,20 @@ class AgentTeamsClient:
             payload["default_mount_name"] = default_mount_name
         if mounts is not None:
             payload["mounts"] = mounts
-        return self._request_json(
+        return await self._request_json(
             "POST",
             "/api/workspaces",
             payload,
         )
 
-    def update_workspace(
+    async def update_workspace(
         self,
         workspace_id: str,
         *,
         default_mount_name: str,
         mounts: list[dict[str, JsonValue]],
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "PUT",
             f"/api/workspaces/{quote(workspace_id, safe='')}",
             {
@@ -651,10 +670,12 @@ class AgentTeamsClient:
             },
         )
 
-    def get_workspace_snapshot(self, workspace_id: str) -> dict[str, JsonValue]:
-        return self._request_json("GET", f"/api/workspaces/{workspace_id}/snapshot")
+    async def get_workspace_snapshot(self, workspace_id: str) -> dict[str, JsonValue]:
+        return await self._request_json(
+            "GET", f"/api/workspaces/{workspace_id}/snapshot"
+        )
 
-    def open_workspace_root(
+    async def open_workspace_root(
         self,
         workspace_id: str,
         *,
@@ -663,12 +684,12 @@ class AgentTeamsClient:
         path = f"/api/workspaces/{workspace_id}:open-root"
         if mount is not None:
             path += f"?mount={quote(mount, safe='')}"
-        return self._request_json(
+        return await self._request_json(
             "POST",
             path,
         )
 
-    def get_workspace_tree(
+    async def get_workspace_tree(
         self,
         workspace_id: str,
         *,
@@ -678,12 +699,12 @@ class AgentTeamsClient:
         query = f"path={quote(path, safe='')}"
         if mount is not None:
             query += f"&mount={quote(mount, safe='')}"
-        return self._request_json(
+        return await self._request_json(
             "GET",
             f"/api/workspaces/{workspace_id}/tree?{query}",
         )
 
-    def get_workspace_diffs(
+    async def get_workspace_diffs(
         self,
         workspace_id: str,
         *,
@@ -692,9 +713,9 @@ class AgentTeamsClient:
         path = f"/api/workspaces/{workspace_id}/diffs"
         if mount is not None:
             path += f"?mount={quote(mount, safe='')}"
-        return self._request_json("GET", path)
+        return await self._request_json("GET", path)
 
-    def get_workspace_diff_file(
+    async def get_workspace_diff_file(
         self,
         workspace_id: str,
         *,
@@ -704,57 +725,61 @@ class AgentTeamsClient:
         query = f"path={quote(path, safe='')}"
         if mount is not None:
             query += f"&mount={quote(mount, safe='')}"
-        return self._request_json(
+        return await self._request_json(
             "GET",
             f"/api/workspaces/{workspace_id}/diff?{query}",
         )
 
-    def list_ssh_profiles(self) -> list[dict[str, JsonValue]]:
-        data = self._request_json("GET", "/api/system/configs/workspace/ssh-profiles")
+    async def list_ssh_profiles(self) -> list[dict[str, JsonValue]]:
+        data = await self._request_json(
+            "GET", "/api/system/configs/workspace/ssh-profiles"
+        )
         if isinstance(data, list):
             return [item for item in data if isinstance(item, dict)]
         return []
 
-    def get_ssh_profile(self, ssh_profile_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def get_ssh_profile(self, ssh_profile_id: str) -> dict[str, JsonValue]:
+        return await self._request_json(
             "GET",
             f"/api/system/configs/workspace/ssh-profiles/{quote(ssh_profile_id, safe='')}",
         )
 
-    def save_ssh_profile(
+    async def save_ssh_profile(
         self,
         ssh_profile_id: str,
         payload: dict[str, JsonValue],
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "PUT",
             f"/api/system/configs/workspace/ssh-profiles/{quote(ssh_profile_id, safe='')}",
             {"config": payload},
         )
 
-    def reveal_ssh_profile_password(self, ssh_profile_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def reveal_ssh_profile_password(
+        self, ssh_profile_id: str
+    ) -> dict[str, JsonValue]:
+        return await self._request_json(
             "POST",
             f"/api/system/configs/workspace/ssh-profiles/{quote(ssh_profile_id, safe='')}:reveal-password",
         )
 
-    def probe_ssh_profile(
+    async def probe_ssh_profile(
         self,
         payload: dict[str, JsonValue],
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "POST",
             "/api/system/configs/workspace/ssh-profiles:probe",
             payload,
         )
 
-    def delete_ssh_profile(self, ssh_profile_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def delete_ssh_profile(self, ssh_profile_id: str) -> dict[str, JsonValue]:
+        return await self._request_json(
             "DELETE",
             f"/api/system/configs/workspace/ssh-profiles/{quote(ssh_profile_id, safe='')}",
         )
 
-    def delete_workspace(
+    async def delete_workspace(
         self,
         workspace_id: str,
         *,
@@ -764,128 +789,134 @@ class AgentTeamsClient:
         payload: dict[str, JsonValue] | None = (
             {"force": True} if remove_directory else None
         )
-        return self._request_json(
+        return await self._request_json(
             "DELETE",
             f"/api/workspaces/{workspace_id}{query}",
             payload,
         )
 
-    def list_automation_projects(self) -> list[dict[str, JsonValue]]:
-        data = self._request_json("GET", "/api/automation/projects")
+    async def list_automation_projects(self) -> list[dict[str, JsonValue]]:
+        data = await self._request_json("GET", "/api/automation/projects")
         raw = data.get("data")
         if not isinstance(raw, list):
             return []
         return [item for item in raw if isinstance(item, dict)]
 
-    def list_automation_feishu_bindings(self) -> list[dict[str, JsonValue]]:
-        data = self._request_json("GET", "/api/automation/feishu-bindings")
+    async def list_automation_feishu_bindings(self) -> list[dict[str, JsonValue]]:
+        data = await self._request_json("GET", "/api/automation/feishu-bindings")
         raw = data.get("data")
         if not isinstance(raw, list):
             return []
         return [item for item in raw if isinstance(item, dict)]
 
-    def list_wechat_gateway_accounts(self) -> list[dict[str, JsonValue]]:
-        data = self._request_json("GET", "/api/gateway/wechat/accounts")
+    async def list_wechat_gateway_accounts(self) -> list[dict[str, JsonValue]]:
+        data = await self._request_json("GET", "/api/gateway/wechat/accounts")
         raw = data.get("data", data)
         if not isinstance(raw, list):
             return []
         return [item for item in raw if isinstance(item, dict)]
 
-    def start_wechat_gateway_login(
+    async def start_wechat_gateway_login(
         self,
         payload: dict[str, JsonValue] | None = None,
     ) -> dict[str, JsonValue]:
         request_payload = {} if payload is None else payload
-        return self._request_json(
+        return await self._request_json(
             "POST", "/api/gateway/wechat/login/start", request_payload
         )
 
-    def wait_wechat_gateway_login(
+    async def wait_wechat_gateway_login(
         self,
         payload: dict[str, JsonValue],
     ) -> dict[str, JsonValue]:
-        return self._request_json("POST", "/api/gateway/wechat/login/wait", payload)
+        return await self._request_json(
+            "POST", "/api/gateway/wechat/login/wait", payload
+        )
 
-    def update_wechat_gateway_account(
+    async def update_wechat_gateway_account(
         self,
         account_id: str,
         payload: dict[str, JsonValue],
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "PATCH",
             f"/api/gateway/wechat/accounts/{account_id}",
             payload,
         )
 
-    def enable_wechat_gateway_account(self, account_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def enable_wechat_gateway_account(
+        self, account_id: str
+    ) -> dict[str, JsonValue]:
+        return await self._request_json(
             "POST",
             f"/api/gateway/wechat/accounts/{account_id}:enable",
             {},
         )
 
-    def disable_wechat_gateway_account(self, account_id: str) -> dict[str, JsonValue]:
-        return self._request_json(
+    async def disable_wechat_gateway_account(
+        self, account_id: str
+    ) -> dict[str, JsonValue]:
+        return await self._request_json(
             "POST",
             f"/api/gateway/wechat/accounts/{account_id}:disable",
             {},
         )
 
-    def delete_wechat_gateway_account(
+    async def delete_wechat_gateway_account(
         self,
         account_id: str,
         *,
         force: bool = True,
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "DELETE",
             f"/api/gateway/wechat/accounts/{account_id}",
             {"force": force},
         )
 
-    def reload_wechat_gateway(self) -> dict[str, JsonValue]:
-        return self._request_json("POST", "/api/gateway/wechat/reload", {})
+    async def reload_wechat_gateway(self) -> dict[str, JsonValue]:
+        return await self._request_json("POST", "/api/gateway/wechat/reload", {})
 
-    def get_automation_project(
+    async def get_automation_project(
         self, automation_project_id: str
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "GET",
             f"/api/automation/projects/{automation_project_id}",
         )
 
-    def create_automation_project(
+    async def create_automation_project(
         self,
         payload: dict[str, JsonValue],
     ) -> dict[str, JsonValue]:
-        return self._request_json("POST", "/api/automation/projects", payload)
+        return await self._request_json("POST", "/api/automation/projects", payload)
 
-    def update_automation_project(
+    async def update_automation_project(
         self,
         automation_project_id: str,
         payload: dict[str, JsonValue],
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "PATCH",
             f"/api/automation/projects/{automation_project_id}",
             payload,
         )
 
-    def run_automation_project(
+    async def run_automation_project(
         self,
         automation_project_id: str,
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "POST",
             f"/api/automation/projects/{automation_project_id}:run",
             {},
         )
 
-    def list_automation_project_sessions(
+    async def list_automation_project_sessions(
         self,
         automation_project_id: str,
     ) -> list[dict[str, JsonValue]]:
-        data = self._request_json(
+        data = await self._request_json(
             "GET",
             f"/api/automation/projects/{automation_project_id}/sessions",
         )
@@ -894,52 +925,56 @@ class AgentTeamsClient:
             return []
         return [item for item in raw if isinstance(item, dict)]
 
-    def delete_subagent_reflection(
+    async def delete_subagent_reflection(
         self,
         session_id: str,
         instance_id: str,
     ) -> dict[str, JsonValue]:
-        return self._request_json(
+        return await self._request_json(
             "DELETE",
             f"/api/sessions/{session_id}/agents/{instance_id}/reflection",
         )
 
-    def _request_json(
+    async def _request_json(
         self,
         method: str,
         path: str,
         payload: object | None = None,
     ) -> dict[str, JsonValue]:
-        sync_proxy_env_to_process_env(load_proxy_env_config())
-        request_body = None
         headers: dict[str, str] = {"Accept": "application/json"}
         if payload is not None:
-            request_body = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
 
-        request = Request(
-            url=f"{self._base_url}{path}",
-            data=request_body,
-            headers=headers,
-            method=method,
-        )
-
-        try:
-            with urlopen(request, timeout=self._timeout_seconds) as response:
-                body = response.read().decode("utf-8")
-                if not body:
+        async with create_async_http_client(
+            proxy_config=load_proxy_env_config(),
+            timeout_seconds=self._timeout_seconds,
+            connect_timeout_seconds=self._timeout_seconds,
+        ) as client:
+            try:
+                response = await client.request(
+                    method,
+                    f"{self._base_url}{path}",
+                    content=json.dumps(payload).encode("utf-8")
+                    if payload is not None
+                    else None,
+                    headers=headers,
+                )
+                response.raise_for_status()
+                if not response.content:
                     return {}
-                data = json.loads(body)
+                data = response.json()
                 if isinstance(data, dict):
                     return data
                 return {"data": data}
-        except HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"HTTP {exc.code} {method} {path}: {body}") from exc
-        except URLError as exc:
-            raise RuntimeError(f"Failed to connect to server: {exc}") from exc
-        except TimeoutError as exc:
-            raise RuntimeError(f"Request timed out: {method} {path}") from exc
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(
+                    f"HTTP {exc.response.status_code} {method} {path}: {exc.response.text}"
+                ) from exc
+            except httpx.TimeoutException as exc:
+                raise RuntimeError(f"Request timed out: {method} {path}") from exc
+            except httpx.RequestError as exc:
+                raise RuntimeError(f"Failed to connect to server: {exc}") from exc
+        raise RuntimeError(f"Unexpected response handling exit: {method} {path}")
 
 
 def _expect_str(value: JsonValue | None, field_name: str) -> str:

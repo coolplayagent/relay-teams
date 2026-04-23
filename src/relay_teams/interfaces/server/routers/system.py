@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from typing import NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -189,11 +190,12 @@ def _raise_system_http_error(
 
 
 @router.get("/health")
-def health_check(request: Request) -> ServerHealthPayload:
+async def health_check(request: Request) -> ServerHealthPayload:
     container = getattr(request.app.state, "container", None)
     if container is None:
-        return build_server_health_payload()
-    return build_server_health_payload(
+        return await asyncio.to_thread(build_server_health_payload)
+    return await asyncio.to_thread(
+        build_server_health_payload,
         config_dir=container.config_dir,
         role_registry=container.role_registry,
         skill_registry=container.skill_registry,
@@ -202,26 +204,26 @@ def health_check(request: Request) -> ServerHealthPayload:
 
 
 @router.get("/configs")
-def get_config_status(
+async def get_config_status(
     service: ConfigStatusService = Depends(get_config_status_service),
 ) -> dict[str, JsonValue]:
-    return service.get_config_status()
+    return await asyncio.to_thread(service.get_config_status)
 
 
 @router.get("/configs/workspace/ssh-profiles")
-def list_ssh_profiles(
+async def list_ssh_profiles(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> list[SshProfileRecord]:
-    return list(service.list_profiles())
+    return list(await asyncio.to_thread(service.list_profiles))
 
 
 @router.get("/configs/workspace/ssh-profiles/{ssh_profile_id}")
-def get_ssh_profile(
+async def get_ssh_profile(
     ssh_profile_id: RequiredIdentifierStr,
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfileRecord:
     try:
-        return service.get_profile(ssh_profile_id)
+        return await asyncio.to_thread(service.get_profile, ssh_profile_id)
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -232,12 +234,12 @@ def get_ssh_profile(
 
 
 @router.post("/configs/workspace/ssh-profiles/{ssh_profile_id}:reveal-password")
-def reveal_ssh_profile_password(
+async def reveal_ssh_profile_password(
     ssh_profile_id: RequiredIdentifierStr,
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfilePasswordRevealView:
     try:
-        return service.reveal_password(ssh_profile_id)
+        return await asyncio.to_thread(service.reveal_password, ssh_profile_id)
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -248,12 +250,12 @@ def reveal_ssh_profile_password(
 
 
 @router.post("/configs/workspace/ssh-profiles:probe")
-def probe_ssh_profile_connectivity(
+async def probe_ssh_profile_connectivity(
     req: SshProfileConnectivityProbeRequest,
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfileConnectivityProbeResult:
     try:
-        return service.probe_connectivity(req)
+        return await asyncio.to_thread(service.probe_connectivity, req)
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -264,13 +266,14 @@ def probe_ssh_profile_connectivity(
 
 
 @router.put("/configs/workspace/ssh-profiles/{ssh_profile_id}")
-def save_ssh_profile(
+async def save_ssh_profile(
     ssh_profile_id: RequiredIdentifierStr,
     req: SshProfileRequest,
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfileRecord:
     try:
-        return service.save_profile(
+        return await asyncio.to_thread(
+            service.save_profile,
             ssh_profile_id=ssh_profile_id,
             config=req.config,
         )
@@ -282,12 +285,12 @@ def save_ssh_profile(
 
 
 @router.delete("/configs/workspace/ssh-profiles/{ssh_profile_id}")
-def delete_ssh_profile(
+async def delete_ssh_profile(
     ssh_profile_id: RequiredIdentifierStr,
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> dict[str, str]:
     try:
-        service.delete_profile(ssh_profile_id)
+        await asyncio.to_thread(service.delete_profile, ssh_profile_id)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -299,43 +302,43 @@ def delete_ssh_profile(
 
 
 @router.get("/configs/ui-language")
-def get_ui_language_settings(
+async def get_ui_language_settings(
     service: UiLanguageSettingsService = Depends(get_ui_language_settings_service),
 ) -> UiLanguageSettings:
-    return service.get_ui_language_settings()
+    return await asyncio.to_thread(service.get_ui_language_settings)
 
 
 @router.put("/configs/ui-language")
-def save_ui_language_settings(
+async def save_ui_language_settings(
     req: UiLanguageSettings,
     service: UiLanguageSettingsService = Depends(get_ui_language_settings_service),
 ) -> dict[str, str]:
     try:
-        service.save_ui_language_settings(req)
+        await asyncio.to_thread(service.save_ui_language_settings, req)
         return {"status": "ok"}
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/configs/model")
-def get_model_config(
+async def get_model_config(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, JsonValue]:
-    return service.get_model_config()
+    return await asyncio.to_thread(service.get_model_config)
 
 
 @router.get("/configs/model/profiles")
-def get_model_profiles(
+async def get_model_profiles(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, dict[str, JsonValue]]:
-    return service.get_model_profiles()
+    return await asyncio.to_thread(service.get_model_profiles)
 
 
 @router.get("/configs/model-fallback")
-def get_model_fallback_config(
+async def get_model_fallback_config(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelFallbackConfig:
-    return service.get_model_fallback_config()
+    return await asyncio.to_thread(service.get_model_fallback_config)
 
 
 class ModelProfileRequest(ModelProfileConfigPayload):
@@ -345,7 +348,7 @@ class ModelProfileRequest(ModelProfileConfigPayload):
 
 
 @router.put("/configs/model/profiles/{name}")
-def save_model_profile(
+async def save_model_profile(
     name: str,
     req: ModelProfileRequest,
     service: ModelConfigService = Depends(get_model_config_service),
@@ -384,7 +387,12 @@ def save_model_profile(
             ]
         if req.maas_auth is not None:
             profile["maas_auth"] = req.maas_auth.model_dump(mode="json")
-        service.save_model_profile(name, profile, source_name=req.source_name)
+        await asyncio.to_thread(
+            service.save_model_profile,
+            name,
+            profile,
+            source_name=req.source_name,
+        )
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -395,23 +403,26 @@ def save_model_profile(
 
 
 @router.get("/configs/model/providers/models")
-def get_provider_models(
+async def get_provider_models(
     provider: ProviderType | None = Query(default=None),
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> list[dict[str, JsonValue]]:
     return [
         model.model_dump(mode="json")
-        for model in service.get_provider_models(provider=provider)
+        for model in await asyncio.to_thread(
+            service.get_provider_models,
+            provider=provider,
+        )
     ]
 
 
 @router.delete("/configs/model/profiles/{name}")
-def delete_model_profile(
+async def delete_model_profile(
     name: str,
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, str]:
     try:
-        service.delete_model_profile(name)
+        await asyncio.to_thread(service.delete_model_profile, name)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -422,79 +433,84 @@ def delete_model_profile(
 
 
 @router.put("/configs/model")
-def save_model_config(
+async def save_model_config(
     req: ModelConfigPayload | ModelConfigRequest,
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, str]:
     try:
         config = req.config if isinstance(req, ModelConfigRequest) else req
-        service.save_model_config(config)
+        await asyncio.to_thread(service.save_model_config, config)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(exc, value_error_status=400)
 
 
 @router.put("/configs/model-fallback")
-def save_model_fallback_config(
+async def save_model_fallback_config(
     req: ModelFallbackConfig | ModelFallbackConfigRequest,
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, str]:
     try:
         config = req.config if isinstance(req, ModelFallbackConfigRequest) else req
-        service.save_model_fallback_config(config)
+        await asyncio.to_thread(service.save_model_fallback_config, config)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(exc, value_error_status=400)
 
 
 @router.post("/configs/model:probe")
-def probe_model_connectivity(
+async def probe_model_connectivity(
     req: ModelConnectivityProbeRequest,
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelConnectivityProbeResult:
     try:
-        return service.probe_connectivity(req)
+        return await asyncio.to_thread(service.probe_connectivity, req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/configs/model:discover")
-def discover_model_catalog(
+async def discover_model_catalog(
     req: ModelDiscoveryRequest,
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelDiscoveryResult:
     try:
-        return service.discover_models(req)
+        return await asyncio.to_thread(service.discover_models, req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/configs/notifications")
-def get_notification_config(
+async def get_notification_config(
     service: NotificationSettingsService = Depends(get_notification_settings_service),
 ) -> NotificationConfig:
-    return service.get_notification_config()
+    return await asyncio.to_thread(service.get_notification_config)
 
 
 @router.get("/configs/environment-variables")
-def get_environment_variables(
+async def get_environment_variables(
     service: EnvironmentVariableService = Depends(get_environment_variable_service),
 ) -> EnvironmentVariableCatalog:
     try:
-        return service.list_environment_variables()
+        return await asyncio.to_thread(service.list_environment_variables)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/configs/environment-variables/{scope}/{key}")
-def save_environment_variable(
+async def save_environment_variable(
     scope: EnvironmentVariableScope,
     key: str,
     req: EnvironmentVariableSaveRequest,
     service: EnvironmentVariableService = Depends(get_environment_variable_service),
 ) -> EnvironmentVariableRecord:
     try:
-        return service.save_environment_variable(scope=scope, key=key, request=req)
+        return await asyncio.to_thread(
+            service.save_environment_variable,
+            scope=scope,
+            key=key,
+            request=req,
+        )
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -505,13 +521,17 @@ def save_environment_variable(
 
 
 @router.delete("/configs/environment-variables/{scope}/{key}")
-def delete_environment_variable(
+async def delete_environment_variable(
     scope: EnvironmentVariableScope,
     key: str,
     service: EnvironmentVariableService = Depends(get_environment_variable_service),
 ) -> dict[str, str]:
     try:
-        service.delete_environment_variable(scope=scope, key=key)
+        await asyncio.to_thread(
+            service.delete_environment_variable,
+            scope=scope,
+            key=key,
+        )
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -523,19 +543,19 @@ def delete_environment_variable(
 
 
 @router.get("/configs/proxy")
-def get_proxy_config(
+async def get_proxy_config(
     service: ProxyConfigService = Depends(get_proxy_config_service),
 ) -> ProxyEnvInput:
-    return service.get_saved_proxy_config()
+    return await asyncio.to_thread(service.get_saved_proxy_config)
 
 
 @router.put("/configs/proxy")
-def save_proxy_config(
+async def save_proxy_config(
     req: ProxyEnvInput,
     service: ProxyConfigService = Depends(get_proxy_config_service),
 ) -> dict[str, str]:
     try:
-        service.save_proxy_config(req)
+        await asyncio.to_thread(service.save_proxy_config, req)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -546,19 +566,19 @@ def save_proxy_config(
 
 
 @router.get("/configs/web")
-def get_web_config(
+async def get_web_config(
     service: WebConfigService = Depends(get_web_config_service),
 ) -> WebConfig:
-    return service.get_web_config()
+    return await asyncio.to_thread(service.get_web_config)
 
 
 @router.put("/configs/web")
-def save_web_config(
+async def save_web_config(
     req: WebConfig,
     service: WebConfigService = Depends(get_web_config_service),
 ) -> dict[str, str]:
     try:
-        service.save_web_config(req)
+        await asyncio.to_thread(service.save_web_config, req)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -569,42 +589,42 @@ def save_web_config(
 
 
 @router.get("/configs/agents", response_model=list[ExternalAgentSummary])
-def list_external_agents(
+async def list_external_agents(
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> tuple[ExternalAgentSummary, ...]:
-    return service.list_agents()
+    return await asyncio.to_thread(service.list_agents)
 
 
 @router.get("/configs/agents/{agent_id}", response_model=ExternalAgentConfig)
-def get_external_agent(
+async def get_external_agent(
     agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> ExternalAgentConfig:
     try:
-        return service.get_agent(agent_id)
+        return await asyncio.to_thread(service.get_agent, agent_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.put("/configs/agents/{agent_id}", response_model=ExternalAgentConfig)
-def save_external_agent(
+async def save_external_agent(
     agent_id: RequiredIdentifierStr,
     req: ExternalAgentConfig,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> ExternalAgentConfig:
     try:
-        return service.save_agent(agent_id, req)
+        return await asyncio.to_thread(service.save_agent, agent_id, req)
     except (KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.delete("/configs/agents/{agent_id}")
-def delete_external_agent(
+async def delete_external_agent(
     agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> dict[str, str]:
     try:
-        service.delete_agent(agent_id)
+        await asyncio.to_thread(service.delete_agent, agent_id)
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -616,7 +636,7 @@ async def test_external_agent(
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> ExternalAgentTestResult:
     try:
-        config = service.resolve_runtime_agent(agent_id)
+        config = await asyncio.to_thread(service.resolve_runtime_agent, agent_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     result = await probe_acp_agent(config)
@@ -626,31 +646,35 @@ async def test_external_agent(
 
 
 @router.get("/configs/github")
-def get_github_config(
+async def get_github_config(
     service: GitHubConfigService = Depends(get_github_config_service),
 ) -> GitHubConfigView:
-    return service.get_github_config_view()
+    return await asyncio.to_thread(service.get_github_config_view)
 
 
 @router.post("/configs/github:reveal")
-def reveal_github_token(
+async def reveal_github_token(
     service: GitHubConfigService = Depends(get_github_config_service),
 ) -> GitHubTokenRevealView:
-    return service.reveal_github_token()
+    return await asyncio.to_thread(service.reveal_github_token)
 
 
 @router.put("/configs/github")
-def save_github_config(
+async def save_github_config(
     req: GitHubConfigUpdate,
     service: GitHubConfigService = Depends(get_github_config_service),
     trigger_service: GitHubTriggerService = Depends(get_github_trigger_service),
 ) -> dict[str, str]:
     try:
-        previous_config = service.get_github_config()
-        service.update_github_config(req)
-        trigger_service.refresh_repo_callback_urls_from_system_config(
-            previous_webhook_base_url=previous_config.webhook_base_url
-        )
+
+        def _save_github_config() -> None:
+            previous_config = service.get_github_config()
+            service.update_github_config(req)
+            trigger_service.refresh_repo_callback_urls_from_system_config(
+                previous_webhook_base_url=previous_config.webhook_base_url
+            )
+
+        await asyncio.to_thread(_save_github_config)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -661,19 +685,19 @@ def save_github_config(
 
 
 @router.get("/configs/clawhub")
-def get_clawhub_config(
+async def get_clawhub_config(
     service: ClawHubConfigService = Depends(get_clawhub_config_service),
 ) -> ClawHubConfig:
-    return service.get_clawhub_config()
+    return await asyncio.to_thread(service.get_clawhub_config)
 
 
 @router.put("/configs/clawhub")
-def save_clawhub_config(
+async def save_clawhub_config(
     req: ClawHubConfig,
     service: ClawHubConfigService = Depends(get_clawhub_config_service),
 ) -> dict[str, str]:
     try:
-        service.save_clawhub_config(req)
+        await asyncio.to_thread(service.save_clawhub_config, req)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -684,14 +708,14 @@ def save_clawhub_config(
 
 
 @router.post("/configs/clawhub:probe")
-def probe_clawhub_connectivity(
+async def probe_clawhub_connectivity(
     req: ClawHubConnectivityProbeRequest,
     service: ClawHubConnectivityProbeService = Depends(
         get_clawhub_connectivity_probe_service
     ),
 ) -> ClawHubConnectivityProbeResult:
     try:
-        return service.probe(req)
+        return await asyncio.to_thread(service.probe, req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -700,22 +724,22 @@ def probe_clawhub_connectivity(
     "/configs/clawhub/skills",
     response_model=list[ClawHubSkillSummary],
 )
-def list_clawhub_skills(
+async def list_clawhub_skills(
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> tuple[ClawHubSkillSummary, ...]:
-    return service.list_skills()
+    return await asyncio.to_thread(service.list_skills)
 
 
 @router.get(
     "/configs/clawhub/skills/{skill_id}",
     response_model=ClawHubSkillDetail,
 )
-def get_clawhub_skill(
+async def get_clawhub_skill(
     skill_id: RequiredIdentifierStr,
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> ClawHubSkillDetail:
     try:
-        return service.get_skill(skill_id)
+        return await asyncio.to_thread(service.get_skill, skill_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -726,24 +750,24 @@ def get_clawhub_skill(
     "/configs/clawhub/skills/{skill_id}",
     response_model=ClawHubSkillDetail,
 )
-def save_clawhub_skill(
+async def save_clawhub_skill(
     skill_id: RequiredIdentifierStr,
     req: ClawHubSkillWriteRequest,
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> ClawHubSkillDetail:
     try:
-        return service.save_skill(skill_id, req)
+        return await asyncio.to_thread(service.save_skill, skill_id, req)
     except (KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.delete("/configs/clawhub/skills/{skill_id}")
-def delete_clawhub_skill(
+async def delete_clawhub_skill(
     skill_id: RequiredIdentifierStr,
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> dict[str, str]:
     try:
-        service.delete_skill(skill_id)
+        await asyncio.to_thread(service.delete_skill, skill_id)
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -752,44 +776,44 @@ def delete_clawhub_skill(
 
 
 @router.put("/configs/notifications")
-def save_notification_config(
+async def save_notification_config(
     req: NotificationConfig | NotificationConfigRequest,
     service: NotificationSettingsService = Depends(get_notification_settings_service),
 ) -> dict[str, str]:
     try:
         config = req.config if isinstance(req, NotificationConfigRequest) else req
-        service.save_notification_config(config)
+        await asyncio.to_thread(service.save_notification_config, config)
         return {"status": "ok"}
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/configs/orchestration")
-def get_orchestration_config(
+async def get_orchestration_config(
     service: OrchestrationSettingsService = Depends(get_orchestration_settings_service),
 ) -> OrchestrationSettings:
-    return service.get_orchestration_config()
+    return await asyncio.to_thread(service.get_orchestration_config)
 
 
 @router.put("/configs/orchestration")
-def save_orchestration_config(
+async def save_orchestration_config(
     req: OrchestrationSettings | OrchestrationConfigRequest,
     service: OrchestrationSettingsService = Depends(get_orchestration_settings_service),
 ) -> dict[str, str]:
     try:
         config = req.config if isinstance(req, OrchestrationConfigRequest) else req
-        service.save_orchestration_config(config)
+        await asyncio.to_thread(service.save_orchestration_config, config)
         return {"status": "ok"}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/configs/model:reload")
-def reload_model_config(
+async def reload_model_config(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, str]:
     try:
-        service.reload_model_config()
+        await asyncio.to_thread(service.reload_model_config)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -800,11 +824,11 @@ def reload_model_config(
 
 
 @router.post("/configs/proxy:reload")
-def reload_proxy_config(
+async def reload_proxy_config(
     service: ProxyConfigService = Depends(get_proxy_config_service),
 ) -> dict[str, str]:
     try:
-        service.reload_proxy_config()
+        await asyncio.to_thread(service.reload_proxy_config)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -815,51 +839,51 @@ def reload_proxy_config(
 
 
 @router.post("/configs/web:probe")
-def probe_web_connectivity(
+async def probe_web_connectivity(
     req: WebConnectivityProbeRequest,
     service: WebConnectivityProbeService = Depends(get_web_connectivity_probe_service),
 ) -> WebConnectivityProbeResult:
     try:
-        return service.probe(req)
+        return await service.probe(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/configs/github:probe")
-def probe_github_connectivity(
+async def probe_github_connectivity(
     req: GitHubConnectivityProbeRequest,
     service: GitHubConnectivityProbeService = Depends(
         get_github_connectivity_probe_service
     ),
 ) -> GitHubConnectivityProbeResult:
     try:
-        return service.probe(req)
+        return await service.probe_async(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/configs/github/webhook:probe")
-def probe_github_webhook_connectivity(
+async def probe_github_webhook_connectivity(
     req: GitHubWebhookConnectivityProbeRequest,
     service: GitHubWebhookConnectivityProbeService = Depends(
         get_github_webhook_connectivity_probe_service
     ),
 ) -> GitHubWebhookConnectivityProbeResult:
     try:
-        return service.probe(req)
+        return await asyncio.to_thread(service.probe, req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/configs/github/webhook/tunnel")
-def get_github_webhook_tunnel_status(
+async def get_github_webhook_tunnel_status(
     service: LocalhostRunTunnelService = Depends(get_localhost_run_tunnel_service),
 ) -> LocalhostRunTunnelStatus:
-    return service.get_status()
+    return await asyncio.to_thread(service.get_status)
 
 
 @router.post("/configs/github/webhook/tunnel:start")
-def start_github_webhook_tunnel(
+async def start_github_webhook_tunnel(
     req: LocalhostRunTunnelStartRequest,
     request: Request,
     tunnel_service: LocalhostRunTunnelService = Depends(
@@ -874,16 +898,20 @@ def start_github_webhook_tunnel(
                 "local_port": req.local_port or request.url.port or 8000,
             }
         )
-        status = tunnel_service.start(effective_request)
-        if req.auto_save_webhook_base_url and status.public_url:
-            previous_config = github_config_service.get_github_config()
-            github_config_service.update_github_config(
-                GitHubConfigUpdate(webhook_base_url=status.public_url)
-            )
-            trigger_service.refresh_repo_callback_urls_from_system_config(
-                previous_webhook_base_url=previous_config.webhook_base_url
-            )
-        return status
+
+        def _start_tunnel() -> LocalhostRunTunnelStatus:
+            status = tunnel_service.start(effective_request)
+            if effective_request.auto_save_webhook_base_url and status.public_url:
+                previous_config = github_config_service.get_github_config()
+                github_config_service.update_github_config(
+                    GitHubConfigUpdate(webhook_base_url=status.public_url)
+                )
+                trigger_service.refresh_repo_callback_urls_from_system_config(
+                    previous_webhook_base_url=previous_config.webhook_base_url
+                )
+            return status
+
+        return await asyncio.to_thread(_start_tunnel)
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -894,7 +922,7 @@ def start_github_webhook_tunnel(
 
 
 @router.post("/configs/github/webhook/tunnel:stop")
-def stop_github_webhook_tunnel(
+async def stop_github_webhook_tunnel(
     req: LocalhostRunTunnelStopRequest,
     tunnel_service: LocalhostRunTunnelService = Depends(
         get_localhost_run_tunnel_service
@@ -903,17 +931,21 @@ def stop_github_webhook_tunnel(
     trigger_service: GitHubTriggerService = Depends(get_github_trigger_service),
 ) -> LocalhostRunTunnelStatus:
     try:
-        status = tunnel_service.stop()
-        if req.clear_webhook_base_url_if_matching and status.public_url:
-            existing_config = github_config_service.get_github_config()
-            if existing_config.webhook_base_url == status.public_url:
-                github_config_service.update_github_config(
-                    GitHubConfigUpdate(webhook_base_url=None)
-                )
-                trigger_service.refresh_repo_callback_urls_from_system_config(
-                    previous_webhook_base_url=existing_config.webhook_base_url
-                )
-        return status
+
+        def _stop_tunnel() -> LocalhostRunTunnelStatus:
+            status = tunnel_service.stop()
+            if req.clear_webhook_base_url_if_matching and status.public_url:
+                existing_config = github_config_service.get_github_config()
+                if existing_config.webhook_base_url == status.public_url:
+                    github_config_service.update_github_config(
+                        GitHubConfigUpdate(webhook_base_url=None)
+                    )
+                    trigger_service.refresh_repo_callback_urls_from_system_config(
+                        previous_webhook_base_url=existing_config.webhook_base_url
+                    )
+            return status
+
+        return await asyncio.to_thread(_stop_tunnel)
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -923,11 +955,11 @@ def stop_github_webhook_tunnel(
 
 
 @router.post("/configs/mcp:reload")
-def reload_mcp_config(
+async def reload_mcp_config(
     service: McpConfigReloadService = Depends(get_mcp_config_reload_service),
 ) -> dict[str, str]:
     try:
-        service.reload_mcp_config()
+        await asyncio.to_thread(service.reload_mcp_config)
         return {"status": "ok"}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -936,11 +968,11 @@ def reload_mcp_config(
 
 
 @router.post("/configs/skills:reload")
-def reload_skills_config(
+async def reload_skills_config(
     service: SkillsConfigReloadService = Depends(get_skills_config_reload_service),
 ) -> dict[str, str]:
     try:
-        service.reload_skills_config()
+        await asyncio.to_thread(service.reload_skills_config)
         return {"status": "ok"}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -949,37 +981,37 @@ def reload_skills_config(
 
 
 @router.get("/configs/hooks")
-def get_hooks_config(
+async def get_hooks_config(
     service: HookService = Depends(get_hook_service),
 ) -> HooksConfig:
-    return service.get_user_config()
+    return await asyncio.to_thread(service.get_user_config)
 
 
 @router.get("/configs/hooks/runtime")
-def get_hooks_runtime_view(
+async def get_hooks_runtime_view(
     service: HookService = Depends(get_hook_service),
 ) -> HookRuntimeView:
-    return service.get_runtime_view()
+    return await asyncio.to_thread(service.get_runtime_view)
 
 
 @router.put("/configs/hooks")
-def save_hooks_config(
+async def save_hooks_config(
     req: HooksConfig,
     service: HookService = Depends(get_hook_service),
 ) -> HooksConfig:
     try:
-        return service.save_user_config(req)
+        return await asyncio.to_thread(service.save_user_config, req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/configs/hooks:validate")
-def validate_hooks_config(
+async def validate_hooks_config(
     req: HooksConfig,
     service: HookService = Depends(get_hook_service),
 ) -> dict[str, str]:
     try:
-        _ = service.validate_config(req)
+        _ = await asyncio.to_thread(service.validate_config, req)
         return {"status": "ok"}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

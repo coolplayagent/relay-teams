@@ -1861,6 +1861,124 @@ console.log(JSON.stringify({
     ]
 
 
+def test_projects_sidebar_uses_workspace_id_titles_for_duplicate_workspace_paths(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const projectCards = projectsList.children.filter(child => child.className === "project-card");
+
+console.log(JSON.stringify({
+    projectTitles: projectCards.map(card => card.querySelector(".project-title").textContent),
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "ui-multi-mount-demo",
+        root_path: "/opt/workspace/agent-teams-main",
+        updated_at: "2026-03-14T11:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+    {
+        workspace_id: "agent-teams-main",
+        root_path: "/opt/workspace/agent-teams-main",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function forkWorkspace(workspaceId, name) {
+    globalThis.__forkCalls.push({ workspaceId, name });
+    return {
+        workspace_id: `${workspaceId}-fork`,
+        root_path: `/worktrees/${workspaceId}-fork`,
+        updated_at: "2026-03-14T12:30:00Z",
+        profile: {
+            file_scope: {
+                backend: "git_worktree",
+            },
+        },
+    };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function startNewSession(workspaceId) {
+    globalThis.__createdSessionWorkspaceIds.push(workspaceId);
+    return {
+        session_id: `session-new-${globalThis.__createdSessionWorkspaceIds.length}`,
+        workspace_id: workspaceId,
+        updated_at: "2026-03-14T11:00:00Z",
+        pending_tool_approval_count: 0,
+    };
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    assert payload["projectTitles"] == [
+        "ui-multi-mount-demo",
+        "agent-teams-main",
+    ]
+
+
 def test_projects_sidebar_can_keep_directory_when_removing_workspace(
     tmp_path: Path,
 ) -> None:

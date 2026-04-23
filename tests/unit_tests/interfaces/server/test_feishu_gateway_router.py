@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -171,6 +172,65 @@ def test_create_feishu_account_route_reloads_subscription_service() -> None:
     assert response.json()["account_id"] == "fsg_created"
     assert subscription_service.reload_calls == 1
     assert gateway_service.created_payloads[0].name == "feishu_ops"
+
+
+def test_feishu_account_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[[], object],
+    ) -> object:
+        calls.append(func.__name__)
+        return func()
+
+    monkeypatch.setattr(feishu_gateway, "run_in_threadpool", fake_run_in_threadpool)
+    gateway_service = _FakeFeishuGatewayService()
+    subscription_service = _FakeSubscriptionService()
+    client = _client(gateway_service, subscription_service)
+
+    requests = [
+        client.get("/api/gateway/feishu/accounts"),
+        client.post(
+            "/api/gateway/feishu/accounts",
+            json={
+                "name": "feishu_ops",
+                "source_config": {
+                    "provider": "feishu",
+                    "trigger_rule": "mention_only",
+                    "app_id": "cli_demo",
+                    "app_name": "Agent Teams Bot",
+                },
+                "target_config": {"workspace_id": "default"},
+                "secret_config": {"app_secret": "secret-demo"},
+            },
+        ),
+        client.patch(
+            "/api/gateway/feishu/accounts/fsg_main",
+            json={
+                "source_config": {
+                    "provider": "feishu",
+                    "trigger_rule": "all_messages",
+                    "app_id": "cli_demo",
+                    "app_name": "Agent Teams Bot",
+                },
+            },
+        ),
+        client.post("/api/gateway/feishu/accounts/fsg_main:enable"),
+        client.post("/api/gateway/feishu/accounts/fsg_main:disable"),
+        client.delete("/api/gateway/feishu/accounts/fsg_main"),
+        client.post("/api/gateway/feishu/reload"),
+    ]
+
+    assert [response.status_code for response in requests] == [200] * len(requests)
+    assert calls == [
+        "list_accounts",
+        "_create_feishu_account",
+        "_update_feishu_account",
+        "_enable_feishu_account",
+        "_disable_feishu_account",
+        "_delete_feishu_account",
+        "reload",
+    ]
 
 
 def test_create_feishu_account_route_rejects_none_like_name() -> None:

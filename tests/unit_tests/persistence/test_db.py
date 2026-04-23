@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
+from typing import cast
 
+import aiosqlite
+import pytest
+
+import relay_teams.persistence.db as db_module
 from relay_teams.persistence.db import (
     SQLITE_BUSY_TIMEOUT_MS,
+    async_sqlite_supports_fts5,
     is_retryable_sqlite_error,
+    open_async_sqlite,
     open_sqlite,
+    run_async_sqlite_write_with_retry,
     run_sqlite_write_with_retry,
     sqlite_compile_options,
     sqlite_supports_fts5,
@@ -23,6 +32,43 @@ def test_open_sqlite_enables_busy_timeout_and_wal_for_file_db(tmp_path: Path) ->
         assert foreign_keys == 1
         assert busy_timeout == SQLITE_BUSY_TIMEOUT_MS
         assert journal_mode == "wal"
+    finally:
+        conn.close()
+
+
+def test_open_sqlite_falls_back_to_shared_memory_when_file_open_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    real_connect = sqlite3.connect
+    calls: list[tuple[str, bool]] = []
+
+    def fake_connect(
+        database: str,
+        *,
+        timeout: float,
+        check_same_thread: bool = True,
+        uri: bool = False,
+    ) -> sqlite3.Connection:
+        _ = (timeout, check_same_thread)
+        calls.append((database, uri))
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("readonly")
+        return real_connect(
+            database,
+            timeout=timeout,
+            check_same_thread=check_same_thread,
+            uri=uri,
+        )
+
+    monkeypatch.setattr(db_module.sqlite3, "connect", fake_connect)
+
+    conn = open_sqlite(tmp_path / "readonly" / "relay_teams.db")
+    try:
+        assert calls == [
+            (str(tmp_path / "readonly" / "relay_teams.db"), False),
+            (db_module.MEMORY_DSN, True),
+        ]
     finally:
         conn.close()
 
@@ -77,3 +123,101 @@ def test_run_sqlite_write_with_retry_retries_transient_lock_errors(
         assert [row[0] for row in stored] == ["ok"]
     finally:
         conn.close()
+
+
+@pytest.mark.asyncio
+async def test_open_async_sqlite_enables_busy_timeout_and_wal_for_file_db(
+    tmp_path: Path,
+) -> None:
+    conn = await open_async_sqlite(tmp_path / "relay_teams_async.db")
+    try:
+        foreign_keys_row = await (await conn.execute("PRAGMA foreign_keys")).fetchone()
+        busy_timeout_row = await (await conn.execute("PRAGMA busy_timeout")).fetchone()
+        journal_mode_row = await (await conn.execute("PRAGMA journal_mode")).fetchone()
+
+        assert foreign_keys_row is not None
+        assert busy_timeout_row is not None
+        assert journal_mode_row is not None
+        assert int(foreign_keys_row[0]) == 1
+        assert int(busy_timeout_row[0]) == SQLITE_BUSY_TIMEOUT_MS
+        assert str(journal_mode_row[0]).lower() == "wal"
+        assert await async_sqlite_supports_fts5(conn) is True
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_run_async_sqlite_write_with_retry_retries_transient_lock_errors(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "async_retry.db"
+    conn = await open_async_sqlite(db_path)
+    try:
+        await conn.execute("CREATE TABLE items (value TEXT NOT NULL)")
+        await conn.commit()
+        attempts = 0
+
+        async def operation() -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise sqlite3.OperationalError("database is locked")
+            await conn.execute("INSERT INTO items(value) VALUES(?)", ("ok",))
+            return "done"
+
+        result = await run_async_sqlite_write_with_retry(
+            conn=conn,
+            db_path=db_path,
+            operation=operation,
+            repository_name="test",
+            operation_name="insert_item",
+        )
+
+        rows = await (await conn.execute("SELECT value FROM items")).fetchall()
+        assert result == "done"
+        assert attempts == 3
+        assert [row[0] for row in rows] == ["ok"]
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_run_async_sqlite_write_with_retry_uses_explicit_lock(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "async_retry_lock.db"
+    conn = await open_async_sqlite(db_path)
+    lock = asyncio.Lock()
+    try:
+        await conn.execute("CREATE TABLE items (value TEXT NOT NULL)")
+        await conn.commit()
+
+        async def operation() -> str:
+            await conn.execute("INSERT INTO items(value) VALUES(?)", ("locked",))
+            return "done"
+
+        result = await run_async_sqlite_write_with_retry(
+            conn=conn,
+            db_path=db_path,
+            operation=operation,
+            lock=lock,
+            repository_name="test",
+            operation_name="insert_item",
+        )
+
+        rows = await (await conn.execute("SELECT value FROM items")).fetchall()
+        assert result == "done"
+        assert [row[0] for row in rows] == ["locked"]
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_async_rollback_quietly_ignores_sqlite_errors() -> None:
+    class _FailingRollbackConnection:
+        async def rollback(self) -> None:
+            raise sqlite3.Error("rollback failed")
+
+    await db_module._async_rollback_quietly(
+        cast(aiosqlite.Connection, _FailingRollbackConnection())
+    )
