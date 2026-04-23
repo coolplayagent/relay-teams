@@ -10,6 +10,8 @@ export const state = {
     currentMainView: 'session',
     currentProjectViewWorkspaceId: null,
     currentFeatureViewId: null,
+    pendingNewSessionActive: false,
+    pendingNewSessionWorkspaceId: null,
     activeSubagentSession: null,
     isGenerating: false,
     activeEventSource: null,

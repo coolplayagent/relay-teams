@@ -59,6 +59,7 @@ import {
     waitWeChatGatewayLogin,
 } from '../core/api.js';
 import { clearAllPanels } from './agentPanel.js';
+import { clearNewSessionDraft } from './newSessionDraft.js';
 import { hideRoundNavigator } from './rounds/navigator.js';
 import { setSubagentRailExpanded } from './subagentRail.js';
 import {
@@ -1564,6 +1565,7 @@ function openFeatureShell(featureId) {
     state.currentProjectViewWorkspaceId = `feature:${featureId}`;
     state.currentWorkspaceId = null;
     state.currentSessionId = null;
+    clearNewSessionDraft();
     clearAllPanels();
     hideRoundNavigator();
     setSubagentRailExpanded(false);
@@ -2559,6 +2561,7 @@ export async function openWorkspaceProjectView(workspace) {
     state.currentProjectViewWorkspaceId = workspaceId;
     state.currentWorkspaceId = workspaceId;
     state.currentSessionId = null;
+    clearNewSessionDraft();
     clearAllPanels();
     hideRoundNavigator();
     setSubagentRailExpanded(false);

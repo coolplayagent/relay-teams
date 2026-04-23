@@ -136,6 +136,7 @@ def test_prompt_controls_toggle_mode_specific_fields_and_thinking_effort(
     source = Path("frontend/dist/js/app/prompt.js").read_text(encoding="utf-8")
     temp_dir = tmp_path / "prompt"
     temp_dir.mkdir()
+    _write_new_session_draft_mock(tmp_path)
 
     (temp_dir / "prompt.js").write_text(
         source.replace("../components/rounds/timeline.js", "./mockRounds.mjs")
@@ -538,6 +539,7 @@ def test_handle_send_strips_leading_role_mention_and_targets_run_role(
     source = Path("frontend/dist/js/app/prompt.js").read_text(encoding="utf-8")
     temp_dir = tmp_path / "prompt_mentions"
     temp_dir.mkdir()
+    _write_new_session_draft_mock(tmp_path)
 
     (temp_dir / "prompt.js").write_text(
         source.replace("../components/rounds/timeline.js", "./mockRounds.mjs")
@@ -856,6 +858,7 @@ def test_prompt_role_mentions_offer_autocomplete_and_insert_selection(
     source = Path("frontend/dist/js/app/prompt.js").read_text(encoding="utf-8")
     temp_dir = tmp_path / "prompt_autocomplete"
     temp_dir.mkdir()
+    _write_new_session_draft_mock(tmp_path)
 
     (temp_dir / "prompt.js").write_text(
         source.replace("../components/rounds/timeline.js", "./mockRounds.mjs")
@@ -1508,6 +1511,27 @@ console.log(JSON.stringify({
     assert payload["promptStatusHidden"] is False
 
 
+def _write_new_session_draft_mock(tmp_path: Path) -> None:
+    components_dir = tmp_path / "components"
+    components_dir.mkdir(exist_ok=True)
+    (components_dir / "newSessionDraft.js").write_text(
+        """
+export function applyDraftSessionTopology() {
+    return undefined;
+}
+
+export async function ensureSessionForNewSessionDraft() {
+    return "";
+}
+
+export function isNewSessionDraftActive() {
+    return false;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+
 def _write_multimodal_prompt_fixture(
     tmp_path: Path,
     *,
@@ -1522,6 +1546,7 @@ def _write_multimodal_prompt_fixture(
         else "prompt_multimodal_blocked"
     )
     temp_dir.mkdir()
+    _write_new_session_draft_mock(tmp_path)
     (temp_dir / "prompt.js").write_text(
         source.replace("../components/rounds/timeline.js", "./mockRounds.mjs")
         .replace("../components/rounds.js", "./mockRounds.mjs")

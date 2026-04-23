@@ -4,6 +4,7 @@
  */
 import { initSettings, openSettings, initAppearanceOnStartup } from "../components/settings.js";
 import { initializeProjectView } from "../components/projectView.js";
+import { openNewSessionDraft } from "../components/newSessionDraft.js";
 import { initializeContextIndicators } from "../components/contextIndicators.js";
 import { initializeSessionTokenUsage } from "../components/sessionTokenUsage.js";
 import { initializeSubagentRail } from "../components/subagentRail.js";
@@ -148,5 +149,7 @@ export async function initApp(selectSession, selectSubagentSession, handleSend) 
     if (sessionId) {
       await selectSession(sessionId);
     }
+  } else {
+    openNewSessionDraft("");
   }
 }

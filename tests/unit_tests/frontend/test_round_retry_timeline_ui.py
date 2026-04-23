@@ -161,6 +161,10 @@ export function renderRoundNavigator() {
     return undefined;
 }
 
+export function clearRoundNavigator() {
+    return undefined;
+}
+
 export function setActiveRoundNav() {
     return undefined;
 }

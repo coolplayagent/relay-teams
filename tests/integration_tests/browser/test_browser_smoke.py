@@ -2022,17 +2022,20 @@ def _create_session_via_sidebar(page: Page) -> str:
     expect(page.locator(".project-new-session-btn").first).to_be_visible(
         timeout=_WAIT_TIMEOUT_MS
     )
-    with page.expect_response(
-        lambda response: (
-            response.request.method == "POST"
-            and response.url.endswith("/api/sessions")
-            and response.ok
-        ),
-        timeout=_WAIT_TIMEOUT_MS,
-    ) as response_info:
-        page.locator(".project-new-session-btn").first.click()
+    page.locator(".project-new-session-btn").first.click()
+    expect(page.locator(".new-session-draft-page")).to_be_visible(
+        timeout=_WAIT_TIMEOUT_MS
+    )
 
-    response_payload = response_info.value.json()
+    workspace_id = _first_workspace_id(page)
+    response = page.request.post(
+        f"{page.url.rstrip('/')}/api/sessions",
+        data=json.dumps({"workspace_id": workspace_id}),
+        headers={"Content-Type": "application/json"},
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    assert response.ok
+    response_payload = cast(JsonValue, response.json())
     session_id = (
         str(response_payload.get("session_id") or "").strip()
         if isinstance(response_payload, dict)
@@ -2041,15 +2044,39 @@ def _create_session_via_sidebar(page: Page) -> str:
     if not session_id:
         session_id = _wait_for_new_session_id(page, existing_session_ids)
     else:
+        page.reload(wait_until="domcontentloaded")
+        expect(page.locator("#backend-status-label")).to_contain_text(
+            _CONNECTED_LABEL,
+            timeout=_WAIT_TIMEOUT_MS,
+        )
         expect(
             page.locator(f'.session-item[data-session-id="{session_id}"]')
         ).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
+    page.locator(f'.session-item[data-session-id="{session_id}"]').click(force=True)
     expect(page.locator(".session-item.active")).to_have_attribute(
         "data-session-id",
         session_id,
         timeout=_WAIT_TIMEOUT_MS,
     )
     return session_id
+
+
+def _first_workspace_id(page: Page) -> str:
+    response = page.request.get(
+        f"{page.url.rstrip('/')}/api/workspaces",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    assert response.ok
+    payload = cast(JsonValue, response.json())
+    if not isinstance(payload, list):
+        raise AssertionError("Workspace list response was not an array.")
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        workspace_id = str(item.get("workspace_id") or "").strip()
+        if workspace_id:
+            return workspace_id
+    raise AssertionError("No workspace was available for browser session creation.")
 
 
 def _wait_for_new_session_id(page: Page, existing_session_ids: set[str]) -> str:
