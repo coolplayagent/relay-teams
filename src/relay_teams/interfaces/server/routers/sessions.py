@@ -89,7 +89,7 @@ async def get_session(
     service: SessionService = Depends(get_session_service),
 ) -> SessionRecord:
     try:
-        return service.get_session(session_id)
+        return await run_in_threadpool(service.get_session, session_id)
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
 
@@ -101,7 +101,7 @@ async def update_session(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
     try:
-        service.update_session(session_id, req)
+        await run_in_threadpool(service.update_session, session_id, req)
         return {"status": "ok"}
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
@@ -116,12 +116,16 @@ async def update_session_topology(
     service: SessionService = Depends(get_session_service),
 ) -> SessionRecord:
     try:
-        return service.update_session_topology(
-            session_id,
-            session_mode=req.session_mode,
-            normal_root_role_id=req.normal_root_role_id,
-            orchestration_preset_id=req.orchestration_preset_id,
-        )
+
+        def _update_session_topology() -> SessionRecord:
+            return service.update_session_topology(
+                session_id,
+                session_mode=req.session_mode,
+                normal_root_role_id=req.normal_root_role_id,
+                orchestration_preset_id=req.orchestration_preset_id,
+            )
+
+        return await run_in_threadpool(_update_session_topology)
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
     except SystemRolesUnavailableError as exc:
@@ -142,11 +146,15 @@ async def delete_session(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
     try:
-        service.delete_session(
-            session_id,
-            force=req.force if req is not None else False,
-            cascade=req.cascade if req is not None else False,
-        )
+
+        def _delete_session() -> None:
+            service.delete_session(
+                session_id,
+                force=req.force if req is not None else False,
+                cascade=req.cascade if req is not None else False,
+            )
+
+        await run_in_threadpool(_delete_session)
         return {"status": "ok"}
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
@@ -161,11 +169,14 @@ async def get_session_rounds(
     cursor_run_id: OptionalIdentifierStr = None,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
-    return service.get_session_rounds(
-        session_id,
-        limit=limit,
-        cursor_run_id=cursor_run_id,
-    )
+    def _get_session_rounds() -> dict[str, object]:
+        return service.get_session_rounds(
+            session_id,
+            limit=limit,
+            cursor_run_id=cursor_run_id,
+        )
+
+    return await run_in_threadpool(_get_session_rounds)
 
 
 @router.get("/{session_id}/recovery")
@@ -174,7 +185,7 @@ async def get_session_recovery(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return service.get_recovery_snapshot(session_id)
+        return await run_in_threadpool(service.get_recovery_snapshot, session_id)
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
 
@@ -186,7 +197,7 @@ async def get_round(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return service.get_round(session_id, run_id)
+        return await run_in_threadpool(service.get_round, session_id, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -197,7 +208,8 @@ async def list_session_agents(
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     try:
-        return list(service.list_agents_in_session(session_id))
+        agents = await run_in_threadpool(service.list_agents_in_session, session_id)
+        return list(agents)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
@@ -208,7 +220,11 @@ async def list_session_subagents(
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     try:
-        return list(service.list_normal_mode_subagents(session_id))
+        subagents = await run_in_threadpool(
+            service.list_normal_mode_subagents,
+            session_id,
+        )
+        return list(subagents)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
@@ -220,7 +236,11 @@ async def delete_session_subagent(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
     try:
-        service.delete_normal_mode_subagent(session_id, instance_id)
+        await run_in_threadpool(
+            service.delete_normal_mode_subagent,
+            session_id,
+            instance_id,
+        )
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Subagent not found") from exc
@@ -235,7 +255,11 @@ async def get_agent_reflection(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return service.get_agent_reflection(session_id, instance_id)
+        return await run_in_threadpool(
+            service.get_agent_reflection,
+            session_id,
+            instance_id,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Agent not found") from exc
 
@@ -262,11 +286,15 @@ async def update_agent_reflection(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return service.update_agent_reflection(
-            session_id,
-            instance_id,
-            summary=req.summary,
-        )
+
+        def _update_agent_reflection() -> dict[str, object]:
+            return service.update_agent_reflection(
+                session_id,
+                instance_id,
+                summary=req.summary,
+            )
+
+        return await run_in_threadpool(_update_agent_reflection)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Agent not found") from exc
     except RuntimeError as exc:
@@ -280,7 +308,11 @@ async def delete_agent_reflection(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return service.delete_agent_reflection(session_id, instance_id)
+        return await run_in_threadpool(
+            service.delete_agent_reflection,
+            session_id,
+            instance_id,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Agent not found") from exc
     except RuntimeError as exc:
@@ -292,7 +324,7 @@ async def get_session_events(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return service.get_global_events(session_id)
+    return await run_in_threadpool(service.get_global_events, session_id)
 
 
 @router.get("/{session_id}/messages")
@@ -300,7 +332,7 @@ async def get_session_messages(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return service.get_session_messages(session_id)
+    return await run_in_threadpool(service.get_session_messages, session_id)
 
 
 @router.get("/{session_id}/agents/{instance_id}/messages")
@@ -309,7 +341,11 @@ async def get_agent_messages(
     instance_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return service.get_agent_messages(session_id, instance_id)
+    return await run_in_threadpool(
+        service.get_agent_messages,
+        session_id,
+        instance_id,
+    )
 
 
 @router.get("/{session_id}/tasks")
@@ -317,7 +353,7 @@ async def get_session_tasks(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return service.get_session_tasks(session_id)
+    return await run_in_threadpool(service.get_session_tasks, session_id)
 
 
 @router.get("/{session_id}/token-usage")
@@ -325,7 +361,7 @@ async def get_session_token_usage(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
-    summary = service.get_token_usage_by_session(session_id)
+    summary = await run_in_threadpool(service.get_token_usage_by_session, session_id)
     return {
         "session_id": summary.session_id,
         "total_input_tokens": summary.total_input_tokens,
@@ -357,7 +393,8 @@ async def get_run_token_usage(
     run_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
-    usage = service.get_token_usage_by_run(run_id)
+    _ = session_id
+    usage = await run_in_threadpool(service.get_token_usage_by_run, run_id)
     return {
         "run_id": usage.run_id,
         "total_input_tokens": usage.total_input_tokens,

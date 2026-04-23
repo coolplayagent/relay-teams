@@ -23,6 +23,7 @@ class _FakeSessionService:
     def __init__(self) -> None:
         self.created_calls: list[tuple[str | None, str, dict[str, str] | None]] = []
         self.list_calls = 0
+        self.get_calls: list[str] = []
         self.updated_calls: list[tuple[str, SessionMetadataPatch]] = []
         self.topology_update_calls: list[tuple[str, str, str | None, str | None]] = []
         self.delete_subagent_calls: list[tuple[str, str]] = []
@@ -97,8 +98,11 @@ class _FakeSessionService:
             },
         )
 
-    def get_session(self, session_id: str) -> SessionRecord:  # pragma: no cover
-        raise AssertionError(f"not used: {session_id}")
+    def get_session(self, session_id: str) -> SessionRecord:
+        if self.raise_missing:
+            raise KeyError(session_id)
+        self.get_calls.append(session_id)
+        return SessionRecord(session_id=session_id, workspace_id="default")
 
     def delete_session(
         self,
@@ -168,6 +172,42 @@ class _FakeSessionService:
                 )
             },
         )
+
+    def get_session_rounds(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+        cursor_run_id: str | None,
+    ) -> dict[str, object]:
+        return {
+            "session_id": session_id,
+            "limit": limit,
+            "cursor_run_id": cursor_run_id,
+            "rounds": [],
+        }
+
+    def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
+        return {"session_id": session_id, "runs": []}
+
+    def get_round(self, session_id: str, run_id: str) -> dict[str, object]:
+        return {"session_id": session_id, "run_id": run_id}
+
+    def get_global_events(self, session_id: str) -> list[dict[str, object]]:
+        return [{"session_id": session_id, "event": "created"}]
+
+    def get_session_messages(self, session_id: str) -> list[dict[str, object]]:
+        return [{"session_id": session_id, "message": "hello"}]
+
+    def get_agent_messages(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> list[dict[str, object]]:
+        return [{"session_id": session_id, "instance_id": instance_id}]
+
+    def get_session_tasks(self, session_id: str) -> list[dict[str, object]]:
+        return [{"session_id": session_id, "task": "task-1"}]
 
     def get_token_usage_by_run(self, run_id: str) -> RunTokenUsage:
         return RunTokenUsage(
@@ -335,6 +375,74 @@ def test_list_sessions_route_runs_service_call_in_threadpool(monkeypatch) -> Non
     assert response.json()[0]["session_id"] == "session-listed"
     assert calls == ["list"]
     assert fake_service.list_calls == 1
+
+
+def test_sync_session_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(sessions, "run_in_threadpool", fake_run_in_threadpool)
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    requests = [
+        client.get("/api/sessions/session-1"),
+        client.patch("/api/sessions/session-1", json={"title": "Renamed Session"}),
+        client.patch(
+            "/api/sessions/session-1/topology",
+            json={"session_mode": "orchestration"},
+        ),
+        client.request("DELETE", "/api/sessions/session-1"),
+        client.get("/api/sessions/session-1/rounds"),
+        client.get("/api/sessions/session-1/recovery"),
+        client.get("/api/sessions/session-1/rounds/run-1"),
+        client.get("/api/sessions/session-1/agents"),
+        client.get("/api/sessions/session-1/subagents"),
+        client.delete("/api/sessions/session-1/subagents/inst-subagent-1"),
+        client.get("/api/sessions/session-1/agents/inst-1/reflection"),
+        client.patch(
+            "/api/sessions/session-1/agents/inst-1/reflection",
+            json={"summary": "Keep implementation notes concise."},
+        ),
+        client.delete("/api/sessions/session-1/agents/inst-1/reflection"),
+        client.get("/api/sessions/session-1/events"),
+        client.get("/api/sessions/session-1/messages"),
+        client.get("/api/sessions/session-1/agents/inst-1/messages"),
+        client.get("/api/sessions/session-1/tasks"),
+        client.get("/api/sessions/session-1/token-usage"),
+        client.get("/api/sessions/session-1/runs/run-1/token-usage"),
+    ]
+
+    assert [response.status_code for response in requests] == [200] * len(requests)
+    assert [call[0] for call in calls] == [
+        "get_session",
+        "update_session",
+        "_update_session_topology",
+        "_delete_session",
+        "_get_session_rounds",
+        "get_recovery_snapshot",
+        "get_round",
+        "list_agents_in_session",
+        "list_normal_mode_subagents",
+        "delete_normal_mode_subagent",
+        "get_agent_reflection",
+        "_update_agent_reflection",
+        "delete_agent_reflection",
+        "get_global_events",
+        "get_session_messages",
+        "get_agent_messages",
+        "get_session_tasks",
+        "get_token_usage_by_session",
+        "get_token_usage_by_run",
+    ]
 
 
 def test_create_session_route_accepts_explicit_metadata_payload() -> None:
