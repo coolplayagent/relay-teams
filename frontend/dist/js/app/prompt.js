@@ -12,6 +12,11 @@ import {
   fetchOrchestrationConfig,
   updateSessionTopology,
 } from "../core/api.js";
+import {
+  applyDraftSessionTopology,
+  ensureSessionForNewSessionDraft,
+  isNewSessionDraftActive,
+} from "../components/newSessionDraft.js";
 import { hydrateSessionView, startSessionContinuity } from "./recovery.js";
 import {
   applyCurrentSessionRecord,
@@ -115,9 +120,10 @@ export function refreshSessionTopologyControls() {
     : [];
   const hasNormalModeRoles = normalModeRoles.length > 0;
   const hasPresets = presets.length > 0;
+  const isDraft = isNewSessionDraftActive();
   const canSwitch =
-    !!state.currentSessionId &&
-    state.currentSessionCanSwitchMode === true &&
+    (isDraft ||
+      (!!state.currentSessionId && state.currentSessionCanSwitchMode === true)) &&
     !state.isGenerating;
   const disabledReason = resolveTopologyDisabledReason({
     canSwitch,
@@ -215,7 +221,7 @@ export async function handleSend() {
     );
     return;
   }
-  if (!state.currentSessionId) {
+  if (!state.currentSessionId && !isNewSessionDraftActive()) {
     sysLog(
       t("composer.error.no_active_session"),
       "log-error",
@@ -259,6 +265,43 @@ export async function handleSend() {
     sysLog(imageInputBlockedMessage, "log-error");
     return;
   }
+  state.isGenerating = true;
+  if (els.sendBtn) els.sendBtn.disabled = true;
+  if (els.promptInput) els.promptInput.disabled = true;
+  refreshSessionTopologyControls();
+  if (isNewSessionDraftActive()) {
+    try {
+      const sessionId = await ensureSessionForNewSessionDraft();
+      if (!sessionId) {
+        state.isGenerating = false;
+        if (els.sendBtn) els.sendBtn.disabled = false;
+        if (els.promptInput) els.promptInput.disabled = false;
+        refreshSessionTopologyControls();
+        sysLog(t("composer.error.no_active_session"), "log-error");
+        return;
+      }
+    } catch (error) {
+      const message = error?.message || String(error);
+      state.isGenerating = false;
+      if (els.sendBtn) els.sendBtn.disabled = false;
+      if (els.promptInput) els.promptInput.disabled = false;
+      refreshSessionTopologyControls();
+      setPromptComposerStatus(message, { tone: "danger" });
+      sysLog(
+        formatMessage("sidebar.error.creating_session", { error: message }),
+        "log-error",
+      );
+      return;
+    }
+  }
+  if (!state.currentSessionId) {
+    state.isGenerating = false;
+    if (els.sendBtn) els.sendBtn.disabled = false;
+    if (els.promptInput) els.promptInput.disabled = false;
+    refreshSessionTopologyControls();
+    sysLog(t("composer.error.no_active_session"), "log-error");
+    return;
+  }
   clearPromptComposerStatus();
   const inputParts = buildPromptInputParts(text);
   const promptPreviewText = text || summarizePromptAttachments(promptAttachments);
@@ -272,9 +315,6 @@ export async function handleSend() {
   state.activeAgentInstanceId = null;
   state.autoSwitchedSubagentInstances = {};
   state.activeRunId = null;
-  state.isGenerating = true;
-  if (els.sendBtn) els.sendBtn.disabled = true;
-  if (els.promptInput) els.promptInput.disabled = true;
   if (els.stopBtn) {
     els.stopBtn.style.display = "inline-flex";
     els.stopBtn.disabled = false;
@@ -727,6 +767,9 @@ function bindSessionTopologyControls() {
     document.addEventListener("agent-teams-language-changed", () => {
       refreshSessionTopologyControls();
     });
+    document.addEventListener("agent-teams-new-session-draft-opened", () => {
+      refreshSessionTopologyControls();
+    });
   }
 }
 
@@ -736,7 +779,7 @@ async function handleTopologyModeChange(nextMode) {
   if (normalizedMode === state.currentSessionMode) {
     return;
   }
-  if (!state.currentSessionId) {
+  if (!state.currentSessionId && !isNewSessionDraftActive()) {
     return;
   }
   if (normalizedMode === "orchestration" && !resolveSelectedPresetId()) {
@@ -745,6 +788,16 @@ async function handleTopologyModeChange(nextMode) {
       message: resolveMissingPresetMessage(),
       tone: "warning",
     });
+    return;
+  }
+  if (!state.currentSessionId && isNewSessionDraftActive()) {
+    applyDraftSessionTopology(normalizedMode, {
+      orchestrationPresetId:
+        normalizedMode === "orchestration" ? resolveSelectedPresetId() : null,
+      normalRootRoleId:
+        normalizedMode === "normal" ? resolveSelectedNormalRoleId() : null,
+    });
+    refreshSessionTopologyControls();
     return;
   }
   await persistSessionTopology(normalizedMode, {
@@ -760,6 +813,13 @@ async function persistSessionTopology(
   { orchestrationPresetId = null, normalRootRoleId = null } = {},
 ) {
   if (!state.currentSessionId) {
+    if (isNewSessionDraftActive()) {
+      applyDraftSessionTopology(sessionMode, {
+        orchestrationPresetId,
+        normalRootRoleId,
+      });
+      refreshSessionTopologyControls();
+    }
     return;
   }
   try {
@@ -790,7 +850,7 @@ async function persistSessionTopology(
 }
 
 function resolveTopologyDisabledReason({ canSwitch, hasPresets }) {
-  if (!state.currentSessionId) {
+  if (!state.currentSessionId && !isNewSessionDraftActive()) {
     return t("composer.session_mode_title");
   }
   if (state.isGenerating) {

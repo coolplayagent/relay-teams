@@ -7,6 +7,7 @@ import { clearContextIndicators, scheduleCoordinatorContextPreview } from '../co
 import { clearAllStreamState } from '../components/messageRenderer.js';
 import { clearSessionTokenUsage, scheduleSessionTokenUsageRefresh } from '../components/sessionTokenUsage.js';
 import { hideProjectView } from '../components/projectView.js';
+import { clearNewSessionDraft } from '../components/newSessionDraft.js';
 import { setRoundsMode } from '../components/sidebar.js';
 import {
     clearActiveSubagentSession,
@@ -55,6 +56,7 @@ export async function selectSession(sessionId) {
         detachNormalModeSubagentStreamsForSessionSwitch(previousSessionId);
     }
     state.currentSessionId = sessionId;
+    clearNewSessionDraft();
     state.instanceRoleMap = {};
     state.roleInstanceMap = {};
     state.taskInstanceMap = {};

@@ -78,6 +78,7 @@ console.log(JSON.stringify({
     expandedVisibilityLabel,
     recollapsedSessionCount,
     createdSessionWorkspaceIds: globalThis.__createdSessionWorkspaceIds,
+    openedNewSessionDraftWorkspaceIds: globalThis.__openedNewSessionDraftWorkspaceIds,
     selectedSessionIds: globalThis.__selectedSessionIds,
     finalProjectCount: projectsList.children.filter(child => child.className === "project-card").length,
     initialFirstProjectTitle,
@@ -97,8 +98,12 @@ console.log(JSON.stringify({
     assert payload["expandedSessionCount"] == 11
     assert payload["expandedVisibilityLabel"] == "Collapse"
     assert payload["recollapsedSessionCount"] == 10
-    assert payload["createdSessionWorkspaceIds"] == ["alpha-project", "gamma-project"]
-    assert payload["selectedSessionIds"] == ["session-new-1", "session-new-2"]
+    assert payload["createdSessionWorkspaceIds"] == []
+    assert payload["openedNewSessionDraftWorkspaceIds"] == [
+        "alpha-project",
+        "gamma-project",
+    ]
+    assert payload["selectedSessionIds"] == []
     assert payload["finalProjectCount"] == 3
     assert payload["initialFirstProjectTitle"] == "Alpha Project"
     assert payload["initialSecondProjectTitle"] == "Beta Project"
@@ -149,6 +154,7 @@ console.log(JSON.stringify({
     beforeVisibilityLabel,
     afterCount,
     afterVisibilityLabel,
+    openedNewSessionDraftWorkspaceIds: globalThis.__openedNewSessionDraftWorkspaceIds,
     selectedSessionIds: globalThis.__selectedSessionIds,
 }));
 """.strip(),
@@ -163,15 +169,16 @@ console.log(JSON.stringify({
     assert payload["beforeCount"] == 10
     assert payload["beforeVisibilityLabel"] == "Show all (11)"
     assert payload["afterCount"] == 10
-    assert payload["afterVisibilityLabel"] == "Show all (12)"
-    assert payload["selectedSessionIds"] == ["session-new-1"]
+    assert payload["afterVisibilityLabel"] == "Show all (11)"
+    assert payload["openedNewSessionDraftWorkspaceIds"] == ["alpha-project"]
+    assert payload["selectedSessionIds"] == []
     assert (
         "expandedProjectSessionIds.add(groupKey('workspace', targetWorkspaceId));"
         not in sidebar_script
     )
     assert "let pendingSessionAnimation = null;" in sidebar_script
     assert "function animateSessionItem(item, animation) {" in sidebar_script
-    assert "setPendingSessionAnimation(data.session_id, 'entering');" in sidebar_script
+    assert "openNewSessionDraftFromSidebar(projectId);" in sidebar_script
     assert "animateSessionItem(sessionItem, 'removing');" in sidebar_script
     assert "animateSessionItem(button, 'activating');" in sidebar_script
     assert ".session-item-entering {" in components_base_css
@@ -1753,7 +1760,7 @@ export async function enableAutomationProject() {
     assert payload["openedGatewayFeatureCount"] == 1
 
 
-def test_projects_sidebar_primary_new_session_opens_workspace_picker_for_multiple_workspaces(
+def test_projects_sidebar_primary_new_session_opens_draft_for_multiple_workspaces(
     tmp_path: Path,
 ) -> None:
     payload = _run_sidebar_script(
@@ -1780,15 +1787,52 @@ await flushTasks();
 
 console.log(JSON.stringify({
     createdSessionWorkspaceIds: globalThis.__createdSessionWorkspaceIds,
+    openedNewSessionDraftWorkspaceIds: globalThis.__openedNewSessionDraftWorkspaceIds,
     selectedSessionIds: globalThis.__selectedSessionIds,
     showFormDialogTitles: globalThis.__showFormDialogCalls.map(item => item.title),
 }));
 """.strip(),
     )
 
-    assert payload["createdSessionWorkspaceIds"] == ["beta-project"]
-    assert payload["selectedSessionIds"] == ["session-new-1"]
-    assert payload["showFormDialogTitles"] == ["New conversation"]
+    assert payload["createdSessionWorkspaceIds"] == []
+    assert payload["openedNewSessionDraftWorkspaceIds"] == [""]
+    assert payload["selectedSessionIds"] == []
+    assert payload["showFormDialogTitles"] == []
+
+
+def test_projects_sidebar_new_session_detaches_active_stream_without_session(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+import { state } from "./mockState.mjs";
+
+installGlobals(createDomEnvironment());
+state.currentSessionId = null;
+state.currentMainView = "project";
+state.currentProjectViewWorkspaceId = "alpha-project";
+state.activeEventSource = { close() {} };
+
+await loadProjects();
+const featureSection = document.getElementById("projects-list").children[0];
+featureSection.querySelector(".home-new-session-btn").onclick();
+await flushTasks();
+
+console.log(JSON.stringify({
+    detachStreamCalls: globalThis.__detachStreamCalls || 0,
+    openedNewSessionDraftWorkspaceIds: globalThis.__openedNewSessionDraftWorkspaceIds,
+    activeEventSource: state.activeEventSource,
+}));
+""".strip(),
+    )
+
+    assert payload["detachStreamCalls"] == 1
+    assert payload["openedNewSessionDraftWorkspaceIds"] == ["alpha-project"]
+    assert payload["activeEventSource"] is None
 
 
 def test_projects_sidebar_forks_project_and_can_keep_worktree_on_remove(
@@ -1828,6 +1872,7 @@ console.log(JSON.stringify({
     forkCalls: globalThis.__forkCalls,
     deleteWorkspaceCalls: globalThis.__deleteWorkspaceCalls,
     createdSessionWorkspaceIds: globalThis.__createdSessionWorkspaceIds,
+    openedNewSessionDraftWorkspaceIds: globalThis.__openedNewSessionDraftWorkspaceIds,
     confirmDialogCalls: globalThis.__confirmDialogCalls,
     showFormDialogCalls: globalThis.__showFormDialogCalls.map(item => ({
         title: item.title,
@@ -1850,7 +1895,8 @@ console.log(JSON.stringify({
             "options": {"removeDirectory": False},
         }
     ]
-    assert payload["createdSessionWorkspaceIds"] == ["alpha-project-fork"]
+    assert payload["createdSessionWorkspaceIds"] == []
+    assert payload["openedNewSessionDraftWorkspaceIds"] == ["alpha-project-fork"]
     assert payload["confirmDialogCalls"] == []
     assert payload["showFormDialogCalls"] == [
         {
@@ -2682,6 +2728,8 @@ def _run_sidebar_script(
     mock_context_indicators_path = tmp_path / "mockContextIndicators.mjs"
     mock_project_view_path = tmp_path / "mockProjectView.mjs"
     mock_subagent_sessions_path = tmp_path / "mockSubagentSessions.mjs"
+    mock_new_session_draft_path = tmp_path / "mockNewSessionDraft.mjs"
+    mock_rounds_timeline_path = tmp_path / "mockRoundsTimeline.mjs"
     runner_path = tmp_path / "runner.mjs"
 
     mock_dom_path.write_text(
@@ -2989,6 +3037,9 @@ export function createDomEnvironment() {
             });
             return true;
         },
+        querySelectorAll() {
+            return [];
+        },
         querySelector(selector) {
             if (selector === ".session-item") {
                 const projectsList = elements.get("projects-list");
@@ -3289,16 +3340,22 @@ export const state = {
     currentWorkspaceId: "alpha-project",
     currentMainView: "session",
     currentProjectViewWorkspaceId: null,
+    currentFeatureViewId: null,
     activeSubagentSession: null,
     activeEventSource: null,
+    pendingNewSessionActive: false,
+    pendingNewSessionWorkspaceId: null,
 };
 """.strip(),
         encoding="utf-8",
     )
     mock_stream_path.write_text(
         """
+import { state } from "./mockState.mjs";
+
 export function detachActiveStreamForSessionSwitch() {
     globalThis.__detachStreamCalls = (globalThis.__detachStreamCalls || 0) + 1;
+    state.activeEventSource = null;
 }
 
 export function detachNormalModeSubagentStreamsForSessionSwitch() {
@@ -3473,6 +3530,41 @@ export function removeSessionSubagent(sessionId, instanceId) {
         encoding="utf-8",
     )
 
+    mock_new_session_draft_path.write_text(
+        """
+import { state } from "./mockState.mjs";
+
+export function clearNewSessionDraft() {
+    globalThis.__clearNewSessionDraftCalls += 1;
+    state.pendingNewSessionActive = false;
+    state.pendingNewSessionWorkspaceId = null;
+}
+
+export function openNewSessionDraft(workspaceId = "") {
+    const safeWorkspaceId = String(workspaceId || "").trim();
+    globalThis.__openedNewSessionDraftWorkspaceIds.push(safeWorkspaceId);
+    state.pendingNewSessionActive = true;
+    state.pendingNewSessionWorkspaceId = safeWorkspaceId;
+    state.currentSessionId = null;
+    state.currentMainView = "new-session-draft";
+    state.currentFeatureViewId = null;
+    if (safeWorkspaceId) {
+        state.currentWorkspaceId = safeWorkspaceId;
+    }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    mock_rounds_timeline_path.write_text(
+        """
+export function clearSessionTimeline() {
+    globalThis.__clearSessionTimelineCalls += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("../utils/dom.js", "./mockDom.mjs")
@@ -3488,6 +3580,8 @@ export function removeSessionSubagent(sessionId, instanceId) {
         .replace("./contextIndicators.js", "./mockContextIndicators.mjs")
         .replace("./projectView.js", "./mockProjectView.mjs")
         .replace("./subagentSessions.js", "./mockSubagentSessions.mjs")
+        .replace("./newSessionDraft.js", "./mockNewSessionDraft.mjs")
+        .replace("./rounds/timeline.js", "./mockRoundsTimeline.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 
@@ -3499,6 +3593,7 @@ globalThis.__logs = [];
 globalThis.__confirmDialogCalls = [];
 globalThis.__confirmDialogResponses = [];
 globalThis.__createdSessionWorkspaceIds = [];
+globalThis.__openedNewSessionDraftWorkspaceIds = [];
 globalThis.__deleteSubagentCalls = [];
 globalThis.__deleteWorkspaceCalls = [];
 globalThis.__forkCalls = [];
@@ -3507,6 +3602,8 @@ globalThis.__selectedSessionIds = [];
 globalThis.__openedWorkspaceIds = [];
 globalThis.__openedAutomationProjectIds = [];
 globalThis.__hideProjectViewCalls = 0;
+globalThis.__clearNewSessionDraftCalls = 0;
+globalThis.__clearSessionTimelineCalls = 0;
 globalThis.__showFormDialogResult = null;
 globalThis.__showFormDialogCalls = [];
 globalThis.__requestAutomationProjectInputResult = null;

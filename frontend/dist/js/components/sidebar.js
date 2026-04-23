@@ -18,7 +18,6 @@ import {
     fetchWorkspaces,
     forkWorkspace,
     pickWorkspace,
-    startNewSession,
     updateSession,
 } from '../core/api.js';
 import { state } from '../core/state.js';
@@ -30,6 +29,11 @@ import { clearSessionRecovery, stopSessionContinuity } from '../app/recovery.js'
 import { clearAllStreamState } from './messageRenderer.js';
 import { clearAllPanels } from './agentPanel.js';
 import { clearContextIndicators } from './contextIndicators.js';
+import {
+    clearNewSessionDraft,
+    openNewSessionDraft,
+} from './newSessionDraft.js';
+import { clearSessionTimeline } from './rounds/timeline.js';
 import { formatMessage, t } from '../utils/i18n.js';
 import {
     hideProjectView,
@@ -114,13 +118,28 @@ function clearActiveSessionView() {
         stopSessionContinuity(sessionId);
     }
     state.currentSessionId = null;
+    clearNewSessionDraft();
     clearSessionRecovery();
     clearAllPanels();
     clearContextIndicators();
     clearAllStreamState();
+    clearSessionTimeline();
     if (els.chatMessages) {
         els.chatMessages.innerHTML = '';
     }
+}
+
+function openNewSessionDraftFromSidebar(workspaceId) {
+    if (state.currentSessionId || state.pendingNewSessionActive || state.activeEventSource) {
+        clearActiveSessionView();
+    }
+    if (state.currentMainView === 'project' || state.currentFeatureViewId) {
+        hideProjectView();
+    }
+    document.querySelectorAll('.home-feature-item.is-active').forEach(item => {
+        item.classList.remove('is-active');
+    });
+    openNewSessionDraft(workspaceId);
 }
 
 function escapeHtml(value) {
@@ -449,20 +468,6 @@ function formatProjectLabel(group) {
     return String(group.displayLabel || formatWorkspaceProjectLabel(group.workspace)).trim() || group.id;
 }
 
-function formatWorkspaceOptionLabel(workspace) {
-    const workspaceId = String(workspace?.workspace_id || '').trim();
-    const rootPath = String(workspace?.root_path || '').trim();
-    if (workspaceId && rootPath) {
-        return `${workspaceId} - ${rootPath}`;
-    }
-    return workspaceId || rootPath;
-}
-
-function formatWorkspaceOptionDescription(workspace) {
-    const rootPath = String(workspace?.root_path || '').trim();
-    return rootPath || t('automation.workspace.help');
-}
-
 function buildFeishuBindingKey(binding) {
     const triggerId = String(binding?.trigger_id || '').trim();
     const tenantKey = String(binding?.tenant_key || '').trim();
@@ -720,57 +725,21 @@ function renderFeatureNav() {
     return section;
 }
 
-async function requestWorkspaceSelection(workspaces) {
-    const workspaceOptions = (Array.isArray(workspaces) ? workspaces : []).map(workspace => ({
-        value: String(workspace?.workspace_id || '').trim(),
-        label: formatWorkspaceOptionLabel(workspace),
-        description: formatWorkspaceOptionDescription(workspace),
-    })).filter(option => option.value);
-    if (workspaceOptions.length === 0) {
-        return '';
-    }
-    const values = await showFormDialog({
-        title: t('sidebar.new_session_primary'),
-        message: t('sidebar.select_workspace_for_session'),
-        tone: 'info',
-        confirmLabel: t('sidebar.new_session'),
-        cancelLabel: t('settings.action.cancel'),
-        fields: [
-            {
-                id: 'workspace_id',
-                label: t('sidebar.workspace_directory'),
-                type: 'select',
-                value: workspaceOptions[0]?.value || '',
-                options: workspaceOptions,
-            },
-        ],
-    });
-    return String(values?.workspace_id || '').trim();
-}
-
 async function handlePrimaryNewSessionClick() {
     try {
         const fetchedWorkspaces = await fetchWorkspaces();
         const workspaces = Array.isArray(fetchedWorkspaces) ? fetchedWorkspaces : [];
-        if (workspaces.length === 0) {
-            await handleNewProjectClick();
-            return;
-        }
         const currentWorkspaceId = String(state.currentWorkspaceId || '').trim();
         const matchingWorkspace = workspaces.find(workspace => String(workspace?.workspace_id || '').trim() === currentWorkspaceId) || null;
         if (matchingWorkspace) {
-            await handleNewSessionClick(currentWorkspaceId, true);
+            openNewSessionDraftFromSidebar(currentWorkspaceId);
             return;
         }
         if (workspaces.length === 1) {
-            await handleNewSessionClick(String(workspaces[0]?.workspace_id || '').trim(), true);
+            openNewSessionDraftFromSidebar(String(workspaces[0]?.workspace_id || '').trim());
             return;
         }
-        const selectedWorkspaceId = await requestWorkspaceSelection(workspaces);
-        if (!selectedWorkspaceId) {
-            return;
-        }
-        await handleNewSessionClick(selectedWorkspaceId, true);
+        openNewSessionDraftFromSidebar('');
     } catch (error) {
         sysLog(formatMessage('sidebar.error.creating_session', { error: error.message }), 'log-error');
     }
@@ -887,7 +856,7 @@ function bindProjectCard(card, group) {
     });
     card.querySelector('.project-new-session-btn')?.addEventListener('click', event => {
         event?.stopPropagation?.();
-        void handleNewSessionClick(projectId, true);
+        openNewSessionDraftFromSidebar(projectId);
     });
     card.querySelector('.project-options-btn')?.addEventListener('click', event => {
         event?.stopPropagation?.();
@@ -1196,6 +1165,8 @@ export async function loadProjects() {
         });
         document.addEventListener('agent-teams-session-selected', () => void loadProjects());
         document.addEventListener('agent-teams-subagent-session-selected', () => void loadProjects());
+        document.addEventListener('agent-teams-new-session-draft-created', () => void loadProjects());
+        document.addEventListener('agent-teams-draft-workspace-added', () => void loadProjects());
         languageRefreshBound = true;
     }
     const requestId = ++loadProjectsRequestId;
@@ -1308,7 +1279,7 @@ export async function handleNewProjectClick() {
         state.currentWorkspaceId = workspace.workspace_id;
         sysLog(formatMessage('sidebar.log.added_project', { workspace_id: workspace.workspace_id }));
         await loadProjects();
-        await handleNewSessionClick(workspace.workspace_id, true);
+        openNewSessionDraftFromSidebar(workspace.workspace_id);
     } catch (error) {
         sysLog(formatMessage('sidebar.error.creating_project', { error: error.message }), 'log-error');
     }
@@ -1351,7 +1322,7 @@ export async function handleForkWorkspaceClick(workspace) {
         openProjectMenuId = null;
         sysLog(formatMessage('sidebar.log.forked_project', { workspace_id: forkedWorkspace.workspace_id }));
         await loadProjects();
-        await handleNewSessionClick(forkedWorkspace.workspace_id, true);
+        openNewSessionDraftFromSidebar(forkedWorkspace.workspace_id);
     } catch (error) {
         sysLog(formatMessage('sidebar.error.forking_project', { error: error.message }), 'log-error');
     }
@@ -1459,26 +1430,6 @@ async function handleRunAutomationProject(project, manualClick = true) {
     }
     sysLog(formatMessage('sidebar.log.started_automation_run', { session_id: data.session_id }));
     await selectSessionById(data.session_id);
-}
-
-export async function handleNewSessionClick(workspaceId, manualClick = true) {
-    const targetWorkspaceId = String(workspaceId || state.currentWorkspaceId || '').trim();
-    if (!targetWorkspaceId) {
-        sysLog(t('sidebar.error.no_project_selected'), 'log-error');
-        return;
-    }
-    try {
-        const data = await startNewSession(targetWorkspaceId);
-        state.currentWorkspaceId = targetWorkspaceId;
-        sysLog(formatMessage('sidebar.log.created_session', { session_id: data.session_id }));
-        if (manualClick) els.chatMessages.innerHTML = '';
-        setPendingSessionAnimation(data.session_id, 'entering');
-        await loadProjects();
-        await selectSessionById(data.session_id);
-        animateSessionItem(findSessionItem(data.session_id), 'activating');
-    } catch (error) {
-        sysLog(formatMessage('sidebar.error.creating_session', { error: error.message }), 'log-error');
-    }
 }
 
 async function maybeSyncBackgroundStreams(sessions) {

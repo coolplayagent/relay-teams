@@ -66,6 +66,18 @@ export function hideRoundNavigator() {
     nav.style.display = 'none';
 }
 
+export function clearRoundNavigator() {
+    navRounds = [];
+    navActiveRunId = null;
+    navOnSelectRound = null;
+    const nav = document.getElementById('round-nav-float');
+    if (!nav) {
+        return;
+    }
+    nav.style.display = 'none';
+    nav.innerHTML = '';
+}
+
 export function setActiveRoundNav(runId) {
     navActiveRunId = runId || null;
     const nav = document.getElementById('round-nav-float');
