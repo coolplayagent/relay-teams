@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 
 from relay_teams.automation.automation_delivery_repository import (
     AutomationDeliveryRepository,
 )
-from relay_teams.automation.automation_delivery_service import AutomationDeliveryService
+from relay_teams.automation.automation_delivery_service import (
+    AutomationDeliveryService,
+    AutomationDeliveryWorker,
+)
 from relay_teams.automation.automation_models import (
     AutomationCleanupStatus,
     AutomationDeliveryEvent,
@@ -78,6 +83,15 @@ class _FakeFeishuClient:
         if self.fail_delete:
             raise RuntimeError("delete_failed")
         self.deleted_messages.append(message_id)
+
+
+class _FakeAutomationDeliveryWorkerService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def process_pending(self) -> bool:
+        self.calls += 1
+        return self.calls == 1
 
 
 class _FakeNotificationService:
@@ -555,3 +569,23 @@ def test_delivery_service_emits_fallback_notification_after_terminal_delivery_fa
         }
     ]
     assert service.should_suppress_terminal_notification("run-1") is False
+
+
+def test_automation_delivery_worker_start_wake_stop() -> None:
+    async def run_worker() -> None:
+        service = _FakeAutomationDeliveryWorkerService()
+        worker = AutomationDeliveryWorker(
+            delivery_service=cast(AutomationDeliveryService, service),
+            poll_interval_seconds=0.01,
+        )
+
+        await worker.stop()
+        await worker.start()
+        await worker.start()
+        worker.wake()
+        await asyncio.sleep(0.03)
+        await worker.stop()
+
+        assert service.calls >= 2
+
+    asyncio.run(run_worker())

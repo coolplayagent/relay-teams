@@ -1,11 +1,87 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from types import TracebackType
+
+import httpx
 import pytest
 
 from relay_teams.interfaces.sdk.client import AsyncAgentTeamsClient
 
 pytestmark = pytest.mark.asyncio
+
+
+class _FakeSdkStreamResponse:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    async def __aenter__(self) -> _FakeSdkStreamResponse:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        _ = (exc_type, exc, traceback)
+
+    def raise_for_status(self) -> None:
+        return None
+
+    async def aiter_lines(self) -> AsyncIterator[str]:
+        for line in self._lines:
+            yield line
+
+
+class _FakeSdkHttpClient:
+    def __init__(
+        self,
+        *,
+        response: httpx.Response | None = None,
+        stream_lines: list[str] | None = None,
+    ) -> None:
+        self._response = response or httpx.Response(
+            200,
+            json={"status": "ok"},
+            request=httpx.Request("GET", "http://server.test/"),
+        )
+        self._stream_lines = [] if stream_lines is None else stream_lines
+        self.requests: list[tuple[str, str, bytes | None, dict[str, str]]] = []
+        self.streams: list[tuple[str, str, dict[str, str]]] = []
+
+    async def __aenter__(self) -> _FakeSdkHttpClient:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        _ = (exc_type, exc, traceback)
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        content: bytes | None,
+        headers: dict[str, str],
+    ) -> httpx.Response:
+        self.requests.append((method, url, content, headers))
+        return self._response
+
+    def stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+    ) -> _FakeSdkStreamResponse:
+        self.streams.append((method, url, headers))
+        return _FakeSdkStreamResponse(self._stream_lines)
 
 
 async def test_reload_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
@@ -905,3 +981,278 @@ async def test_external_agent_sdk_calls_expected_endpoints(monkeypatch) -> None:
         ("POST", "/api/system/configs/agents/codex_local:test", {}),
         ("DELETE", "/api/system/configs/agents/codex_local", None),
     ]
+
+
+async def test_sdk_misc_endpoint_wrappers_cover_async_primitives(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
+    calls: list[tuple[str, str, object | None]] = []
+
+    async def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object] | list[object]:
+        calls.append((method, path, payload))
+        if path == "/api/runs/run-1/tool-approvals":
+            return {"data": [{"approval_id": "approval-1"}, "ignored"]}
+        if path == "/api/runs/run-1/questions":
+            return {"data": [{"question_id": "question-1"}, "ignored"]}
+        if method == "GET" and path == "/api/gateway/feishu/accounts":
+            return {
+                "data": [
+                    {
+                        "account_id": "feishu-1",
+                        "name": "primary",
+                        "display_name": "Primary",
+                        "status": "enabled",
+                        "source_config": {"kind": "feishu"},
+                        "target_config": {"workspace_id": "default"},
+                        "secret_config": {"app_secret": "configured"},
+                        "secret_status": {"app_secret": True},
+                    },
+                    "ignored",
+                ]
+            }
+        if method == "GET" and path == "/api/automation/projects":
+            return {"data": [{"automation_project_id": "auto-1"}, "ignored"]}
+        if path == "/api/automation/feishu-bindings":
+            return {"data": [{"binding_id": "binding-1"}, "ignored"]}
+        if path == "/api/gateway/wechat/accounts":
+            return {"data": [{"account_id": "wechat-1"}, "ignored"]}
+        if path == "/api/automation/projects/auto-1/sessions":
+            return {"data": [{"session_id": "session-1"}, "ignored"]}
+        return {"status": "ok"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    assert await client.health() == {"status": "ok"}
+    assert await client.update_session_topology(
+        "session-1",
+        session_mode="orchestration",
+        normal_root_role_id="coordinator",
+        orchestration_preset_id="default",
+    ) == {"status": "ok"}
+    assert await client.list_tool_approvals("run-1") == [{"approval_id": "approval-1"}]
+    assert await client.resolve_tool_approval(
+        "run-1", "tool-call-1", "approve", "ok"
+    ) == {"status": "ok"}
+    assert await client.list_user_questions("run-1") == [{"question_id": "question-1"}]
+    assert await client.answer_user_question(
+        "run-1", "question-1", [{"choice": "yes"}]
+    ) == {"status": "ok"}
+    assert await client.create_tasks("run-1", [{"title": "Draft"}]) == {"status": "ok"}
+    assert await client.list_delegated_tasks("run-1", include_root=True) == {
+        "status": "ok"
+    }
+    assert await client.list_run_tasks("run-1") == {"status": "ok"}
+    assert await client.update_task("task-1", objective="Ship it", title="Release") == {
+        "status": "ok"
+    }
+    assert await client.inject_message("run-1", "continue") == {"status": "ok"}
+    assert await client.stop_run("run-1") == {"status": "ok"}
+    assert await client.resume_run("run-1") == {"status": "ok"}
+    assert await client.stop_subagent("run-1", "agent-1") == {"status": "ok"}
+    assert await client.create_feishu_gateway_account(
+        name="primary",
+        display_name="Primary",
+        source_config={"kind": "feishu"},
+        target_config={"workspace_id": "default"},
+        secret_config={"app_secret": "secret"},
+    ) == {"status": "ok"}
+    assert await client.list_feishu_gateway_accounts() == [
+        {
+            "account_id": "feishu-1",
+            "name": "primary",
+            "display_name": "Primary",
+            "status": "enabled",
+            "source_config": {"kind": "feishu"},
+            "target_config": {"workspace_id": "default"},
+            "secret_config": {"app_secret": "configured"},
+            "secret_status": {"app_secret": True},
+        }
+    ]
+    assert await client.update_feishu_gateway_account(
+        "feishu-1", {"enabled": True}
+    ) == {"status": "ok"}
+    assert await client.enable_feishu_gateway_account("feishu-1") == {"status": "ok"}
+    assert await client.disable_feishu_gateway_account("feishu-1") == {"status": "ok"}
+    assert await client.reload_feishu_gateway() == {"status": "ok"}
+    assert await client.create_trigger(
+        name="trigger-1",
+        source_type="im",
+        auth_policies=[{"kind": "token"}],
+        public_token="public",
+    ) == {"status": "ok"}
+    assert await client.list_triggers() == [
+        {
+            "trigger_id": "feishu-1",
+            "name": "primary",
+            "display_name": "Primary",
+            "source_type": "im",
+            "status": "enabled",
+            "source_config": {"kind": "feishu"},
+            "target_config": {"workspace_id": "default"},
+            "secret_config": {"app_secret": "configured"},
+            "secret_status": {"app_secret": True},
+        }
+    ]
+    with pytest.raises(RuntimeError, match="Trigger webhooks were removed"):
+        await client.ingest_trigger_webhook("public", {"event": "ping"})
+    assert await client.inject_subagent_message("run-1", "agent-1", "hello") == {
+        "status": "ok"
+    }
+    assert await client.get_subagent_reflection("session-1", "agent-1") == {
+        "status": "ok"
+    }
+    assert await client.refresh_subagent_reflection("session-1", "agent-1") == {
+        "status": "ok"
+    }
+    assert await client.update_subagent_reflection(
+        "session-1", "agent-1", "summary"
+    ) == {"status": "ok"}
+    assert await client.delete_subagent_reflection("session-1", "agent-1") == {
+        "status": "ok"
+    }
+    assert await client.get_workspace_snapshot("workspace-1") == {"status": "ok"}
+    assert await client.list_automation_projects() == [
+        {"automation_project_id": "auto-1"}
+    ]
+    assert await client.list_automation_feishu_bindings() == [
+        {"binding_id": "binding-1"}
+    ]
+    assert await client.list_wechat_gateway_accounts() == [{"account_id": "wechat-1"}]
+    assert await client.start_wechat_gateway_login() == {"status": "ok"}
+    assert await client.wait_wechat_gateway_login({"login_id": "login-1"}) == {
+        "status": "ok"
+    }
+    assert await client.update_wechat_gateway_account(
+        "wechat-1", {"enabled": True}
+    ) == {"status": "ok"}
+    assert await client.enable_wechat_gateway_account("wechat-1") == {"status": "ok"}
+    assert await client.disable_wechat_gateway_account("wechat-1") == {"status": "ok"}
+    assert await client.delete_wechat_gateway_account("wechat-1", force=False) == {
+        "status": "ok"
+    }
+    assert await client.reload_wechat_gateway() == {"status": "ok"}
+    assert await client.get_automation_project("auto-1") == {"status": "ok"}
+    assert await client.create_automation_project({"name": "Auto"}) == {"status": "ok"}
+    assert await client.update_automation_project("auto-1", {"name": "Auto"}) == {
+        "status": "ok"
+    }
+    assert await client.run_automation_project("auto-1") == {"status": "ok"}
+    assert await client.list_automation_project_sessions("auto-1") == [
+        {"session_id": "session-1"}
+    ]
+
+    assert (
+        "PATCH",
+        "/api/sessions/session-1/topology",
+        {
+            "session_mode": "orchestration",
+            "normal_root_role_id": "coordinator",
+            "orchestration_preset_id": "default",
+        },
+    ) in calls
+    assert (
+        "POST",
+        "/api/gateway/wechat/login/start",
+        {},
+    ) in calls
+    assert (
+        "DELETE",
+        "/api/gateway/wechat/accounts/wechat-1",
+        {"force": False},
+    ) in calls
+
+
+async def test_request_json_uses_async_http_client_and_normalizes_lists(
+    monkeypatch,
+) -> None:
+    response = httpx.Response(
+        200,
+        json=[{"item": "one"}],
+        request=httpx.Request("POST", "http://server.test/api/items"),
+    )
+    fake_client = _FakeSdkHttpClient(response=response)
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_create_async_http_client(**kwargs: object) -> _FakeSdkHttpClient:
+        captured_kwargs.update(kwargs)
+        return fake_client
+
+    monkeypatch.setattr(
+        "relay_teams.interfaces.sdk.client.create_async_http_client",
+        fake_create_async_http_client,
+    )
+
+    client = AsyncAgentTeamsClient(base_url="http://server.test/", timeout_seconds=7.5)
+    result = await client._request_json("POST", "/api/items", {"name": "one"})
+
+    assert result == {"data": [{"item": "one"}]}
+    assert fake_client.requests == [
+        (
+            "POST",
+            "http://server.test/api/items",
+            b'{"name": "one"}',
+            {"Accept": "application/json", "Content-Type": "application/json"},
+        )
+    ]
+    assert captured_kwargs["timeout_seconds"] == 7.5
+
+
+async def test_request_json_returns_empty_dict_for_empty_response(monkeypatch) -> None:
+    response = httpx.Response(
+        204,
+        content=b"",
+        request=httpx.Request("DELETE", "http://server.test/api/items/1"),
+    )
+    fake_client = _FakeSdkHttpClient(response=response)
+
+    def fake_create_async_http_client(**kwargs: object) -> _FakeSdkHttpClient:
+        _ = kwargs
+        return fake_client
+
+    monkeypatch.setattr(
+        "relay_teams.interfaces.sdk.client.create_async_http_client",
+        fake_create_async_http_client,
+    )
+
+    client = AsyncAgentTeamsClient(base_url="http://server.test")
+    assert await client._request_json("DELETE", "/api/items/1") == {}
+
+
+async def test_stream_run_events_filters_sse_lines(monkeypatch) -> None:
+    fake_client = _FakeSdkHttpClient(
+        stream_lines=[
+            "",
+            "event: ping",
+            "data:",
+            "data: []",
+            'data: {"event_type":"run_completed","run_id":"run-1"}',
+        ]
+    )
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_create_async_http_client(**kwargs: object) -> _FakeSdkHttpClient:
+        captured_kwargs.update(kwargs)
+        return fake_client
+
+    monkeypatch.setattr(
+        "relay_teams.interfaces.sdk.client.create_async_http_client",
+        fake_create_async_http_client,
+    )
+
+    client = AsyncAgentTeamsClient(
+        base_url="http://server.test", stream_timeout_seconds=12.0
+    )
+    events = [event async for event in client.stream_run_events("run-1")]
+
+    assert events == [{"event_type": "run_completed", "run_id": "run-1"}]
+    assert fake_client.streams == [
+        (
+            "GET",
+            "http://server.test/api/runs/run-1/events",
+            {"Accept": "text/event-stream"},
+        )
+    ]
+    assert captured_kwargs["timeout_seconds"] == 12.0

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Optional
 
 from relay_teams.logger import get_logger, log_event
 from relay_teams.triggers.service import GitHubTriggerService
@@ -21,7 +22,7 @@ class GitHubTriggerActionWorker:
         self._poll_interval_seconds = poll_interval_seconds
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
-        self._task: asyncio.Task[None] | None = None
+        self._task: Optional[asyncio.Task[None]] = None
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():

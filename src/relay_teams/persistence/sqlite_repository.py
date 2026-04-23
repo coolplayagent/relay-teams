@@ -6,8 +6,7 @@ import sqlite3
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from threading import RLock
-from typing import Self
-from typing import TypeVar
+from typing import Optional, Self, TypeVar
 
 import aiosqlite
 
@@ -26,7 +25,7 @@ class SharedSqliteRepository:
         self,
         db_path: Path,
         *,
-        repository_name: str | None = None,
+        repository_name: Optional[str] = None,
     ) -> None:
         self._db_path = Path(db_path)
         self._conn = open_sqlite(self._db_path)
@@ -60,7 +59,7 @@ class AsyncSharedSqliteRepository:
         db_path: Path,
         conn: aiosqlite.Connection,
         *,
-        repository_name: str | None = None,
+        repository_name: Optional[str] = None,
     ) -> None:
         self._db_path = Path(db_path)
         self._conn = conn
@@ -73,7 +72,7 @@ class AsyncSharedSqliteRepository:
         cls,
         db_path: Path,
         *,
-        repository_name: str | None = None,
+        repository_name: Optional[str] = None,
     ) -> Self:
         repository = cls(
             db_path,
@@ -87,7 +86,7 @@ class AsyncSharedSqliteRepository:
         await self._conn.close()
 
     async def _initialize(self) -> None:
-        return None
+        self._conn.row_factory = sqlite3.Row
 
     async def _run_read(
         self,
@@ -95,6 +94,7 @@ class AsyncSharedSqliteRepository:
     ) -> _ResultT:
         async with self._lock:
             return await operation()
+        raise RuntimeError("Async SQLite read helper exited without a result")
 
     async def _run_write(
         self,

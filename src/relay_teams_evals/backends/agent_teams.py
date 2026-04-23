@@ -11,23 +11,16 @@ from collections.abc import (
     Mapping,
 )
 from inspect import isawaitable
-from typing import TYPE_CHECKING, TypeVar, overload
+from typing import TypeVar, Union, cast
 
 import typer
 
+from relay_teams.interfaces.sdk.client import AsyncAgentTeamsClient
 from relay_teams_evals.backends.agent_teams_config import AgentTeamsConfig
 from relay_teams_evals.backends.base import AgentBackend, AgentEvent
 from relay_teams_evals.workspace.base import PreparedWorkspace
 
-if TYPE_CHECKING:
-    from relay_teams.interfaces.sdk.client import (
-        AsyncAgentTeamsClient as AsyncAgentTeamsClientType,
-    )
-else:
-    AsyncAgentTeamsClientType = object
-
-AsyncAgentTeamsClient: type[AsyncAgentTeamsClientType] | None = None
-AgentTeamsClient: type[AsyncAgentTeamsClientType] | None = None
+AgentTeamsClient = AsyncAgentTeamsClient
 
 _TERMINAL_EVENTS = frozenset({"run_completed", "run_failed", "run_stopped"})
 _T = TypeVar("_T")
@@ -361,7 +354,7 @@ def _log_run_event(
 
 
 async def _try_delete_workspace(
-    client: AsyncAgentTeamsClientType, workspace_id: str
+    client: AsyncAgentTeamsClient, workspace_id: str
 ) -> None:
     try:
         await _maybe_await(client.delete_workspace(workspace_id))
@@ -369,35 +362,18 @@ async def _try_delete_workspace(
         pass
 
 
-def _get_agent_teams_client() -> type[AsyncAgentTeamsClientType]:
-    global AgentTeamsClient, AsyncAgentTeamsClient
-    if AsyncAgentTeamsClient is not None:
-        return AsyncAgentTeamsClient
-    if AgentTeamsClient is not None:
-        return AgentTeamsClient
-    from relay_teams.interfaces.sdk.client import AsyncAgentTeamsClient as _Client
-
-    AsyncAgentTeamsClient = _Client
-    AgentTeamsClient = _Client
-    return AsyncAgentTeamsClient
+def _get_agent_teams_client() -> type[AsyncAgentTeamsClient]:
+    return AgentTeamsClient
 
 
-@overload
-async def _maybe_await(value: Awaitable[_T]) -> _T: ...
-
-
-@overload
-async def _maybe_await(value: _T) -> _T: ...
-
-
-async def _maybe_await(value: _T | Awaitable[_T]) -> _T:
+async def _maybe_await(value: Union[_T, Awaitable[_T]]) -> _T:
     if isawaitable(value):
-        return await value
-    return value
+        return await cast(Awaitable[_T], value)
+    return cast(_T, value)
 
 
 async def _iter_raw_events(
-    stream: AsyncIterable[Mapping[str, object]] | Iterable[Mapping[str, object]],
+    stream: Union[AsyncIterable[Mapping[str, object]], Iterable[Mapping[str, object]]],
 ) -> AsyncIterator[Mapping[str, object]]:
     if isinstance(stream, AsyncIterable):
         async for raw_event in stream:
@@ -459,8 +435,9 @@ class AgentTeamsBackend(AgentBackend):
 
         try:
             _log(workspace.item_id, "creating session ...")
-            session_data = await _maybe_await(
-                client.create_session(workspace_id=workspace_id)
+            session_data = cast(
+                Mapping[str, object],
+                await _maybe_await(client.create_session(workspace_id=workspace_id)),
             )
             session_id = str(session_data.get("session_id", ""))
             _log(workspace.item_id, f"session: {session_id}")

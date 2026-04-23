@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from typing import Dict, List, Optional, Union
 from urllib.parse import urlparse
 
 import httpx
@@ -50,10 +51,10 @@ def _request_json(
     base_url: str,
     method: str,
     path: str,
-    payload: dict[str, object] | None = None,
-    extra_headers: dict[str, str] | None = None,
+    payload: Optional[Dict[str, object]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
     timeout_seconds: float = 30.0,
-) -> dict[str, object] | list[object]:
+) -> Union[Dict[str, object], List[object]]:
     return asyncio.run(
         _request_json_async(
             base_url=base_url,
@@ -71,10 +72,10 @@ async def _request_json_async(
     base_url: str,
     method: str,
     path: str,
-    payload: dict[str, object] | None = None,
-    extra_headers: dict[str, str] | None = None,
+    payload: Optional[Dict[str, object]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
     timeout_seconds: float = 30.0,
-) -> dict[str, object] | list[object]:
+) -> Union[Dict[str, object], List[object]]:
     headers = {"Accept": "application/json"}
     if extra_headers is not None:
         headers.update(extra_headers)
@@ -113,10 +114,22 @@ def _is_server_healthy(base_url: str) -> bool:
     return health is not None and health.status == "ok"
 
 
-def _get_server_health(base_url: str) -> ServerHealthPayload | None:
+async def _is_server_healthy_async(base_url: str) -> bool:
+    health = await _get_server_health_async(base_url)
+    return health is not None and health.status == "ok"
+
+
+def _get_server_health(base_url: str) -> Optional[ServerHealthPayload]:
+    return asyncio.run(_get_server_health_async(base_url))
+
+
+async def _get_server_health_async(base_url: str) -> Optional[ServerHealthPayload]:
     try:
-        health_response = _request_json(
-            base_url, "GET", "/api/system/health", timeout_seconds=1.5
+        health_response = await _request_json_async(
+            base_url=base_url,
+            method="GET",
+            path="/api/system/health",
+            timeout_seconds=1.5,
         )
         health = _require_object_response(health_response, "/api/system/health")
         return ServerHealthPayload.model_validate(health)
@@ -178,7 +191,7 @@ async def _wait_until_healthy_async(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_seconds
     while loop.time() < deadline:
-        if _is_server_healthy(base_url):
+        if await _is_server_healthy_async(base_url):
             return True
         await asyncio.sleep(0.25)
     return False
@@ -219,8 +232,8 @@ def _module_request_json(
     base_url: str,
     method: str,
     path: str,
-    payload: dict[str, object] | None = None,
-) -> dict[str, object] | list[object]:
+    payload: Optional[Dict[str, object]] = None,
+) -> Union[Dict[str, object], List[object]]:
     return _request_json(
         base_url=base_url,
         method=method,

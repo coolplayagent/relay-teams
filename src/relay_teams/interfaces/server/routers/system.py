@@ -833,7 +833,7 @@ async def probe_github_connectivity(
     ),
 ) -> GitHubConnectivityProbeResult:
     try:
-        return service.probe(req)
+        return await service.probe_async(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

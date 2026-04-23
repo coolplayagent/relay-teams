@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import subprocess
+from types import TracebackType
+from typing import Optional
 
+import httpx
 from typer.testing import CliRunner
 
 from relay_teams.interfaces.cli import app as cli_app
@@ -21,6 +25,37 @@ class _FakeStartupInfo:
     def __init__(self) -> None:
         self.dwFlags = 0
         self.wShowWindow = 0
+
+
+class _FakeServerHealthClient:
+    def __init__(
+        self,
+        *,
+        response: httpx.Response | None = None,
+        error: httpx.HTTPError | None = None,
+    ) -> None:
+        self._response = response
+        self._error = error
+        self.requests: list[tuple[str, dict[str, str]]] = []
+
+    async def __aenter__(self) -> _FakeServerHealthClient:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        _ = (exc_type, exc, traceback)
+
+    async def get(self, url: str, *, headers: dict[str, str]) -> httpx.Response:
+        self.requests.append((url, headers))
+        if self._error is not None:
+            raise self._error
+        if self._response is None:
+            raise RuntimeError("missing fake response")
+        return self._response
 
 
 def _runtime_identity(
@@ -362,6 +397,87 @@ def test_health_check_host_resolves_wildcard_addresses() -> None:
     assert server_cli._health_check_host("10.0.1.5") == "10.0.1.5"
 
 
+def test_server_cli_get_server_health_async_uses_async_http_client(monkeypatch) -> None:
+    response = httpx.Response(
+        200,
+        text=_health_payload().model_dump_json(),
+        request=httpx.Request("GET", "http://127.0.0.1:8000/api/system/health"),
+    )
+    fake_client = _FakeServerHealthClient(response=response)
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_create_async_http_client(**kwargs: object) -> _FakeServerHealthClient:
+        captured_kwargs.update(kwargs)
+        return fake_client
+
+    monkeypatch.setattr(
+        server_cli,
+        "create_async_http_client",
+        fake_create_async_http_client,
+    )
+
+    health = asyncio.run(server_cli.get_server_health_async("http://127.0.0.1:8000/"))
+
+    assert health is not None
+    assert health.status == "ok"
+    assert fake_client.requests == [
+        (
+            "http://127.0.0.1:8000/api/system/health",
+            {"Accept": "application/json"},
+        )
+    ]
+    assert captured_kwargs["timeout_seconds"] == 1.5
+
+
+def test_server_cli_get_server_health_async_returns_none_on_http_error(
+    monkeypatch,
+) -> None:
+    request = httpx.Request("GET", "http://127.0.0.1:8000/api/system/health")
+    fake_client = _FakeServerHealthClient(
+        error=httpx.ConnectError("offline", request=request)
+    )
+
+    def fake_create_async_http_client(**kwargs: object) -> _FakeServerHealthClient:
+        _ = kwargs
+        return fake_client
+
+    monkeypatch.setattr(
+        server_cli,
+        "create_async_http_client",
+        fake_create_async_http_client,
+    )
+
+    assert (
+        asyncio.run(server_cli.get_server_health_async("http://127.0.0.1:8000")) is None
+    )
+
+
+def test_server_cli_wait_until_healthy_async_uses_async_health(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_get_server_health_async(
+        base_url: str,
+    ) -> Optional[ServerHealthPayload]:
+        calls.append(base_url)
+        return _health_payload()
+
+    monkeypatch.setattr(
+        server_cli,
+        "get_server_health_async",
+        fake_get_server_health_async,
+    )
+
+    result = asyncio.run(
+        server_cli._wait_until_healthy_async(
+            "http://127.0.0.1:8000",
+            timeout_seconds=0.1,
+        )
+    )
+
+    assert result is True
+    assert calls == ["http://127.0.0.1:8000"]
+
+
 def test_restart_fails_for_unmanaged_healthy_server(monkeypatch) -> None:
     def fake_stop(
         force: bool,
@@ -498,3 +614,29 @@ def test_root_cli_autostart_rejects_mismatched_builtin_roles_dir(monkeypatch) ->
         raise AssertionError("root CLI should reject builtin role path mismatches")
 
     assert started == []
+
+
+def test_root_cli_wait_until_healthy_async_uses_async_health(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_get_server_health_async(
+        base_url: str,
+    ) -> Optional[ServerHealthPayload]:
+        calls.append(base_url)
+        return _health_payload()
+
+    monkeypatch.setattr(
+        cli_app,
+        "_get_server_health_async",
+        fake_get_server_health_async,
+    )
+
+    result = asyncio.run(
+        cli_app._wait_until_healthy_async(
+            "http://127.0.0.1:8000",
+            timeout_seconds=0.1,
+        )
+    )
+
+    assert result is True
+    assert calls == ["http://127.0.0.1:8000"]

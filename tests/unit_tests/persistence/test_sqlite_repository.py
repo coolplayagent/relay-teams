@@ -151,5 +151,18 @@ async def test_async_shared_sqlite_repository_run_write_uses_retry_helper(
     ]
 
 
+@pytest.mark.asyncio
+async def test_async_shared_sqlite_repository_run_read_uses_lock(
+    tmp_path: Path,
+) -> None:
+    repo = await _AsyncDummyRepository.open(tmp_path / "async_shared_repo_read.db")
+    try:
+        result = await repo._run_read(lambda: _async_value("ok"))
+    finally:
+        await repo.close()
+
+    assert result == "ok"
+
+
 async def _async_value(value: str) -> str:
     return value

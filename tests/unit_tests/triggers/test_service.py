@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -43,6 +44,7 @@ from relay_teams.triggers import (
     TriggerRuleMatchConfig,
     TriggerTargetType,
 )
+from relay_teams.triggers.action_worker import GitHubTriggerActionWorker
 
 
 class _FakeGitHubTriggerSecretStore(GitHubTriggerSecretStore):
@@ -83,6 +85,15 @@ class _FakeGitHubTriggerSecretStore(GitHubTriggerSecretStore):
 
     def delete_webhook_secret(self, config_dir: Path, *, account_id: str) -> None:
         self._webhook_secrets.pop((str(config_dir.resolve()), account_id), None)
+
+
+class _FakeGitHubTriggerActionWorkerService:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def process_pending_actions(self) -> bool:
+        self.calls += 1
+        return self.calls == 1
 
 
 class _FakeGitHubApiClient:
@@ -1045,3 +1056,23 @@ def test_refresh_repo_callback_urls_from_system_config_clears_old_generated_call
     assert len(updated) == 1
     assert updated[0].callback_url is None
     assert updated[0].webhook_status == GitHubWebhookStatus.UNREGISTERED
+
+
+def test_github_trigger_action_worker_start_wake_stop() -> None:
+    async def run_worker() -> None:
+        service = _FakeGitHubTriggerActionWorkerService()
+        worker = GitHubTriggerActionWorker(
+            trigger_service=cast(GitHubTriggerService, service),
+            poll_interval_seconds=0.01,
+        )
+
+        await worker.stop()
+        await worker.start()
+        await worker.start()
+        worker.wake()
+        await asyncio.sleep(0.03)
+        await worker.stop()
+
+        assert service.calls >= 2
+
+    asyncio.run(run_worker())

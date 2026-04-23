@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Iterator
 
+from relay_teams_evals.backends import agent_teams as agent_teams_module
 from relay_teams_evals.backends.agent_teams import AgentTeamsBackend, AgentTeamsConfig
 from relay_teams_evals.workspace.base import PreparedWorkspace
 
@@ -203,6 +206,34 @@ class _FakeClient:
                 '"status": "completed", "output": "Task finished successfully"}'
             ),
         }
+
+
+def test_agent_teams_backend_helpers_support_sync_and_async_clients(
+    monkeypatch,
+) -> None:
+    async def async_value() -> str:
+        return "async"
+
+    async def async_stream() -> AsyncIterator[dict[str, object]]:
+        yield {"event_type": "async"}
+
+    async def run_helpers() -> None:
+        assert await agent_teams_module._maybe_await("sync") == "sync"
+        assert await agent_teams_module._maybe_await(async_value()) == "async"
+        assert [
+            event async for event in agent_teams_module._iter_raw_events(async_stream())
+        ] == [{"event_type": "async"}]
+        assert [
+            event
+            async for event in agent_teams_module._iter_raw_events(
+                [{"event_type": "sync"}]
+            )
+        ] == [{"event_type": "sync"}]
+
+    monkeypatch.setattr(agent_teams_module, "AgentTeamsClient", _FakeClient)
+
+    assert agent_teams_module._get_agent_teams_client() is _FakeClient
+    asyncio.run(run_helpers())
 
 
 def test_agent_teams_backend_emits_detailed_runtime_logs(monkeypatch, capsys) -> None:

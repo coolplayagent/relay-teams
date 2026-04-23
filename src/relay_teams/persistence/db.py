@@ -7,7 +7,7 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from threading import RLock
-from typing import TypeVar
+from typing import Optional, TypeVar
 
 import aiosqlite
 
@@ -149,7 +149,7 @@ async def run_async_sqlite_write_with_retry(
     conn: aiosqlite.Connection,
     db_path: Path,
     operation: Callable[[], Awaitable[_ResultT]],
-    lock: asyncio.Lock | None = None,
+    lock: Optional[asyncio.Lock] = None,
     repository_name: str,
     operation_name: str,
     max_retries: int = SQLITE_WRITE_RETRY_ATTEMPTS,
@@ -196,7 +196,7 @@ def run_sqlite_write_with_retry(
     conn: sqlite3.Connection,
     db_path: Path,
     operation: Callable[[], _ResultT],
-    lock: RLock | None = None,
+    lock: Optional[RLock] = None,
     repository_name: str,
     operation_name: str,
     max_retries: int = SQLITE_WRITE_RETRY_ATTEMPTS,

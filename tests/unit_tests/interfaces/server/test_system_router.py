@@ -670,6 +670,14 @@ class _FakeSystemService:
             return self.probe_webhook_connectivity(request)
         return self.probe_connectivity(request)
 
+    async def probe_async(
+        self,
+        request: GitHubConnectivityProbeRequest,
+    ) -> GitHubConnectivityProbeResult:
+        result = self.probe_connectivity(request)
+        assert isinstance(result, GitHubConnectivityProbeResult)
+        return result
+
     def discover_models(
         self,
         _request: object,

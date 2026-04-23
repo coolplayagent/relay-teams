@@ -972,6 +972,7 @@ class AsyncAgentTeamsClient:
                 raise RuntimeError(f"Request timed out: {method} {path}") from exc
             except httpx.RequestError as exc:
                 raise RuntimeError(f"Failed to connect to server: {exc}") from exc
+        raise RuntimeError(f"Unexpected response handling exit: {method} {path}")
 
 
 def _expect_str(value: JsonValue | None, field_name: str) -> str:
