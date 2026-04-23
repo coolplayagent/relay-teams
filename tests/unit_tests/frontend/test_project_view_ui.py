@@ -877,7 +877,7 @@ await flushTasks();
 document.getElementById("automation-editor-display-name-input").value = "Friday Briefing";
 document.getElementById("automation-editor-prompt-input").value = "Summarize the latest project changes.";
 document.getElementById("automation-editor-timezone-input").value = "Asia/Shanghai";
-document.getElementById("automation-editor-delivery-binding-input").value = "trg_feishu::tenant-1::oc_123::session-im-1";
+document.getElementById("automation-editor-delivery-binding-input").value = "feishu::trg_feishu::tenant-1::oc_123::session-im-1";
 document.querySelector("[data-automation-editor-binding]")?.onchange?.({
     target: document.getElementById("automation-editor-delivery-binding-input"),
 });
@@ -2118,6 +2118,501 @@ export async function updateAutomationProject(_automationProjectId, payload) {
     assert run_config["orchestration_preset_id"] == "preset-default"
 
 
+def test_project_view_updates_automation_project_with_xiaoluban_binding(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationHomeView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openAutomationHomeView("aut_1");
+await flushTasks();
+await flushTasks();
+
+const editButton = els.projectViewContent.querySelector("[data-automation-edit]");
+editButton?.onclick?.();
+await flushTasks();
+
+const displayNameInput = document.getElementById("automation-editor-display-name-input");
+if (displayNameInput) {
+    displayNameInput.value = "Friday Briefing";
+}
+const bindingSelect = document.getElementById("automation-editor-delivery-binding-input");
+if (bindingSelect) {
+    bindingSelect.value = "xiaoluban::xlb_1";
+    bindingSelect.onchange?.({ target: bindingSelect });
+}
+await flushTasks();
+
+const saveButton = document.querySelector("[data-automation-editor-save]");
+saveButton?.onclick?.();
+await flushTasks();
+
+console.log(JSON.stringify({
+    contentHtml: els.projectViewContent.innerHTML,
+    updatePayload: globalThis.__updatedAutomationPayload,
+}));
+""".strip(),
+        mock_api_source="""
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        name: "daily-briefing",
+        display_name: "Daily Briefing",
+        status: "enabled",
+        workspace_id: "alpha-project",
+        prompt: "Summarize the latest project changes.",
+        schedule_mode: "cron",
+        cron_expression: "0 9 * * *",
+        timezone: "UTC",
+        delivery_binding: {
+            provider: "xiaoluban",
+            account_id: "xlb_1",
+            display_name: "小鲁班主账号",
+            derived_uid: "uid_self",
+            source_label: "发送给自己（uid_self）",
+        },
+        delivery_events: ["completed"],
+        next_run_at: "2026-03-14T09:00:00Z",
+    };
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [
+        {
+            provider: "feishu",
+            trigger_id: "trg_feishu",
+            trigger_name: "Feishu Main",
+            tenant_key: "tenant-1",
+            chat_id: "oc_123",
+            chat_type: "group",
+            source_label: "Release Updates",
+            session_id: "session-im-1",
+            session_title: "feishu_main - Release Updates",
+            updated_at: "2026-03-14T10:00:00Z",
+        },
+        {
+            provider: "xiaoluban",
+            account_id: "xlb_1",
+            display_name: "小鲁班主账号",
+            derived_uid: "uid_self",
+            source_label: "发送给自己（uid_self）",
+            updated_at: "2026-03-14T10:05:00Z",
+        },
+    ];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [];
+}
+
+export async function fetchAutomationProjects() {
+    return [{ automation_project_id: "aut_1", display_name: "Daily Briefing", name: "daily-briefing", status: "enabled", workspace_id: "alpha-project" }];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "alpha-project", root_path: "/work/alpha-project" }];
+}
+
+export async function fetchWorkspaceSnapshot() { throw new Error("not used"); }
+export async function fetchWorkspaceTree() { throw new Error("not used"); }
+export async function fetchWorkspaceDiffs() { throw new Error("not used"); }
+export async function fetchWorkspaceDiffFile() { throw new Error("not used"); }
+export async function runAutomationProject() { return { status: "ok" }; }
+export async function fetchConfigStatus() { return { skills: { skills: [] } }; }
+export async function fetchOrchestrationConfig() { return { presets: [] }; }
+export async function fetchRoleConfigOptions() { return { normal_mode_roles: [] }; }
+export async function fetchTriggers() { return []; }
+export async function fetchWeChatGatewayAccounts() { return []; }
+export async function fetchXiaolubanGatewayAccounts() { return []; }
+export async function reloadSkillsConfig() { return { status: "ok" }; }
+export async function fetchSshProfiles() { return []; }
+export async function updateWorkspace() { return { status: "ok" }; }
+export async function createTrigger() { return { status: "ok" }; }
+export async function updateTrigger() { return { status: "ok" }; }
+export async function deleteTrigger() { return { status: "ok" }; }
+export async function enableTrigger() { return { status: "ok" }; }
+export async function disableTrigger() { return { status: "ok" }; }
+export async function startWeChatGatewayLogin() { return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" }; }
+export async function waitWeChatGatewayLogin() { return { connected: true }; }
+export async function updateWeChatGatewayAccount() { return { status: "ok" }; }
+export async function enableWeChatGatewayAccount() { return { status: "ok" }; }
+export async function disableWeChatGatewayAccount() { return { status: "ok" }; }
+export async function deleteWeChatGatewayAccount() { return { status: "ok" }; }
+export async function createXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function updateXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function enableXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function disableXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function deleteXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function updateAutomationProject(_automationProjectId, payload) {
+    globalThis.__updatedAutomationPayload = payload;
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    update_payload = cast(dict[str, object], payload["updatePayload"])
+    delivery_binding = cast(dict[str, object], update_payload["delivery_binding"])
+    assert delivery_binding == {
+        "provider": "xiaoluban",
+        "account_id": "xlb_1",
+        "display_name": "小鲁班主账号",
+        "derived_uid": "uid_self",
+        "source_label": "发送给自己（uid_self）",
+    }
+    assert update_payload["delivery_events"] == ["completed"]
+    assert "发送给自己（uid_self）" in str(payload["contentHtml"])
+
+
+def test_project_view_keeps_automation_xiaoluban_binding_errors_inline(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationHomeView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openAutomationHomeView("aut_1");
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-automation-edit]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-automation-editor-save]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    modalHtml: globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n"),
+    updateAttempts: globalThis.__automationUpdateAttempts || 0,
+}));
+""".strip(),
+        mock_api_source="""
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        name: "daily-briefing",
+        display_name: "Daily Briefing",
+        status: "enabled",
+        workspace_id: "alpha-project",
+        prompt: "Summarize the latest project changes.",
+        schedule_mode: "cron",
+        cron_expression: "0 9 * * *",
+        timezone: "UTC",
+        delivery_binding: {
+            provider: "xiaoluban",
+            account_id: "xlb_1",
+            display_name: "小鲁班主账号",
+            derived_uid: "uid_self",
+            source_label: "发送给自己（uid_self）",
+        },
+        delivery_events: ["completed"],
+        next_run_at: "2026-03-14T09:00:00Z",
+    };
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [
+        {
+            provider: "xiaoluban",
+            account_id: "xlb_1",
+            display_name: "小鲁班主账号",
+            derived_uid: "uid_self",
+            source_label: "发送给自己（uid_self）",
+            updated_at: "2026-03-14T10:05:00Z",
+        },
+    ];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [];
+}
+
+export async function fetchAutomationProjects() {
+    return [{ automation_project_id: "aut_1", display_name: "Daily Briefing", name: "daily-briefing", status: "enabled", workspace_id: "alpha-project" }];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "alpha-project", root_path: "/work/alpha-project" }];
+}
+
+export async function fetchWorkspaceSnapshot() { throw new Error("not used"); }
+export async function fetchWorkspaceTree() { throw new Error("not used"); }
+export async function fetchWorkspaceDiffs() { throw new Error("not used"); }
+export async function fetchWorkspaceDiffFile() { throw new Error("not used"); }
+export async function runAutomationProject() { return { status: "ok" }; }
+export async function fetchConfigStatus() { return { skills: { skills: [] } }; }
+export async function fetchOrchestrationConfig() { return { presets: [] }; }
+export async function fetchRoleConfigOptions() { return { normal_mode_roles: [] }; }
+export async function fetchTriggers() { return []; }
+export async function fetchWeChatGatewayAccounts() { return []; }
+export async function fetchXiaolubanGatewayAccounts() { return []; }
+export async function reloadSkillsConfig() { return { status: "ok" }; }
+export async function fetchSshProfiles() { return []; }
+export async function updateWorkspace() { return { status: "ok" }; }
+export async function createTrigger() { return { status: "ok" }; }
+export async function updateTrigger() { return { status: "ok" }; }
+export async function deleteTrigger() { return { status: "ok" }; }
+export async function enableTrigger() { return { status: "ok" }; }
+export async function disableTrigger() { return { status: "ok" }; }
+export async function startWeChatGatewayLogin() { return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" }; }
+export async function waitWeChatGatewayLogin() { return { connected: true }; }
+export async function updateWeChatGatewayAccount() { return { status: "ok" }; }
+export async function enableWeChatGatewayAccount() { return { status: "ok" }; }
+export async function disableWeChatGatewayAccount() { return { status: "ok" }; }
+export async function deleteWeChatGatewayAccount() { return { status: "ok" }; }
+export async function createXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function updateXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function enableXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function disableXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function deleteXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function updateAutomationProject() {
+    globalThis.__automationUpdateAttempts = (globalThis.__automationUpdateAttempts || 0) + 1;
+    throw new Error("delivery_binding.account_id does not have usable Xiaoluban credentials");
+}
+""".strip(),
+    )
+
+    assert payload["updateAttempts"] == 1
+    assert (
+        "The selected Xiaoluban account is unavailable. Check the personal token or account status."
+        in str(payload["modalHtml"])
+    )
+    assert (
+        "delivery_binding.account_id does not have usable Xiaoluban credentials"
+        not in str(payload["modalHtml"])
+    )
+
+
+def test_project_view_defaults_delivery_notifications_on_first_binding_selection(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationHomeView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openAutomationHomeView("aut_1");
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-automation-edit]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const firstBinding = document.getElementById("automation-editor-delivery-binding-input");
+firstBinding.value = "feishu::trg_feishu::tenant-1::oc_123::session-im-1";
+document.querySelector("[data-automation-editor-binding]")?.onchange?.({ target: firstBinding });
+await flushTasks();
+await flushTasks();
+
+const defaultsAfterFirstSelection = {
+    started: document.getElementById("automation-editor-delivery-started-input")?.checked === true,
+    completed: document.getElementById("automation-editor-delivery-completed-input")?.checked === true,
+    failed: document.getElementById("automation-editor-delivery-failed-input")?.checked === true,
+};
+
+document.getElementById("automation-editor-delivery-completed-input").checked = false;
+
+const secondBinding = document.getElementById("automation-editor-delivery-binding-input");
+secondBinding.value = "feishu::trg_feishu_alt::tenant-1::oc_456::session-im-2";
+document.querySelector("[data-automation-editor-binding]")?.onchange?.({ target: secondBinding });
+await flushTasks();
+await flushTasks();
+
+const stateAfterSwitch = {
+    started: document.getElementById("automation-editor-delivery-started-input")?.checked === true,
+    completed: document.getElementById("automation-editor-delivery-completed-input")?.checked === true,
+    failed: document.getElementById("automation-editor-delivery-failed-input")?.checked === true,
+};
+
+document.querySelector("[data-automation-editor-save]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    defaultsAfterFirstSelection,
+    stateAfterSwitch,
+    updatePayload: globalThis.__updatedAutomationPayload || null,
+}));
+""".strip(),
+        mock_api_source="""
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        name: "daily-briefing",
+        display_name: "Daily Briefing",
+        status: "enabled",
+        workspace_id: "alpha-project",
+        prompt: "Summarize the latest project changes.",
+        schedule_mode: "cron",
+        cron_expression: "0 9 * * *",
+        timezone: "UTC",
+        delivery_events: [],
+        next_run_at: "2026-03-14T09:00:00Z",
+    };
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [
+        {
+            provider: "feishu",
+            trigger_id: "trg_feishu",
+            trigger_name: "Feishu Main",
+            tenant_key: "tenant-1",
+            chat_id: "oc_123",
+            chat_type: "group",
+            source_label: "Release Updates",
+            session_id: "session-im-1",
+            session_title: "feishu_main - Release Updates",
+            updated_at: "2026-03-14T10:00:00Z",
+        },
+        {
+            provider: "feishu",
+            trigger_id: "trg_feishu_alt",
+            trigger_name: "Feishu Alt",
+            tenant_key: "tenant-1",
+            chat_id: "oc_456",
+            chat_type: "group",
+            source_label: "Operations",
+            session_id: "session-im-2",
+            session_title: "feishu_alt - Operations",
+            updated_at: "2026-03-14T10:05:00Z",
+        },
+    ];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [];
+}
+
+export async function fetchAutomationProjects() {
+    return [{ automation_project_id: "aut_1", display_name: "Daily Briefing", name: "daily-briefing", status: "enabled", workspace_id: "alpha-project" }];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "alpha-project", root_path: "/work/alpha-project" }];
+}
+
+export async function fetchWorkspaceSnapshot() { throw new Error("not used"); }
+export async function fetchWorkspaceTree() { throw new Error("not used"); }
+export async function fetchWorkspaceDiffs() { throw new Error("not used"); }
+export async function fetchWorkspaceDiffFile() { throw new Error("not used"); }
+export async function runAutomationProject() { return { status: "ok" }; }
+export async function fetchConfigStatus() { return { skills: { skills: [] } }; }
+export async function fetchOrchestrationConfig() { return { presets: [] }; }
+export async function fetchRoleConfigOptions() { return { normal_mode_roles: [] }; }
+export async function fetchTriggers() { return []; }
+export async function fetchWeChatGatewayAccounts() { return []; }
+export async function fetchXiaolubanGatewayAccounts() { return []; }
+export async function reloadSkillsConfig() { return { status: "ok" }; }
+export async function fetchSshProfiles() { return []; }
+export async function updateWorkspace() { return { status: "ok" }; }
+export async function createTrigger() { return { status: "ok" }; }
+export async function updateTrigger() { return { status: "ok" }; }
+export async function deleteTrigger() { return { status: "ok" }; }
+export async function enableTrigger() { return { status: "ok" }; }
+export async function disableTrigger() { return { status: "ok" }; }
+export async function startWeChatGatewayLogin() { return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" }; }
+export async function waitWeChatGatewayLogin() { return { connected: true }; }
+export async function updateWeChatGatewayAccount() { return { status: "ok" }; }
+export async function enableWeChatGatewayAccount() { return { status: "ok" }; }
+export async function disableWeChatGatewayAccount() { return { status: "ok" }; }
+export async function deleteWeChatGatewayAccount() { return { status: "ok" }; }
+export async function createXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function updateXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function enableXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function disableXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function deleteXiaolubanGatewayAccount() { return { status: "ok" }; }
+export async function updateAutomationProject(_automationProjectId, payload) {
+    globalThis.__updatedAutomationPayload = payload;
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    assert payload["defaultsAfterFirstSelection"] == {
+        "started": True,
+        "completed": True,
+        "failed": True,
+    }
+    assert payload["stateAfterSwitch"] == {
+        "started": True,
+        "completed": False,
+        "failed": True,
+    }
+    update_payload = cast(dict[str, object], payload["updatePayload"])
+    delivery_binding = cast(dict[str, object], update_payload["delivery_binding"])
+    assert delivery_binding["trigger_id"] == "trg_feishu_alt"
+    assert update_payload["delivery_events"] == ["started", "failed"]
+
+
 def test_project_view_renders_github_automation_section_and_access_panel(
     tmp_path: Path,
 ) -> None:
@@ -3070,15 +3565,40 @@ export async function updateWeChatGatewayAccount() {
     return { status: "ok" };
 }
 
+export async function createXiaolubanGatewayAccount(payload) {
+    globalThis.__createdXiaolubanAccountPayload = payload;
+    return { account_id: "xlb_new", display_name: payload?.display_name || "Xiaoluban", derived_uid: "uid_self" };
+}
+
+export async function updateXiaolubanGatewayAccount(accountId, payload) {
+    globalThis.__updatedXiaolubanAccountPayload = { accountId, payload };
+    return { account_id: accountId, display_name: payload?.display_name || "Xiaoluban", derived_uid: "uid_self" };
+}
+
 export async function enableWeChatGatewayAccount() {
     return { status: "ok" };
+}
+
+export async function enableXiaolubanGatewayAccount(accountId) {
+    globalThis.__enabledXiaolubanAccountId = accountId;
+    return { account_id: accountId, status: "enabled" };
 }
 
 export async function disableWeChatGatewayAccount() {
     return { status: "ok" };
 }
 
+export async function disableXiaolubanGatewayAccount(accountId) {
+    globalThis.__disabledXiaolubanAccountId = accountId;
+    return { account_id: accountId, status: "disabled" };
+}
+
 export async function deleteWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function deleteXiaolubanGatewayAccount(accountId) {
+    globalThis.__deletedXiaolubanAccountId = accountId;
     return { status: "ok" };
 }
 
@@ -3862,6 +4382,13 @@ def test_project_view_automation_editor_actions_keep_buttons_single_line() -> No
     assert "white-space: nowrap;" in components_css
 
 
+def test_project_view_feedback_submit_error_aligns_with_form_fields() -> None:
+    components_css = load_components_css()
+
+    assert ".feedback-dialog-submit-error {" in components_css
+    assert "padding: 0 1.15rem;" in components_css
+
+
 def test_project_view_skills_feature_does_not_repeat_inner_title(
     tmp_path: Path,
 ) -> None:
@@ -4366,6 +4893,292 @@ export async function updateAutomationProject() {
     assert "gateway-qr-card" not in str(payload["contentHtml"])
 
 
+def test_project_view_renders_xiaoluban_section_and_creates_account(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__showFormDialogResult = {
+    token: "uid_self_1234567890abcdef1234567890ab",
+};
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-feature-gateway-add-xiaoluban]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+
+console.log(JSON.stringify({
+    title: els.projectViewTitle.textContent,
+    contentHtml: els.projectViewContent.innerHTML,
+    createdPayload: globalThis.__createdXiaolubanAccountPayload || null,
+    toastCalls: globalThis.__toastCalls || [],
+    showFormDialogCalls: globalThis.__showFormDialogCalls || [],
+    fieldIds: fields.map(field => field.id),
+    displayNameValue: String((fields.find(field => field.id === "display_name") || {}).value || ""),
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchXiaolubanGatewayAccounts() {
+    return [
+        {
+            account_id: "xlb_1",
+            display_name: "Self Notify",
+            base_url: "http://127.0.0.1:18080/send",
+            status: "enabled",
+            derived_uid: "uid_self",
+            secret_status: { token_configured: true },
+        },
+    ];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function createXiaolubanGatewayAccount(payload) {
+    globalThis.__createdXiaolubanAccountPayload = payload;
+    return {
+        account_id: "xlb_new",
+        display_name: payload?.display_name || "Xiaoluban Main",
+        base_url: payload?.base_url || "",
+        status: payload?.enabled === false ? "disabled" : "enabled",
+        derived_uid: "uid_self",
+        secret_status: { token_configured: true },
+    };
+}
+""".strip(),
+    )
+
+    assert payload["title"] == "IM Gateway"
+    assert "Xiaoluban" in str(payload["contentHtml"])
+    assert "Self Notify" in str(payload["contentHtml"])
+    assert "Internal ID: xlb_1" in str(payload["contentHtml"])
+    assert "data-feature-gateway-add-xiaoluban" in str(payload["contentHtml"])
+    assert "http://127.0.0.1:18080/send" not in str(payload["contentHtml"])
+    assert str(payload["contentHtml"]).find("WeChat") < str(
+        payload["contentHtml"]
+    ).find("Xiaoluban")
+    assert payload["createdPayload"] == {
+        "display_name": "Xiaoluban",
+        "token": "uid_self_1234567890abcdef1234567890ab",
+    }
+    assert payload["showFormDialogCalls"] != []
+    assert payload["fieldIds"] == ["display_name", "token"]
+    assert payload["displayNameValue"] == "Xiaoluban"
+    toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
+    assert toast_calls[-1]["message"] == "Xiaoluban account saved."
+
+
+def test_project_view_updates_toggles_and_deletes_xiaoluban_account(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__showFormDialogResult = {
+    display_name: "Self Notify Updated",
+    token: "",
+};
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+els.projectViewContent.querySelector('[data-feature-xiaoluban-edit]')?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+
+els.projectViewContent.querySelector('[data-feature-xiaoluban-toggle]')?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+els.projectViewContent.querySelector('[data-feature-xiaoluban-delete]')?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    updatedPayload: globalThis.__updatedXiaolubanAccountPayload || null,
+    disabledAccountId: globalThis.__disabledXiaolubanAccountId || null,
+    deletedAccountId: globalThis.__deletedXiaolubanAccountId || null,
+    editDialogMessage: dialogCall.message || "",
+    tokenFieldPlaceholder: (dialogCall.fields || []).find(field => field.id === "token")?.placeholder || "",
+    tokenFieldDescription: (dialogCall.fields || []).find(field => field.id === "token")?.description || "",
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchXiaolubanGatewayAccounts() {
+    return [
+        {
+            account_id: "xlb_1",
+            display_name: "Self Notify",
+            base_url: "http://127.0.0.1:18080/send",
+            status: "enabled",
+            derived_uid: "uid_self",
+            secret_status: { token_configured: true },
+        },
+    ];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function updateXiaolubanGatewayAccount(accountId, payload) {
+    globalThis.__updatedXiaolubanAccountPayload = { accountId, payload };
+    return {
+        account_id: accountId,
+        display_name: payload?.display_name || "Self Notify Updated",
+        base_url: payload?.base_url || "",
+        status: payload?.enabled === false ? "disabled" : "enabled",
+        derived_uid: "uid_self",
+        secret_status: { token_configured: true },
+    };
+}
+
+export async function disableXiaolubanGatewayAccount(accountId) {
+    globalThis.__disabledXiaolubanAccountId = accountId;
+    return { account_id: accountId, status: "disabled" };
+}
+
+export async function deleteXiaolubanGatewayAccount(accountId) {
+    globalThis.__deletedXiaolubanAccountId = accountId;
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    assert payload["updatedPayload"] == {
+        "accountId": "xlb_1",
+        "payload": {
+            "display_name": "Self Notify Updated",
+        },
+    }
+    assert payload["disabledAccountId"] == "xlb_1"
+    assert payload["deletedAccountId"] == "xlb_1"
+    assert payload["editDialogMessage"] == "Internal ID: xlb_1"
+    assert payload["tokenFieldPlaceholder"] == ""
+    assert (
+        payload["tokenFieldDescription"]
+        == "A personal token is already configured. Leave this blank to keep it, and enter a new personal token only if you want to update it."
+    )
+    toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
+    assert toast_calls[0]["message"] == "Xiaoluban account saved."
+    assert toast_calls[-1]["message"] == "Xiaoluban account deleted."
+
+
+def test_project_view_maps_xiaoluban_submit_errors_to_inline_messages(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__xiaolubanCreateErrors = [
+    "token format is invalid",
+    "token must be a personal Xiaoluban token",
+    "something unexpected",
+];
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-feature-gateway-add-xiaoluban]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const messages = [];
+
+for (const formValues of [
+    { display_name: "Xiaoluban", token: "bad" },
+    { display_name: "Xiaoluban", token: "p_bad_token_value_1234567890abcdef" },
+    { display_name: "Xiaoluban", token: "" },
+    { display_name: "Xiaoluban", token: "uid_self_1234567890abcdef1234567890ab" },
+]) {
+    try {
+        await dialogCall.submitHandler(formValues);
+        messages.push("ok");
+    } catch (error) {
+        messages.push(String(error?.message || error || ""));
+    }
+}
+
+console.log(JSON.stringify({
+    messages,
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchXiaolubanGatewayAccounts() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function createXiaolubanGatewayAccount() {
+    const nextError = (globalThis.__xiaolubanCreateErrors || []).shift();
+    if (typeof nextError === "string" && nextError) {
+        throw new Error(nextError);
+    }
+    return { account_id: "xlb_new", display_name: "Xiaoluban", derived_uid: "uid_self" };
+}
+""".strip(),
+    )
+
+    assert payload["messages"] == [
+        "Personal token format is invalid.",
+        "Enter a personal token. Plugin tokens are not supported.",
+        "Personal token is required.",
+        "Unable to save the Xiaoluban account. Check the personal token and try again.",
+    ]
+    assert payload["toastCalls"] == []
+
+
 def _run_project_view_script(
     tmp_path: Path,
     runner_source: str,
@@ -4782,6 +5595,10 @@ export async function fetchWeChatGatewayAccounts() {
     return [];
 }
 
+export async function fetchXiaolubanGatewayAccounts() {
+    return [];
+}
+
 export async function fetchWorkspaceSnapshot(workspaceId) {
     await new Promise(resolve => setTimeout(resolve, 0));
     globalThis.__snapshotRequests.push(workspaceId);
@@ -5065,6 +5882,41 @@ export async function fetchGitHubTriggerRules() {
     return globalThis.__mockGitHubRules || [];
 }
 """.strip(),
+        "fetchXiaolubanGatewayAccounts": """
+export async function fetchXiaolubanGatewayAccounts() {
+    return [];
+}
+""".strip(),
+        "createXiaolubanGatewayAccount": """
+export async function createXiaolubanGatewayAccount(payload) {
+    globalThis.__createdXiaolubanAccountPayload = payload;
+    return { account_id: "xlb_new", display_name: payload?.display_name || "Xiaoluban", derived_uid: "uid_self" };
+}
+""".strip(),
+        "updateXiaolubanGatewayAccount": """
+export async function updateXiaolubanGatewayAccount(accountId, payload) {
+    globalThis.__updatedXiaolubanAccountPayload = { accountId, payload };
+    return { account_id: accountId, display_name: payload?.display_name || "Xiaoluban", derived_uid: "uid_self" };
+}
+""".strip(),
+        "enableXiaolubanGatewayAccount": """
+export async function enableXiaolubanGatewayAccount(accountId) {
+    globalThis.__enabledXiaolubanAccountId = accountId;
+    return { account_id: accountId, status: "enabled" };
+}
+""".strip(),
+        "disableXiaolubanGatewayAccount": """
+export async function disableXiaolubanGatewayAccount(accountId) {
+    globalThis.__disabledXiaolubanAccountId = accountId;
+    return { account_id: accountId, status: "disabled" };
+}
+""".strip(),
+        "deleteXiaolubanGatewayAccount": """
+export async function deleteXiaolubanGatewayAccount(accountId) {
+    globalThis.__deletedXiaolubanAccountId = accountId;
+    return { status: "ok" };
+}
+""".strip(),
         "createGitHubTriggerAccount": """
 export async function createGitHubTriggerAccount(payload) {
     globalThis.__createdGitHubAccountPayload = payload;
@@ -5244,6 +6096,8 @@ export const state = {
         "workspace_view.change.modified": "Modified",
         "workspace_view.delivery_disabled": "Disabled",
         "workspace_view.delivery_events": "Delivery events",
+        "workspace_view.delivery_provider": "Delivery provider",
+        "workspace_view.delivery_target": "Delivery target",
         "workspace_view.feishu_trigger": "Feishu trigger",
         "workspace_view.feishu_chat": "Feishu chat",
         "workspace_view.chat_type": "Chat type",
@@ -5290,6 +6144,19 @@ export const state = {
         "settings.gateway.connect_wechat": "Connect WeChat",
         "settings.gateway.wechat_none": "No WeChat accounts",
         "settings.gateway.wechat_none_copy": "Connect a WeChat account.",
+        "settings.gateway.xiaoluban_account_editor": "Xiaoluban Account",
+        "settings.gateway.xiaoluban_title": "Xiaoluban",
+        "settings.gateway.xiaoluban_none": "No Xiaoluban accounts",
+        "settings.gateway.xiaoluban_none_copy": "Create an account to send automation updates to yourself.",
+        "settings.gateway.xiaoluban_token": "Personal Token",
+        "settings.gateway.xiaoluban_token_copy": "Paste the personal token used for outbound notifications.",
+        "settings.gateway.xiaoluban_token_edit_copy": "A personal token is already configured. Leave this blank to keep it, and enter a new personal token only if you want to update it.",
+        "settings.gateway.xiaoluban_token_keep": "Keep existing token",
+        "settings.gateway.xiaoluban_missing_token": "Personal token is required.",
+        "settings.gateway.xiaoluban_token_invalid": "Personal token format is invalid.",
+        "settings.gateway.xiaoluban_personal_token_only": "Enter a personal token. Plugin tokens are not supported.",
+        "settings.gateway.xiaoluban_uid": "Derived UID",
+        "settings.gateway.xiaoluban_internal_id_copy": "Internal ID: {account_id}",
         "settings.gateway.qr_title": "Scan To Connect",
         "settings.gateway.qr_copy": "Scan this QR code in WeChat.",
         "settings.gateway.login_waiting": "Waiting for QR scan confirmation...",
@@ -5302,9 +6169,12 @@ export const state = {
         "settings.gateway.delete_confirm_message": "Delete account {name}?",
         "settings.gateway.saved": "Saved",
         "settings.gateway.saved_message": "WeChat account saved.",
+        "settings.gateway.xiaoluban_saved_message": "Xiaoluban account saved.",
+        "settings.gateway.xiaoluban_save_failed_message": "Unable to save the Xiaoluban account. Check the personal token and try again.",
         "settings.gateway.save_failed": "Save failed",
         "settings.gateway.deleted": "Deleted",
         "settings.gateway.deleted_message": "WeChat account deleted.",
+        "settings.gateway.xiaoluban_deleted_message": "Xiaoluban account deleted.",
         "feature.skills.title": "Skills",
         "feature.skills.directory_title": "Installed Skills",
         "feature.skills.summary": "{count} skills available",
@@ -5384,10 +6254,15 @@ export const state = {
         "feature.automation.github_failed_title": "Save failed",
         "feature.automation.github_deleted_title": "Deleted",
         "feature.gateway.title": "IM Gateway",
-        "feature.gateway.summary": "{feishu} Feishu · {wechat} WeChat",
+        "feature.gateway.summary": "{feishu} Feishu · {wechat} WeChat · {xiaoluban} Xiaoluban",
         "feature.gateway.add_feishu": "Add Robot",
+        "feature.gateway.add_xiaoluban": "Add Xiaoluban",
         "feature.gateway.feishu_section": "Feishu",
+        "feature.gateway.xiaoluban_section": "Xiaoluban",
         "feature.gateway.wechat_section": "WeChat",
+        "sidebar.delivery_none": "No delivery target",
+        "sidebar.delivery_none_copy": "Do not send automation updates.",
+        "sidebar.delivery_target": "Delivery target",
         "composer.no_roles": "No roles",
         "composer.no_presets": "No presets",
         "composer.mode_normal": "Normal Mode",
@@ -5415,6 +6290,9 @@ export const state = {
         "automation.detail.no_runs": "No runs yet.",
         "automation.detail.not_scheduled": "Not scheduled",
         "automation.detail.never": "Never",
+        "automation.delivery.xiaoluban_credentials_unusable": "The selected Xiaoluban account is unavailable. Check the personal token or account status.",
+        "automation.delivery.xiaoluban_account_missing": "Select a valid Xiaoluban account.",
+        "automation.delivery.save_failed": "Unable to save the automation settings. Check the delivery target and try again.",
         "automation.run_status.completed": "Completed",
         "sidebar.log.started_bound_session": "Started automation run in bound IM session: {session_id}",
         "sidebar.log.started_automation_run": "Started automation run: {session_id}",

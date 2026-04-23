@@ -4,13 +4,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Optional, Protocol
+from typing import Optional, Protocol, Tuple
 from uuid import uuid4
 
 from relay_teams.automation.automation_delivery_repository import (
     AutomationDeliveryRepository,
 )
 from relay_teams.automation.automation_models import (
+    AutomationDeliveryBinding,
     AutomationCleanupStatus,
     AutomationDeliveryEvent,
     AutomationDeliveryStatus,
@@ -18,6 +19,7 @@ from relay_teams.automation.automation_models import (
     AutomationProjectRecord,
     AutomationRunDeliveryRecord,
 )
+from relay_teams.gateway.feishu import FEISHU_PLATFORM
 from relay_teams.gateway.feishu.models import FeishuEnvironment
 from relay_teams.logger import get_logger, log_event
 from relay_teams.notifications import NotificationContext, NotificationType
@@ -43,7 +45,7 @@ _CLAIM_STALE_AFTER_SECONDS = 60
 class FeishuRuntimeConfigLookup(Protocol):
     def get_runtime_config_by_trigger_id(
         self, trigger_id: str
-    ) -> FeishuRuntimeConfigLike | None: ...
+    ) -> Optional[FeishuRuntimeConfigLike]: ...
 
 
 class FeishuRuntimeConfigLike(Protocol):
@@ -58,7 +60,7 @@ class FeishuClientLike(Protocol):
         *,
         chat_id: str,
         text: str,
-        environment: FeishuEnvironment | None = None,
+        environment: Optional[FeishuEnvironment] = None,
     ) -> str: ...
 
     def reply_text_message(
@@ -66,7 +68,7 @@ class FeishuClientLike(Protocol):
         *,
         message_id: str,
         text: str,
-        environment: FeishuEnvironment | None = None,
+        environment: Optional[FeishuEnvironment] = None,
     ) -> str: ...
 
 
@@ -78,8 +80,18 @@ class NotificationServiceLike(Protocol):
         title: str,
         body: str,
         context: NotificationContext,
-        dedupe_key: str | None = None,
+        dedupe_key: Optional[str] = None,
     ) -> bool: ...
+
+
+class XiaolubanGatewayServiceLike(Protocol):
+    def send_text_message(
+        self,
+        *,
+        account_id: str,
+        text: str,
+        receiver_uid: Optional[str] = None,
+    ) -> str: ...
 
 
 class AutomationDeliveryService:
@@ -89,13 +101,15 @@ class AutomationDeliveryService:
         repository: AutomationDeliveryRepository,
         runtime_config_lookup: FeishuRuntimeConfigLookup,
         feishu_client: FeishuClientLike,
+        xiaoluban_gateway_service: Optional[XiaolubanGatewayServiceLike] = None,
         run_runtime_repo: RunRuntimeRepository,
         event_log: EventLog,
-        notification_service: NotificationServiceLike | None = None,
+        notification_service: Optional[NotificationServiceLike] = None,
     ) -> None:
         self._repository = repository
         self._runtime_config_lookup = runtime_config_lookup
         self._feishu_client = feishu_client
+        self._xiaoluban_gateway_service = xiaoluban_gateway_service
         self._run_runtime_repo = run_runtime_repo
         self._event_log = event_log
         self._notification_service = notification_service
@@ -103,17 +117,17 @@ class AutomationDeliveryService:
     def register_run(
         self,
         *,
-        project: AutomationProjectRecord | None,
+        project: Optional[AutomationProjectRecord],
         session_id: str,
         run_id: str,
         reason: str,
-        project_id: str | None = None,
-        project_name: str | None = None,
-        binding: AutomationFeishuBinding | None = None,
-        delivery_events: tuple[AutomationDeliveryEvent, ...] | None = None,
+        project_id: Optional[str] = None,
+        project_name: Optional[str] = None,
+        binding: Optional[AutomationDeliveryBinding] = None,
+        delivery_events: Optional[Tuple[AutomationDeliveryEvent, ...]] = None,
         send_started: bool = True,
-        reply_to_message_id: str | None = None,
-    ) -> AutomationRunDeliveryRecord | None:
+        reply_to_message_id: Optional[str] = None,
+    ) -> Optional[AutomationRunDeliveryRecord]:
         resolved_binding = (
             binding
             if binding is not None
@@ -196,7 +210,7 @@ class AutomationDeliveryService:
     def delete_project_deliveries(self, automation_project_id: str) -> None:
         self._repository.delete_by_project(automation_project_id)
 
-    def should_suppress_terminal_notification(self, run_id: str | None) -> bool:
+    def should_suppress_terminal_notification(self, run_id: Optional[str]) -> bool:
         normalized_run_id = str(run_id or "").strip()
         if not normalized_run_id:
             return False
@@ -218,7 +232,7 @@ class AutomationDeliveryService:
         self,
         *,
         run_id: str,
-        terminal_message: str | None = None,
+        terminal_message: Optional[str] = None,
     ) -> None:
         try:
             record = self._repository.get_by_run_id(run_id)
@@ -258,8 +272,7 @@ class AutomationDeliveryService:
         attempts = claimed.started_attempts + 1
         try:
             message_id = self._send_text(
-                trigger_id=claimed.binding.trigger_id,
-                chat_id=claimed.binding.chat_id,
+                binding=claimed.binding,
                 text=str(claimed.started_message or "").strip(),
             )
         except RuntimeError as exc:
@@ -327,6 +340,7 @@ class AutomationDeliveryService:
             runtime_status=runtime.status,
             event_log=self._event_log,
             fallback_error=runtime.last_error,
+            binding=claimed.binding,
         )
         if (
             terminal_event not in claimed.delivery_events
@@ -351,8 +365,7 @@ class AutomationDeliveryService:
         )
         try:
             message_id = self._send_text(
-                trigger_id=claimed.binding.trigger_id,
-                chat_id=claimed.binding.chat_id,
+                binding=claimed.binding,
                 text=terminal_message,
                 reply_to_message_id=reply_to_message_id or None,
             )
@@ -419,28 +432,39 @@ class AutomationDeliveryService:
     def _send_text(
         self,
         *,
-        trigger_id: str,
-        chat_id: str,
+        binding: AutomationDeliveryBinding,
         text: str,
-        reply_to_message_id: str | None = None,
+        reply_to_message_id: Optional[str] = None,
     ) -> str:
-        runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
-            trigger_id
-        )
-        if runtime_config is None:
-            raise RuntimeError("missing_runtime_config")
-        normalized_reply_to_message_id = str(reply_to_message_id or "").strip()
-        if normalized_reply_to_message_id:
-            return self._feishu_client.reply_text_message(
-                message_id=normalized_reply_to_message_id,
+        if isinstance(binding, AutomationFeishuBinding):
+            runtime_config = (
+                self._runtime_config_lookup.get_runtime_config_by_trigger_id(
+                    binding.trigger_id
+                )
+            )
+            if runtime_config is None:
+                raise RuntimeError("missing_runtime_config")
+            normalized_reply_to_message_id = str(reply_to_message_id or "").strip()
+            if normalized_reply_to_message_id:
+                return self._feishu_client.reply_text_message(
+                    message_id=normalized_reply_to_message_id,
+                    text=text,
+                    environment=runtime_config.environment,
+                )
+            return self._feishu_client.send_text_message(
+                chat_id=binding.chat_id,
                 text=text,
                 environment=runtime_config.environment,
             )
-        return self._feishu_client.send_text_message(
-            chat_id=chat_id,
-            text=text,
-            environment=runtime_config.environment,
-        )
+        if self._xiaoluban_gateway_service is None:
+            raise RuntimeError("xiaoluban_delivery_service_unavailable")
+        try:
+            return self._xiaoluban_gateway_service.send_text_message(
+                account_id=binding.account_id,
+                text=text,
+            )
+        except KeyError as exc:
+            raise RuntimeError("missing_xiaoluban_account") from exc
 
     def _emit_fallback_terminal_notification(
         self,
@@ -570,7 +594,8 @@ def _build_terminal_message(
     run_id: str,
     runtime_status: RunRuntimeStatus,
     event_log: EventLog,
-    fallback_error: str | None,
+    fallback_error: Optional[str],
+    binding: AutomationDeliveryBinding,
 ) -> str:
     output = ""
     terminal_error = ""
@@ -585,6 +610,8 @@ def _build_terminal_message(
     if runtime_status == RunRuntimeStatus.COMPLETED:
         if output:
             return output
+        if binding.provider != FEISHU_PLATFORM:
+            return f"定时任务 {project_name} 执行完成。"
         return ""
     failure_detail = (
         output or terminal_error or str(fallback_error or "").strip() or "未知错误。"

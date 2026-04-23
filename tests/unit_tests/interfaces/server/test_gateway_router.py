@@ -6,7 +6,17 @@ from typing import Callable
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from relay_teams.interfaces.server.deps import get_wechat_gateway_service
+from relay_teams.gateway.xiaoluban import (
+    XiaolubanAccountCreateInput,
+    XiaolubanAccountRecord,
+    XiaolubanAccountStatus,
+    XiaolubanAccountUpdateInput,
+    XiaolubanSecretStatus,
+)
+from relay_teams.interfaces.server.deps import (
+    get_wechat_gateway_service,
+    get_xiaoluban_gateway_service,
+)
 from relay_teams.interfaces.server.routers import gateway
 from relay_teams.sessions.runs.run_models import RunThinkingConfig
 from relay_teams.gateway.wechat.models import (
@@ -110,10 +120,81 @@ class _FakeWeChatGatewayService:
         )
 
 
-def _client(fake_service: _FakeWeChatGatewayService) -> TestClient:
+class _FakeXiaolubanGatewayService:
+    def __init__(self) -> None:
+        self.created_payloads: list[XiaolubanAccountCreateInput] = []
+        self.updated_payloads: list[tuple[str, XiaolubanAccountUpdateInput]] = []
+        self.deleted_account_ids: list[tuple[str, bool]] = []
+
+    def list_accounts(self) -> tuple[XiaolubanAccountRecord, ...]:
+        return (self._record(),)
+
+    def create_account(
+        self,
+        req: XiaolubanAccountCreateInput,
+    ) -> XiaolubanAccountRecord:
+        self.created_payloads.append(req)
+        return self._record().model_copy(update={"display_name": req.display_name})
+
+    def update_account(
+        self,
+        account_id: str,
+        req: XiaolubanAccountUpdateInput,
+    ) -> XiaolubanAccountRecord:
+        self.updated_payloads.append((account_id, req))
+        return self._record().model_copy(
+            update={
+                "account_id": account_id,
+                "display_name": req.display_name or self._record().display_name,
+            }
+        )
+
+    def set_account_enabled(
+        self,
+        account_id: str,
+        enabled: bool,
+    ) -> XiaolubanAccountRecord:
+        return self._record().model_copy(
+            update={
+                "account_id": account_id,
+                "status": (
+                    XiaolubanAccountStatus.ENABLED
+                    if enabled
+                    else XiaolubanAccountStatus.DISABLED
+                ),
+            }
+        )
+
+    def delete_account(self, account_id: str, *, force: bool = False) -> None:
+        if account_id == "missing":
+            raise KeyError("Unknown Xiaoluban account_id: missing")
+        if account_id == "enabled" and not force:
+            raise RuntimeError("Cannot delete enabled Xiaoluban account without force")
+        self.deleted_account_ids.append((account_id, force))
+
+    @staticmethod
+    def _record() -> XiaolubanAccountRecord:
+        return XiaolubanAccountRecord(
+            account_id="xlb_123",
+            display_name="小鲁班主账号",
+            status=XiaolubanAccountStatus.ENABLED,
+            derived_uid="uid_self",
+            secret_status=XiaolubanSecretStatus(token_configured=True),
+            created_at=datetime(2026, 4, 22, 1, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 4, 22, 1, 0, tzinfo=UTC),
+        )
+
+
+def _client(
+    fake_service: _FakeWeChatGatewayService,
+    fake_xiaoluban_service: _FakeXiaolubanGatewayService | None = None,
+) -> TestClient:
     app = FastAPI()
     app.include_router(gateway.router, prefix="/api")
     app.dependency_overrides[get_wechat_gateway_service] = lambda: fake_service
+    app.dependency_overrides[get_xiaoluban_gateway_service] = lambda: (
+        fake_xiaoluban_service or _FakeXiaolubanGatewayService()
+    )
     return TestClient(app)
 
 
@@ -230,6 +311,110 @@ def test_wechat_account_routes_run_service_calls_in_threadpool(monkeypatch) -> N
         "set_account_enabled",
         "delete_account",
         "reload",
+    ]
+
+
+def test_list_xiaoluban_accounts_route_returns_accounts() -> None:
+    client = _client(
+        _FakeWeChatGatewayService(),
+        _FakeXiaolubanGatewayService(),
+    )
+
+    response = client.get("/api/gateway/xiaoluban/accounts")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["account_id"] == "xlb_123"
+    assert payload[0]["derived_uid"] == "uid_self"
+
+
+def test_create_xiaoluban_account_route_returns_created_record() -> None:
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
+
+    response = client.post(
+        "/api/gateway/xiaoluban/accounts",
+        json={
+            "display_name": "小鲁班主账号",
+            "token": "uid_1234567890abcdef1234567890abcdef",
+            "base_url": "http://xlb.test/send",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["display_name"] == "小鲁班主账号"
+    assert fake_xiaoluban_service.created_payloads[0].display_name == "小鲁班主账号"
+
+
+def test_disable_xiaoluban_account_route_returns_disabled_record() -> None:
+    client = _client(
+        _FakeWeChatGatewayService(),
+        _FakeXiaolubanGatewayService(),
+    )
+
+    response = client.post("/api/gateway/xiaoluban/accounts/xlb_123:disable")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "disabled"
+
+
+def test_delete_xiaoluban_account_route_forwards_force_flag() -> None:
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
+
+    response = client.request(
+        "DELETE",
+        "/api/gateway/xiaoluban/accounts/enabled",
+        json={"force": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert fake_xiaoluban_service.deleted_account_ids == [("enabled", True)]
+
+
+def test_xiaoluban_account_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway.asyncio, "to_thread", fake_to_thread)
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
+
+    requests = [
+        client.get("/api/gateway/xiaoluban/accounts"),
+        client.post(
+            "/api/gateway/xiaoluban/accounts",
+            json={
+                "display_name": "小鲁班主账号",
+                "token": "uid_1234567890abcdef1234567890abcdef",
+            },
+        ),
+        client.patch(
+            "/api/gateway/xiaoluban/accounts/xlb_123",
+            json={"display_name": "小鲁班备用账号"},
+        ),
+        client.post("/api/gateway/xiaoluban/accounts/xlb_123:enable"),
+        client.post("/api/gateway/xiaoluban/accounts/xlb_123:disable"),
+        client.delete("/api/gateway/xiaoluban/accounts/xlb_123"),
+    ]
+
+    assert [response.status_code for response in requests] == [200] * len(requests)
+    assert [call[0] for call in calls] == [
+        "list_accounts",
+        "create_account",
+        "update_account",
+        "set_account_enabled",
+        "set_account_enabled",
+        "delete_account",
     ]
 
 

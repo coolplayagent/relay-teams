@@ -7,12 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from relay_teams.automation.automation_models import (
+from relay_teams.automation import (
+    AutomationFeishuBinding,
     AutomationProjectRecord,
+    AutomationProjectRepository,
     AutomationProjectStatus,
     AutomationScheduleMode,
+    AutomationXiaolubanBinding,
 )
-from relay_teams.automation.automation_repository import AutomationProjectRepository
 
 
 def test_automation_project_repo_normalizes_legacy_optional_identifiers(
@@ -65,7 +67,78 @@ def test_automation_project_repo_normalizes_legacy_optional_identifiers(
     assert loaded.run_config.normal_root_role_id is None
     assert loaded.run_config.orchestration_preset_id is None
     assert loaded.delivery_binding is not None
+    assert isinstance(loaded.delivery_binding, AutomationFeishuBinding)
     assert loaded.delivery_binding.session_id is None
+
+
+def test_automation_project_repo_reads_legacy_feishu_binding_without_provider(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "automation_legacy_binding.db"
+    repository = AutomationProjectRepository(db_path)
+    record = _build_project_record(
+        automation_project_id="aut-legacy-binding",
+        name="legacy-binding-project",
+    )
+    _ = repository.create(record)
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        UPDATE automation_projects
+        SET delivery_binding_json=?
+        WHERE automation_project_id=?
+        """,
+        (
+            json.dumps(
+                {
+                    "trigger_id": "trigger-legacy",
+                    "tenant_key": "tenant-1",
+                    "chat_id": "chat-legacy",
+                    "session_id": "session-legacy",
+                    "chat_type": "group",
+                    "source_label": "Legacy Chat",
+                }
+            ),
+            record.automation_project_id,
+        ),
+    )
+    connection.commit()
+    connection.close()
+
+    loaded = repository.get(record.automation_project_id)
+
+    assert loaded.delivery_binding is not None
+    assert isinstance(loaded.delivery_binding, AutomationFeishuBinding)
+    assert loaded.delivery_binding.provider == "feishu"
+    assert loaded.delivery_binding.chat_id == "chat-legacy"
+
+
+def test_automation_project_repo_roundtrips_xiaoluban_binding(
+    tmp_path: Path,
+) -> None:
+    repository = AutomationProjectRepository(tmp_path / "automation_xiaoluban.db")
+    record = _build_project_record(
+        automation_project_id="aut-xiaoluban",
+        name="xiaoluban-project",
+    ).model_copy(
+        update={
+            "delivery_binding": AutomationXiaolubanBinding(
+                account_id="xlb_1",
+                display_name="Self Notify",
+                derived_uid="uidself",
+                source_label="发送给自己（uidself）",
+            )
+        }
+    )
+
+    _ = repository.create(record)
+
+    loaded = repository.get(record.automation_project_id)
+
+    assert loaded.delivery_binding is not None
+    assert isinstance(loaded.delivery_binding, AutomationXiaolubanBinding)
+    assert loaded.delivery_binding.account_id == "xlb_1"
+    assert loaded.delivery_binding.derived_uid == "uidself"
 
 
 def test_automation_project_repo_skips_invalid_required_identifier_rows(

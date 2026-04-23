@@ -3,54 +3,55 @@ from __future__ import annotations
 
 from fastapi import Request
 
-from relay_teams.agents.orchestration.task_orchestration_service import (
-    TaskOrchestrationService,
-)
 from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
+from relay_teams.agents.orchestration.task_orchestration_service import (
+    TaskOrchestrationService,
+)
+from relay_teams.automation.automation_service import AutomationService
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.environment_variable_service import EnvironmentVariableService
 from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.env.localhost_run_tunnel_service import LocalhostRunTunnelService
-from relay_teams.external_agents import ExternalAgentConfigService
-from relay_teams.automation.automation_service import AutomationService
 from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.web_config_service import WebConfigService
+from relay_teams.external_agents import ExternalAgentConfigService
+from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
+from relay_teams.gateway.feishu.subscription_service import FeishuSubscriptionService
+from relay_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
+from relay_teams.gateway.wechat.service import WeChatGatewayService
+from relay_teams.gateway.xiaoluban import XiaolubanGatewayService
+from relay_teams.hooks import HookService
 from relay_teams.interfaces.server.config_status_service import ConfigStatusService
 from relay_teams.interfaces.server.container import ServerContainer
 from relay_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
+from relay_teams.mcp.config_reload_service import McpConfigReloadService
+from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.mcp_service import McpService
+from relay_teams.media import MediaAssetService
+from relay_teams.metrics import MetricsService
 from relay_teams.net.clawhub_connectivity import ClawHubConnectivityProbeService
 from relay_teams.net.github_connectivity import (
     GitHubConnectivityProbeService,
     GitHubWebhookConnectivityProbeService,
 )
 from relay_teams.net.web_connectivity import WebConnectivityProbeService
-from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
-from relay_teams.gateway.feishu.subscription_service import FeishuSubscriptionService
-from relay_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
-from relay_teams.mcp.config_reload_service import McpConfigReloadService
-from relay_teams.mcp.mcp_registry import McpRegistry
-from relay_teams.mcp.mcp_service import McpService
-from relay_teams.media import MediaAssetService
-from relay_teams.metrics import MetricsService
 from relay_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
 )
 from relay_teams.providers.model_config_service import ModelConfigService
 from relay_teams.roles import RoleMemoryService, RoleRegistry
 from relay_teams.roles.settings_service import RoleSettingsService
-from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.runs.run_manager import RunManager
-from relay_teams.skills.config_reload_service import SkillsConfigReloadService
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
+from relay_teams.skills.config_reload_service import SkillsConfigReloadService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.triggers import GitHubTriggerService
-from relay_teams.gateway.wechat.service import WeChatGatewayService
 from relay_teams.workspace import SshProfileService, WorkspaceManager, WorkspaceService
-from relay_teams.hooks import HookService
 
 
 def get_container(request: Request) -> ServerContainer:
@@ -223,6 +224,10 @@ def get_metrics_service(request: Request) -> MetricsService:
 
 def get_wechat_gateway_service(request: Request) -> WeChatGatewayService:
     return get_container(request).wechat_gateway_service
+
+
+def get_xiaoluban_gateway_service(request: Request) -> XiaolubanGatewayService:
+    return get_container(request).xiaoluban_gateway_service
 
 
 def get_github_trigger_service(request: Request) -> GitHubTriggerService:

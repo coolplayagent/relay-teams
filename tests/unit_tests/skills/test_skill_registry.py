@@ -816,6 +816,7 @@ def test_load_skill_reports_missing_skill_for_authorized_stale_role_ref() -> Non
     assert "Skill not found: planner" in cast(str, error["message"])
 
 
+@pytest.mark.timeout(5)
 def test_load_skill_omits_large_dependency_trees_from_file_listing(
     tmp_path: Path,
 ) -> None:

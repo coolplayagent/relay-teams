@@ -30,6 +30,9 @@ from relay_teams.automation.feishu_binding_service import (
     AutomationFeishuBindingService,
 )
 from relay_teams.automation.scheduler_service import AutomationSchedulerService
+from relay_teams.automation.xiaoluban_binding_service import (
+    AutomationXiaolubanBindingService,
+)
 from relay_teams.builtin import (
     ensure_app_config_bootstrap,
     get_builtin_roles_dir,
@@ -207,6 +210,12 @@ from relay_teams.gateway.wechat.inbound_queue_repository import (
 )
 from relay_teams.gateway.wechat.secret_store import get_wechat_secret_store
 from relay_teams.gateway.wechat.service import WeChatGatewayService
+from relay_teams.gateway.xiaoluban import (
+    XiaolubanAccountRepository,
+    XiaolubanClient,
+    XiaolubanGatewayService,
+    get_xiaoluban_secret_store,
+)
 from relay_teams.hooks import HookLoader, HookRuntimeState, HookService
 from relay_teams.hooks.executors.agent_executor import AgentHookExecutor
 from relay_teams.hooks.executors.command_executor import CommandHookExecutor
@@ -524,10 +533,14 @@ class ServerContainer:
             run_event_hub=self.run_event_hub,
         )
         self.feishu_client = FeishuClient()
+        self.xiaoluban_account_repository = XiaolubanAccountRepository(
+            runtime.paths.db_path
+        )
         self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
         self.wechat_inbound_queue_repo = WeChatInboundQueueRepository(
             runtime.paths.db_path
         )
+        self.xiaoluban_client = XiaolubanClient()
         self.wechat_client = WeChatClient()
         self.github_trigger_secret_store = get_github_trigger_secret_store()
         self.github_api_client = GitHubApiClient(
@@ -777,16 +790,26 @@ class ServerContainer:
             inbound_queue_repo=self.wechat_inbound_queue_repo,
             session_ingress_service=self.session_ingress_service,
         )
+        self.xiaoluban_gateway_service = XiaolubanGatewayService(
+            config_dir=app_config_dir,
+            repository=self.xiaoluban_account_repository,
+            secret_store=get_xiaoluban_secret_store(),
+            client=self.xiaoluban_client,
+        )
         self.automation_feishu_binding_service = AutomationFeishuBindingService(
             external_session_binding_repo=self.external_session_binding_repo,
             session_repo=self.session_repo,
             account_lookup=self.feishu_gateway_service,
             runtime_config_lookup=self.feishu_gateway_service,
         )
+        self.automation_xiaoluban_binding_service = AutomationXiaolubanBindingService(
+            account_lookup=self.xiaoluban_gateway_service
+        )
         self.automation_delivery_service = AutomationDeliveryService(
             repository=self.automation_delivery_repo,
             runtime_config_lookup=self.feishu_gateway_service,
             feishu_client=self.feishu_client,
+            xiaoluban_gateway_service=self.xiaoluban_gateway_service,
             run_runtime_repo=self.run_runtime_repo,
             event_log=self.event_log,
             notification_service=self.notification_service,
@@ -843,6 +866,7 @@ class ServerContainer:
             session_service=self.session_service,
             run_service=self.run_service,
             feishu_binding_service=self.automation_feishu_binding_service,
+            xiaoluban_binding_service=self.automation_xiaoluban_binding_service,
             delivery_service=self.automation_delivery_service,
             bound_session_queue_service=self.automation_bound_session_queue_service,
             workspace_service=self.workspace_service,

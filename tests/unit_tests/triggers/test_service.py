@@ -1131,6 +1131,7 @@ def test_github_trigger_action_worker_stop_times_out_for_stalled_processing() ->
 
         service.release.set()
         assert await asyncio.to_thread(service.finished.wait, 1.0)
+        await asyncio.wait_for(worker.stop(), timeout=1.0)
 
     asyncio.run(run_worker())
 
