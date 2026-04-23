@@ -83,13 +83,13 @@ def test_pr_checks_gate_changed_line_unit_coverage() -> None:
     assert "diff-cover coverage.xml --config-file pyproject.toml" in pr_workflow
 
 
-def test_qodana_code_quality_workflow_uses_cloud_scan() -> None:
+def test_qodana_code_quality_workflow_uses_cloud_scan_without_repo_config() -> None:
     project_root = _project_root()
     qodana_workflow = (
         project_root / ".github" / "workflows" / "code_quality.yml"
     ).read_text(encoding="utf-8")
-    qodana_config = (project_root / "qodana.yaml").read_text(encoding="utf-8")
 
+    assert not (project_root / "qodana.yaml").exists()
     assert "name: Qodana" in qodana_workflow
     assert "JetBrains/qodana-action" not in qodana_workflow
     assert "https://jb.gg/qodana-cli/install" in qodana_workflow
@@ -102,9 +102,6 @@ def test_qodana_code_quality_workflow_uses_cloud_scan() -> None:
     assert "QODANA_TOKEN" in qodana_workflow
     assert 'QODANA_ENDPOINT: "https://qodana.cloud"' in qodana_workflow
     assert "fetch-depth: 0" in qodana_workflow
-    assert "linter: qodana-python-community" in qodana_config
-    assert "failThreshold: 0" in qodana_config
-    assert "failureConditions" not in qodana_config
 
 
 def test_pptx_craft_package_metadata_preserves_esm_runtime_contract() -> None:
