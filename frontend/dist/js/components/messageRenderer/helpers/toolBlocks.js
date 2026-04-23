@@ -580,6 +580,9 @@ function renderEnvelopeResult(targetEl, envelope, toolName) {
     }
 
     if (toolName === 'read' && data != null) {
+        if (renderStructuredPayload(targetEl, data, envelope.meta)) {
+            return;
+        }
         renderReadOutput(targetEl, data);
         return;
     }
@@ -750,7 +753,9 @@ function renderStructuredPayload(targetEl, payload, meta = null) {
     if (hasText) {
         const textEl = document.createElement('div');
         textEl.className = 'msg-text';
-        renderRichContent(textEl, String(payload.text || ''));
+        renderRichContent(textEl, String(payload.text || ''), {
+            enableWorkspaceImagePreview: !hasStructuredContent,
+        });
         targetEl.appendChild(textEl);
     }
     if (hasStructuredContent) {

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, JsonValue
+from pydantic_ai.messages import ToolReturn
 
 import asyncio
 import inspect
@@ -12,10 +13,19 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from enum import Enum
 from json import dumps
-from typing import Protocol, cast, get_args, get_origin, get_type_hints
+from typing import (
+    Literal,
+    Protocol,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+    overload,
+)
 from uuid import uuid4
 
 from relay_teams.logger import get_logger, log_event, log_tool_error
+from relay_teams.media import ContentPart, TextContentPart, UserPromptContent
 from relay_teams.metrics.adapters import record_tool_execution
 from relay_teams.notifications import NotificationContext, NotificationType
 from relay_teams.persistence import is_retryable_sqlite_error
@@ -47,6 +57,7 @@ from relay_teams.tools.runtime.persisted_state import (
     ToolApprovalMode,
     ToolApprovalStatus,
     ToolExecutionStatus,
+    load_tool_call_state,
     merge_tool_call_state,
 )
 from relay_teams.env.hook_runtime_env import (
@@ -66,6 +77,8 @@ from relay_teams.hooks import (
 LOGGER = get_logger(__name__)
 
 
+# noinspection PyUnusedLocal,PyTypeHints
+@overload
 async def execute_tool(
     ctx: ToolContext,
     *,
@@ -86,7 +99,59 @@ async def execute_tool(
     ]
     | None = None,
     keep_approval_ticket_reusable: bool = False,
-) -> dict[str, JsonValue]:
+    allow_tool_return: Literal[False] = False,
+) -> dict[str, JsonValue]: ...
+
+
+# noinspection PyUnusedLocal,PyTypeHints
+@overload
+async def execute_tool(
+    ctx: ToolContext,
+    *,
+    tool_name: str,
+    args_summary: dict[str, JsonValue],
+    action: Callable[[dict[str, JsonValue]], object | Awaitable[object]]
+    | Callable[[], object | Awaitable[object]]
+    | object,
+    tool_input: dict[str, JsonValue] | None = None,
+    approval_request: ToolApprovalRequest | None = None,
+    approval_request_factory: Callable[
+        [dict[str, JsonValue]], ToolApprovalRequest | None
+    ]
+    | None = None,
+    approval_args_summary: dict[str, JsonValue] | None = None,
+    approval_args_summary_factory: Callable[
+        [dict[str, JsonValue]], dict[str, JsonValue] | None
+    ]
+    | None = None,
+    keep_approval_ticket_reusable: bool = False,
+    allow_tool_return: Literal[True] = True,
+) -> ToolReturn | dict[str, JsonValue]: ...
+
+
+# noinspection PyUnusedLocal,PyTypeHints,PyRedeclaration
+async def execute_tool(
+    ctx: ToolContext,
+    *,
+    tool_name: str,
+    args_summary: dict[str, JsonValue],
+    action: Callable[[dict[str, JsonValue]], object | Awaitable[object]]
+    | Callable[[], object | Awaitable[object]]
+    | object,
+    tool_input: dict[str, JsonValue] | None = None,
+    approval_request: ToolApprovalRequest | None = None,
+    approval_request_factory: Callable[
+        [dict[str, JsonValue]], ToolApprovalRequest | None
+    ]
+    | None = None,
+    approval_args_summary: dict[str, JsonValue] | None = None,
+    approval_args_summary_factory: Callable[
+        [dict[str, JsonValue]], dict[str, JsonValue] | None
+    ]
+    | None = None,
+    keep_approval_ticket_reusable: bool = False,
+    allow_tool_return: bool = False,
+) -> ToolReturn | dict[str, JsonValue]:
     """Run a tool action with approval, logging, and normalized envelopes."""
     tool_call_id = ctx.tool_call_id or f"toolcall_{uuid4().hex[:12]}"
     with trace_span(
@@ -223,7 +288,9 @@ async def execute_tool(
             finally:
                 reset_tool_hook_runtime_env(hook_env_token)
             _raise_if_stopped(ctx)
-            visible_data, internal_data = _normalize_result_payload(result)
+            visible_data, internal_data, tool_content_parts = _normalize_result_payload(
+                result
+            )
 
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             meta["duration_ms"] = elapsed_ms
@@ -243,6 +310,19 @@ async def execute_tool(
                 data=visible_data,
                 meta=meta,
             )
+            tool_return_content: UserPromptContent | None = None
+            if tool_content_parts:
+                if not allow_tool_return:
+                    raise ValueError(
+                        f"Tool {tool_name} produced model content without enabling tool returns."
+                    )
+                tool_return_content = _tool_return_content(
+                    ctx=ctx,
+                    tool_name=tool_name,
+                    tool_content_parts=tool_content_parts,
+                )
+
+            meta["tool_result_event_published"] = True
             envelope = await _apply_post_tool_hooks(
                 ctx=ctx,
                 tool_name=tool_name,
@@ -274,6 +354,11 @@ async def execute_tool(
             )
             if approval_ticket_id and not keep_approval_ticket_reusable:
                 ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
+            if tool_return_content is not None:
+                return ToolReturn(
+                    return_value=envelope,
+                    content=tool_return_content,
+                )
             return envelope
         except Exception as exc:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -345,6 +430,8 @@ async def execute_tool(
             return envelope
 
 
+# noinspection PyUnusedLocal,PyTypeHints
+@overload
 async def execute_tool_call(
     ctx: ToolContext,
     *,
@@ -364,7 +451,57 @@ async def execute_tool_call(
     ]
     | None = None,
     keep_approval_ticket_reusable: bool = False,
-) -> dict[str, JsonValue]:
+    allow_tool_return: Literal[False] = False,
+) -> dict[str, JsonValue]: ...
+
+
+# noinspection PyUnusedLocal,PyTypeHints
+@overload
+async def execute_tool_call(
+    ctx: ToolContext,
+    *,
+    tool_name: str,
+    args_summary: dict[str, JsonValue],
+    action: Callable[..., object | Awaitable[object]] | object,
+    raw_args: Mapping[str, object] | None = None,
+    args_exclude: tuple[str, ...] = ("ctx",),
+    approval_request: ToolApprovalRequest | None = None,
+    approval_request_factory: Callable[
+        [dict[str, JsonValue]], ToolApprovalRequest | None
+    ]
+    | None = None,
+    approval_args_summary: dict[str, JsonValue] | None = None,
+    approval_args_summary_factory: Callable[
+        [dict[str, JsonValue]], dict[str, JsonValue] | None
+    ]
+    | None = None,
+    keep_approval_ticket_reusable: bool = False,
+    allow_tool_return: Literal[True] = True,
+) -> ToolReturn | dict[str, JsonValue]: ...
+
+
+# noinspection PyUnusedLocal,PyTypeHints,PyRedeclaration
+async def execute_tool_call(
+    ctx: ToolContext,
+    *,
+    tool_name: str,
+    args_summary: dict[str, JsonValue],
+    action: Callable[..., object | Awaitable[object]] | object,
+    raw_args: Mapping[str, object] | None = None,
+    args_exclude: tuple[str, ...] = ("ctx",),
+    approval_request: ToolApprovalRequest | None = None,
+    approval_request_factory: Callable[
+        [dict[str, JsonValue]], ToolApprovalRequest | None
+    ]
+    | None = None,
+    approval_args_summary: dict[str, JsonValue] | None = None,
+    approval_args_summary_factory: Callable[
+        [dict[str, JsonValue]], dict[str, JsonValue] | None
+    ]
+    | None = None,
+    keep_approval_ticket_reusable: bool = False,
+    allow_tool_return: bool = False,
+) -> ToolReturn | dict[str, JsonValue]:
     """Run a tool through the hook-aware runtime using natural Python params.
 
     Tool authors should prefer this wrapper for new tools:
@@ -396,6 +533,7 @@ async def execute_tool_call(
         approval_args_summary=approval_args_summary,
         approval_args_summary_factory=approval_args_summary_factory,
         keep_approval_ticket_reusable=keep_approval_ticket_reusable,
+        allow_tool_return=allow_tool_return,
     )
 
 
@@ -493,14 +631,46 @@ def _error_payload(exc: Exception) -> ToolError:
 
 def _normalize_result_payload(
     result: object,
-) -> tuple[JsonValue | None, JsonValue | None]:
+) -> tuple[JsonValue | None, JsonValue | None, tuple[ContentPart, ...]]:
     if isinstance(result, ToolResultProjection):
         return (
             _normalize_json_value(result.visible_data),
             _normalize_json_value(result.internal_data),
+            tuple(result.tool_content_parts),
         )
     normalized = _normalize_json_value(result)
-    return normalized, normalized
+    return normalized, normalized, ()
+
+
+# noinspection PyTypeHints
+def _tool_return_content(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    tool_content_parts: tuple[ContentPart, ...],
+) -> UserPromptContent:
+    if not tool_content_parts:
+        return ""
+    if all(isinstance(part, TextContentPart) for part in tool_content_parts):
+        return "\n\n".join(
+            part.text
+            for part in tool_content_parts
+            if isinstance(part, TextContentPart)
+        ).strip()
+    media_asset_service = ctx.deps.media_asset_service
+    if media_asset_service is None:
+        raise ValueError(
+            f"Tool {tool_name} returned media content without media asset support."
+        )
+    provider_content = media_asset_service.to_provider_user_prompt_content(
+        parts=tool_content_parts
+    )
+    hydrated_content = media_asset_service.hydrate_user_prompt_content(
+        content=provider_content
+    )
+    if isinstance(hydrated_content, str):
+        return hydrated_content
+    return tuple(hydrated_content)
 
 
 def _safe_json(value: object) -> str:
@@ -1543,6 +1713,7 @@ def _publish_tool_approval_event(
     )
 
 
+# noinspection PyTypeHints
 def _visible_envelope(
     *,
     ok: bool,
@@ -1621,6 +1792,20 @@ def _persist_tool_record(
 ) -> None:
     approval_status = _approval_status_from_meta(runtime_meta)
     approval_mode = _approval_mode_from_meta(runtime_meta)
+    result_record = _internal_record(
+        tool_name=tool_name,
+        visible_envelope=visible_envelope,
+        internal_data=internal_data,
+        runtime_meta=runtime_meta,
+    )
+    current_state = load_tool_call_state(
+        shared_store=ctx.deps.shared_store,
+        task_id=ctx.deps.task_id,
+        tool_call_id=tool_call_id,
+    )
+    existing_call_state = (
+        dict(current_state.call_state) if current_state is not None else {}
+    )
     merge_tool_call_state(
         shared_store=ctx.deps.shared_store,
         task_id=ctx.deps.task_id,
@@ -1636,12 +1821,8 @@ def _persist_tool_record(
         approval_status=approval_status,
         approval_feedback=str(runtime_meta.get("approval_feedback") or ""),
         execution_status=execution_status,
-        result_envelope=_internal_record(
-            tool_name=tool_name,
-            visible_envelope=visible_envelope,
-            internal_data=internal_data,
-            runtime_meta=runtime_meta,
-        ),
+        result_envelope=result_record,
+        call_state=existing_call_state,
     )
 
 

@@ -264,9 +264,14 @@ def build_session_rounds(
             if isinstance(candidate_role_id, str) and candidate_role_id:
                 coordinator_role_id = candidate_role_id
         coordinator_messages = [
-            message
+            projected
             for message in run_messages
-            if _is_round_coordinator_message(message, coordinator_role_id)
+            if (
+                projected := _round_coordinator_message_projection(
+                    message, coordinator_role_id
+                )
+            )
+            is not None
         ]
         if not coordinator_messages:
             reconstructed = _reconstruct_completed_output_message(
@@ -576,42 +581,58 @@ def _intent_parts_to_text(intent_parts: list[dict[str, object]]) -> str | None:
     return "\n\n".join(fragments)
 
 
-def _is_round_coordinator_message(
+# noinspection PyTypeHints
+def _round_coordinator_message_projection(
     message: dict[str, object],
     coordinator_role_id: str | None,
-) -> bool:
+) -> dict[str, object] | None:
     if coordinator_role_id is None:
-        return False
+        return None
     if str(message.get("role_id") or "") != coordinator_role_id:
-        return False
+        return None
     role = str(message.get("role") or "")
     if role != "user":
-        return True
-    return _is_tool_outcome_message(cast(object, message.get("message")))
+        return message
+    projected_message = _tool_outcome_message_projection(
+        cast(object, message.get("message"))
+    )
+    if projected_message is None:
+        return None
+    projected = dict(message)
+    projected["message"] = projected_message
+    return projected
 
 
-def _is_tool_outcome_message(message: object) -> bool:
+# noinspection PyTypeHints
+def _tool_outcome_message_projection(message: object) -> dict[str, object] | None:
     if not isinstance(message, dict):
-        return False
+        return None
     parts = message.get("parts")
     if not isinstance(parts, list) or not parts:
-        return False
+        return None
+    outcome_parts: list[object] = []
     for part in parts:
         if not isinstance(part, dict):
-            return False
+            continue
         part_kind = str(part.get("part_kind") or "")
         if part_kind in {"tool-return", "retry-prompt"}:
+            outcome_parts.append(part)
             continue
         if (
             part.get("tool_name") is not None
             and part.get("content") is not None
             and part.get("args") is None
         ):
+            outcome_parts.append(part)
             continue
-        return False
-    return True
+    if not outcome_parts:
+        return None
+    projected = dict(message)
+    projected["parts"] = outcome_parts
+    return projected
 
 
+# noinspection PyTypeHints
 def _parse_event_payload(payload_json: object) -> dict[str, object]:
     if not isinstance(payload_json, str) or not payload_json:
         return {}
@@ -624,6 +645,7 @@ def _parse_event_payload(payload_json: object) -> dict[str, object]:
     return {str(key): value for key, value in decoded.items() if isinstance(key, str)}
 
 
+# noinspection PyTypeHints
 def _reconstruct_completed_output_message(
     *,
     run_id: str,

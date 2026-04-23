@@ -42,8 +42,19 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
     )
     assert "function appendUserPromptText(contentEl, text) {" in block_script
     assert "function updateUserPromptText(promptEl, text) {" in block_script
+    assert "function updateThinkingText(textEl, text, options = {}) {" in block_script
     assert "appendPromptContentBlock(contentEl, text, {" in block_script
     assert "return updatePromptContentBlock(promptEl, text, {" in block_script
+    assert (
+        "enableWorkspaceImagePreview: options.enableWorkspaceImagePreview !== false,"
+        in block_script
+    )
+    assert (
+        "updateMessageText(textEl, text, {\n"
+        "        ...options,\n"
+        "        enableWorkspaceImagePreview: false,\n"
+        "    });" in block_script
+    )
     assert ".user-prompt-block {" in components_css
     assert ".user-prompt-summary {" in components_css
     assert ".user-prompt-preview {" in components_css
@@ -59,6 +70,11 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
     assert (
         "function renderRoundIntentStructuredContent(bodyEl, parts) {"
         in timeline_script
+    )
+    assert (
+        "renderPromptContentParts(bodyEl, parts, {\n"
+        "        enableWorkspaceImagePreview: false,\n"
+        "    });" in timeline_script
     )
     assert (
         "header.appendChild(buildRoundIntentBlock(round.intent, round.intent_parts));"
@@ -88,6 +104,24 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
     assert ".round-detail-intent-body {" in components_css
     assert ".round-detail-intent-actions {" in components_css
     assert ".round-detail-intent-collapse {" in components_css
+    prompt_script = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "messageRenderer"
+        / "helpers"
+        / "prompt.js"
+    ).read_text(encoding="utf-8")
+    assert (
+        "export function renderPromptContentParts(targetEl, parts, options = {}) {"
+        in prompt_script
+    )
+    assert (
+        "enableWorkspaceImagePreview: options.enableWorkspaceImagePreview !== false,"
+        in prompt_script
+    )
 
 
 def test_thinking_blocks_use_compact_summary_spacing() -> None:

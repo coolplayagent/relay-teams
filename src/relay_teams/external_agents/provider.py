@@ -968,6 +968,7 @@ class ExternalAcpSessionManager:
             tool_approval_policy=self._tool_approval_policy,
             shell_approval_repo=self._shell_approval_repo,
             get_notification_service=self._get_notification_service,
+            resolve_model_config=self._resolve_model_config,
             metric_recorder=self._metric_recorder,
             im_tool_service=self._im_tool_service,
             computer_runtime=self._computer_runtime,

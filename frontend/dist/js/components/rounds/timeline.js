@@ -628,7 +628,9 @@ function buildRoundIntentBlock(intentText, intentParts = null) {
 }
 
 function renderRoundIntentStructuredContent(bodyEl, parts) {
-    renderPromptContentParts(bodyEl, parts);
+    renderPromptContentParts(bodyEl, parts, {
+        enableWorkspaceImagePreview: false,
+    });
 }
 
 function normalizeRoundIntentText(intentText) {

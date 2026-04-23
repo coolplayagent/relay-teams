@@ -611,7 +611,7 @@ class ServerContainer:
             tool_approval_policy=self.tool_approval_policy,
             shell_approval_repo=self.shell_approval_repo,
             get_notification_service=lambda: self.notification_service,
-            resolve_model_config=self._resolve_external_agent_model_config,
+            resolve_model_config=self.resolve_external_agent_model_config,
             metric_recorder=self.metric_recorder,
             im_tool_service=self.im_tool_service,
             computer_runtime=self.computer_runtime,
@@ -1038,7 +1038,7 @@ class ServerContainer:
             ),
         )
 
-    def _resolve_external_agent_model_config(
+    def resolve_external_agent_model_config(
         self,
         role: RoleDefinition,
         request: LLMRequest,
