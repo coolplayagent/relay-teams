@@ -64,7 +64,8 @@ def _github_delivery_callback_url(
 async def list_github_accounts(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> list[GitHubTriggerAccountRecord]:
-    return list(service.list_accounts())
+    accounts = await run_in_threadpool(service.list_accounts)
+    return list(accounts)
 
 
 @router.post("/github/accounts", response_model=GitHubTriggerAccountRecord)
@@ -73,7 +74,7 @@ async def create_github_account(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubTriggerAccountRecord:
     try:
-        return service.create_account(req)
+        return await run_in_threadpool(service.create_account, req)
     except GitHubTriggerAccountNameConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except GitHubApiError as exc:
@@ -91,7 +92,7 @@ async def update_github_account(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubTriggerAccountRecord:
     try:
-        return service.update_account(account_id, req)
+        return await run_in_threadpool(service.update_account, account_id, req)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except GitHubTriggerAccountNameConflictError as exc:
@@ -108,7 +109,7 @@ async def delete_github_account(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> dict[str, JsonValue]:
     try:
-        service.delete_account(account_id)
+        await run_in_threadpool(service.delete_account, account_id)
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -122,7 +123,7 @@ async def enable_github_account(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubTriggerAccountRecord:
     try:
-        return service.enable_account(account_id)
+        return await run_in_threadpool(service.enable_account, account_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except GitHubApiError as exc:
@@ -139,7 +140,7 @@ async def disable_github_account(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubTriggerAccountRecord:
     try:
-        return service.disable_account(account_id)
+        return await run_in_threadpool(service.disable_account, account_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except GitHubApiError as exc:
@@ -152,7 +153,8 @@ async def disable_github_account(
 async def list_github_repo_subscriptions(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> list[GitHubRepoSubscriptionRecord]:
-    return list(service.list_repo_subscriptions())
+    subscriptions = await run_in_threadpool(service.list_repo_subscriptions)
+    return list(subscriptions)
 
 
 @router.get(
@@ -290,7 +292,8 @@ async def disable_github_repo_subscription(
 async def list_github_rules(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> list[TriggerRuleRecord]:
-    return list(service.list_rules())
+    rules = await run_in_threadpool(service.list_rules)
+    return list(rules)
 
 
 @router.post("/github/rules", response_model=TriggerRuleRecord)

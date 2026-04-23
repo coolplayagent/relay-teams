@@ -88,7 +88,8 @@ class _FakeWeChatGatewayService:
             }
         )
 
-    def delete_account(self, account_id: str) -> None:
+    def delete_account(self, account_id: str, *, force: bool = False) -> None:
+        _ = force
         if account_id == "missing":
             raise KeyError("Unknown account_id: missing")
         self.deleted_account_ids.append(account_id)
@@ -194,6 +195,42 @@ def test_wait_wechat_login_route_runs_service_call_in_threadpool(monkeypatch) ->
     assert response.status_code == 200
     assert response.json()["connected"] is True
     assert [call.session_key for call in calls] == ["wechat-login-1"]
+
+
+def test_wechat_account_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway.asyncio, "to_thread", fake_to_thread)
+    fake_service = _FakeWeChatGatewayService()
+    client = _client(fake_service)
+
+    requests = [
+        client.get("/api/gateway/wechat/accounts"),
+        client.patch("/api/gateway/wechat/accounts/wx_123", json={"route_tag": "ops"}),
+        client.post("/api/gateway/wechat/accounts/wx_123:enable"),
+        client.post("/api/gateway/wechat/accounts/wx_123:disable"),
+        client.delete("/api/gateway/wechat/accounts/wx_123"),
+        client.post("/api/gateway/wechat/reload"),
+    ]
+
+    assert [response.status_code for response in requests] == [200] * len(requests)
+    assert [call[0] for call in calls] == [
+        "list_accounts",
+        "update_account",
+        "set_account_enabled",
+        "set_account_enabled",
+        "delete_account",
+        "reload",
+    ]
 
 
 def test_update_wechat_account_route_maps_validation_error_to_422() -> None:

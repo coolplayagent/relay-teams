@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -27,6 +28,7 @@ class _FakeAutomationService:
         self.run_calls: list[str] = []
         self.status_calls: list[tuple[str, AutomationProjectStatus]] = []
         self.deleted_calls: list[tuple[str, bool, bool]] = []
+        self.updated_payloads: list[tuple[str, AutomationProjectUpdateInput]] = []
         self.delete_error: Exception | None = None
         self.list_feishu_bindings_calls = 0
 
@@ -113,9 +115,15 @@ class _FakeAutomationService:
         )
 
     def update_project(
-        self, automation_project_id: str, _req: AutomationProjectUpdateInput
-    ) -> AutomationProjectRecord:  # pragma: no cover
-        raise AssertionError(f"not used: {automation_project_id}")
+        self, automation_project_id: str, req: AutomationProjectUpdateInput
+    ) -> AutomationProjectRecord:
+        self.updated_payloads.append((automation_project_id, req))
+        return self.get_project(automation_project_id).model_copy(
+            update={
+                "name": req.name or "daily-briefing",
+                "display_name": req.display_name or "Daily Briefing",
+            }
+        )
 
     def delete_project(
         self,
@@ -275,6 +283,63 @@ def test_list_feishu_bindings_route_returns_candidates() -> None:
     assert payload[0]["trigger_id"] == "trg_feishu"
     assert payload[0]["chat_id"] == "oc_123"
     assert fake_service.list_feishu_bindings_calls == 1
+
+
+def test_automation_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(automation, "run_in_threadpool", fake_run_in_threadpool)
+    fake_service = _FakeAutomationService()
+    client = _client(fake_service)
+
+    requests = [
+        client.get("/api/automation/feishu-bindings"),
+        client.post(
+            "/api/automation/projects",
+            json={
+                "name": "daily-briefing",
+                "workspace_id": "default",
+                "prompt": "Summarize the day.",
+                "schedule_mode": "cron",
+                "cron_expression": "0 9 * * *",
+                "timezone": "UTC",
+            },
+        ),
+        client.get("/api/automation/projects"),
+        client.get("/api/automation/projects/aut_1"),
+        client.patch(
+            "/api/automation/projects/aut_1",
+            json={"display_name": "Updated Briefing"},
+        ),
+        client.delete("/api/automation/projects/aut_1"),
+        client.post("/api/automation/projects/aut_1:run"),
+        client.post("/api/automation/projects/aut_1:enable"),
+        client.post("/api/automation/projects/aut_1:disable"),
+        client.get("/api/automation/projects/aut_1/sessions"),
+    ]
+
+    assert [response.status_code for response in requests] == [200] * len(requests)
+    assert [call[0] for call in calls] == [
+        "list_feishu_bindings",
+        "create_project",
+        "list_projects",
+        "get_project",
+        "update_project",
+        "delete_project",
+        "run_now",
+        "set_project_status",
+        "set_project_status",
+        "list_project_sessions",
+    ]
 
 
 def test_get_project_route_returns_record() -> None:

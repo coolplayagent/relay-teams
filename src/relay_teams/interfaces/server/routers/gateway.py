@@ -26,7 +26,8 @@ router = APIRouter(prefix="/gateway", tags=["Gateway"])
 async def list_wechat_accounts(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> list[WeChatAccountRecord]:
-    return list(service.list_accounts())
+    accounts = await asyncio.to_thread(service.list_accounts)
+    return list(accounts)
 
 
 @router.post("/wechat/login/start", response_model=WeChatLoginStartResponse)
@@ -61,7 +62,7 @@ async def update_wechat_account(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
     try:
-        return service.update_account(account_id, req)
+        return await asyncio.to_thread(service.update_account, account_id, req)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -75,7 +76,7 @@ async def enable_wechat_account(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
     try:
-        return service.set_account_enabled(account_id, True)
+        return await asyncio.to_thread(service.set_account_enabled, account_id, True)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -91,7 +92,7 @@ async def disable_wechat_account(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
     try:
-        return service.set_account_enabled(account_id, False)
+        return await asyncio.to_thread(service.set_account_enabled, account_id, False)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -106,8 +107,10 @@ async def delete_wechat_account(
     req: DeleteRequest | None = Body(default=None),
 ) -> dict[str, str]:
     try:
-        service.delete_account(
-            account_id, force=req.force if req is not None else False
+        await asyncio.to_thread(
+            service.delete_account,
+            account_id,
+            force=req.force if req is not None else False,
         )
         return {"status": "ok"}
     except KeyError as exc:
@@ -120,5 +123,5 @@ async def delete_wechat_account(
 async def reload_wechat_gateway(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> dict[str, str]:
-    service.reload()
+    await asyncio.to_thread(service.reload)
     return {"status": "ok"}

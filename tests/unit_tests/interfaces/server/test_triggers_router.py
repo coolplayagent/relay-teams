@@ -299,6 +299,55 @@ def test_create_github_account_route_maps_name_conflict_to_409() -> None:
     assert "already exists" in response.json()["detail"]
 
 
+def test_github_account_and_list_routes_run_service_calls_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(triggers, "run_in_threadpool", fake_run_in_threadpool)
+    client = _client(_FakeGitHubTriggerService())
+
+    requests = [
+        client.get("/api/triggers/github/accounts"),
+        client.post(
+            "/api/triggers/github/accounts",
+            json={
+                "name": "main",
+                "display_name": "Main",
+                "token": "ghp_test",
+                "webhook_secret": "whsec_test",
+            },
+        ),
+        client.patch("/api/triggers/github/accounts/ghta_1", json={"enabled": True}),
+        client.delete("/api/triggers/github/accounts/ghta_1"),
+        client.post("/api/triggers/github/accounts/ghta_1:enable"),
+        client.post("/api/triggers/github/accounts/ghta_1:disable"),
+        client.get("/api/triggers/github/repos"),
+        client.get("/api/triggers/github/rules"),
+    ]
+
+    assert [response.status_code for response in requests] == [200] * len(requests)
+    assert [call[0] for call in calls] == [
+        "list_accounts",
+        "create_account",
+        "update_account",
+        "delete_account",
+        "enable_account",
+        "disable_account",
+        "list_repo_subscriptions",
+        "list_rules",
+    ]
+
+
 def test_create_github_repo_route_maps_validation_error_to_422() -> None:
     client = _client(_FakeGitHubTriggerService())
 
