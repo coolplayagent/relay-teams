@@ -213,7 +213,7 @@ async def get_config_status(
 async def list_ssh_profiles(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> list[SshProfileRecord]:
-    return list(service.list_profiles())
+    return list(await asyncio.to_thread(service.list_profiles))
 
 
 @router.get("/configs/workspace/ssh-profiles/{ssh_profile_id}")
@@ -222,7 +222,7 @@ async def get_ssh_profile(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfileRecord:
     try:
-        return service.get_profile(ssh_profile_id)
+        return await asyncio.to_thread(service.get_profile, ssh_profile_id)
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -238,7 +238,7 @@ async def reveal_ssh_profile_password(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfilePasswordRevealView:
     try:
-        return service.reveal_password(ssh_profile_id)
+        return await asyncio.to_thread(service.reveal_password, ssh_profile_id)
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -271,7 +271,8 @@ async def save_ssh_profile(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfileRecord:
     try:
-        return service.save_profile(
+        return await asyncio.to_thread(
+            service.save_profile,
             ssh_profile_id=ssh_profile_id,
             config=req.config,
         )
@@ -288,7 +289,7 @@ async def delete_ssh_profile(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> dict[str, str]:
     try:
-        service.delete_profile(ssh_profile_id)
+        await asyncio.to_thread(service.delete_profile, ssh_profile_id)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(

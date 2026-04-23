@@ -975,6 +975,53 @@ def test_probe_ssh_profile_connectivity_runs_service_call_in_threadpool(
     assert [call.ssh_profile_id for call in calls] == ["prod"]
 
 
+def test_ssh_profile_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    responses = [
+        client.get("/api/system/configs/workspace/ssh-profiles"),
+        client.get("/api/system/configs/workspace/ssh-profiles/prod"),
+        client.post("/api/system/configs/workspace/ssh-profiles/prod:reveal-password"),
+        client.put(
+            "/api/system/configs/workspace/ssh-profiles/staging",
+            json={
+                "config": {
+                    "host": "staging-alias",
+                    "username": "ops",
+                    "password": "relay-secret",
+                    "port": 2222,
+                    "remote_shell": "/bin/bash",
+                    "connect_timeout_seconds": 15,
+                    "private_key": ("-----BEGIN KEY-----\ncontent\n-----END KEY-----"),
+                    "private_key_name": "id_rsa",
+                }
+            },
+        ),
+        client.delete("/api/system/configs/workspace/ssh-profiles/staging"),
+    ]
+
+    assert [response.status_code for response in responses] == [200] * len(responses)
+    assert [call[0] for call in calls] == [
+        "list_profiles",
+        "get_profile",
+        "reveal_password",
+        "save_profile",
+        "delete_profile",
+    ]
+
+
 def test_save_and_delete_ssh_profile() -> None:
     service = _FakeSystemService()
     client = _create_test_client(service)
