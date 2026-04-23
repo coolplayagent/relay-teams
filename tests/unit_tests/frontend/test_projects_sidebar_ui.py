@@ -348,6 +348,171 @@ export async function runAutomationProject() {
     }
 
 
+def test_projects_sidebar_subagent_children_keep_state_for_transition_classes(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+
+globalThis.__sessionSubagentSessionsMap = {
+    "session-1": [
+        {
+            sessionId: "session-1",
+            instanceId: "inst-sub-1",
+            roleId: "Explorer",
+            runId: "subagent_run_1",
+            title: "Explore history",
+            updatedAt: "2026-03-14T10:12:00Z",
+        },
+        {
+            sessionId: "session-1",
+            instanceId: "inst-sub-2",
+            roleId: "Crafter",
+            runId: "subagent_run_2",
+            title: "Draft summary",
+            updatedAt: "2026-03-14T10:13:00Z",
+        },
+    ],
+};
+globalThis.__expandedSubagentSessionIds.add("session-1");
+
+await loadProjects();
+
+let projectsList = document.getElementById("projects-list");
+let firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const firstRenderList = firstProject.querySelector(".session-subagent-list");
+
+globalThis.__expandedSubagentSessionIds.delete("session-1");
+await loadProjects();
+await flushTasks();
+
+projectsList = document.getElementById("projects-list");
+firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const collapsedRenderList = firstProject.querySelector(".session-subagent-list");
+
+globalThis.__expandedSubagentSessionIds.add("session-1");
+await loadProjects();
+await flushTasks();
+
+projectsList = document.getElementById("projects-list");
+firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const reopenRenderList = firstProject.querySelector(".session-subagent-list");
+
+console.log(JSON.stringify({
+    firstRenderClass: firstRenderList.className,
+    collapsedRenderClass: collapsedRenderList.className,
+    collapsedAria: collapsedRenderList.getAttribute("aria-hidden"),
+    reopenedRenderClass: reopenRenderList.className,
+    collapsedChildCount: firstProject.querySelectorAll(".session-subagent-item").length,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        session_mode: "normal",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        metadata: { title: "Root session" },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    repo_root = Path(__file__).resolve().parents[3]
+    sidebar_script = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
+    ).read_text(encoding="utf-8")
+    components_css = load_components_css()
+
+    assert "is-expanded" in str(payload["firstRenderClass"])
+    assert "is-collapsed" in str(payload["collapsedRenderClass"])
+    assert payload["collapsedAria"] == "true"
+    assert "is-expanded" in str(payload["reopenedRenderClass"])
+    assert payload["collapsedChildCount"] == 2
+    assert ".session-subagent-list.is-collapsed" in components_css
+    assert ".session-subagent-list.is-expanded" in components_css
+    assert "function syncSubagentSessionListVisualState" in sidebar_script
+
+
 def test_projects_sidebar_uses_session_summary_for_subagent_toggle_without_prefetch(
     tmp_path: Path,
 ) -> None:
@@ -1978,6 +2143,269 @@ console.log(JSON.stringify({
     }
 
 
+def test_projects_sidebar_force_refreshes_subagent_events_even_when_hovering(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { loadProjects } from "./sidebar.mjs";
+
+await loadProjects();
+
+const initialCounts = { ...globalThis.__fetchCounts };
+globalThis.__projectsListHover = true;
+document.dispatchEvent({
+    type: "agent-teams-subagent-sessions-changed",
+    detail: { forceRefresh: true },
+});
+await new Promise(resolve => setTimeout(resolve, 160));
+
+const refreshedCounts = { ...globalThis.__fetchCounts };
+
+console.log(JSON.stringify({
+    initialCounts,
+    refreshedCounts,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        session_mode: "normal",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        metadata: { title: "Root session" },
+    },
+];
+
+globalThis.__fetchCounts = {
+    workspaces: 0,
+    sessions: 0,
+    automationProjects: 0,
+};
+
+export async function fetchWorkspaces() {
+    globalThis.__fetchCounts.workspaces += 1;
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    globalThis.__fetchCounts.sessions += 1;
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    globalThis.__fetchCounts.automationProjects += 1;
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    assert payload["initialCounts"] == {
+        "workspaces": 1,
+        "sessions": 1,
+        "automationProjects": 1,
+    }
+    assert payload["refreshedCounts"] == {
+        "workspaces": 2,
+        "sessions": 2,
+        "automationProjects": 2,
+    }
+
+
+def test_projects_sidebar_defaults_subagent_events_to_force_refresh_when_detail_missing(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { loadProjects } from "./sidebar.mjs";
+
+await loadProjects();
+
+const initialCounts = { ...globalThis.__fetchCounts };
+globalThis.__projectsListHover = true;
+document.dispatchEvent({
+    type: "agent-teams-subagent-sessions-changed",
+});
+await new Promise(resolve => setTimeout(resolve, 180));
+
+const refreshedCounts = { ...globalThis.__fetchCounts };
+
+console.log(JSON.stringify({
+    initialCounts,
+    refreshedCounts,
+}));""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        session_mode: "normal",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        metadata: { title: "Root session" },
+    },
+];
+
+globalThis.__fetchCounts = {
+    workspaces: 0,
+    sessions: 0,
+    automationProjects: 0,
+};
+
+export async function fetchWorkspaces() {
+    globalThis.__fetchCounts.workspaces += 1;
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    globalThis.__fetchCounts.sessions += 1;
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    globalThis.__fetchCounts.automationProjects += 1;
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}""".strip(),
+    )
+
+    assert payload["initialCounts"] == {
+        "workspaces": 1,
+        "sessions": 1,
+        "automationProjects": 1,
+    }
+    assert payload["refreshedCounts"] == {
+        "workspaces": 2,
+        "sessions": 2,
+        "automationProjects": 2,
+    }
+
+
 def test_projects_sidebar_hover_hint_preserves_project_action_space() -> None:
     components_css = load_components_css()
 
@@ -2163,8 +2591,9 @@ function parseElements(source, selector) {
             ".project-fork-btn": /class="[^"]*project-fork-btn[^"]*"[^>]*>/g,
             ".project-remove-btn": /class="[^"]*project-remove-btn[^"]*"[^>]*>/g,
         ".project-session-visibility-btn": /class="project-session-visibility-btn"[^>]*>([\s\S]*?)<\/button>/g,
-        ".session-subagents-toggle": /class="session-subagents-toggle"[^>]*data-session-id="([^"]+)"[^>]*aria-expanded="([^"]+)"[^>]*>/g,
-        ".session-subagent-item": /class="([^"]*session-subagent-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-subagent-instance-id="([^"]+)"[^>]*data-subagent-role-id="([^"]+)"[^>]*data-subagent-run-id="([^"]+)"[^>]*data-subagent-title="([^"]*)"[^>]*>[\s\S]*?<span class="session-label-text">([\s\S]*?)<\/span>/g,
+            ".session-subagents-toggle": /class="session-subagents-toggle"[^>]*data-session-id="([^"]+)"[^>]*aria-expanded="([^"]+)"[^>]*>/g,
+            ".session-subagent-list": /class="([^"]*session-subagent-list[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*aria-hidden="([^"]+)"[^>]*>/g,
+            ".session-subagent-item": /class="([^"]*session-subagent-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-subagent-instance-id="([^"]+)"[^>]*data-subagent-role-id="([^"]+)"[^>]*data-subagent-run-id="([^"]+)"[^>]*data-subagent-title="([^"]*)"[^>]*>[\s\S]*?<span class="session-label-text">([\s\S]*?)<\/span>/g,
         ".session-subagent-delete-btn": /class="([^"]*session-subagent-delete-btn[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-subagent-instance-id="([^"]+)"[^>]*data-subagent-run-id="([^"]+)"[^>]*data-subagent-label="([^"]*)"[^>]*>/g,
         ".session-subagent-empty": /class="session-subagent-empty"[^>]*>([\s\S]*?)<\/div>/g,
         ".session-rename-btn": /class="session-rename-btn"[^>]*data-session-id="([^"]+)"[^>]*data-session-metadata="([^"]*)"[^>]*>/g,
@@ -2213,6 +2642,14 @@ function parseElements(source, selector) {
                 attributes: {
                     "data-session-id": match[1],
                     "aria-expanded": match[2],
+                },
+            }));
+        } else if (selector === ".session-subagent-list") {
+            results.push(createNode({
+                className: match[1],
+                attributes: {
+                    "data-session-id": match[2],
+                    "aria-hidden": match[3],
                 },
             }));
         } else if (selector === ".session-subagent-item") {
