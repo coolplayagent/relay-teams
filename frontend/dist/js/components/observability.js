@@ -5,6 +5,7 @@
 import { fetchObservabilityBreakdowns, fetchObservabilityOverview } from '../core/api.js';
 import { state } from '../core/state.js';
 import { hideProjectView } from './projectView.js';
+import { clearNewSessionDraft } from './newSessionDraft.js';
 import { getCurrentLanguage, t } from '../utils/i18n.js';
 import { sysLog } from '../utils/logger.js';
 
@@ -1101,6 +1102,9 @@ function setVisible(visible) {
             button.classList.remove('is-active');
             button.setAttribute('aria-current', 'false');
         });
+    }
+    if (visible) {
+        clearNewSessionDraft();
     }
     if (view) {
         view.style.display = visible ? 'block' : 'none';

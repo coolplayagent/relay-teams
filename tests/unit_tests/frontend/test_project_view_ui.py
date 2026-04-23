@@ -3204,6 +3204,7 @@ def _run_project_view_script(
     mock_logger_path = tmp_path / "mockLogger.mjs"
     mock_feedback_path = tmp_path / "mockFeedback.mjs"
     mock_agent_panel_path = tmp_path / "mockAgentPanel.mjs"
+    mock_new_session_draft_path = tmp_path / "mockNewSessionDraft.mjs"
     mock_navigator_path = tmp_path / "mockNavigator.mjs"
     mock_subagent_rail_path = tmp_path / "mockSubagentRail.mjs"
     mock_clawhub_settings_path = tmp_path / "settings" / "clawhubSettings.js"
@@ -4284,6 +4285,15 @@ export function clearAllPanels() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_new_session_draft_path.write_text(
+        """
+export function clearNewSessionDraft() {
+    globalThis.__clearNewSessionDraftCalls =
+        (globalThis.__clearNewSessionDraftCalls || 0) + 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_navigator_path.write_text(
         """
 export function hideRoundNavigator() {
@@ -4343,6 +4353,7 @@ export function renderGitHubAccessPanelMarkup() {
         .replace("../utils/feedback.js", "./mockFeedback.mjs")
         .replace("../utils/logger.js", "./mockLogger.mjs")
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
+        .replace("./newSessionDraft.js", "./mockNewSessionDraft.mjs")
         .replace("./rounds/navigator.js", "./mockNavigator.mjs")
         .replace("./subagentRail.js", "./mockSubagentRail.mjs")
         .replace("./settings/githubSettings.js", "./settings/githubSettings.js")
@@ -4365,6 +4376,7 @@ globalThis.__showFormDialogCalls = [];
 globalThis.__dispatchedEvents = [];
 globalThis.__logs = [];
 globalThis.__toastCalls = [];
+globalThis.__clearNewSessionDraftCalls = 0;
 globalThis.CustomEvent = class CustomEvent {{
     constructor(type, init = {{}}) {{
         this.type = type;
