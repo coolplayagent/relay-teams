@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from relay_teams.computer import ExecutionSurface
 from relay_teams.external_agents import ExternalAgentOption, ExternalAgentTransportType
@@ -464,7 +465,14 @@ def test_get_role_config_options() -> None:
     ).model_dump(mode="json")
 
 
-def test_get_role_config_options_reloads_missing_builtin_skills() -> None:
+def test_get_role_config_options_reloads_missing_builtin_skills(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        roles,
+        "_collect_builtin_reserved_role_skill_names",
+        lambda: frozenset({"skill-installer"}),
+    )
     registry = RoleRegistry()
     registry.register(
         RoleDefinition(
@@ -531,9 +539,14 @@ def test_get_role_config_options_reloads_missing_builtin_skills() -> None:
     assert reload_service.reload_calls == 1
 
 
-def test_get_role_config_options_returns_503_when_builtin_skills_still_missing() -> (
-    None
-):
+def test_get_role_config_options_returns_503_when_builtin_skills_still_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        roles,
+        "_collect_builtin_reserved_role_skill_names",
+        lambda: frozenset({"skill-installer"}),
+    )
     registry = RoleRegistry()
     registry.register(
         RoleDefinition(
@@ -582,6 +595,62 @@ def test_get_role_config_options_returns_503_when_builtin_skills_still_missing()
         "detail": "Builtin skills are unavailable: ['skill-installer']"
     }
     assert reload_service.reload_calls == 1
+
+
+def test_get_role_config_options_ignores_reserved_role_skill_wildcard() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates the run.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            model_profile="default",
+            system_prompt="Coordinate the run.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Executes normal-mode runs.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            skills=("*",),
+            model_profile="default",
+            system_prompt="Handle the run directly.",
+        )
+    )
+    skill_registry = _FakeSkillRegistry(
+        (
+            SkillOptionEntry(
+                ref="time",
+                name="time",
+                description="Read the current time.",
+                source=SkillSource.USER_RELAY_TEAMS,
+            ),
+        )
+    )
+    reload_service = _FakeSkillsReloadService(skill_registry)
+    client = _create_test_client(
+        registry=registry,
+        skill_registry=skill_registry,
+        skills_reload_service=reload_service,
+    )
+
+    response = client.get("/api/roles:options")
+
+    assert response.status_code == 200
+    assert response.json()["skills"] == [
+        {
+            "ref": "time",
+            "name": "time",
+            "description": "Read the current time.",
+            "source": "user_relay_teams",
+        }
+    ]
+    assert reload_service.reload_calls == 0
 
 
 def test_get_role_config_options_ignores_missing_non_system_role_skills() -> None:
@@ -763,9 +832,14 @@ def test_get_role_config_options_uses_available_project_skill_without_reload() -
     assert reload_service.reload_calls == 0
 
 
-def test_get_role_config_options_recomputes_required_builtin_skills_after_reload() -> (
-    None
-):
+def test_get_role_config_options_recomputes_required_builtin_skills_after_reload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        roles,
+        "_collect_builtin_reserved_role_skill_names",
+        lambda: frozenset({"skill-installer"}),
+    )
     registry = RoleRegistry()
     registry.register(
         RoleDefinition(

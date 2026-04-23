@@ -584,7 +584,7 @@ console.log(JSON.stringify({
     assert "time" in cast(str, payload["skillsHtml"])
     assert "BUILTIN" not in cast(str, payload["skillsHtml"])
     assert "APP" not in cast(str, payload["skillsHtml"])
-    assert payload["skillValues"] == ["builtin:diff", "app:time"]
+    assert payload["skillValues"] == ["*", "builtin:diff", "app:time"]
 
 
 def test_role_settings_disambiguates_only_duplicate_skill_names(
@@ -623,6 +623,173 @@ console.log(JSON.stringify({
     assert "time" in skills_html
     assert "BUILTIN" in skills_html
     assert "APP" in skills_html
+
+
+def test_role_settings_saves_skill_and_mcp_wildcard_selections(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+const mcpWildcardOption = document.getElementById("role-mcp-picker")
+    .querySelectorAll('input[type="checkbox"]')
+    .find(input => input.dataset.optionValue === "*");
+const skillWildcardOption = document.getElementById("role-skills-picker")
+    .querySelectorAll('input[type="checkbox"]')
+    .find(input => input.dataset.optionValue === "*");
+mcpWildcardOption.checked = true;
+await mcpWildcardOption.onchange();
+skillWildcardOption.checked = true;
+await skillWildcardOption.onchange();
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    mcpHtml: document.getElementById("role-mcp-picker").innerHTML,
+    skillsHtml: document.getElementById("role-skills-picker").innerHTML,
+    mcpValues: document.getElementById("role-mcp-picker")
+        .querySelectorAll('input[type="checkbox"]')
+        .map(input => input.dataset.optionValue),
+    skillValues: document.getElementById("role-skills-picker")
+        .querySelectorAll('input[type="checkbox"]')
+        .map(input => input.dataset.optionValue),
+    savePayload: globalThis.__saveCalls[0].payload,
+}));
+""".strip(),
+    )
+
+    save_payload = cast(dict[str, JsonValue], payload["savePayload"])
+    assert "All MCP servers" in cast(str, payload["mcpHtml"])
+    assert "* ·" not in cast(str, payload["mcpHtml"])
+    assert "Clear this checkbox to choose individual servers." in cast(
+        str, payload["mcpHtml"]
+    )
+    assert "All skills" in cast(str, payload["skillsHtml"])
+    assert "* ·" not in cast(str, payload["skillsHtml"])
+    assert "Clear this checkbox to choose individual skills." in cast(
+        str, payload["skillsHtml"]
+    )
+    assert payload["mcpValues"] == ["*"]
+    assert payload["skillValues"] == ["*"]
+    assert save_payload["mcp_servers"] == ["*"]
+    assert save_payload["skills"] == ["*"]
+
+
+def test_role_settings_collapses_mixed_wildcard_records_and_allows_clearing(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+globalThis.__roleConfigOptionsOverride = {
+    mcp_servers: ["*", "docs", "filesystem"],
+    skills: [
+        { ref: "*", name: "*", description: "Wildcard from stale options.", scope: "app" },
+        { ref: "builtin:diff", name: "diff", description: "Inspect file changes before replying.", scope: "builtin" },
+        { ref: "builtin:time", name: "time", description: "Read the current wall-clock time.", scope: "builtin" },
+    ],
+};
+globalThis.__roleRecordsOverride = {
+    reviewer: {
+        source_role_id: "reviewer",
+        role_id: "reviewer",
+        name: "Reviewer",
+        description: "Reviews delivered work.",
+        version: "1.0.0",
+        bound_agent_id: null,
+        execution_surface: "browser",
+        tools: ["read_file", "write_file"],
+        mcp_servers: ["*", "docs", "missing_mcp"],
+        skills: ["*", "builtin:diff", "missing_skill"],
+        model_profile: "default",
+        memory_profile: { enabled: true },
+        system_prompt: "Review the delivered work.",
+        file_name: "reviewer.md",
+        content: "---\\nrole_id: reviewer\\n---\\n\\nReview the delivered work.\\n",
+        deletable: true,
+    },
+};
+
+installGlobals(createElements());
+bindRoleSettingsHandlers();
+await loadRoleSettingsPanel();
+
+await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
+const initialMcpOptions = document.getElementById("role-mcp-picker").querySelectorAll('input[type="checkbox"]');
+const initialSkillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');
+const initialMcpWildcard = initialMcpOptions.find(input => input.dataset.optionValue === "*");
+const initialSkillWildcard = initialSkillOptions.find(input => input.dataset.optionValue === "*");
+const initialMcpValues = initialMcpOptions.map(input => input.dataset.optionValue);
+const initialSkillValues = initialSkillOptions.map(input => input.dataset.optionValue);
+const initialMcpHtml = document.getElementById("role-mcp-picker").innerHTML;
+const initialSkillsHtml = document.getElementById("role-skills-picker").innerHTML;
+
+await document.getElementById("save-role-btn").onclick();
+
+const mcpWildcardAfterSave = document.getElementById("role-mcp-picker")
+    .querySelectorAll('input[type="checkbox"]')
+    .find(input => input.dataset.optionValue === "*");
+mcpWildcardAfterSave.checked = false;
+await mcpWildcardAfterSave.onchange();
+const docsOptionAfterClear = document.getElementById("role-mcp-picker")
+    .querySelectorAll('input[type="checkbox"]')
+    .find(input => input.dataset.optionValue === "docs");
+docsOptionAfterClear.checked = true;
+await docsOptionAfterClear.onchange();
+
+const skillWildcardAfterSave = document.getElementById("role-skills-picker")
+    .querySelectorAll('input[type="checkbox"]')
+    .find(input => input.dataset.optionValue === "*");
+skillWildcardAfterSave.checked = false;
+await skillWildcardAfterSave.onchange();
+const diffOptionAfterClear = document.getElementById("role-skills-picker")
+    .querySelectorAll('input[type="checkbox"]')
+    .find(input => input.dataset.optionValue === "builtin:diff");
+diffOptionAfterClear.checked = true;
+await diffOptionAfterClear.onchange();
+
+await document.getElementById("save-role-btn").onclick();
+
+console.log(JSON.stringify({
+    initialMcpWildcardChecked: initialMcpWildcard.checked,
+    initialSkillWildcardChecked: initialSkillWildcard.checked,
+    initialMcpValues,
+    initialSkillValues,
+    initialMcpHtml,
+    initialSkillsHtml,
+    docsDisabledAfterClear: docsOptionAfterClear.disabled,
+    diffDisabledAfterClear: diffOptionAfterClear.disabled,
+    firstSavePayload: globalThis.__saveCalls[0].payload,
+    secondSavePayload: globalThis.__saveCalls[1].payload,
+}));
+""".strip(),
+    )
+
+    first_save_payload = cast(dict[str, JsonValue], payload["firstSavePayload"])
+    second_save_payload = cast(dict[str, JsonValue], payload["secondSavePayload"])
+    assert payload["initialMcpWildcardChecked"] is True
+    assert payload["initialSkillWildcardChecked"] is True
+    assert payload["initialMcpValues"] == ["*"]
+    assert payload["initialSkillValues"] == ["*"]
+    assert "docs" not in cast(str, payload["initialMcpHtml"])
+    assert "builtin:diff" not in cast(str, payload["initialSkillsHtml"])
+    assert "missing_mcp" not in cast(str, payload["initialMcpHtml"])
+    assert "missing_skill" not in cast(str, payload["initialSkillsHtml"])
+    assert payload["docsDisabledAfterClear"] is False
+    assert payload["diffDisabledAfterClear"] is False
+    assert first_save_payload["mcp_servers"] == ["*"]
+    assert first_save_payload["skills"] == ["*"]
+    assert second_save_payload["mcp_servers"] == ["docs"]
+    assert second_save_payload["skills"] == ["builtin:diff"]
 
 
 def test_role_settings_accepts_bare_skill_refs_and_new_source_field(
@@ -932,8 +1099,9 @@ await loadRoleSettingsPanel();
 await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[1].onclick({ stopPropagation() {} });
 const initialSkillsHtml = document.getElementById("role-skills-picker").innerHTML;
 const initialSkillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');
-initialSkillOptions[1].checked = true;
-await initialSkillOptions[1].onchange();
+const builtinTimeOption = initialSkillOptions.find(input => input.dataset.optionValue === "builtin:time");
+builtinTimeOption.checked = true;
+await builtinTimeOption.onchange();
 const advisoryStillPresent = document.getElementById("role-skills-picker").innerHTML.includes(
     "Roles that use skills usually work better with the exec command tool enabled."
 );
@@ -988,8 +1156,9 @@ const advisoryRemoved = !document.getElementById("role-skills-picker").innerHTML
 );
 
 const skillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');
-skillOptions[1].checked = true;
-await skillOptions[1].onchange();
+const builtinTimeOption = skillOptions.find(input => input.dataset.optionValue === "builtin:time");
+builtinTimeOption.checked = true;
+await builtinTimeOption.onchange();
 
 await document.getElementById("save-role-btn").onclick();
 
@@ -1095,10 +1264,13 @@ await loadRoleSettingsPanel();
 
 await document.getElementById("roles-list").querySelectorAll(".role-record-edit-btn")[0].onclick({ stopPropagation() {} });
 const initialSkillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');
-initialSkillOptions[0].checked = true;
-await initialSkillOptions[0].onchange();
-initialSkillOptions[1].checked = true;
-await initialSkillOptions[1].onchange();
+const builtinDiffOption = initialSkillOptions.find(input => input.dataset.optionValue === "builtin:diff");
+builtinDiffOption.checked = true;
+await builtinDiffOption.onchange();
+const refreshedSkillOptions = document.getElementById("role-skills-picker").querySelectorAll('input[type="checkbox"]');
+const builtinTimeOption = refreshedSkillOptions.find(input => input.dataset.optionValue === "builtin:time");
+builtinTimeOption.checked = true;
+await builtinTimeOption.onchange();
 
 await document.getElementById("save-role-btn").onclick();
 
@@ -1929,6 +2101,10 @@ const translations = {
     "settings.roles.no_tools": "No tools loaded.",
     "settings.roles.no_mcp": "No MCP servers loaded.",
     "settings.roles.no_skills": "No skills loaded.",
+    "settings.roles.all_mcp_servers": "All MCP servers",
+    "settings.roles.all_mcp_servers_hint": "All MCP servers are selected. Clear this checkbox to choose individual servers.",
+    "settings.roles.all_skills": "All skills",
+    "settings.roles.all_skills_hint": "All skills are selected. Clear this checkbox to choose individual skills.",
     "settings.roles.skills_shell_advisory": "Roles that use skills usually work better with the exec command tool enabled.",
     "settings.system.unavailable_state": "Unavailable",
 };
@@ -2084,6 +2260,7 @@ function createElement(initialDisplay = "block") {{
                     toolValue: toolValue ? toolValue[1] : "",
                 }},
                 checked: tag.includes(" checked"),
+                disabled: tag.includes(" disabled"),
                 indeterminate: false,
                 onchange: null,
             }});

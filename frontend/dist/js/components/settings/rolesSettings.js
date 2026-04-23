@@ -49,6 +49,7 @@ let roleActionRequestId = 0;
 const DEFAULT_ROLE_TOOL = 'office_read_markdown';
 const OTHER_TOOL_GROUP_ID = '__other_tools__';
 const UNAVAILABLE_TOOL_GROUP_ID = '__unavailable_tools__';
+const CAPABILITY_WILDCARD = '*';
 
 export function bindRoleSettingsHandlers() {
     bindActionButton('add-role-btn', handleAddRole);
@@ -184,6 +185,11 @@ function normalizeOptionNames(values) {
         .filter(value => Boolean(value));
 }
 
+function normalizeCapabilitySelections(values) {
+    const normalized = normalizeOptionNames(values);
+    return normalized.includes(CAPABILITY_WILDCARD) ? [CAPABILITY_WILDCARD] : normalized;
+}
+
 function normalizeOptionName(value) {
     if (typeof value === 'string') {
         return value.trim();
@@ -273,7 +279,7 @@ function normalizeSkillSelections(values) {
     if (!Array.isArray(values)) {
         return [];
     }
-    return values
+    const normalized = values
         .map(value => {
             if (typeof value === 'string') {
                 return value.trim();
@@ -284,6 +290,7 @@ function normalizeSkillSelections(values) {
             return '';
         })
         .filter(value => Boolean(value));
+    return normalized.includes(CAPABILITY_WILDCARD) ? [CAPABILITY_WILDCARD] : normalized;
 }
 
 function compareSkillOptions(left, right) {
@@ -399,7 +406,7 @@ function applyRoleRecord(record) {
     currentExecutionSurface = String(record.execution_surface || 'api').trim() || 'api';
     currentSelections = {
         tools: orderToolSelections(normalizeOptionNames(record.tools)),
-        mcp_servers: normalizeOptionNames(record.mcp_servers),
+        mcp_servers: normalizeCapabilitySelections(record.mcp_servers),
         skills: normalizeSkillSelections(record.skills),
     };
     resetToolGroupExpansionState(currentSelections.tools);
@@ -455,22 +462,31 @@ function renderOptionPicker(containerId, availableValues, selectedValues, emptyM
     if (!container) return;
 
     const selectedSet = new Set(Array.isArray(selectedValues) ? selectedValues : []);
-    const availableList = Array.isArray(availableValues) ? availableValues : [];
-    const invalidValues = Array.from(selectedSet).filter(value => !availableList.includes(value));
-
-    if (availableList.length === 0 && invalidValues.length === 0) {
-        container.innerHTML = `<div class="role-option-empty">${escapeHtml(emptyMessage)}</div>`;
-        return;
-    }
+    const wildcardSelected = selectedSet.has(CAPABILITY_WILDCARD);
+    const availableList = Array.isArray(availableValues)
+        ? availableValues.filter(value => value !== CAPABILITY_WILDCARD)
+        : [];
+    const invalidValues = wildcardSelected
+        ? []
+        : Array.from(selectedSet).filter(value => value !== CAPABILITY_WILDCARD && !availableList.includes(value));
+    const emptyStateHtml = availableList.length === 0 && invalidValues.length === 0
+        ? `<div class="role-option-empty">${escapeHtml(emptyMessage)}</div>`
+        : '';
 
     container.innerHTML = [
-        ...availableList.map(value => `
+        renderCapabilityWildcardOption({
+            label: t('settings.roles.all_mcp_servers'),
+            hint: t('settings.roles.all_mcp_servers_hint'),
+            checked: wildcardSelected,
+        }),
+        emptyStateHtml,
+        ...(wildcardSelected ? [] : availableList.map(value => `
             <label class="role-option-item">
                 <input type="checkbox" data-option-value="${escapeHtml(value)}"${selectedSet.has(value) ? ' checked' : ''}>
                 <span class="role-option-check" aria-hidden="true"></span>
                 <span class="role-option-label">${escapeHtml(value)}</span>
             </label>
-        `),
+        `)),
         ...invalidValues.map(value => `
             <label class="role-option-item role-option-item-invalid">
                 <input type="checkbox" data-option-value="${escapeHtml(value)}" checked>
@@ -490,23 +506,32 @@ function renderSkillOptionPicker(selectedValues, emptyMessage) {
     if (!container) return;
 
     const selectedSet = new Set(Array.isArray(selectedValues) ? selectedValues : []);
-    const availableList = Array.isArray(roleConfigOptions.skills) ? roleConfigOptions.skills : [];
+    const wildcardSelected = selectedSet.has(CAPABILITY_WILDCARD);
+    const availableList = Array.isArray(roleConfigOptions.skills)
+        ? roleConfigOptions.skills.filter(option => option.ref !== CAPABILITY_WILDCARD)
+        : [];
     const availableRefs = new Set(availableList.map(option => option.ref));
-    const invalidValues = Array.from(selectedSet).filter(value => !availableRefs.has(value));
-
-    if (availableList.length === 0 && invalidValues.length === 0) {
-        container.innerHTML = `<div class="role-option-empty">${escapeHtml(emptyMessage)}</div>`;
-        return;
-    }
+    const invalidValues = wildcardSelected
+        ? []
+        : Array.from(selectedSet).filter(value => value !== CAPABILITY_WILDCARD && !availableRefs.has(value));
+    const emptyStateHtml = availableList.length === 0 && invalidValues.length === 0
+        ? `<div class="role-option-empty">${escapeHtml(emptyMessage)}</div>`
+        : '';
 
     container.innerHTML = [
-        ...availableList.map(option => `
+        renderCapabilityWildcardOption({
+            label: t('settings.roles.all_skills'),
+            hint: t('settings.roles.all_skills_hint'),
+            checked: wildcardSelected,
+        }),
+        emptyStateHtml,
+        ...(wildcardSelected ? [] : availableList.map(option => `
             <label class="role-option-item">
                 <input type="checkbox" data-option-value="${escapeHtml(option.ref)}"${selectedSet.has(option.ref) ? ' checked' : ''}>
                 <span class="role-option-check" aria-hidden="true"></span>
                 <span class="role-option-label">${escapeHtml(formatSkillOptionLabel(option))}</span>
             </label>
-        `),
+        `)),
         ...invalidValues.map(value => `
             <label class="role-option-item role-option-item-invalid">
                 <input type="checkbox" data-option-value="${escapeHtml(value)}" checked>
@@ -519,6 +544,19 @@ function renderSkillOptionPicker(selectedValues, emptyMessage) {
     container.querySelectorAll('input[type="checkbox"]').forEach(input => {
         input.onchange = () => syncOptionSelection('role-skills-picker');
     });
+}
+
+function renderCapabilityWildcardOption({ label, hint, checked }) {
+    return `
+        <label class="role-option-item">
+            <input type="checkbox" data-option-value="${CAPABILITY_WILDCARD}" data-option-wildcard="true"${checked ? ' checked' : ''}>
+            <span class="role-option-check" aria-hidden="true"></span>
+            <span class="role-option-copy">
+                <span class="role-option-label">${escapeHtml(label)}</span>
+                ${checked ? `<span class="role-option-hint">${escapeHtml(hint)}</span>` : ''}
+            </span>
+        </label>
+    `;
 }
 
 function renderToolGroupPicker(selectedTools, emptyMessage) {
@@ -786,6 +824,10 @@ function refreshOptionPicker(containerId) {
         renderToolGroupPicker(currentSelections.tools, t('settings.roles.no_tool_groups'));
         return;
     }
+    if (containerId === 'role-mcp-picker') {
+        renderOptionPicker('role-mcp-picker', roleConfigOptions.mcp_servers, currentSelections.mcp_servers, t('settings.roles.no_mcp'));
+        return;
+    }
     if (containerId === 'role-skills-picker') {
         renderSkillOptionPicker(currentSelections.skills, t('settings.roles.no_skills'));
     }
@@ -801,12 +843,19 @@ function syncOptionSelection(containerId) {
             nextValues.push(String(input.dataset.optionValue || '').trim());
         }
     });
+    const normalizedValues = nextValues.includes(CAPABILITY_WILDCARD)
+        ? [CAPABILITY_WILDCARD]
+        : nextValues;
     if (containerId === 'role-mcp-picker') {
-        currentSelections.mcp_servers = nextValues;
+        currentSelections.mcp_servers = normalizedValues;
     } else if (containerId === 'role-skills-picker') {
-        currentSelections.skills = nextValues;
+        currentSelections.skills = normalizedValues;
     }
-    if (shouldRefreshPicker) {
+    if (
+        shouldRefreshPicker
+        || containerId === 'role-mcp-picker'
+        || containerId === 'role-skills-picker'
+    ) {
         refreshOptionPicker(containerId);
     }
     if (containerId === 'role-skills-picker') {

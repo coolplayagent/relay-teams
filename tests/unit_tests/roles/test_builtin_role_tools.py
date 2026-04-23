@@ -55,7 +55,8 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert daily_ai_report.mode == RoleMode.SUBAGENT
     assert "webfetch" in main_agent.tools
     assert "websearch" in main_agent.tools
-    assert "skill-installer" in main_agent.skills
+    assert main_agent.skills == ("*",)
+    assert crafter.skills == ("*",)
     assert "office_read_markdown" in daily_ai_report.tools
     assert "todo_write" not in daily_ai_report.tools
     assert "todo_read" not in daily_ai_report.tools

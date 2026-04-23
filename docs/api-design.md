@@ -1807,6 +1807,10 @@ Notes:
   `capabilities.input` for compatibility with existing consumers.
 - `tool_groups[]` is an editor convenience for bulk selection only. Role
   documents and validation/save requests still persist plain `tools[]`.
+- Role `mcp_servers[]` and `skills[]` may contain the exact value `"*"`.
+  This grants all currently configured MCP servers or all currently discovered
+  skills at runtime, including entries added after config reload. Partial glob
+  patterns such as `docs-*` or `builtin:*` are not supported.
 - `normal_mode_roles[]` contains non-system roles whose `mode` is `primary` or `all`.
 - `subagent_roles[]` contains non-system roles whose `mode` is `subagent` or `all`.
 - Returns `503` when required builtin/system roles such as `Coordinator` or
@@ -1890,6 +1894,9 @@ Request:
 Rules:
 - Path `role_id` must match body `role_id`.
 - Unknown tools, MCP servers, or skills are rejected.
+- The exact value `"*"` is accepted in `mcp_servers` and `skills` to mean all
+  current entries for that capability type. It is preserved in saved role
+  documents instead of being expanded.
 - Unknown `bound_agent_id` values are rejected.
 - Unrelated saved role files with stale `tools`, `mcp_servers`, or `skills` do
   not block the reload after a successful save; those references are ignored

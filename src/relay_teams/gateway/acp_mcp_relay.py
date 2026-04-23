@@ -70,7 +70,9 @@ class GatewayAwareMcpRegistry(McpRegistry):
         self._disabled_session_servers: set[tuple[str, str]] = set()
 
     def validate_known(self, names: tuple[str, ...]) -> None:
-        missing = [name for name in names if name not in self.list_names()]
+        missing = [
+            name for name in names if name != "*" and name not in self.list_names()
+        ]
         if missing:
             raise ValueError(f"Unknown MCP servers: {missing}")
 
@@ -80,10 +82,19 @@ class GatewayAwareMcpRegistry(McpRegistry):
         *,
         strict: bool = True,
         consumer: str | None = None,
+        expand_wildcards: bool = True,
     ) -> tuple[str, ...]:
         _ = consumer
         resolved: list[str] = []
         for name in names:
+            if name == "*":
+                if expand_wildcards:
+                    for server_name in self.list_names():
+                        if server_name not in resolved:
+                            resolved.append(server_name)
+                elif name not in resolved:
+                    resolved.append(name)
+                continue
             if name not in resolved:
                 resolved.append(name)
         for name in self._relay.current_session_server_names():
@@ -92,7 +103,11 @@ class GatewayAwareMcpRegistry(McpRegistry):
         if strict:
             self.validate_known(tuple(resolved))
         else:
-            resolved = [name for name in resolved if name in self.list_names()]
+            resolved = [
+                name
+                for name in resolved
+                if (name == "*" and not expand_wildcards) or name in self.list_names()
+            ]
         return tuple(resolved)
 
     def list_names(self) -> tuple[str, ...]:
