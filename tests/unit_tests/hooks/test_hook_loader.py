@@ -142,6 +142,77 @@ def test_hook_loader_includes_role_and_skill_hooks(tmp_path: Path) -> None:
     assert tool_groups[0].group.role_ids == ("Reviewer",)
 
 
+def test_hook_loader_expands_wildcard_role_skills_for_skill_hooks(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    app_config_dir.mkdir()
+    role_registry = RoleRegistry()
+    role_registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="primary role",
+            version="1",
+            tools=(),
+            skills=("*", "app:guardrail"),
+            system_prompt="run",
+        )
+    )
+
+    def _skill(ref: str, command: str) -> Skill:
+        return Skill(
+            ref=ref,
+            metadata=SkillMetadata(
+                name=ref.rsplit(":", maxsplit=1)[-1],
+                description="skill",
+                instructions="use hook",
+                hooks=HooksConfig.model_validate(
+                    {
+                        "hooks": {
+                            "PreToolUse": [
+                                {
+                                    "matcher": command,
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": command,
+                                        }
+                                    ],
+                                }
+                            ]
+                        }
+                    }
+                ),
+            ),
+            directory=tmp_path / "skills" / ref.replace(":", "_"),
+            source=SkillSource.USER_RELAY_TEAMS,
+        )
+
+    class _SkillRegistry:
+        def list_skill_definitions(self) -> tuple[Skill, ...]:
+            return (
+                _skill("app:guardrail", "shell"),
+                _skill("app:format", "write"),
+            )
+
+    loader = HookLoader(
+        app_config_dir=app_config_dir,
+        project_root=None,
+        get_role_registry=lambda: role_registry,
+        get_skill_registry=lambda: _SkillRegistry(),
+    )
+
+    snapshot = loader.load_snapshot()
+
+    tool_groups = snapshot.hooks[HookEventName.PRE_TOOL_USE]
+    assert [group.group.matcher for group in tool_groups] == ["shell", "write"]
+    assert [group.group.role_ids for group in tool_groups] == [
+        ("MainAgent",),
+        ("MainAgent",),
+    ]
+
+
 def test_hook_loader_validate_payload_rejects_unknown_agent_role(
     tmp_path: Path,
 ) -> None:

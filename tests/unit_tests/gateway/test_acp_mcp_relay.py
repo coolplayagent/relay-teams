@@ -25,7 +25,7 @@ from relay_teams.metrics import (
     MetricRecorder,
     MetricRegistry,
 )
-from relay_teams.mcp.mcp_models import McpServerSpec
+from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from relay_teams.mcp.mcp_registry import McpRegistry
 
 
@@ -407,6 +407,94 @@ async def test_gateway_aware_mcp_registry_exposes_session_scoped_acp_servers() -
     assert [tool.name for tool in tools] == ["zed-tools_echo"]
     assert schemas[0].name == "zed-tools_echo"
     assert cast(dict[str, JsonValue], schemas[0].input_schema)["type"] == "object"
+
+
+def test_gateway_aware_mcp_registry_supports_wildcard_resolution() -> None:
+    relay = AcpMcpRelay()
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="zed-tools",
+                name="zed-tools",
+                transport="acp",
+                config={"transport": "acp", "id": "zed-tools"},
+            ),
+        ),
+    )
+    registry = GatewayAwareMcpRegistry(
+        base_registry=McpRegistry(
+            (
+                McpServerSpec(
+                    name="filesystem",
+                    config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                    server_config={"command": "npx"},
+                    source=McpConfigScope.APP,
+                ),
+            )
+        ),
+        relay=relay,
+    )
+
+    with relay.session_scope("gws_123"):
+        assert registry.resolve_server_names(("*",)) == ("filesystem", "zed-tools")
+        assert registry.resolve_server_names(
+            ("*",),
+            expand_wildcards=False,
+            strict=False,
+        ) == ("*", "zed-tools")
+
+
+def test_gateway_aware_mcp_registry_filters_unknowns_after_wildcard() -> None:
+    relay = AcpMcpRelay()
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="zed-tools",
+                name="zed-tools",
+                transport="acp",
+                config={"transport": "acp", "id": "zed-tools"},
+            ),
+        ),
+    )
+    registry = GatewayAwareMcpRegistry(
+        base_registry=McpRegistry(
+            (
+                McpServerSpec(
+                    name="filesystem",
+                    config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                    server_config={"command": "npx"},
+                    source=McpConfigScope.APP,
+                ),
+            )
+        ),
+        relay=relay,
+    )
+
+    with relay.session_scope("gws_123"):
+        resolved = registry.resolve_server_names(
+            ("*", "missing", "filesystem"),
+            strict=False,
+        )
+
+    assert resolved == ("filesystem", "zed-tools")
+
+
+def test_gateway_aware_mcp_registry_validates_exact_wildcard_only() -> None:
+    registry = GatewayAwareMcpRegistry(
+        base_registry=McpRegistry(()),
+        relay=AcpMcpRelay(),
+    )
+
+    registry.validate_known(("*",))
+    assert registry.resolve_server_names(
+        ("*",),
+        expand_wildcards=False,
+        strict=True,
+    ) == ("*",)
+    with pytest.raises(ValueError, match="Unknown MCP servers: \\['mcp-\\*'\\]"):
+        registry.validate_known(("mcp-*",))
 
 
 @pytest.mark.asyncio

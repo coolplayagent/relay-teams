@@ -45,6 +45,7 @@ from relay_teams.tools.registry import ToolRegistry, list_default_tool_groups
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/roles", tags=["Roles"])
+_CAPABILITY_WILDCARD = "*"
 
 
 @router.get("")
@@ -272,6 +273,7 @@ def _collect_builtin_reserved_role_skill_names() -> frozenset[str]:
         for role in registry.list_roles()
         if is_reserved_system_role_definition(role)
         for skill_name in role.skills
+        if skill_name != _CAPABILITY_WILDCARD
     )
 
 

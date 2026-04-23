@@ -91,6 +91,140 @@ def test_resolve_known_trims_blank_entries_and_preserves_requested_order(
     assert resolved == ("beta", "alpha", "beta")
 
 
+def test_resolve_known_expands_wildcard_to_all_skill_names(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path / "skills" / "alpha",
+        name="alpha",
+        description="alpha helper",
+        instructions="Use alpha.",
+    )
+    _write_skill(
+        tmp_path / "skills" / "beta",
+        name="beta",
+        description="beta helper",
+        instructions="Use beta.",
+    )
+    registry = SkillRegistry(directory=_skills_directory(tmp_path / "skills"))
+
+    resolved = registry.resolve_known(("*", "alpha"), strict=True)
+
+    assert resolved == ("alpha", "beta")
+
+
+def test_resolve_known_can_preserve_wildcard_for_role_config(
+    tmp_path: Path,
+) -> None:
+    _write_skill(
+        tmp_path / "skills" / "time",
+        name="time",
+        description="timezone helper",
+        instructions="Use UTC.",
+    )
+    registry = SkillRegistry(directory=_skills_directory(tmp_path / "skills"))
+
+    resolved = registry.resolve_known(
+        ("*", "builtin:time"),
+        strict=True,
+        expand_wildcards=False,
+    )
+
+    assert resolved == ("*", "time")
+
+
+def test_resolve_known_rejects_partial_wildcard_patterns(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path / "skills" / "time",
+        name="time",
+        description="timezone helper",
+        instructions="Use UTC.",
+    )
+    registry = SkillRegistry(directory=_skills_directory(tmp_path / "skills"))
+
+    with pytest.raises(ValueError, match="Unknown skills: \\['time\\*'\\]"):
+        registry.resolve_known(("time*",), strict=True)
+
+
+def test_resolve_known_expands_wildcard_before_filtering_unknown_skills(
+    tmp_path: Path,
+) -> None:
+    _write_skill(
+        tmp_path / "skills" / "alpha",
+        name="alpha",
+        description="alpha helper",
+        instructions="Use alpha.",
+    )
+    _write_skill(
+        tmp_path / "skills" / "beta",
+        name="beta",
+        description="beta helper",
+        instructions="Use beta.",
+    )
+    registry = SkillRegistry(directory=_skills_directory(tmp_path / "skills"))
+
+    resolved = registry.resolve_known(
+        ("*", "missing", "builtin:alpha"),
+        strict=False,
+    )
+
+    assert resolved == ("alpha", "beta")
+
+
+def test_resolve_known_reports_unknown_skills_even_when_wildcard_is_present(
+    tmp_path: Path,
+) -> None:
+    _write_skill(
+        tmp_path / "skills" / "alpha",
+        name="alpha",
+        description="alpha helper",
+        instructions="Use alpha.",
+    )
+    registry = SkillRegistry(directory=_skills_directory(tmp_path / "skills"))
+
+    with pytest.raises(ValueError, match="Unknown skills: \\['missing'\\]"):
+        registry.resolve_known(("*", "missing"), strict=True)
+
+
+def test_resolve_known_wildcard_on_empty_registry_is_empty(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    registry = SkillRegistry(directory=_skills_directory(skills_dir))
+
+    assert registry.resolve_known(("*",), strict=True) == ()
+    assert registry.resolve_known(("*", "missing"), strict=False) == ()
+
+
+def test_resolve_known_preserves_wildcard_once_when_not_expanding(
+    tmp_path: Path,
+) -> None:
+    _write_skill(
+        tmp_path / "skills" / "time",
+        name="time",
+        description="timezone helper",
+        instructions="Use UTC.",
+    )
+    registry = SkillRegistry(directory=_skills_directory(tmp_path / "skills"))
+
+    resolved = registry.resolve_known(
+        (" * ", "missing", "*", "app:time"),
+        strict=False,
+        expand_wildcards=False,
+    )
+
+    assert resolved == ("*", "time")
+
+
+def test_validate_known_accepts_exact_wildcard_and_rejects_partial_wildcard(
+    tmp_path: Path,
+) -> None:
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    registry = SkillRegistry(directory=_skills_directory(skills_dir))
+
+    registry.validate_known(("*",))
+    with pytest.raises(ValueError, match="Unknown skills: \\['builtin:\\*'\\]"):
+        registry.validate_known(("builtin:*",))
+
+
 def test_resolve_known_rejects_blank_entries_when_strict_is_true(
     tmp_path: Path,
 ) -> None:
@@ -567,6 +701,80 @@ def test_load_skill_accepts_legacy_scoped_name_for_authorized_role(
     data = cast(dict[str, JsonValue], result["data"])
     assert data["ref"] == "time"
     assert data["name"] == "time"
+
+
+def test_load_skill_allows_any_known_skill_for_wildcard_authorized_role(
+    tmp_path: Path,
+) -> None:
+    _write_skill(
+        tmp_path / "skills" / "planner",
+        name="planner",
+        description="planning helper",
+        instructions="Plan the work.",
+    )
+    registry = SkillRegistry(directory=_skills_directory(tmp_path / "skills"))
+    ctx = _ctx_with_role_skills(("*",))
+
+    result = asyncio.run(
+        registry.load_skill(
+            cast(ToolContext, cast(object, ctx)),
+            name="builtin:planner",
+        )
+    )
+
+    assert result["ok"] is True
+    data = cast(dict[str, JsonValue], result["data"])
+    assert data["ref"] == "planner"
+
+
+def test_load_skill_rejects_unknown_skill_for_wildcard_authorized_role(
+    tmp_path: Path,
+) -> None:
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    registry = SkillRegistry(directory=_skills_directory(skills_dir))
+    ctx = _ctx_with_role_skills(("*",))
+
+    result = asyncio.run(
+        registry.load_skill(
+            cast(ToolContext, cast(object, ctx)),
+            name="missing",
+        )
+    )
+
+    assert result["ok"] is False
+    error = cast(dict[str, JsonValue], result["error"])
+    assert "Role spec_coder is not authorized to load skill: missing" in cast(
+        str, error["message"]
+    )
+
+
+def test_load_skill_rejects_wildcard_as_concrete_skill_request(
+    tmp_path: Path,
+) -> None:
+    _write_skill(
+        tmp_path / "skills" / "planner",
+        name="planner",
+        description="planning helper",
+        instructions="Plan the work.",
+    )
+    registry = SkillRegistry(directory=_skills_directory(tmp_path / "skills"))
+    ctx = _ctx_with_role_skills(("*",))
+
+    for requested_name in ("*", "builtin:*"):
+        result = asyncio.run(
+            registry.load_skill(
+                cast(ToolContext, cast(object, ctx)),
+                name=requested_name,
+            )
+        )
+
+        assert result["ok"] is False
+        error = cast(dict[str, JsonValue], result["error"])
+        assert (
+            f"Role spec_coder is not authorized to load skill: {requested_name}"
+            in cast(str, error["message"])
+        )
 
 
 def test_load_skill_rejects_role_unauthorized_skill(tmp_path: Path) -> None:

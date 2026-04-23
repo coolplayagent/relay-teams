@@ -1118,11 +1118,13 @@ class ServerContainer:
                             role.mcp_servers,
                             strict=False,
                             consumer=consumer,
+                            expand_wildcards=False,
                         ),
                         "skills": self.skill_registry.resolve_known(
                             role.skills,
                             strict=False,
                             consumer=consumer,
+                            expand_wildcards=False,
                         ),
                     }
                 )

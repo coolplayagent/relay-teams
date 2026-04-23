@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 import sys
 import time
@@ -652,17 +653,18 @@ Use this skill only for integration tests.
         for skill in updated_record.get("skills", [])
         if isinstance(skill, str) and skill
     }
-    updated_skills.add("hook-skill")
-    updated_record["skills"] = sorted(updated_skills)
-
-    save_response = api_client.put(
-        "/api/roles/configs/MainAgent",
-        json=_role_draft_payload(updated_record),
-    )
-    save_response.raise_for_status()
-    _wait_for_role_skills(api_client, "MainAgent", {"hook-skill"})
 
     try:
+        if "*" not in updated_skills:
+            updated_skills.add("hook-skill")
+            updated_record["skills"] = sorted(updated_skills)
+            save_response = api_client.put(
+                "/api/roles/configs/MainAgent",
+                json=_role_draft_payload(updated_record),
+            )
+            save_response.raise_for_status()
+            _wait_for_role_skills(api_client, "MainAgent", {"hook-skill"})
+
         session_id = create_session(
             api_client,
             session_id=new_session_id("hook-skill-frontmatter"),
@@ -680,6 +682,7 @@ Use this skill only for integration tests.
             json=_role_draft_payload(original_record),
         )
         restore_response.raise_for_status()
+        shutil.rmtree(skill_dir, ignore_errors=True)
         _ = api_client.post("/api/system/configs/skills:reload")
 
     assert "[fake-llm] skill frontmatter rewrite" in _text_output(events)
