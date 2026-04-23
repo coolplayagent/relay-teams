@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import ModuleType
 from types import SimpleNamespace
 from typing import cast
 
@@ -29,7 +30,10 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-import relay_teams.agents.execution.llm_session as llm_module
+import relay_teams.agents.execution.agent_llm_session as agent_llm_session_module
+import relay_teams.agents.execution.recovery_flow as recovery_flow_module
+import relay_teams.agents.execution.session_prompt as session_prompt_module
+import relay_teams.agents.execution.session_runtime as session_runtime_module
 from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
@@ -47,7 +51,7 @@ from relay_teams.agents.execution.conversation_compaction import (
     ConversationCompactionService,
 )
 from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
-from relay_teams.agents.execution.llm_session import _PreparedPromptContext
+from relay_teams.agents.execution.agent_llm_session import _PreparedPromptContext
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.providers.openai_compatible import OpenAICompatibleProvider
 import relay_teams.providers.llm_retry as llm_retry_module
@@ -83,6 +87,41 @@ from relay_teams.tools.registry import ToolRegistry
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.workspace import WorkspaceManager, build_conversation_id
+
+
+class _LlmModulePatchProxy:
+    @property
+    def asyncio(self) -> ModuleType:
+        return recovery_flow_module.asyncio
+
+    def __getattr__(self, name: str) -> object:
+        if name == "build_coordination_agent":
+            return session_prompt_module.build_coordination_agent
+        if name == "ModelRequestNode":
+            return session_runtime_module.ModelRequestNode
+        if name == "log_event":
+            return session_runtime_module.log_event
+        if name == "compute_retry_delay_ms":
+            return recovery_flow_module.compute_retry_delay_ms
+        return getattr(agent_llm_session_module, name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "build_coordination_agent":
+            setattr(session_prompt_module, name, value)
+            return
+        if name == "ModelRequestNode":
+            setattr(session_runtime_module, name, value)
+            return
+        if name == "log_event":
+            setattr(session_runtime_module, name, value)
+            return
+        if name == "compute_retry_delay_ms":
+            setattr(recovery_flow_module, name, value)
+            return
+        setattr(agent_llm_session_module, name, value)
+
+
+llm_module = _LlmModulePatchProxy()
 
 
 class _FakeRunEventHub:
@@ -169,6 +208,12 @@ class _FakeConversationCompactionService:
             applied=False,
             plan=self._plan,
         )
+
+    async def maybe_compact(
+        self, **kwargs: object
+    ) -> list[ModelRequest | ModelResponse]:
+        result = await self.maybe_compact_with_result(**kwargs)
+        return list(result.messages)
 
     def build_prompt_section(
         self,

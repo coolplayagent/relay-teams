@@ -85,6 +85,7 @@ async def _wait_for_expected_output(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(os.name != "nt", reason="Windows-specific stop regression")
+@pytest.mark.timeout(15)
 async def test_background_task_manager_stop_unblocks_windows_pipe_runtime(
     tmp_path: Path,
 ) -> None:
@@ -132,6 +133,7 @@ async def test_background_task_manager_stop_unblocks_windows_pipe_runtime(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only background process coverage")
+@pytest.mark.timeout(15)
 async def test_background_task_manager_auto_detects_powershell_commands(
     tmp_path: Path,
 ) -> None:
@@ -179,6 +181,7 @@ async def test_background_task_manager_auto_detects_powershell_commands(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only background process coverage")
+@pytest.mark.timeout(15)
 @pytest.mark.parametrize(
     ("runtime", "command", "expected_output"),
     [
