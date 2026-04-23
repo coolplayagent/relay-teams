@@ -368,6 +368,7 @@ def _get_agent_teams_client() -> type[AsyncAgentTeamsClient]:
     return AgentTeamsClient
 
 
+# noinspection PyTypeHints
 async def _maybe_await(value: Union[T, Awaitable[T]]) -> T:
     if isawaitable(value):
         return await value
@@ -437,6 +438,7 @@ class AgentTeamsBackend(AgentBackend):
 
         try:
             _log(workspace.item_id, "creating session ...")
+            # noinspection PyTypeHints
             session_data = cast(
                 dict[str, object],
                 await _maybe_await(client.create_session(workspace_id=workspace_id)),

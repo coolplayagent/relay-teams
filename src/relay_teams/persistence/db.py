@@ -143,6 +143,7 @@ def is_retryable_sqlite_error(exc: sqlite3.OperationalError) -> bool:
     )
 
 
+# noinspection PyTypeHints
 async def run_async_sqlite_write_with_retry(
     *,
     conn: aiosqlite.Connection,
@@ -190,6 +191,7 @@ async def run_async_sqlite_write_with_retry(
     )
 
 
+# noinspection PyTypeHints
 def run_sqlite_write_with_retry(
     *,
     conn: sqlite3.Connection,

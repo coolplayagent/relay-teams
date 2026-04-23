@@ -32,10 +32,12 @@ class SharedSqliteRepository:
         self._lock = RLock()
         self._repository_name = repository_name or type(self).__name__
 
+    # noinspection PyTypeHints
     def _run_read(self, operation: Callable[[], ResultT]) -> ResultT:
         with self._lock:
             return operation()
 
+    # noinspection PyTypeHints
     def _run_write(
         self,
         *,
@@ -87,6 +89,7 @@ class AsyncSharedSqliteRepository:
     async def _initialize(self) -> None:
         self._conn.row_factory = sqlite3.Row
 
+    # noinspection PyTypeHints
     async def _run_read(
         self,
         operation: Callable[[], Awaitable[ResultT]],
@@ -95,6 +98,7 @@ class AsyncSharedSqliteRepository:
             return await operation()
         raise RuntimeError("Async SQLite read helper exited without a result")
 
+    # noinspection PyTypeHints
     async def _run_write(
         self,
         *,
