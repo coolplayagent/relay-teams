@@ -625,3 +625,24 @@ def test_automation_delivery_worker_stop_waits_for_inflight_processing() -> None
         assert service.finished.is_set()
 
     asyncio.run(run_worker())
+
+
+def test_automation_delivery_worker_stop_times_out_for_stalled_processing() -> None:
+    async def run_worker() -> None:
+        service = _BlockingAutomationDeliveryWorkerService()
+        worker = AutomationDeliveryWorker(
+            delivery_service=cast(AutomationDeliveryService, service),
+            poll_interval_seconds=0.01,
+            stop_timeout_seconds=0.05,
+        )
+
+        await worker.start()
+        assert await asyncio.to_thread(service.entered.wait, 1.0)
+
+        await asyncio.wait_for(worker.stop(), timeout=1.0)
+        assert service.finished.is_set() is False
+
+        service.release.set()
+        assert await asyncio.to_thread(service.finished.wait, 1.0)
+
+    asyncio.run(run_worker())

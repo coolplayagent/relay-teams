@@ -22,6 +22,7 @@ from relay_teams.sessions.session_models import (
 class _FakeSessionService:
     def __init__(self) -> None:
         self.created_calls: list[tuple[str | None, str, dict[str, str] | None]] = []
+        self.list_calls = 0
         self.updated_calls: list[tuple[str, SessionMetadataPatch]] = []
         self.topology_update_calls: list[tuple[str, str, str | None, str | None]] = []
         self.delete_subagent_calls: list[tuple[str, str]] = []
@@ -58,8 +59,9 @@ class _FakeSessionService:
             raise KeyError(session_id)
         self.updated_calls.append((session_id, patch))
 
-    def list_sessions(self) -> tuple[SessionRecord, ...]:  # pragma: no cover
-        raise AssertionError("not used")
+    def list_sessions(self) -> tuple[SessionRecord, ...]:
+        self.list_calls += 1
+        return (SessionRecord(session_id="session-listed", workspace_id="default"),)
 
     def list_normal_mode_subagents(
         self, session_id: str
@@ -312,6 +314,27 @@ def test_create_session_route_runs_service_call_in_threadpool(monkeypatch) -> No
     assert response.status_code == 200
     assert calls == ["create"]
     assert fake_service.created_calls == [("session-1", "default", None)]
+
+
+def test_list_sessions_route_runs_service_call_in_threadpool(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[[], tuple[SessionRecord, ...]],
+    ) -> tuple[SessionRecord, ...]:
+        calls.append("list")
+        return func()
+
+    monkeypatch.setattr(sessions, "run_in_threadpool", fake_run_in_threadpool)
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.get("/api/sessions")
+
+    assert response.status_code == 200
+    assert response.json()[0]["session_id"] == "session-listed"
+    assert calls == ["list"]
+    assert fake_service.list_calls == 1
 
 
 def test_create_session_route_accepts_explicit_metadata_payload() -> None:

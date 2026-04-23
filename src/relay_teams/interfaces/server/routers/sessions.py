@@ -76,7 +76,11 @@ async def create_session(
 async def list_sessions(
     service: SessionService = Depends(get_session_service),
 ) -> list[SessionRecord]:
-    return list(service.list_sessions())
+    def _list_sessions() -> tuple[SessionRecord, ...]:
+        return service.list_sessions()
+
+    records = await run_in_threadpool(_list_sessions)
+    return list(records)
 
 
 @router.get("/{session_id}", response_model=SessionRecord)

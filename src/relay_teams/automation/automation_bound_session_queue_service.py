@@ -780,9 +780,11 @@ class AutomationBoundSessionQueueWorker:
         *,
         queue_service: AutomationBoundSessionQueueService,
         poll_interval_seconds: float = 1.0,
+        stop_timeout_seconds: float = 10.0,
     ) -> None:
         self._queue_service = queue_service
         self._poll_interval_seconds = poll_interval_seconds
+        self._stop_timeout_seconds = stop_timeout_seconds
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
         self._task: Optional[asyncio.Task[None]] = None
@@ -804,7 +806,22 @@ class AutomationBoundSessionQueueWorker:
         if task is None:
             return
         try:
-            await task
+            await asyncio.wait_for(task, timeout=self._stop_timeout_seconds)
+        except asyncio.TimeoutError:
+            log_event(
+                logger,
+                logging.WARNING,
+                event="automation.bound_session_queue.stop_timeout",
+                message=(
+                    "Timed out waiting for automation bound session queue worker to stop"
+                ),
+                payload={"timeout_seconds": self._stop_timeout_seconds},
+            )
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         except asyncio.CancelledError:
             pass
         self._task = None
