@@ -127,6 +127,29 @@ def test_list_wechat_accounts_route_returns_accounts() -> None:
     assert payload[0]["running"] is True
 
 
+def test_start_wechat_login_route_runs_service_call_in_threadpool(monkeypatch) -> None:
+    calls: list[WeChatLoginStartRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[[WeChatLoginStartRequest], WeChatLoginStartResponse],
+        request: WeChatLoginStartRequest,
+    ) -> WeChatLoginStartResponse:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(gateway.asyncio, "to_thread", fake_to_thread)
+    client = _client(_FakeWeChatGatewayService())
+
+    response = client.post(
+        "/api/gateway/wechat/login/start",
+        json={"bot_type": "lark"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["session_key"] == "wechat-login-1"
+    assert [call.bot_type for call in calls] == ["lark"]
+
+
 def test_wait_wechat_login_route_maps_missing_session_to_404() -> None:
     client = _client(_FakeWeChatGatewayService())
 

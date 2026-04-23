@@ -35,7 +35,7 @@ async def start_wechat_login(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatLoginStartResponse:
     try:
-        return service.start_login(req)
+        return await asyncio.to_thread(service.start_login, req)
     except RuntimeError as exc:
         raise http_exception_for(exc, mappings=((RuntimeError, 400),)) from exc
 

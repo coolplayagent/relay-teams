@@ -455,6 +455,34 @@ def test_create_github_repo_route_runs_service_call_in_threadpool(monkeypatch) -
     ]
 
 
+def test_update_github_repo_route_runs_service_call_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, GitHubRepoSubscriptionUpdateInput]] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[
+            [str, GitHubRepoSubscriptionUpdateInput],
+            GitHubRepoSubscriptionRecord,
+        ],
+        repo_subscription_id: str,
+        req: GitHubRepoSubscriptionUpdateInput,
+    ) -> GitHubRepoSubscriptionRecord:
+        calls.append((repo_subscription_id, req))
+        return func(repo_subscription_id, req)
+
+    monkeypatch.setattr(triggers, "run_in_threadpool", fake_run_in_threadpool)
+    client = _client(_FakeGitHubTriggerService())
+
+    response = client.patch(
+        "/api/triggers/github/repos/ghrs_1",
+        json={"callback_url": "https://example.com/updated"},
+    )
+
+    assert response.status_code == 200
+    assert [(repo_id, call.callback_url) for repo_id, call in calls] == [
+        ("ghrs_1", "https://example.com/updated")
+    ]
+
+
 def test_create_github_repo_route_maps_provider_not_found_to_404() -> None:
     client = _client(_FakeGitHubTriggerService())
 
@@ -509,6 +537,45 @@ def test_update_github_rule_route_maps_missing_rule_to_404() -> None:
     )
 
     assert response.status_code == 404
+
+
+def test_create_github_rule_route_runs_service_call_in_threadpool(monkeypatch) -> None:
+    calls: list[TriggerRuleCreateInput] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[[TriggerRuleCreateInput], TriggerRuleRecord],
+        req: TriggerRuleCreateInput,
+    ) -> TriggerRuleRecord:
+        calls.append(req)
+        return func(req)
+
+    monkeypatch.setattr(triggers, "run_in_threadpool", fake_run_in_threadpool)
+    client = _client(_FakeGitHubTriggerService())
+
+    response = client.post(
+        "/api/triggers/github/rules",
+        json={
+            "name": "pr-opened",
+            "provider": "github",
+            "account_id": "ghta_1",
+            "repo_subscription_id": "ghrs_1",
+            "match_config": {
+                "event_name": "pull_request",
+                "actions": ["opened"],
+            },
+            "dispatch_config": {
+                "target_type": "run_template",
+                "run_template": {
+                    "workspace_id": "default",
+                    "prompt_template": "Investigate the delivery.",
+                },
+            },
+            "enabled": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert [call.name for call in calls] == ["pr-opened"]
 
 
 def test_create_github_rule_route_rejects_removed_match_fields() -> None:

@@ -1191,6 +1191,27 @@ def test_save_github_config() -> None:
     assert service.refreshed_github_callback_previous_base_url is None
 
 
+def test_save_github_config_runs_refresh_in_threadpool(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_to_thread(func: Callable[[], None]) -> None:
+        calls.append("save")
+        func()
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/github",
+        json={"webhook_base_url": "https://agent-teams.example.com"},
+    )
+
+    assert response.status_code == 200
+    assert calls == ["save"]
+    assert service.current_github_webhook_base_url == "https://agent-teams.example.com"
+
+
 def test_save_github_config_rejects_removed_clear_token_field() -> None:
     client = _create_test_client(_FakeSystemService())
 

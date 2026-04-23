@@ -647,11 +647,15 @@ async def save_github_config(
     trigger_service: GitHubTriggerService = Depends(get_github_trigger_service),
 ) -> dict[str, str]:
     try:
-        previous_config = service.get_github_config()
-        service.update_github_config(req)
-        trigger_service.refresh_repo_callback_urls_from_system_config(
-            previous_webhook_base_url=previous_config.webhook_base_url
-        )
+
+        def _save_github_config() -> None:
+            previous_config = service.get_github_config()
+            service.update_github_config(req)
+            trigger_service.refresh_repo_callback_urls_from_system_config(
+                previous_webhook_base_url=previous_config.webhook_base_url
+            )
+
+        await asyncio.to_thread(_save_github_config)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
