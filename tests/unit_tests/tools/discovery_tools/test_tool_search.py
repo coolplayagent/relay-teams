@@ -231,7 +231,7 @@ async def test_tool_search_select_includes_schema(
             "description": "Read a file or directory from disk.",
             "kind": "function",
             "sequential": False,
-            "activation_state": "deferred",
+            "activation_state": "active",
             "parameters_json_schema": {
                 "type": "object",
                 "properties": {
@@ -239,6 +239,76 @@ async def test_tool_search_select_includes_schema(
                 },
             },
         }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_tool_search_restores_required_discovery_tools_in_activation_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_tool_search(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["tool_search"],
+    )
+    agent_repo = AgentInstanceRepository(tmp_path / "instances.db")
+    _seed_runtime_snapshot(
+        agent_repo=agent_repo,
+        instance_id="instance-1",
+        runtime_tools=RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="tool_search",
+                    description="Discover tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="activate_tools",
+                    description="Activate tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read a file or directory from disk.",
+                    parameters_json_schema={"type": "object"},
+                ),
+            ),
+        ),
+        runtime_active_tools_json='["read"]',
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            agent_repo=agent_repo,
+            instance_id="instance-1",
+        )
+    )
+
+    async def _fake_execute_tool_call(ctx, **kwargs: object) -> dict[str, object]:
+        del ctx
+        return cast(
+            dict[str, object],
+            _invoke_tool_action(
+                cast(Callable[..., object], kwargs["action"]),
+                cast(dict[str, object], kwargs.get("raw_args")),
+            ),
+        )
+
+    monkeypatch.setattr(
+        tool_search_module,
+        "execute_tool_call",
+        _fake_execute_tool_call,
+    )
+
+    result = await tool(ctx, query="select:tool_search,activate_tools,read")
+
+    matches = cast(list[dict[str, object]], result["matches"])
+    assert [match["activation_state"] for match in matches] == [
+        "active",
+        "active",
+        "active",
     ]
 
 

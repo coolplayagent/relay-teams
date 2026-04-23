@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import Union
+from typing import Optional, Union
 
 from pydantic import JsonValue
 from pydantic_ai import Agent
@@ -142,7 +142,7 @@ def _parse_runtime_active_tools_json(raw_active_tools: str) -> tuple[str, ...]:
     return tuple(item for item in parsed if isinstance(item, str))
 
 
-def _build_warning_message(activation_result: object) -> str | None:
+def _build_warning_message(activation_result: object) -> Optional[str]:
     result = activation_result
     warning_parts: list[str] = []
     unknown_or_unauthorized = getattr(result, "unknown_or_unauthorized", ())

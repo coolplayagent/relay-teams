@@ -17,6 +17,7 @@ from relay_teams.agents.instances.models import (
     RuntimeToolsSnapshot,
 )
 from relay_teams.tools._description_loader import load_tool_description
+from relay_teams.tools.runtime_activation import merge_active_tools
 from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool_call
 
 DESCRIPTION = load_tool_description(__file__)
@@ -87,10 +88,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Discover runtime-authorized tools and inspect their contracts."""
 
-        def _action(
-            query: str,
-            max_results: int = _DEFAULT_MAX_RESULTS,
-        ) -> dict[str, JsonValue]:
+        def _action() -> dict[str, JsonValue]:
             return _search_runtime_tools(
                 ctx=ctx,
                 query=query.strip(),
@@ -218,10 +216,16 @@ def _load_authorized_tools(
         return None, 0, ()
     snapshot = _parse_runtime_tools_snapshot(runtime_record.runtime_tools_json)
     authorized_tools = _flatten_runtime_tools(snapshot)
+    authorized_local_tools = tuple(entry.name for entry in snapshot.local_tools)
     return (
         authorized_tools,
         len(authorized_tools),
-        _parse_runtime_active_tools_json(runtime_record.runtime_active_tools_json),
+        merge_active_tools(
+            authorized_tools=authorized_local_tools,
+            active_tools=_parse_runtime_active_tools_json(
+                runtime_record.runtime_active_tools_json
+            ),
+        ),
     )
 
 
