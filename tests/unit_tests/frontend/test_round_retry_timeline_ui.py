@@ -54,6 +54,7 @@ def _run_round_timeline_script(tmp_path: Path, runner_source: str) -> dict[str, 
         "./state.js": "./mockRoundsState.mjs",
         "./todo.js": "./mockTodo.mjs",
         "./utils.js": "./mockRoundUtils.mjs",
+        "../../utils/promptTokens.js": "./mockPromptTokens.mjs",
         "../../utils/logger.js": "./mockLogger.mjs",
         "../../utils/i18n.js": "./mockI18n.mjs",
     }
@@ -256,6 +257,17 @@ export function formatMessage(message, values = {}) {
 
 export function t(key) {
     return String(key || '');
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockPromptTokens.mjs").write_text(
+        """
+export function renderPromptTokenizedText(targetEl, source) {
+    if (targetEl) {
+        targetEl.textContent = String(source || '');
+    }
+    return targetEl;
 }
 """.strip(),
         encoding="utf-8",

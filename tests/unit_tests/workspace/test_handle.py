@@ -344,3 +344,4 @@ def test_resolve_absolute_local_path_wins_over_broad_ssh_remote_root(
     assert resolved.provider == WorkspaceMountProvider.LOCAL
     assert resolved.mount_name == "default"
     assert resolved.local_path == local_file.resolve()
+    assert resolved.remote_path is None

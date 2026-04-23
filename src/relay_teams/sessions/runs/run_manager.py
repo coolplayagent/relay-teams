@@ -595,11 +595,14 @@ class RunManager:
     def _prepare_intent(self, intent: IntentInput) -> IntentInput:
         session = self._session_repo.get(intent.session_id)
         target_role_id = str(intent.target_role_id or "").strip() or None
+        skills = tuple(str(skill or "").strip() for skill in (intent.skills or ()))
+        skills = tuple(skill for skill in skills if skill) or None
         if self._orchestration_settings_service is None:
             return intent.model_copy(
                 update={
                     "session_mode": session.session_mode,
                     "target_role_id": target_role_id,
+                    "skills": skills,
                 }
             )
         topology = self._orchestration_settings_service.resolve_run_topology(session)
@@ -607,6 +610,7 @@ class RunManager:
             update={
                 "session_mode": session.session_mode,
                 "target_role_id": target_role_id,
+                "skills": skills,
                 "topology": topology,
             }
         )
@@ -837,6 +841,10 @@ class RunManager:
             ):
                 pending = self._pending_runs[active_run_id]
                 pending.intent = self._merge_intent(pending.intent, intent.intent)
+                existing_skills = pending.skills or ()
+                next_skills = intent.skills or ()
+                merged_skills = tuple(dict.fromkeys((*existing_skills, *next_skills)))
+                pending.skills = merged_skills or None
                 pending.yolo = intent.yolo
                 if self._run_intent_repo is not None:
                     self._run_intent_repo.upsert(

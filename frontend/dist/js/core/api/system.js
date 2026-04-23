@@ -122,6 +122,69 @@ export async function validateHooksConfig(payload) {
     );
 }
 
+export async function fetchCommands(workspaceId) {
+    const safeWorkspaceId = encodeURIComponent(String(workspaceId || '').trim());
+    return requestJson(
+        `/api/system/commands?workspace_id=${safeWorkspaceId}`,
+        undefined,
+        'Failed to fetch commands',
+    );
+}
+
+export async function fetchCommandCatalog() {
+    return requestJson(
+        '/api/system/commands:catalog',
+        undefined,
+        'Failed to fetch command catalog',
+    );
+}
+
+export async function createCommand(payload) {
+    return requestJson(
+        '/api/system/commands',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to create command',
+    );
+}
+
+export async function updateCommand(payload) {
+    return requestJson(
+        '/api/system/commands',
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to update command',
+    );
+}
+
+export async function fetchCommand(name, workspaceId) {
+    const safeName = encodeURIComponent(String(name || '').trim());
+    const safeWorkspaceId = encodeURIComponent(String(workspaceId || '').trim());
+    return requestJson(
+        `/api/system/commands/${safeName}?workspace_id=${safeWorkspaceId}`,
+        undefined,
+        'Failed to fetch command',
+    );
+}
+
+export async function resolveCommandPrompt(payload) {
+    return requestJson(
+        '/api/system/commands:resolve',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to resolve command',
+    );
+}
+
 export async function saveEnvironmentVariable(scope, key, payload) {
     return requestJson(
         `/api/system/configs/environment-variables/${encodeURIComponent(scope)}/${encodeURIComponent(key)}`,

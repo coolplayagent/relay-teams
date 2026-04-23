@@ -66,6 +66,22 @@ export async function fetchWorkspaceTree(workspaceId, path = '.', mount = null) 
     );
 }
 
+export async function searchWorkspacePaths(workspaceId, query = '', limit = 40, mount = null) {
+    const params = new URLSearchParams({
+        query: String(query || '').trim(),
+        limit: String(Math.max(1, Math.min(Number(limit) || 40, 500))),
+    });
+    const safeMount = String(mount || '').trim();
+    if (safeMount) {
+        params.set('mount', safeMount);
+    }
+    return requestJson(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/search?${params.toString()}`,
+        undefined,
+        'Failed to search project workspace',
+    );
+}
+
 export async function fetchWorkspaceDiffs(workspaceId, mount = null) {
     const query = new URLSearchParams();
     const safeMount = String(mount || '').trim();

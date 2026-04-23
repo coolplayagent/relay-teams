@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal
+from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from relay_teams.media import ContentPart
 from relay_teams.media import ContentPartsAdapter
@@ -19,7 +19,11 @@ from relay_teams.sessions.runs.enums import (
     RunEventType,
 )
 from relay_teams.sessions.session_models import SessionMode
-from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
+from relay_teams.validation import (
+    OptionalIdentifierStr,
+    RequiredIdentifierStr,
+    normalize_identifier_tuple,
+)
 
 
 class RunKind(str, Enum):
@@ -98,6 +102,7 @@ class IntentInput(BaseModel):
 
     session_id: RequiredIdentifierStr
     input: tuple[ContentPart, ...] = Field(default_factory=tuple)
+    display_input: tuple[ContentPart, ...] = Field(default_factory=tuple)
     run_kind: RunKind = RunKind.CONVERSATION
     generation_config: MediaGenerationConfig | None = None
     execution_mode: ExecutionMode = ExecutionMode.AI
@@ -105,9 +110,15 @@ class IntentInput(BaseModel):
     reuse_root_instance: bool = True
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
     target_role_id: OptionalIdentifierStr = None
+    skills: Optional[tuple[str, ...]] = None
     session_mode: SessionMode = SessionMode.NORMAL
     topology: RunTopologySnapshot | None = None
     conversation_context: RuntimePromptConversationContext | None = None
+
+    @field_validator("skills", mode="before")
+    @classmethod
+    def _normalize_skills(cls, value: object) -> Optional[tuple[str, ...]]:
+        return normalize_identifier_tuple(value, field_name="skills")
 
     @property
     def intent(self) -> str:
@@ -116,6 +127,11 @@ class IntentInput(BaseModel):
     @intent.setter
     def intent(self, value: str) -> None:
         self.input = content_parts_from_text(value)
+        self.display_input = ()
+
+    @property
+    def display_intent(self) -> str:
+        return content_parts_to_text(self.display_input or self.input)
 
 
 class RunResult(BaseModel):

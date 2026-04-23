@@ -41,6 +41,29 @@ def test_run_intent_repo_round_trips_yolo(tmp_path: Path) -> None:
     assert record.yolo is True
 
 
+def test_run_intent_repo_round_trips_display_input(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_intent_display_input.db"
+    repo = RunIntentRepository(db_path)
+
+    repo.upsert(
+        run_id="run-1",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("Use the time skill.\n\n现在几点了"),
+            display_input=content_parts_from_text("/time 现在几点了"),
+            execution_mode=ExecutionMode.AI,
+            skills=("time",),
+        ),
+    )
+
+    record = repo.get("run-1")
+
+    assert record.intent == "Use the time skill.\n\n现在几点了"
+    assert record.display_intent == "/time 现在几点了"
+    assert record.skills == ("time",)
+
+
 def test_run_intent_repo_does_not_backfill_yolo_from_legacy_approval_mode(
     tmp_path: Path,
 ) -> None:

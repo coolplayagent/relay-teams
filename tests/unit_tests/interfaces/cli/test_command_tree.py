@@ -6,6 +6,7 @@ import re
 
 from typer.testing import CliRunner
 
+from relay_teams.commands import command_cli
 from relay_teams.interfaces.cli import app as cli_app
 
 runner = CliRunner()
@@ -148,6 +149,404 @@ def test_root_message_supports_workspace_selection(monkeypatch, tmp_path: Path) 
         ),
     ]
     assert streamed == {"run_id": "run-1", "debug": False}
+
+
+def test_root_message_resolves_registered_slash_command(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_autostart(base_url: str, autostart: bool) -> None:
+        _ = (base_url, autostart)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object] | list[object]:
+        _ = (base_url, timeout_seconds)
+        calls.append((method, path, payload))
+        if path == "/api/workspaces/pick":
+            return _workspace_response(tmp_path)
+        if path == "/api/system/commands:resolve":
+            return {
+                "matched": True,
+                "raw_text": "/review file.py",
+                "parsed_name": "review",
+                "resolved_name": "review",
+                "args": "file.py",
+                "expanded_prompt": "Review file.py",
+                "expanded_prompt_length": 14,
+            }
+        if path == "/api/sessions":
+            return {"session_id": "session-1"}
+        if path == "/api/runs":
+            return {"run_id": "run-1"}
+        raise AssertionError(f"unexpected path: {path}")
+
+    def fake_stream(base_url: str, run_id: str, debug: bool) -> None:
+        _ = (base_url, run_id, debug)
+
+    monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
+    monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+    monkeypatch.setattr(cli_app, "_stream_events", fake_stream)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli_app.app, ["-m", "/review file.py"])
+
+    assert result.exit_code == 0
+    assert calls == [
+        (
+            "POST",
+            "/api/workspaces/pick",
+            {"root_path": str(tmp_path.resolve())},
+        ),
+        (
+            "POST",
+            "/api/system/commands:resolve",
+            {
+                "workspace_id": "workspace-1",
+                "raw_text": "/review file.py",
+                "mode": "normal",
+                "cwd": str(tmp_path.resolve()),
+            },
+        ),
+        ("POST", "/api/sessions", {"workspace_id": "workspace-1"}),
+        (
+            "POST",
+            "/api/runs",
+            {
+                "session_id": "session-1",
+                "input": [{"kind": "text", "text": "Review file.py"}],
+                "execution_mode": "ai",
+                "yolo": True,
+            },
+        ),
+    ]
+
+
+def test_root_message_falls_back_to_slash_text_when_command_expands_empty(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_autostart(base_url: str, autostart: bool) -> None:
+        _ = (base_url, autostart)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object] | list[object]:
+        _ = (base_url, timeout_seconds)
+        calls.append((method, path, payload))
+        if path == "/api/workspaces/pick":
+            return _workspace_response(tmp_path)
+        if path == "/api/system/commands:resolve":
+            return {
+                "matched": True,
+                "raw_text": "/empty",
+                "parsed_name": "empty",
+                "resolved_name": "empty",
+                "args": "",
+                "expanded_prompt": "",
+                "expanded_prompt_length": 0,
+            }
+        if path == "/api/sessions":
+            return {"session_id": "session-1"}
+        if path == "/api/runs":
+            return {"run_id": "run-1"}
+        raise AssertionError(f"unexpected path: {path}")
+
+    def fake_stream(base_url: str, run_id: str, debug: bool) -> None:
+        _ = (base_url, run_id, debug)
+
+    monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
+    monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+    monkeypatch.setattr(cli_app, "_stream_events", fake_stream)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli_app.app, ["-m", "/empty"])
+
+    assert result.exit_code == 0
+    assert calls[-1] == (
+        "POST",
+        "/api/runs",
+        {
+            "session_id": "session-1",
+            "input": [{"kind": "text", "text": "/empty"}],
+            "execution_mode": "ai",
+            "yolo": True,
+        },
+    )
+
+
+def test_commands_list_uses_backend(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_autostart(base_url: str, autostart: bool) -> None:
+        _ = (base_url, autostart)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object] | list[object]:
+        _ = (base_url, timeout_seconds)
+        calls.append((method, path, payload))
+        if path == "/api/workspaces/pick":
+            return _workspace_response(tmp_path)
+        if path == "/api/system/commands?workspace_id=workspace-1":
+            return [
+                {
+                    "name": "opsx:propose",
+                    "aliases": [],
+                    "description": "Propose",
+                    "argument_hint": "command arguments",
+                    "allowed_modes": ["normal"],
+                    "scope": "project",
+                    "source_path": str(tmp_path / "propose.md"),
+                }
+            ]
+        raise AssertionError(f"unexpected path: {path}")
+
+    monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
+    monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli_app.app, ["commands", "list"])
+
+    assert result.exit_code == 0
+    assert "opsx:propose" in result.output
+    assert calls == [
+        (
+            "POST",
+            "/api/workspaces/pick",
+            {"root_path": str(tmp_path.resolve())},
+        ),
+        ("GET", "/api/system/commands?workspace_id=workspace-1", None),
+    ]
+
+
+def test_commands_list_json_with_workspace_id_skips_pick(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+    (tmp_path / "workspace-1").mkdir()
+
+    def fake_autostart(base_url: str, autostart: bool) -> None:
+        _ = (base_url, autostart)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object] | list[object]:
+        _ = (base_url, timeout_seconds)
+        calls.append((method, path, payload))
+        if path == "/api/workspaces/workspace-1":
+            return {
+                "workspace_id": "workspace-1",
+                "root_path": str((tmp_path / "workspace-1").resolve()),
+            }
+        if path == "/api/system/commands?workspace_id=workspace-1":
+            return [
+                {
+                    "name": "global",
+                    "aliases": ["g"],
+                    "description": "Global command",
+                    "argument_hint": "",
+                    "allowed_modes": ["normal"],
+                    "scope": "app",
+                    "source_path": "C:/config/commands/global.md",
+                }
+            ]
+        raise AssertionError(f"unexpected path: {path}")
+
+    monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
+    monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        cli_app.app,
+        ["commands", "list", "--workspace", "workspace-1", "--format", "json"],
+    )
+
+    assert result.exit_code == 0
+    assert '"name": "global"' in result.output
+    assert calls == [
+        ("GET", "/api/workspaces/workspace-1", None),
+        ("GET", "/api/system/commands?workspace_id=workspace-1", None),
+    ]
+
+
+def test_commands_list_bare_relative_workspace_path_uses_pick(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+
+    def fake_autostart(base_url: str, autostart: bool) -> None:
+        _ = (base_url, autostart)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object] | list[object]:
+        _ = (base_url, timeout_seconds)
+        calls.append((method, path, payload))
+        if path == "/api/workspaces/repo":
+            raise RuntimeError("workspace id not found")
+        if path == "/api/workspaces/pick":
+            return _workspace_response(repo_path)
+        if path == "/api/system/commands?workspace_id=workspace-1":
+            return []
+        raise AssertionError(f"unexpected path: {path}")
+
+    monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
+    monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        cli_app.app,
+        ["commands", "list", "--workspace", "repo"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        ("GET", "/api/workspaces/repo", None),
+        (
+            "POST",
+            "/api/workspaces/pick",
+            {"root_path": str(repo_path.resolve())},
+        ),
+        ("GET", "/api/system/commands?workspace_id=workspace-1", None),
+    ]
+
+
+def test_commands_list_empty_table(monkeypatch, tmp_path: Path) -> None:
+    def fake_autostart(base_url: str, autostart: bool) -> None:
+        _ = (base_url, autostart)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object] | list[object]:
+        _ = (base_url, method, timeout_seconds)
+        if path == "/api/workspaces/pick":
+            return _workspace_response(tmp_path)
+        if path == "/api/system/commands?workspace_id=workspace-1":
+            return []
+        raise AssertionError(f"unexpected path: {path}")
+
+    monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
+    monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli_app.app, ["commands", "list"])
+
+    assert result.exit_code == 0
+    assert "No commands discovered." in result.output
+
+
+def test_commands_show_table_and_json(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_autostart(base_url: str, autostart: bool) -> None:
+        _ = (base_url, autostart)
+
+    def fake_request_json(
+        base_url: str,
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> dict[str, object] | list[object]:
+        _ = (base_url, timeout_seconds)
+        calls.append((method, path, payload))
+        if path == "/api/system/commands/opsx%3Apropose?workspace_id=workspace-1":
+            return {
+                "name": "opsx:propose",
+                "aliases": ["opsx/propose"],
+                "description": "Propose",
+                "argument_hint": "<change-id>",
+                "allowed_modes": ["normal", "orchestration"],
+                "scope": "project",
+                "source_path": "C:/repo/.relay-teams/commands/opsx/propose.md",
+                "template": "Propose {{args}}",
+            }
+        raise AssertionError(f"unexpected path: {path}")
+
+    monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
+    monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
+
+    table_result = runner.invoke(
+        cli_app.app,
+        ["commands", "show", "opsx:propose", "--workspace", "workspace-1"],
+    )
+    json_result = runner.invoke(
+        cli_app.app,
+        [
+            "commands",
+            "show",
+            "opsx:propose",
+            "--workspace",
+            "workspace-1",
+            "--format",
+            "json",
+        ],
+    )
+
+    assert table_result.exit_code == 0
+    assert "Template" in table_result.output
+    assert "opsx/propose" in table_result.output
+    assert json_result.exit_code == 0
+    assert '"template": "Propose {{args}}"' in json_result.output
+    assert calls == [
+        ("GET", "/api/system/commands/opsx%3Apropose?workspace_id=workspace-1", None),
+        ("GET", "/api/system/commands/opsx%3Apropose?workspace_id=workspace-1", None),
+    ]
+
+
+def test_command_cli_helpers_reject_unexpected_payloads(tmp_path: Path) -> None:
+    assert command_cli._looks_like_path(".") is True
+    assert command_cli._looks_like_path("~/repo") is True
+    assert command_cli._looks_like_path("C:/repo") is True
+    assert command_cli._looks_like_path(str(tmp_path)) is True
+    assert command_cli._as_object("bad") == {}
+
+    try:
+        command_cli._require_object_response([], "/api/object")
+    except RuntimeError as exc:
+        assert "Expected JSON object" in str(exc)
+    else:
+        raise AssertionError("expected object response error")
+
+    try:
+        command_cli._require_list_response({}, "/api/list")
+    except RuntimeError as exc:
+        assert "Expected JSON array" in str(exc)
+    else:
+        raise AssertionError("expected list response error")
 
 
 def test_root_message_supports_normal_role_selection(

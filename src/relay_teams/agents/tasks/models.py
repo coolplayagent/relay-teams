@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from relay_teams.agents.tasks.enums import TaskStatus
-from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
+from relay_teams.validation import (
+    OptionalIdentifierStr,
+    RequiredIdentifierStr,
+    normalize_identifier_tuple,
+)
 
 
 class VerificationPlan(BaseModel):
@@ -24,7 +29,13 @@ class TaskEnvelope(BaseModel):
     role_id: OptionalIdentifierStr = "Coordinator"
     title: str | None = None
     objective: str = Field(min_length=1)
+    skills: Optional[tuple[str, ...]] = None
     verification: VerificationPlan
+
+    @field_validator("skills", mode="before")
+    @classmethod
+    def _normalize_skills(cls, value: object) -> Optional[tuple[str, ...]]:
+        return normalize_identifier_tuple(value, field_name="skills")
 
 
 class TaskRecord(BaseModel):

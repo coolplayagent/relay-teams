@@ -6,6 +6,16 @@ import re
 from pathlib import Path
 import subprocess
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _write_prompt_tokens_test_module(tmp_path: Path) -> None:
+    utils_dir = tmp_path / "utils"
+    utils_dir.mkdir(exist_ok=True)
+    source = Path("frontend/dist/js/utils/promptTokens.js").read_text(encoding="utf-8")
+    (utils_dir / "promptTokens.js").write_text(source, encoding="utf-8")
+
 
 def test_chat_input_renders_yolo_and_thinking_controls() -> None:
     html = Path("frontend/dist/index.html").read_text(encoding="utf-8")
@@ -217,6 +227,46 @@ export async function updateSessionTopology() {
         can_switch_mode: true,
     };
 }
+
+export async function fetchCommands() {
+    globalThis.__fetchCommandsCalls = (globalThis.__fetchCommandsCalls || 0) + 1;
+    if (globalThis.__commandsQueue?.length) {
+        const next = globalThis.__commandsQueue.shift();
+        return next();
+    }
+    if (globalThis.__commandsError) {
+        throw globalThis.__commandsError;
+    }
+    return globalThis.__commandsResponse || {
+        commands: [
+            {
+                name: "opsx-propose",
+                aliases: ["opsx:propose"],
+                description: "Create an OpenSpec proposal",
+                argument_hint: "<change-id>",
+            },
+        ],
+    };
+}
+
+export async function resolveCommandPrompt(payload) {
+    return {
+        matched: false,
+        expanded_prompt: String(payload?.raw_text || ""),
+    };
+}
+
+export async function searchWorkspacePaths(workspaceId, query, limit) {
+    globalThis.__searchWorkspacePathCalls = [
+        ...(globalThis.__searchWorkspacePathCalls || []),
+        { workspaceId, query, limit },
+    ];
+    return globalThis.__resourceResponse || {
+        workspace_id: "workspace-1",
+        query: "",
+        results: [],
+    };
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -236,6 +286,7 @@ export function startSessionContinuity() {
         """
 export const state = {
     currentSessionId: "session-1",
+    currentWorkspaceId: "workspace-1",
     currentSessionMode: "normal",
     currentSessionCanSwitchMode: true,
     currentNormalRootRoleId: "MainAgent",
@@ -590,6 +641,7 @@ export async function fetchRoleConfigOptions() {
     return {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
+        skills: globalThis.__skillsResponse || [],
         normal_mode_roles: [
             { role_id: "writer", name: "Writer", description: "Draft final responses" },
             { role_id: "reviewer", name: "Reviewer", description: "Check correctness and risk" },
@@ -612,6 +664,46 @@ export async function updateSessionTopology() {
         can_switch_mode: true,
     };
 }
+
+export async function fetchCommands() {
+    globalThis.__fetchCommandsCalls = (globalThis.__fetchCommandsCalls || 0) + 1;
+    if (globalThis.__commandsQueue?.length) {
+        const next = globalThis.__commandsQueue.shift();
+        return next();
+    }
+    if (globalThis.__commandsError) {
+        throw globalThis.__commandsError;
+    }
+    return globalThis.__commandsResponse || {
+        commands: [
+            {
+                name: "opsx-propose",
+                aliases: ["opsx:propose"],
+                description: "Create an OpenSpec proposal",
+                argument_hint: "<change-id>",
+            },
+        ],
+    };
+}
+
+export async function resolveCommandPrompt(payload) {
+    return {
+        matched: false,
+        expanded_prompt: String(payload?.raw_text || ""),
+    };
+}
+
+export async function searchWorkspacePaths(workspaceId, query, limit) {
+    globalThis.__searchWorkspacePathCalls = [
+        ...(globalThis.__searchWorkspacePathCalls || []),
+        { workspaceId, query, limit },
+    ];
+    return globalThis.__resourceResponse || {
+        workspace_id: "workspace-1",
+        query: "",
+        results: [],
+    };
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -631,6 +723,7 @@ export function startSessionContinuity() {
         """
 export const state = {
     currentSessionId: "session-1",
+    currentWorkspaceId: "workspace-1",
     currentSessionMode: "normal",
     currentSessionCanSwitchMode: true,
     currentNormalRootRoleId: "MainAgent",
@@ -909,6 +1002,7 @@ export async function fetchRoleConfigOptions() {
     return {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
+        skills: globalThis.__skillsResponse || [],
         normal_mode_roles: [
             { role_id: "writer", name: "Writer", description: "Draft final responses" },
             { role_id: "reviewer", name: "Reviewer", description: "Check correctness and risk" },
@@ -931,6 +1025,46 @@ export async function updateSessionTopology() {
         can_switch_mode: true,
     };
 }
+
+export async function fetchCommands() {
+    globalThis.__fetchCommandsCalls = (globalThis.__fetchCommandsCalls || 0) + 1;
+    if (globalThis.__commandsQueue?.length) {
+        const next = globalThis.__commandsQueue.shift();
+        return next();
+    }
+    if (globalThis.__commandsError) {
+        throw globalThis.__commandsError;
+    }
+    return globalThis.__commandsResponse || {
+        commands: [
+            {
+                name: "opsx-propose",
+                aliases: ["opsx:propose"],
+                description: "Create an OpenSpec proposal",
+                argument_hint: "<change-id>",
+            },
+        ],
+    };
+}
+
+export async function resolveCommandPrompt(payload) {
+    return {
+        matched: false,
+        expanded_prompt: String(payload?.raw_text || ""),
+    };
+}
+
+export async function searchWorkspacePaths(workspaceId, query, limit) {
+    globalThis.__searchWorkspacePathCalls = [
+        ...(globalThis.__searchWorkspacePathCalls || []),
+        { workspaceId, query, limit },
+    ];
+    return globalThis.__resourceResponse || {
+        workspace_id: "workspace-1",
+        query: "",
+        results: [],
+    };
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -950,6 +1084,7 @@ export function startSessionContinuity() {
         """
 export const state = {
     currentSessionId: "session-1",
+    currentWorkspaceId: "workspace-1",
     currentSessionMode: "normal",
     currentSessionCanSwitchMode: true,
     currentNormalRootRoleId: "MainAgent",
@@ -1144,8 +1279,11 @@ export function sysLog() {
 import {
     handlePromptComposerInput,
     handlePromptComposerKeydown,
+    invalidatePromptCommandsCache,
+    refreshRoleConfigOptions,
 } from "./prompt.js";
 import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
 
 handlePromptComposerInput();
 const beforeAsciiSelect = {
@@ -1162,6 +1300,8 @@ const arrowDownHandled = handlePromptComposerKeydown({
 });
 
 const afterArrowDownScrollEvents = els.promptMentionMenu._scrollEvents.slice();
+const arrowPreviewValue = els.promptInput.value;
+const arrowPreviewSelectionStart = els.promptInput.selectionStart;
 
 const asciiEnterHandled = handlePromptComposerKeydown({
     key: "Enter",
@@ -1173,6 +1313,25 @@ const asciiEnterHandled = handlePromptComposerKeydown({
 const asciiValue = els.promptInput.value;
 const asciiSelectionStart = els.promptInput.selectionStart;
 const asciiSelectionEnd = els.promptInput.selectionEnd;
+
+els.promptInput.value = "@";
+els.promptInput.selectionStart = 1;
+els.promptInput.selectionEnd = 1;
+handlePromptComposerInput();
+const escapePreviewArrowHandled = handlePromptComposerKeydown({
+    key: "ArrowDown",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+const escapePreviewValue = els.promptInput.value;
+const escapePreviewHandled = handlePromptComposerKeydown({
+    key: "Escape",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+const escapeRestoredValue = els.promptInput.value;
 
 els.promptInput.value = "＠Ma";
 els.promptInput.selectionStart = 3;
@@ -1190,20 +1349,337 @@ const fullwidthEnterHandled = handlePromptComposerKeydown({
     stopImmediatePropagation() { return undefined; },
     stopPropagation() { return undefined; },
 });
+const fullwidthValue = els.promptInput.value;
+const fullwidthSelectionStart = els.promptInput.selectionStart;
+const fullwidthSelectionEnd = els.promptInput.selectionEnd;
+
+els.promptInput.value = "/";
+els.promptInput.selectionStart = 1;
+els.promptInput.selectionEnd = 1;
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const beforeCommandSelect = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+
+const commandTabHandled = handlePromptComposerKeydown({
+    key: "Tab",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+
+const commandValue = els.promptInput.value;
+const commandSelectionStart = els.promptInput.selectionStart;
+const commandSelectionEnd = els.promptInput.selectionEnd;
+
+state.currentWorkspaceId = "workspace-empty";
+globalThis.__commandsResponse = { commands: [] };
+els.promptInput.value = "/";
+els.promptInput.selectionStart = 1;
+els.promptInput.selectionEnd = 1;
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const emptyCommandPanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+const emptyEnterHandled = handlePromptComposerKeydown({
+    key: "Enter",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+const emptyEscapeHandled = handlePromptComposerKeydown({
+    key: "Escape",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+const emptyHiddenAfterEscape = els.promptMentionMenu.hidden;
+
+state.currentWorkspaceId = "";
+globalThis.__commandsResponse = { commands: [] };
+els.promptInput.value = "/";
+els.promptInput.selectionStart = 1;
+els.promptInput.selectionEnd = 1;
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const noWorkspaceCommandPanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+const noWorkspaceTabHandled = handlePromptComposerKeydown({
+    key: "Tab",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+
+state.currentWorkspaceId = "workspace-error";
+globalThis.__commandsError = new Error("registry down");
+els.promptInput.value = "/";
+els.promptInput.selectionStart = 1;
+els.promptInput.selectionEnd = 1;
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const errorCommandPanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+const commandFetchCallsAfterError = globalThis.__fetchCommandsCalls;
+
+globalThis.__commandsError = null;
+globalThis.__commandsResponse = {
+    commands: [
+        {
+            name: "retry",
+            aliases: [],
+            description: "Recovered command list",
+            argument_hint: "",
+        },
+    ],
+};
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const retryCommandPanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+const commandFetchCallsAfterRetry = globalThis.__fetchCommandsCalls;
+
+globalThis.__commandsResponse = {
+    commands: [
+        {
+            name: "fresh",
+            aliases: [],
+            description: "Fresh command list",
+            argument_hint: "",
+        },
+    ],
+};
+invalidatePromptCommandsCache();
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const invalidatedCommandPanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+const commandFetchCallsAfterInvalidation = globalThis.__fetchCommandsCalls;
+
+let rejectStaleCommands;
+let resolveCurrentCommands;
+globalThis.__commandsQueue = [
+    () => new Promise((resolve, reject) => {
+        rejectStaleCommands = reject;
+    }),
+    () => new Promise(() => {}),
+    () => new Promise((resolve) => {
+        resolveCurrentCommands = resolve;
+    }),
+];
+globalThis.__commandsResponse = null;
+state.currentWorkspaceId = "workspace-stale";
+els.promptInput.value = "/";
+els.promptInput.selectionStart = 1;
+els.promptInput.selectionEnd = 1;
+handlePromptComposerInput();
+state.currentWorkspaceId = "workspace-current";
+handlePromptComposerInput();
+state.currentWorkspaceId = "workspace-stale";
+handlePromptComposerInput();
+resolveCurrentCommands({
+    commands: [
+        {
+            name: "current",
+            aliases: [],
+            description: "Current workspace command",
+            argument_hint: "",
+        },
+    ],
+});
+await new Promise(resolve => setTimeout(resolve, 0));
+rejectStaleCommands(new Error("stale registry down"));
+await new Promise(resolve => setTimeout(resolve, 0));
+const staleFailurePanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+
+state.currentWorkspaceId = "workspace-skill";
+globalThis.__skillsResponse = [
+    {
+        ref: "data-analysis",
+        name: "Data Analysis",
+        description: "Analyze a dataset.",
+        source: "builtin",
+    },
+];
+await refreshRoleConfigOptions({ refreshControls: false });
+globalThis.__commandsResponse = { commands: [] };
+invalidatePromptCommandsCache();
+els.promptInput.value = "/Data";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const skillCommandPanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+const skillTabHandled = handlePromptComposerKeydown({
+    key: "Tab",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+const skillCommandValue = els.promptInput.value;
+
+state.currentWorkspaceId = "workspace-files";
+globalThis.__resourceResponse = {
+    workspace_id: "workspace-files",
+    query: "src",
+    results: [
+        { name: "src", path: "src/", kind: "directory", mount_name: "default" },
+        { name: "main.py", path: "src/relay_teams/main.py", kind: "file", mount_name: "default" },
+    ],
+};
+els.promptInput.value = "@src";
+els.promptInput.selectionStart = 4;
+els.promptInput.selectionEnd = 4;
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 120));
+const directoryPanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+const directoryEnterHandled = handlePromptComposerKeydown({
+    key: "Enter",
+    preventDefault() { return undefined; },
+    stopImmediatePropagation() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+const directoryValue = els.promptInput.value;
+const directorySelectionStart = els.promptInput.selectionStart;
+const directoryPanelAfterEnter = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+
+globalThis.__resourceResponse = {
+    workspace_id: "workspace-files",
+    query: "src/relay_teams/agents/ds",
+    results: [],
+};
+els.promptInput.value = "@src/relay_teams/agents/ds";
+els.promptInput.selectionStart = 26;
+els.promptInput.selectionEnd = 26;
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 120));
+const emptyResourcePanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+
+globalThis.__resourceResponse = {
+    workspace_id: "workspace-files",
+    query: "relay",
+    results: [],
+};
+els.promptInput.value = "@relay";
+els.promptInput.selectionStart = 6;
+els.promptInput.selectionEnd = 6;
+handlePromptComposerInput();
+const cachedRelayPanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+
+state.currentWorkspaceId = "workspace-case";
+globalThis.__resourceResponse = {
+    workspace_id: "workspace-case",
+    query: "src/relay_teams/media/",
+    results: [],
+};
+els.promptInput.value = "@src/relay_teams/media/";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 120));
+const lowerCaseMissPanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+globalThis.__resourceResponse = {
+    workspace_id: "workspace-case",
+    query: "Src/Relay_Teams/Media/",
+    results: [
+        { name: "models.py", path: "Src/Relay_Teams/Media/models.py", kind: "file", mount_name: "default" },
+    ],
+};
+els.promptInput.value = "@Src/Relay_Teams/Media/";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 120));
+const mixedCaseHitPanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+const caseResourceCalls = (globalThis.__searchWorkspacePathCalls || [])
+    .filter((call) => call.workspaceId === "workspace-case");
 
 console.log(JSON.stringify({
     beforeAsciiSelect,
     arrowDownHandled,
     afterArrowDownScrollEvents,
+    arrowPreviewValue,
+    arrowPreviewSelectionStart,
     asciiEnterHandled,
     asciiValue,
     asciiSelectionStart,
     asciiSelectionEnd,
+    escapePreviewArrowHandled,
+    escapePreviewValue,
+    escapePreviewHandled,
+    escapeRestoredValue,
     beforeFullwidthSelect,
     fullwidthEnterHandled,
-    fullwidthValue: els.promptInput.value,
-    fullwidthSelectionStart: els.promptInput.selectionStart,
-    fullwidthSelectionEnd: els.promptInput.selectionEnd,
+    fullwidthValue,
+    fullwidthSelectionStart,
+    fullwidthSelectionEnd,
+    beforeCommandSelect,
+    commandTabHandled,
+    commandValue,
+    commandSelectionStart,
+    commandSelectionEnd,
+    emptyCommandPanel,
+    emptyEnterHandled,
+    emptyEscapeHandled,
+    emptyHiddenAfterEscape,
+    noWorkspaceCommandPanel,
+    noWorkspaceTabHandled,
+    errorCommandPanel,
+    commandFetchCallsAfterError,
+    commandFetchCallsAfterRetry,
+    retryCommandPanel,
+    invalidatedCommandPanel,
+    commandFetchCallsAfterInvalidation,
+    staleFailurePanel,
+    skillCommandPanel,
+    skillTabHandled,
+    skillCommandValue,
+    directoryPanel,
+    directoryEnterHandled,
+    directoryValue,
+    directorySelectionStart,
+    directoryPanelAfterEnter,
+    emptyResourcePanel,
+    lowerCaseMissPanel,
+    mixedCaseHitPanel,
+    caseResourceCalls,
+    cachedRelayPanel,
 }));
 """.strip()
     result = subprocess.run(
@@ -1222,11 +1698,37 @@ console.log(JSON.stringify({
     rendered_fullwidth_text = re.sub(
         r"<[^>]+>", "", payload["beforeFullwidthSelect"]["menuHtml"]
     )
+    rendered_command_text = re.sub(
+        r"<[^>]+>", "", payload["beforeCommandSelect"]["menuHtml"]
+    )
+    rendered_empty_command_text = re.sub(
+        r"<[^>]+>", "", payload["emptyCommandPanel"]["menuHtml"]
+    )
+    rendered_no_workspace_command_text = re.sub(
+        r"<[^>]+>", "", payload["noWorkspaceCommandPanel"]["menuHtml"]
+    )
+    rendered_error_command_text = re.sub(
+        r"<[^>]+>", "", payload["errorCommandPanel"]["menuHtml"]
+    )
+    rendered_retry_command_text = re.sub(
+        r"<[^>]+>", "", payload["retryCommandPanel"]["menuHtml"]
+    )
+    rendered_invalidated_command_text = re.sub(
+        r"<[^>]+>", "", payload["invalidatedCommandPanel"]["menuHtml"]
+    )
+    rendered_stale_failure_text = re.sub(
+        r"<[^>]+>", "", payload["staleFailurePanel"]["menuHtml"]
+    )
+    rendered_directory_text = re.sub(
+        r"<[^>]+>", "", payload["directoryPanel"]["menuHtml"]
+    )
+    rendered_cached_relay_text = re.sub(
+        r"<[^>]+>", "", payload["cachedRelayPanel"]["menuHtml"]
+    )
     assert payload["beforeAsciiSelect"]["menuHidden"] is False
     assert payload["beforeFullwidthSelect"]["menuHidden"] is False
     assert "prompt-mention-menu-header" in payload["beforeAsciiSelect"]["menuHtml"]
     assert "prompt-mention-item-accent" in payload["beforeAsciiSelect"]["menuHtml"]
-    assert "prompt-mention-menu-footer" in payload["beforeAsciiSelect"]["menuHtml"]
     assert "prompt-mention-match" in payload["beforeFullwidthSelect"]["menuHtml"]
     assert "Draft final responses" in rendered_ascii_text
     assert "Main Agent" in rendered_ascii_text
@@ -1234,11 +1736,9 @@ console.log(JSON.stringify({
     assert "Main Agent" in rendered_fullwidth_text
     assert "MainAgent" in rendered_fullwidth_text
     assert payload["arrowDownHandled"] is True
-    assert (
-        len(payload["afterArrowDownScrollEvents"])
-        == len(payload["beforeAsciiSelect"]["scrollEvents"]) + 1
-    )
-    assert payload["afterArrowDownScrollEvents"][-1] == {"block": "nearest"}
+    assert payload["afterArrowDownScrollEvents"] == []
+    assert payload["arrowPreviewValue"] == "@Main Agent"
+    assert payload["arrowPreviewSelectionStart"] == 11
     assert payload["asciiEnterHandled"] is True
     assert payload["asciiValue"] == "@Main Agent "
     assert payload["asciiSelectionStart"] == 12
@@ -1247,6 +1747,254 @@ console.log(JSON.stringify({
     assert payload["fullwidthValue"] == "＠Main Agent "
     assert payload["fullwidthSelectionStart"] == 12
     assert payload["fullwidthSelectionEnd"] == 12
+    assert payload["escapePreviewArrowHandled"] is True
+    assert payload["escapePreviewValue"] == "@Main Agent"
+    assert payload["escapePreviewHandled"] is True
+    assert payload["escapeRestoredValue"] == "@"
+    assert payload["beforeCommandSelect"]["menuHidden"] is False
+    assert "/ 命令" in rendered_command_text
+    assert "opsx:propose" in rendered_command_text
+    assert "Create an OpenSpec proposal" in rendered_command_text
+    assert "&lt;change-id&gt;" in payload["beforeCommandSelect"]["menuHtml"]
+    assert payload["commandTabHandled"] is True
+    assert payload["commandValue"] == "/opsx-propose "
+    assert payload["commandSelectionStart"] == 14
+    assert payload["commandSelectionEnd"] == 14
+    assert payload["emptyCommandPanel"]["menuHidden"] is False
+    assert "prompt-mention-empty" in payload["emptyCommandPanel"]["menuHtml"]
+    assert "composer.command_empty" in rendered_empty_command_text
+    assert payload["emptyEnterHandled"] is False
+    assert payload["emptyEscapeHandled"] is True
+    assert payload["emptyHiddenAfterEscape"] is True
+    assert payload["noWorkspaceCommandPanel"]["menuHidden"] is False
+    assert "composer.command_no_workspace" in rendered_no_workspace_command_text
+    assert payload["noWorkspaceTabHandled"] is False
+    assert payload["errorCommandPanel"]["menuHidden"] is False
+    assert "composer.command_load_failed" in rendered_error_command_text
+    assert "registry down" in rendered_error_command_text
+    assert payload["commandFetchCallsAfterRetry"] == (
+        payload["commandFetchCallsAfterError"] + 1
+    )
+    assert payload["retryCommandPanel"]["menuHidden"] is False
+    assert "Recovered command list" in rendered_retry_command_text
+    assert payload["commandFetchCallsAfterInvalidation"] == (
+        payload["commandFetchCallsAfterRetry"] + 1
+    )
+    assert payload["invalidatedCommandPanel"]["menuHidden"] is False
+    assert "Fresh command list" in rendered_invalidated_command_text
+    assert payload["staleFailurePanel"]["menuHidden"] is False
+    assert "current" in rendered_stale_failure_text
+    assert "composer.command_load_failed" not in rendered_stale_failure_text
+    assert payload["skillCommandPanel"]["menuHidden"] is False
+    assert "Data Analysis" in re.sub(
+        r"<[^>]+>", "", payload["skillCommandPanel"]["menuHtml"]
+    )
+    assert payload["skillTabHandled"] is True
+    assert payload["skillCommandValue"] == "/data-analysis "
+    assert payload["directoryPanel"]["menuHidden"] is False
+    assert "src/" in rendered_directory_text
+    assert payload["directoryEnterHandled"] is True
+    assert payload["directoryValue"] == "@src/"
+    assert payload["directorySelectionStart"] == 5
+    assert payload["directoryPanelAfterEnter"]["menuHidden"] is False
+    assert "src/relay_teams/main.py" in re.sub(
+        r"<[^>]+>", "", payload["directoryPanelAfterEnter"]["menuHtml"]
+    )
+    assert payload["emptyResourcePanel"]["menuHidden"] is True
+    assert "正在搜索" not in payload["emptyResourcePanel"]["menuHtml"]
+    assert payload["lowerCaseMissPanel"]["menuHidden"] is True
+    assert payload["mixedCaseHitPanel"]["menuHidden"] is False
+    assert "Src/Relay_Teams/Media/models.py" in re.sub(
+        r"<[^>]+>", "", payload["mixedCaseHitPanel"]["menuHtml"]
+    )
+    assert payload["caseResourceCalls"] == [
+        {
+            "workspaceId": "workspace-case",
+            "query": "src/relay_teams/media/",
+            "limit": 500,
+        },
+        {
+            "workspaceId": "workspace-case",
+            "query": "Src/Relay_Teams/Media/",
+            "limit": 500,
+        },
+    ]
+    assert payload["cachedRelayPanel"]["menuHidden"] is False
+    assert "src/relay_teams/main.py" in rendered_cached_relay_text
+
+
+def test_handle_send_restores_composer_when_command_resolution_aborts(
+    tmp_path: Path,
+) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+import { handleSend } from "./prompt.js";
+import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+els.promptInput.value = "/opsx:propose";
+
+await handleSend();
+
+console.log(JSON.stringify({
+    isGenerating: state.isGenerating,
+    sendDisabled: els.sendBtn.disabled,
+    inputDisabled: els.promptInput.disabled,
+    streamCalls: globalThis.__streamCalls,
+    statusHidden: els.promptInputStatus.hidden,
+    statusText: els.promptInputStatus.textContent,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["isGenerating"] is False
+    assert payload["sendDisabled"] is False
+    assert payload["inputDisabled"] is False
+    assert payload["streamCalls"] == []
+    assert payload["statusHidden"] is False
+    assert (
+        payload["statusText"] == "Cannot resolve command without an active workspace."
+    )
+
+
+def test_handle_send_prefers_command_alias_over_skill_alias(tmp_path: Path) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+import {
+    handleSend,
+    refreshRoleConfigOptions,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+globalThis.__skillsResponse = [
+    {
+        ref: "builtin:deepresearch",
+        name: "deepresearch",
+        description: "Research deeply.",
+        source: "builtin",
+    },
+];
+globalThis.__resolveCommandResponse = {
+    matched: true,
+    expanded_prompt: "Run the project command for the topic.",
+};
+state.currentWorkspaceId = "workspace-1";
+els.promptInput.value = "/deepresearch topic";
+
+await refreshRoleConfigOptions({ refreshControls: false });
+await handleSend();
+
+console.log(JSON.stringify({
+    resolveCalls: globalThis.__resolveCommandCalls,
+    streamCalls: globalThis.__streamCalls,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["resolveCalls"] == [
+        {
+            "workspace_id": "workspace-1",
+            "raw_text": "/deepresearch topic",
+            "mode": "normal",
+        }
+    ]
+    assert len(payload["streamCalls"]) == 1
+    assert payload["streamCalls"][0]["promptText"] == "/deepresearch topic"
+    assert payload["streamCalls"][0]["options"]["inputParts"] == [
+        {
+            "kind": "text",
+            "text": "Run the project command for the topic.",
+        }
+    ]
+    assert payload["streamCalls"][0]["options"]["displayInputParts"] == [
+        {
+            "kind": "text",
+            "text": "/deepresearch topic",
+        }
+    ]
+    assert payload["streamCalls"][0]["options"]["skills"] == []
+
+
+def test_handle_send_does_not_parse_inline_slash_prose_as_action(
+    tmp_path: Path,
+) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+import {
+    handleSend,
+    refreshRoleConfigOptions,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+globalThis.__skillsResponse = [
+    {
+        ref: "builtin:time",
+        name: "time",
+        description: "Get the current time.",
+        source: "builtin",
+    },
+];
+globalThis.__resolveCommandResponse = {
+    matched: true,
+    expanded_prompt: "This should not be used.",
+};
+state.currentWorkspaceId = "workspace-1";
+els.promptInput.value = "Please explain /time complexity";
+
+await refreshRoleConfigOptions({ refreshControls: false });
+await handleSend();
+
+console.log(JSON.stringify({
+    resolveCalls: globalThis.__resolveCommandCalls || [],
+    streamCalls: globalThis.__streamCalls,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["resolveCalls"] == []
+    assert len(payload["streamCalls"]) == 1
+    assert payload["streamCalls"][0]["options"]["inputParts"] == [
+        {
+            "kind": "text",
+            "text": "Please explain /time complexity",
+        }
+    ]
+    assert payload["streamCalls"][0]["options"]["skills"] == []
 
 
 def test_handle_send_sends_pasted_image_as_inline_media_for_multimodal_role(
@@ -1596,6 +2344,7 @@ export async function fetchRoleConfigOptions() {
     return {
         coordinator_role_id: "Coordinator",
         main_agent_role_id: "MainAgent",
+        skills: globalThis.__skillsResponse || [],
         coordinator_role: {
             role_id: "Coordinator",
             name: "Coordinator",
@@ -1637,6 +2386,36 @@ export async function updateSessionTopology() {
         normal_root_role_id: "MainAgent",
         orchestration_preset_id: null,
         can_switch_mode: true,
+    };
+}
+
+export async function fetchCommands() {
+    return { commands: [] };
+}
+
+export async function resolveCommandPrompt(payload) {
+    globalThis.__resolveCommandCalls = [
+        ...(globalThis.__resolveCommandCalls || []),
+        payload,
+    ];
+    if (globalThis.__resolveCommandResponse) {
+        return globalThis.__resolveCommandResponse;
+    }
+    return {
+        matched: false,
+        expanded_prompt: String(payload?.raw_text || ""),
+    };
+}
+
+export async function searchWorkspacePaths(workspaceId, query, limit) {
+    globalThis.__searchWorkspacePathCalls = [
+        ...(globalThis.__searchWorkspacePathCalls || []),
+        { workspaceId, query, limit },
+    ];
+    return globalThis.__resourceResponse || {
+        workspace_id: "workspace-1",
+        query: "",
+        results: [],
     };
 }
 """.strip(),

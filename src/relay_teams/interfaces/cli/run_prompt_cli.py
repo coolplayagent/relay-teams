@@ -141,6 +141,13 @@ def execute_prompt(
         workspace=workspace,
         request_json=request_json,
     )
+    resolved_message = _resolve_slash_command_prompt(
+        message=message,
+        base_url=base_url,
+        workspace_id=workspace_id,
+        session_mode=session_mode,
+        request_json=request_json,
+    )
     resolved_session_id = session_id
     if not resolved_session_id:
         created_response = request_json(
@@ -173,7 +180,7 @@ def execute_prompt(
         "/api/runs",
         {
             "session_id": resolved_session_id,
-            "input": [{"kind": "text", "text": message}],
+            "input": [{"kind": "text", "text": resolved_message}],
             "execution_mode": execution_mode,
             "yolo": yolo,
         },
@@ -271,6 +278,38 @@ def _resolve_workspace_id(
     if not isinstance(workspace_payload, dict):
         raise RuntimeError("Expected workspace details from /api/workspaces/pick")
     return _require_str_field(workspace_payload, "workspace_id")
+
+
+def _resolve_slash_command_prompt(
+    *,
+    message: str,
+    base_url: str,
+    workspace_id: str,
+    session_mode: SessionMode,
+    request_json: RequestJsonCallable,
+) -> str:
+    if not message.startswith("/"):
+        return message
+    response = request_json(
+        base_url,
+        "POST",
+        "/api/system/commands:resolve",
+        {
+            "workspace_id": workspace_id,
+            "raw_text": message,
+            "mode": session_mode.value,
+            "cwd": str(Path.cwd().resolve()),
+        },
+    )
+    payload = _require_object_response(response, "/api/system/commands:resolve")
+    if payload.get("matched") is not True:
+        return message
+    expanded_prompt = payload.get("expanded_prompt")
+    if not isinstance(expanded_prompt, str):
+        raise RuntimeError("Command resolve response is missing expanded_prompt")
+    if not expanded_prompt.strip():
+        return message
+    return expanded_prompt
 
 
 def _require_str_field(payload: dict[str, object], key: str) -> str:
