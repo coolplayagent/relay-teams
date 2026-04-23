@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -147,6 +148,29 @@ def test_wait_wechat_login_route_rejects_none_like_session_key() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_wait_wechat_login_route_runs_service_call_in_threadpool(monkeypatch) -> None:
+    calls: list[WeChatLoginWaitRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[[WeChatLoginWaitRequest], WeChatLoginWaitResponse],
+        request: WeChatLoginWaitRequest,
+    ) -> WeChatLoginWaitResponse:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(gateway.asyncio, "to_thread", fake_to_thread)
+    client = _client(_FakeWeChatGatewayService())
+
+    response = client.post(
+        "/api/gateway/wechat/login/wait",
+        json={"session_key": "wechat-login-1", "timeout_ms": 1000},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["connected"] is True
+    assert [call.session_key for call in calls] == ["wechat-login-1"]
 
 
 def test_update_wechat_account_route_maps_validation_error_to_422() -> None:

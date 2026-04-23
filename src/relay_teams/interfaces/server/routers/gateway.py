@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -45,7 +46,7 @@ async def wait_wechat_login(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatLoginWaitResponse:
     try:
-        return service.wait_login(req)
+        return await asyncio.to_thread(service.wait_login, req)
     except (KeyError, RuntimeError) as exc:
         raise http_exception_for(
             exc,

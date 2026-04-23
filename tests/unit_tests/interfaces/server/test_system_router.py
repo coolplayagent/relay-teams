@@ -1367,6 +1367,34 @@ def test_probe_clawhub_connectivity() -> None:
     assert response.json()["clawhub_version"] == "clawhub 0.4.2"
 
 
+def test_probe_clawhub_connectivity_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[ClawHubConnectivityProbeRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[
+            [ClawHubConnectivityProbeRequest],
+            ClawHubConnectivityProbeResult,
+        ],
+        request: ClawHubConnectivityProbeRequest,
+    ) -> ClawHubConnectivityProbeResult:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/clawhub:probe",
+        json={"token": "ch_secret", "timeout_ms": 2500},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert [call.token for call in calls] == ["ch_secret"]
+
+
 def test_probe_github_connectivity() -> None:
     client = _create_test_client(_FakeSystemService())
 
