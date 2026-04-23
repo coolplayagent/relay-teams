@@ -213,9 +213,9 @@ async def stream_events_async(base_url: str, run_id: str, debug: bool) -> None:
                     if _handle_stream_line(line, debug=debug):
                         return
     except httpx.HTTPStatusError as exc:
+        body = (await exc.response.aread()).decode("utf-8", errors="replace")
         raise RuntimeError(
-            f"HTTP {exc.response.status_code} while streaming run {run_id}: "
-            f"{exc.response.text}"
+            f"HTTP {exc.response.status_code} while streaming run {run_id}: {body}"
         ) from exc
     except httpx.RequestError as exc:
         raise RuntimeError(f"Failed to stream run {run_id}: {exc}") from exc

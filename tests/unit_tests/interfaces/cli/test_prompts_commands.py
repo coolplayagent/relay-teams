@@ -16,8 +16,14 @@ runner = CliRunner()
 
 
 class _FakePromptStreamResponse:
-    def __init__(self, lines: list[str]) -> None:
+    def __init__(
+        self,
+        lines: list[str],
+        *,
+        error_response: httpx.Response | None = None,
+    ) -> None:
         self._lines = lines
+        self._error_response = error_response
 
     async def __aenter__(self) -> _FakePromptStreamResponse:
         return self
@@ -31,6 +37,12 @@ class _FakePromptStreamResponse:
         _ = (exc_type, exc, traceback)
 
     def raise_for_status(self) -> None:
+        if self._error_response is not None:
+            raise httpx.HTTPStatusError(
+                "failed",
+                request=self._error_response.request,
+                response=self._error_response,
+            )
         return None
 
     async def aiter_lines(self) -> AsyncIterator[str]:
@@ -39,8 +51,14 @@ class _FakePromptStreamResponse:
 
 
 class _FakePromptHttpClient:
-    def __init__(self, lines: list[str]) -> None:
+    def __init__(
+        self,
+        lines: list[str],
+        *,
+        error_response: httpx.Response | None = None,
+    ) -> None:
         self._lines = lines
+        self._error_response = error_response
         self.streams: list[tuple[str, str, dict[str, str]]] = []
 
     async def __aenter__(self) -> _FakePromptHttpClient:
@@ -62,7 +80,21 @@ class _FakePromptHttpClient:
         headers: dict[str, str],
     ) -> _FakePromptStreamResponse:
         self.streams.append((method, url, headers))
-        return _FakePromptStreamResponse(self._lines)
+        return _FakePromptStreamResponse(
+            self._lines,
+            error_response=self._error_response,
+        )
+
+
+class _FakeAsyncByteStream(httpx.AsyncByteStream):
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._body
+
+    async def aclose(self) -> None:
+        return None
 
 
 def test_roles_prompt_builds_preview_payload(monkeypatch) -> None:
@@ -308,33 +340,15 @@ async def test_run_prompt_stream_events_async_reads_sse_lines(
 
 @pytest.mark.asyncio
 async def test_run_prompt_stream_events_async_reports_http_errors(monkeypatch) -> None:
-    class _HttpErrorStreamResponse(_FakePromptStreamResponse):
-        def raise_for_status(self) -> None:
-            response = httpx.Response(
-                500,
-                text="failed",
-                request=httpx.Request(
-                    "GET", "http://127.0.0.1:8000/api/runs/run-1/events"
-                ),
-            )
-            raise httpx.HTTPStatusError(
-                "failed", request=response.request, response=response
-            )
+    response = httpx.Response(
+        500,
+        request=httpx.Request("GET", "http://127.0.0.1:8000/api/runs/run-1/events"),
+        stream=_FakeAsyncByteStream(b"failed"),
+    )
 
-    class _HttpErrorClient(_FakePromptHttpClient):
-        def stream(
-            self,
-            method: str,
-            url: str,
-            *,
-            headers: dict[str, str],
-        ) -> _FakePromptStreamResponse:
-            self.streams.append((method, url, headers))
-            return _HttpErrorStreamResponse([])
-
-    def fake_create_async_http_client(**kwargs: object) -> _HttpErrorClient:
+    def fake_create_async_http_client(**kwargs: object) -> _FakePromptHttpClient:
         _ = kwargs
-        return _HttpErrorClient([])
+        return _FakePromptHttpClient([], error_response=response)
 
     monkeypatch.setattr(
         prompt_cli,
@@ -342,7 +356,10 @@ async def test_run_prompt_stream_events_async_reports_http_errors(monkeypatch) -
         fake_create_async_http_client,
     )
 
-    with pytest.raises(RuntimeError, match="HTTP 500 while streaming run run-1"):
+    with pytest.raises(
+        RuntimeError,
+        match="HTTP 500 while streaming run run-1: failed",
+    ):
         await prompt_cli.stream_events_async(
             base_url="http://127.0.0.1:8000",
             run_id="run-1",

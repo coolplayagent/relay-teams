@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -392,7 +393,8 @@ async def answer_user_question(
         submission = UserQuestionAnswerSubmission.model_validate(
             {"answers": list(req.answers)}
         )
-        result = service.answer_user_question(
+        result = await asyncio.to_thread(
+            service.answer_user_question,
             run_id=run_id,
             question_id=question_id,
             answers=submission,

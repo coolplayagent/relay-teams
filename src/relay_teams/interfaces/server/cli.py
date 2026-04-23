@@ -63,7 +63,10 @@ def get_server_health(base_url: str) -> ServerHealthPayload | None:
 
 async def get_server_health_async(base_url: str) -> ServerHealthPayload | None:
     try:
-        async with create_async_http_client(timeout_seconds=1.5) as client:
+        async with create_async_http_client(
+            timeout_seconds=1.5,
+            connect_timeout_seconds=1.5,
+        ) as client:
             response = await client.get(
                 f"{base_url.rstrip('/')}{_SERVER_HEALTH_PATH}",
                 headers={"Accept": "application/json"},

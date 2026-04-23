@@ -457,6 +457,7 @@ def test_server_cli_get_server_health_async_uses_async_http_client(monkeypatch) 
         )
     ]
     assert captured_kwargs["timeout_seconds"] == 1.5
+    assert captured_kwargs["connect_timeout_seconds"] == 1.5
 
 
 def test_cli_request_json_async_applies_timeout_to_connect_phase(monkeypatch) -> None:
