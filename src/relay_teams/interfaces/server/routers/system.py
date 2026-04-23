@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from typing import NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -253,7 +254,7 @@ async def probe_ssh_profile_connectivity(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfileConnectivityProbeResult:
     try:
-        return service.probe_connectivity(req)
+        return await asyncio.to_thread(service.probe_connectivity, req)
     except Exception as exc:
         _raise_system_http_error(
             exc,

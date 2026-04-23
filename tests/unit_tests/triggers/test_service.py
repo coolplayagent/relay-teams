@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import threading
 from pathlib import Path
 from typing import Callable, cast
 
@@ -94,6 +95,19 @@ class _FakeGitHubTriggerActionWorkerService:
     def process_pending_actions(self) -> bool:
         self.calls += 1
         return self.calls == 1
+
+
+class _BlockingGitHubTriggerActionWorkerService:
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.finished = threading.Event()
+
+    def process_pending_actions(self) -> bool:
+        self.entered.set()
+        self.release.wait(timeout=2.0)
+        self.finished.set()
+        return False
 
 
 class _FakeGitHubApiClient:
@@ -1074,5 +1088,27 @@ def test_github_trigger_action_worker_start_wake_stop() -> None:
         await worker.stop()
 
         assert service.calls >= 2
+
+    asyncio.run(run_worker())
+
+
+def test_github_trigger_action_worker_stop_waits_for_inflight_processing() -> None:
+    async def run_worker() -> None:
+        service = _BlockingGitHubTriggerActionWorkerService()
+        worker = GitHubTriggerActionWorker(
+            trigger_service=cast(GitHubTriggerService, service),
+            poll_interval_seconds=0.01,
+        )
+
+        await worker.start()
+        assert await asyncio.to_thread(service.entered.wait, 1.0)
+
+        stop_task = asyncio.create_task(worker.stop())
+        await asyncio.sleep(0.03)
+        assert not stop_task.done()
+
+        service.release.set()
+        await asyncio.wait_for(stop_task, timeout=1.0)
+        assert service.finished.is_set()
 
     asyncio.run(run_worker())

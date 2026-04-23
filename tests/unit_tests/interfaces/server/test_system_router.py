@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import cast
+from typing import Callable, cast
 
 from pydantic import JsonValue
 from fastapi import FastAPI
@@ -945,6 +945,33 @@ def test_probe_ssh_profile_connectivity() -> None:
     assert payload["ssh_profile_id"] == "prod"
     assert payload["host"] == "prod-alias"
     assert payload["latency_ms"] == 44
+
+
+def test_probe_ssh_profile_connectivity_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[SshProfileConnectivityProbeRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[
+            [SshProfileConnectivityProbeRequest],
+            SshProfileConnectivityProbeResult,
+        ],
+        request: SshProfileConnectivityProbeRequest,
+    ) -> SshProfileConnectivityProbeResult:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/workspace/ssh-profiles:probe",
+        json={"ssh_profile_id": "prod"},
+    )
+
+    assert response.status_code == 200
+    assert [call.ssh_profile_id for call in calls] == ["prod"]
 
 
 def test_save_and_delete_ssh_profile() -> None:

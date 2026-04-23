@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import cast
@@ -104,6 +105,19 @@ class _FakeBoundSessionQueueWorkerService:
     def process_pending(self) -> bool:
         self.calls += 1
         return self.calls == 1
+
+
+class _BlockingBoundSessionQueueWorkerService:
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.finished = threading.Event()
+
+    def process_pending(self) -> bool:
+        self.entered.set()
+        self.release.wait(timeout=2.0)
+        self.finished.set()
+        return False
 
 
 class _FakeRuntimeConfigLookup:
@@ -729,5 +743,27 @@ def test_bound_session_queue_worker_start_wake_stop() -> None:
         await worker.stop()
 
         assert service.calls >= 2
+
+    asyncio.run(run_worker())
+
+
+def test_bound_session_queue_worker_stop_waits_for_inflight_processing() -> None:
+    async def run_worker() -> None:
+        service = _BlockingBoundSessionQueueWorkerService()
+        worker = AutomationBoundSessionQueueWorker(
+            queue_service=cast(AutomationBoundSessionQueueService, service),
+            poll_interval_seconds=0.01,
+        )
+
+        await worker.start()
+        assert await asyncio.to_thread(service.entered.wait, 1.0)
+
+        stop_task = asyncio.create_task(worker.stop())
+        await asyncio.sleep(0.03)
+        assert not stop_task.done()
+
+        service.release.set()
+        await asyncio.wait_for(stop_task, timeout=1.0)
+        assert service.finished.is_set()
 
     asyncio.run(run_worker())
