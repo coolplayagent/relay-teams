@@ -56,6 +56,7 @@ from relay_teams.interfaces.server.deps import (
     get_github_connectivity_probe_service,
     get_github_config_service,
     get_github_webhook_connectivity_probe_service,
+    get_hook_service,
     get_localhost_run_tunnel_service,
     get_github_trigger_service,
     get_mcp_config_reload_service,
@@ -95,6 +96,7 @@ from relay_teams.skills.clawhub_models import (
     ClawHubSkillWriteRequest,
 )
 from relay_teams.skills.skill_models import SkillSource
+from relay_teams.hooks import HookRuntimeView, HooksConfig
 from relay_teams.notifications.models import NotificationConfig
 from relay_teams.agents.orchestration.settings_models import OrchestrationSettings
 from relay_teams.workspace import (
@@ -129,6 +131,7 @@ class _FakeSystemService:
         self.started_tunnel_request: dict[str, object] | None = None
         self.stopped_tunnel_request: dict[str, object] | None = None
         self.saved_ui_language_settings: dict[str, object] | None = None
+        self.saved_hooks_config: dict[str, object] | None = None
         self.proxy_save_error: RuntimeError | None = None
         self.model_reload_error: Exception | None = None
         self.proxy_reload_error: Exception | None = None
@@ -514,6 +517,19 @@ class _FakeSystemService:
     def save_orchestration_config(self, config: OrchestrationSettings) -> None:
         self.saved_orchestration_config = config.model_dump(mode="json")
 
+    def get_user_config(self) -> HooksConfig:
+        return HooksConfig()
+
+    def get_runtime_view(self) -> HookRuntimeView:
+        return HookRuntimeView()
+
+    def save_user_config(self, config: HooksConfig) -> HooksConfig:
+        self.saved_hooks_config = config.model_dump(mode="json")
+        return config
+
+    def validate_config(self, config: HooksConfig) -> HooksConfig:
+        return config
+
     def get_provider_models(
         self,
         *,
@@ -857,6 +873,7 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_localhost_run_tunnel_service] = lambda: fake_service
     app.dependency_overrides[get_github_trigger_service] = lambda: fake_service
     app.dependency_overrides[get_external_agent_config_service] = lambda: fake_service
+    app.dependency_overrides[get_hook_service] = lambda: fake_service
     return TestClient(app)
 
 
@@ -1019,6 +1036,253 @@ def test_ssh_profile_routes_run_service_calls_in_threadpool(monkeypatch) -> None
         "reveal_password",
         "save_profile",
         "delete_profile",
+    ]
+
+
+def test_sync_system_read_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    responses = [
+        client.get("/api/system/configs"),
+        client.get("/api/system/configs/ui-language"),
+        client.get("/api/system/configs/model"),
+        client.get("/api/system/configs/model/profiles"),
+        client.get("/api/system/configs/model-fallback"),
+        client.get("/api/system/configs/model/providers/models"),
+        client.get("/api/system/configs/notifications"),
+        client.get("/api/system/configs/proxy"),
+        client.get("/api/system/configs/web"),
+        client.get("/api/system/configs/agents"),
+        client.get("/api/system/configs/agents/codex_local"),
+        client.get("/api/system/configs/github"),
+        client.post("/api/system/configs/github:reveal"),
+        client.get("/api/system/configs/clawhub"),
+        client.get("/api/system/configs/clawhub/skills"),
+        client.get("/api/system/configs/clawhub/skills/skill-creator-2"),
+        client.get("/api/system/configs/orchestration"),
+        client.get("/api/system/configs/github/webhook/tunnel"),
+        client.get("/api/system/configs/hooks"),
+        client.get("/api/system/configs/hooks/runtime"),
+    ]
+
+    assert [response.status_code for response in responses] == [200] * len(responses)
+    assert [call[0] for call in calls] == [
+        "get_config_status",
+        "get_ui_language_settings",
+        "get_model_config",
+        "get_model_profiles",
+        "get_model_fallback_config",
+        "get_provider_models",
+        "get_notification_config",
+        "get_saved_proxy_config",
+        "get_web_config",
+        "list_agents",
+        "get_agent",
+        "get_github_config_view",
+        "reveal_github_token",
+        "get_clawhub_config",
+        "list_skills",
+        "get_skill",
+        "get_orchestration_config",
+        "get_status",
+        "get_user_config",
+        "get_runtime_view",
+    ]
+
+
+def test_sync_system_write_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    async def fake_probe(_config: ExternalAgentConfig) -> ExternalAgentTestResult:
+        return ExternalAgentTestResult(
+            ok=True,
+            message="Connected",
+            agent_name="Codex",
+            agent_version="1.0.0",
+            protocol_version=1,
+        )
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "probe_acp_agent", fake_probe)
+    client = _create_test_client(_FakeSystemService())
+
+    responses = [
+        client.put("/api/system/configs/ui-language", json={"language": "en-US"}),
+        client.put(
+            "/api/system/configs/model/profiles/default",
+            json={
+                "provider": "openai_compatible",
+                "model": "gpt-4o-mini",
+                "base_url": "https://example.test/v1",
+                "temperature": 0.2,
+                "top_p": 1.0,
+                "connect_timeout_seconds": 25.0,
+            },
+        ),
+        client.delete("/api/system/configs/model/profiles/default"),
+        client.put(
+            "/api/system/configs/model",
+            json={
+                "default": {
+                    "provider": "openai_compatible",
+                    "model": "gpt-4o-mini",
+                    "base_url": "https://example.test/v1",
+                    "api_key": "secret",
+                }
+            },
+        ),
+        client.put(
+            "/api/system/configs/model-fallback",
+            json={
+                "policies": [
+                    {
+                        "policy_id": "same_provider_then_other_provider",
+                        "name": "Same Provider Then Other Provider",
+                        "enabled": True,
+                        "trigger": "rate_limit_after_retries",
+                        "strategy": "same_provider_then_other_provider",
+                        "max_hops": 4,
+                        "cooldown_seconds": 90,
+                    }
+                ]
+            },
+        ),
+        client.put(
+            "/api/system/configs/notifications",
+            json={
+                "tool_approval_requested": {
+                    "enabled": True,
+                    "channels": ["browser", "toast"],
+                    "feishu_format": "text",
+                },
+                "run_completed": {
+                    "enabled": True,
+                    "channels": ["toast"],
+                    "feishu_format": "text",
+                },
+                "run_failed": {
+                    "enabled": True,
+                    "channels": ["browser", "toast"],
+                    "feishu_format": "text",
+                },
+                "run_stopped": {
+                    "enabled": False,
+                    "channels": ["toast"],
+                    "feishu_format": "text",
+                },
+            },
+        ),
+        client.put(
+            "/api/system/configs/proxy",
+            json={
+                "http_proxy": "http://proxy.example:8080",
+                "proxy_username": "alice",
+                "proxy_password": "secret",
+            },
+        ),
+        client.put(
+            "/api/system/configs/web",
+            json={
+                "provider": "exa",
+                "exa_api_key": "secret",
+                "fallback_provider": "searxng",
+                "searxng_instance_url": "https://search.example.test/",
+            },
+        ),
+        client.put(
+            "/api/system/configs/agents/claude_http",
+            json={
+                "agent_id": "claude_http",
+                "name": "Claude HTTP",
+                "description": "Runs Claude over HTTP",
+                "transport": {
+                    "transport": "streamable_http",
+                    "url": "http://127.0.0.1:4100/acp",
+                    "headers": [],
+                    "ssl_verify": True,
+                },
+            },
+        ),
+        client.delete("/api/system/configs/agents/claude_http"),
+        client.post("/api/system/configs/agents/codex_local:test"),
+        client.put("/api/system/configs/clawhub", json={"token": "ch_secret"}),
+        client.put(
+            "/api/system/configs/clawhub/skills/demo-skill",
+            json={
+                "runtime_name": "demo-skill",
+                "description": "Demo skill",
+                "instructions": "Use with care.",
+                "files": [],
+            },
+        ),
+        client.delete("/api/system/configs/clawhub/skills/demo-skill"),
+        client.put(
+            "/api/system/configs/orchestration",
+            json={
+                "default_orchestration_preset_id": "shipping",
+                "presets": [
+                    {
+                        "preset_id": "shipping",
+                        "name": "Shipping",
+                        "description": "Release work.",
+                        "role_ids": ["writer"],
+                        "orchestration_prompt": "Use writer for outward-facing updates.",
+                    }
+                ],
+            },
+        ),
+        client.post("/api/system/configs/model:reload"),
+        client.post("/api/system/configs/proxy:reload"),
+        client.post("/api/system/configs/mcp:reload"),
+        client.post("/api/system/configs/skills:reload"),
+        client.put("/api/system/configs/hooks", json={"hooks": {}}),
+        client.post("/api/system/configs/hooks:validate", json={"hooks": {}}),
+    ]
+
+    assert [response.status_code for response in responses] == [200] * len(responses)
+    assert [call[0] for call in calls] == [
+        "save_ui_language_settings",
+        "save_model_profile",
+        "delete_model_profile",
+        "save_model_config",
+        "save_model_fallback_config",
+        "save_notification_config",
+        "save_proxy_config",
+        "save_web_config",
+        "save_agent",
+        "delete_agent",
+        "resolve_runtime_agent",
+        "save_clawhub_config",
+        "save_skill",
+        "delete_skill",
+        "save_orchestration_config",
+        "reload_model_config",
+        "reload_proxy_config",
+        "reload_mcp_config",
+        "reload_skills_config",
+        "save_user_config",
+        "validate_config",
     ]
 
 
@@ -2664,6 +2928,43 @@ def test_get_environment_variables() -> None:
     payload = response.json()
     assert payload["system"][0]["key"] == "ComSpec"
     assert payload["app"][0]["scope"] == "app"
+
+
+def test_environment_variable_routes_run_service_calls_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_env_test_client(_FakeEnvironmentVariableService())
+
+    responses = [
+        client.get("/api/system/configs/environment-variables"),
+        client.put(
+            "/api/system/configs/environment-variables/app/OPENAI_API_KEY",
+            json={
+                "source_key": "OPENAI_KEY",
+                "value": "updated-secret",
+            },
+        ),
+        client.delete("/api/system/configs/environment-variables/app/OPENAI_API_KEY"),
+    ]
+
+    assert [response.status_code for response in responses] == [200] * len(responses)
+    assert [call[0] for call in calls] == [
+        "list_environment_variables",
+        "save_environment_variable",
+        "delete_environment_variable",
+    ]
 
 
 def test_save_environment_variable() -> None:
