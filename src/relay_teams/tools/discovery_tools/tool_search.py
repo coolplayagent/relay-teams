@@ -7,6 +7,7 @@ import json
 import math
 import re
 from collections.abc import Iterable, Mapping
+from typing import Optional, Union
 
 from pydantic import JsonValue
 from pydantic_ai import Agent
@@ -59,6 +60,11 @@ _STOPWORDS = frozenset(
         "with",
     }
 )
+
+_AuthorizedToolsLoadResult = Union[
+    tuple[tuple[RuntimeToolSnapshotEntry, ...], int, tuple[str, ...]],
+    tuple[None, int, tuple[str, ...]],
+]
 
 
 @dataclass(frozen=True)
@@ -205,10 +211,7 @@ def _search_runtime_tools(
 
 def _load_authorized_tools(
     ctx: ToolContext,
-) -> (
-    tuple[tuple[RuntimeToolSnapshotEntry, ...], int, tuple[str, ...]]
-    | tuple[None, int, tuple[str, ...]]
-):
+) -> _AuthorizedToolsLoadResult:
     try:
         runtime_record = ctx.deps.agent_repo.get_instance(ctx.deps.instance_id)
     except KeyError:
@@ -274,7 +277,7 @@ def _parse_select_query(query: str) -> tuple[str, ...]:
 def _find_tool_by_name(
     entries: Iterable[RuntimeToolSnapshotEntry],
     tool_name: str,
-) -> RuntimeToolSnapshotEntry | None:
+) -> Optional[RuntimeToolSnapshotEntry]:
     normalized_name = tool_name.strip().casefold()
     if not normalized_name:
         return None
@@ -519,7 +522,7 @@ def _build_search_response(
     total_authorized_tools: int,
     active_local_tools: tuple[str, ...],
     include_schema: bool = False,
-    warning: str | None = None,
+    warning: Optional[str] = None,
 ) -> dict[str, JsonValue]:
     payload: dict[str, JsonValue] = {
         "query": query,

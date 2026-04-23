@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel, ConfigDict, Field
 
 DEFAULT_ALWAYS_ACTIVE_TOOLS: tuple[str, ...] = (
@@ -31,7 +33,7 @@ class ActivationApplyResult(BaseModel):
     rejected_due_to_limit: tuple[str, ...] = ()
     active_tools: tuple[str, ...] = ()
     deferred_tools: tuple[str, ...] = ()
-    max_active_tools: int | None = Field(default=None, ge=1)
+    max_active_tools: Optional[int] = Field(default=None, ge=1)
 
 
 def merge_active_tools(
@@ -112,7 +114,7 @@ def apply_tool_activation(
     authorized_tools: tuple[str, ...],
     active_tools: tuple[str, ...],
     requested_tool_names: tuple[str, ...],
-    max_active_tools: int | None = None,
+    max_active_tools: Optional[int] = None,
 ) -> ActivationApplyResult:
     validation = validate_activation_request(
         authorized_tools=authorized_tools,
