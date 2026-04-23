@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, field_validator
+from starlette.concurrency import run_in_threadpool
 
 from relay_teams.interfaces.server.deps import get_session_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
@@ -53,13 +54,17 @@ async def create_session(
     service: SessionService = Depends(get_session_service),
 ) -> SessionRecord:
     try:
-        return service.create_session(
-            session_id=req.session_id,
-            workspace_id=req.workspace_id,
-            metadata=(
-                None if req.metadata is None else req.metadata.to_metadata_dict()
-            ),
-        )
+
+        def _create_session() -> SessionRecord:
+            return service.create_session(
+                session_id=req.session_id,
+                workspace_id=req.workspace_id,
+                metadata=(
+                    None if req.metadata is None else req.metadata.to_metadata_dict()
+                ),
+            )
+
+        return await run_in_threadpool(_create_session)
     except (SystemRolesUnavailableError, ValueError) as exc:
         raise http_exception_for(
             exc,

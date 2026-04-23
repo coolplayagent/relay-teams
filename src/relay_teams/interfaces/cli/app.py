@@ -84,6 +84,7 @@ async def _request_json_async(
         async with create_async_http_client(
             proxy_config=load_proxy_env_config(),
             timeout_seconds=timeout_seconds,
+            connect_timeout_seconds=timeout_seconds,
         ) as client:
             response = await client.request(
                 method,

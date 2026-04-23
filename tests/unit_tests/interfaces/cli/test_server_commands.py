@@ -58,6 +58,36 @@ class _FakeServerHealthClient:
         return self._response
 
 
+class _FakeCliRequestJsonClient:
+    def __init__(self, response: httpx.Response) -> None:
+        self._response = response
+        self.requests: list[
+            tuple[str, str, dict[str, str], dict[str, object] | None]
+        ] = []
+
+    async def __aenter__(self) -> _FakeCliRequestJsonClient:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        _ = (exc_type, exc, traceback)
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object] | None = None,
+    ) -> httpx.Response:
+        self.requests.append((method, url, headers, json))
+        return self._response
+
+
 def _runtime_identity(
     *,
     python_executable: str = "D:/workspace/agent_teams/.venv/Scripts/python.exe",
@@ -427,6 +457,39 @@ def test_server_cli_get_server_health_async_uses_async_http_client(monkeypatch) 
         )
     ]
     assert captured_kwargs["timeout_seconds"] == 1.5
+
+
+def test_cli_request_json_async_applies_timeout_to_connect_phase(monkeypatch) -> None:
+    response = httpx.Response(
+        200,
+        json={"status": "ok"},
+        request=httpx.Request("GET", "http://127.0.0.1:8000/api/system/health"),
+    )
+    fake_client = _FakeCliRequestJsonClient(response)
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_create_async_http_client(**kwargs: object) -> _FakeCliRequestJsonClient:
+        captured_kwargs.update(kwargs)
+        return fake_client
+
+    monkeypatch.setattr(
+        cli_app,
+        "create_async_http_client",
+        fake_create_async_http_client,
+    )
+
+    payload = asyncio.run(
+        cli_app._request_json_async(
+            base_url="http://127.0.0.1:8000",
+            method="GET",
+            path="/api/system/health",
+            timeout_seconds=1.5,
+        )
+    )
+
+    assert payload == {"status": "ok"}
+    assert captured_kwargs["timeout_seconds"] == 1.5
+    assert captured_kwargs["connect_timeout_seconds"] == 1.5
 
 
 def test_server_cli_get_server_health_async_returns_none_on_http_error(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Callable
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -286,6 +288,29 @@ def test_create_session_route_returns_created_session() -> None:
 
     assert response.status_code == 200
     assert response.json()["session_id"] == "session-1"
+    assert fake_service.created_calls == [("session-1", "default", None)]
+
+
+def test_create_session_route_runs_service_call_in_threadpool(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[[], SessionRecord],
+    ) -> SessionRecord:
+        calls.append("create")
+        return func()
+
+    monkeypatch.setattr(sessions, "run_in_threadpool", fake_run_in_threadpool)
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/sessions",
+        json={"session_id": "session-1", "workspace_id": "default"},
+    )
+
+    assert response.status_code == 200
+    assert calls == ["create"]
     assert fake_service.created_calls == [("session-1", "default", None)]
 
 
