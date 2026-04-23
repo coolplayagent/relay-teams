@@ -104,7 +104,7 @@ relay-teams --help
 relay-teams-evals --help
 ```
 
-If the `relay-teams` command is still missing in a fresh local checkout, the project package was not installed into the active virtual environment. Re-run the matching `-m uv pip install -e .` command above for your platform, or use `uv run python -m relay_teams --help` as a fallback.
+If the `relay-teams` command is still missing in a fresh local checkout, the project package was not installed into the active virtual environment. Re-run the matching `-m uv pip install -e .` command above for your platform, or use `py -3 -m uv run python -m relay_teams --help` on Windows or `python3 -m uv run python -m relay_teams --help` on Linux/macOS as a fallback.
 
 Examples:
 
