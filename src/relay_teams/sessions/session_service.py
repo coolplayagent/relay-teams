@@ -12,11 +12,11 @@ from relay_teams.media import ContentPart
 from relay_teams.metrics import SqliteMetricAggregateStore
 from relay_teams.monitors.repository import MonitorRepository
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType
-from relay_teams.interfaces.server.api_write_validation import (
+from relay_teams.validation import (
     require_cascade_delete,
     require_force_delete,
 )
-from relay_teams.gateway.feishu import (
+from relay_teams.sessions.session_metadata import (
     SESSION_METADATA_TITLE_SOURCE_KEY,
     SESSION_TITLE_SOURCE_MANUAL,
 )

@@ -7,7 +7,13 @@ from pathlib import Path
 import sqlite3
 
 import pytest
-from relay_teams.workspace import WorkspaceRepository
+from relay_teams.workspace import (
+    WorkspaceLocalMountConfig,
+    WorkspaceMountProvider,
+    WorkspaceMountRecord,
+    WorkspaceRepository,
+    WorkspaceSshMountConfig,
+)
 
 
 def test_workspace_repository_supports_concurrent_reads(tmp_path: Path) -> None:
@@ -56,6 +62,57 @@ def test_workspace_repository_skips_invalid_persisted_rows(tmp_path: Path) -> No
     assert [record.workspace_id for record in records] == ["project-alpha"]
     with pytest.raises(KeyError):
         repository.get("None")
+
+
+def test_workspace_repository_persists_mounts_in_provider_then_name_order(
+    tmp_path: Path,
+) -> None:
+    app_root = tmp_path / "app-root"
+    ops_root = tmp_path / "ops-root"
+    app_root.mkdir()
+    ops_root.mkdir()
+    repository = WorkspaceRepository(tmp_path / "workspace_mount_order.db")
+
+    created = repository.create(
+        workspace_id="project-alpha",
+        default_mount_name="prod",
+        mounts=(
+            WorkspaceMountRecord(
+                mount_name="prod",
+                provider=WorkspaceMountProvider.SSH,
+                provider_config=WorkspaceSshMountConfig(
+                    ssh_profile_id="prod",
+                    remote_root="/srv/prod",
+                ),
+            ),
+            WorkspaceMountRecord(
+                mount_name="ops",
+                provider=WorkspaceMountProvider.LOCAL,
+                provider_config=WorkspaceLocalMountConfig(root_path=ops_root),
+            ),
+            WorkspaceMountRecord(
+                mount_name="app",
+                provider=WorkspaceMountProvider.LOCAL,
+                provider_config=WorkspaceLocalMountConfig(root_path=app_root),
+            ),
+            WorkspaceMountRecord(
+                mount_name="stage",
+                provider=WorkspaceMountProvider.SSH,
+                provider_config=WorkspaceSshMountConfig(
+                    ssh_profile_id="stage",
+                    remote_root="/srv/stage",
+                ),
+            ),
+        ),
+    )
+
+    fetched = repository.get("project-alpha")
+    listed = repository.list_all()[0]
+    expected_order = ["app", "ops", "prod", "stage"]
+
+    assert [mount.mount_name for mount in created.mounts] == expected_order
+    assert [mount.mount_name for mount in fetched.mounts] == expected_order
+    assert [mount.mount_name for mount in listed.mounts] == expected_order
 
 
 def test_workspace_repository_skips_invalid_legacy_profile_rows_on_init(

@@ -1,0 +1,52 @@
+name: Qodana
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "releases/*"
+
+jobs:
+  qodana:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: write
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+      - name: Install project dependencies
+        run: uv sync --extra dev --no-default-groups
+      - name: Install Qodana CLI
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL https://jb.gg/qodana-cli/install | bash -s -- v2025.3.2 "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Qodana Scan
+        env:
+          QODANA_TOKEN: ${{ secrets.QODANA_TOKEN }}
+          QODANA_ENDPOINT: "https://qodana.cloud"
+          QODANA_PYTHON_PATH: ${{ github.workspace }}/.venv/bin/python
+        run: |
+          set -euo pipefail
+
+          qodana_args=(scan --within-docker false --print-problems)
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base_ref="${{ github.event.pull_request.base.ref }}"
+            git fetch --no-tags origin "${base_ref}:refs/remotes/origin/${base_ref}"
+            diff_start="$(git merge-base "origin/${base_ref}" HEAD)"
+            qodana_args+=(--diff-start "$diff_start")
+          fi
+
+          qodana "${qodana_args[@]}"

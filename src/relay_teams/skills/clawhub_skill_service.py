@@ -17,7 +17,7 @@ from relay_teams.skills.clawhub_models import (
     ClawHubSkillSummary,
     ClawHubSkillWriteRequest,
 )
-from relay_teams.skills.skill_models import SkillScope, build_skill_ref
+from relay_teams.skills.skill_models import SkillSource
 
 _SKILL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SKILL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -133,7 +133,8 @@ class ClawHubSkillService:
                 skill_id=skill_id,
                 runtime_name=parsed.runtime_name,
                 description=parsed.description,
-                ref=build_skill_ref(scope=SkillScope.APP, name=parsed.runtime_name),
+                ref=parsed.runtime_name,
+                source=SkillSource.USER_RELAY_TEAMS,
                 directory=skill_dir.as_posix(),
                 manifest_path=manifest_path.as_posix(),
                 valid=True,

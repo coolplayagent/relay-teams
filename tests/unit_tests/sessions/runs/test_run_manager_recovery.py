@@ -76,7 +76,7 @@ from relay_teams.sessions.session_models import SessionRecord
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.task_repository import TaskRepository
-from relay_teams.tools.runtime import ToolApprovalManager
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
     ShellApprovalScope,

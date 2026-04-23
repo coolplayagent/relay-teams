@@ -60,7 +60,8 @@ from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
-from relay_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
 )
@@ -68,7 +69,7 @@ from relay_teams.workspace import WorkspaceManager
 from relay_teams.hooks import HookService
 
 if TYPE_CHECKING:
-    from relay_teams.gateway.im import ImToolService
+    from relay_teams.gateway.im.service import ImToolService
 
 
 def create_provider_factory(

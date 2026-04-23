@@ -5,9 +5,7 @@ from typing import cast
 
 import pytest
 
-from relay_teams.agents.execution import (
-    coordination_agent_builder as coordination_agent,
-)
+import relay_teams.agents.execution.coordination_agent_builder as coordination_agent
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.role_registry import RoleRegistry

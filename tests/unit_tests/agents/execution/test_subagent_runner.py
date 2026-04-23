@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from relay_teams.agents.execution import SubAgentRequest, SubAgentRunner
+from relay_teams.agents.execution.subagent_runner import SubAgentRequest, SubAgentRunner
 from relay_teams.agents.execution.system_prompts import (
     PromptBuildInput,
     RuntimePromptBuilder,

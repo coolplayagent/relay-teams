@@ -4,7 +4,7 @@ from __future__ import annotations
 import httpx
 
 from relay_teams.env.github_config_models import GitHubConfig
-from relay_teams.env.github_connectivity import (
+from relay_teams.net.github_connectivity import (
     GitHubWebhookConnectivityProbeRequest,
     GitHubWebhookConnectivityProbeService,
 )
@@ -37,7 +37,7 @@ def test_probe_github_webhook_marks_inactive_temporary_public_url(monkeypatch) -
         )
     )
     monkeypatch.setattr(
-        "relay_teams.env.github_connectivity.create_sync_http_client",
+        "relay_teams.net.github_connectivity.create_sync_http_client",
         lambda **_kwargs: fake_client,
     )
     service = GitHubWebhookConnectivityProbeService(

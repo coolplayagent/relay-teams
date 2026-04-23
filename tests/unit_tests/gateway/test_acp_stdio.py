@@ -31,7 +31,7 @@ from relay_teams.metrics import (
     MetricRegistry,
 )
 from relay_teams.providers.token_usage_repo import RunTokenUsage
-from relay_teams.sessions import SessionService
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.session_models import SessionRecord
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_manager import RunManager

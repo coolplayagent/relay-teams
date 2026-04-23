@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pydantic_ai.mcp import MCPServerStdio
 
-from relay_teams.mcp import mcp_config_manager as config_manager
+import relay_teams.mcp.mcp_config_manager as config_manager
 from relay_teams.mcp.mcp_models import McpConfigScope
 from relay_teams.mcp.mcp_registry import build_mcp_server
 

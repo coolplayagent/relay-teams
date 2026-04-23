@@ -11,7 +11,7 @@ from pydantic_ai import Agent
 
 import relay_teams.tools.workspace_tools as workspace_tools_module
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
-from relay_teams.tools.runtime import ToolResultProjection
+from relay_teams.tools.runtime.models import ToolResultProjection
 from relay_teams.tools.runtime.context import ToolDeps
 from relay_teams.tools.workspace_tools import register_office_read_markdown
 from relay_teams.tools.workspace_tools.edit_state import load_file_read_state

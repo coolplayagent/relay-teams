@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
-from relay_teams.automation import AutomationService
+from relay_teams.automation.automation_service import AutomationService
 from relay_teams.env.github_config_models import GitHubConfig
 from relay_teams.env.public_webhook_url import (
     build_public_base_url_path,

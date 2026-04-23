@@ -10,18 +10,19 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from pydantic_ai import Tool
 
 from relay_teams.logger import get_logger, log_event
-
 from relay_teams.skills.discovery import SkillsDirectory
 from relay_teams.skills.skill_models import (
     Skill,
     SkillInstructionEntry,
     SkillOptionEntry,
-    SkillScope,
     SkillSummaryEntry,
-    parse_skill_ref,
 )
 from relay_teams.trace import trace_span
-from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from relay_teams.tools.runtime.context import (
+    ToolContext,
+    ToolDeps,
+)
+from relay_teams.tools.runtime.execution import execute_tool
 
 LOGGER = get_logger(__name__)
 _SKILL_LOAD_MAX_PAYLOAD_CHARS = 120_000
@@ -45,6 +46,7 @@ _SKILL_LOAD_EXCLUDED_DIR_NAMES = frozenset(
     }
 )
 _SKILL_LOAD_EXCLUDED_FILE_SUFFIXES = frozenset({".pyc", ".pyo"})
+_LEGACY_SCOPED_SKILL_PREFIXES = frozenset({"app", "builtin"})
 
 
 class _SkillFileSelection(BaseModel):
@@ -81,11 +83,13 @@ class SkillRegistry(BaseModel):
         *,
         app_config_dir: Path,
         max_depth: int = 3,
+        project_start_dir: Path | None = None,
     ) -> SkillRegistry:
         return cls(
             directory=SkillsDirectory.from_config_dirs(
                 app_config_dir=app_config_dir,
                 max_depth=max_depth,
+                project_start_dir=project_start_dir,
             )
         )
 
@@ -95,11 +99,13 @@ class SkillRegistry(BaseModel):
         *,
         user_home_dir: Path | None = None,
         max_depth: int = 3,
+        start_dir: Path | None = None,
     ) -> SkillRegistry:
         return cls(
             directory=SkillsDirectory.from_default_scopes(
                 user_home_dir=user_home_dir,
                 max_depth=max_depth,
+                start_dir=start_dir,
             )
         )
 
@@ -113,19 +119,19 @@ class SkillRegistry(BaseModel):
             return tuple(sorted(skills, key=_skill_sort_key))
 
     def get_skill_definition(self, name: str) -> Skill | None:
+        raw_name = name.strip()
         with trace_span(
             LOGGER,
             component="skills.registry",
             operation="get_skill_definition",
-            attributes={"skill_name": name},
+            attributes={"skill_name": raw_name},
         ):
             skill_map = self._get_effective_skill_map()
-            if name in skill_map:
-                return skill_map[name]
-            candidates = self._get_skill_name_index(skill_map).get(name.strip(), ())
-            if len(candidates) == 1:
-                return candidates[0]
-            return None
+            normalized_name = _normalize_legacy_scoped_skill_name(
+                name=raw_name,
+                skill_map=skill_map,
+            )
+            return skill_map.get(normalized_name)
 
     def get_toolset_tools(self, skill_names: tuple[str, ...]) -> list[Tool[ToolDeps]]:
         _ = skill_names
@@ -134,10 +140,8 @@ class SkillRegistry(BaseModel):
                 self.load_skill,
                 name="load_skill",
                 description=(
-                    "Load a specific skill by canonical ref or name. "
-                    "If multiple scopes share the same name, the app-scoped skill "
-                    "is preferred. "
-                    "including its instructions and selected absolute file paths."
+                    "Load a specific skill by name, including its instructions, "
+                    "resources, scripts, and selected absolute file paths."
                 ),
             ),
         ]
@@ -162,18 +166,12 @@ class SkillRegistry(BaseModel):
             operation="resolve_known",
             attributes=attributes,
         ):
-            _, resolved, missing, ambiguous = self._resolve_skill_names(
+            resolved, missing = self._resolve_skill_names(
                 skill_names,
                 strict=strict,
-                consumer=consumer,
             )
-            error_messages: list[str] = []
             if strict and missing:
-                error_messages.append(f"Unknown skills: {list(missing)}")
-            if strict and ambiguous:
-                error_messages.append(_format_ambiguous_skills_error(ambiguous))
-            if error_messages:
-                raise ValueError("; ".join(error_messages))
+                raise ValueError(f"Unknown skills: {list(missing)}")
             if missing:
                 self._log_ignored_unknown_skills(
                     skill_names=skill_names,
@@ -190,18 +188,9 @@ class SkillRegistry(BaseModel):
             operation="validate_known",
             attributes={"skill_names": list(skill_names)},
         ):
-            _, _, missing, ambiguous = self._resolve_skill_names(
-                skill_names,
-                strict=True,
-                consumer=None,
-            )
-            error_messages: list[str] = []
+            _, missing = self._resolve_skill_names(skill_names, strict=True)
             if missing:
-                error_messages.append(f"Unknown skills: {list(missing)}")
-            if ambiguous:
-                error_messages.append(_format_ambiguous_skills_error(ambiguous))
-            if error_messages:
-                raise ValueError("; ".join(error_messages))
+                raise ValueError(f"Unknown skills: {list(missing)}")
 
     def list_names(self) -> tuple[str, ...]:
         return tuple(skill.ref for skill in self.list_skill_definitions())
@@ -217,7 +206,7 @@ class SkillRegistry(BaseModel):
                     ref=skill.ref,
                     name=skill.metadata.name,
                     description=skill.metadata.description.strip(),
-                    scope=skill.scope,
+                    source=skill.source,
                 )
                 for skill in self.list_skill_definitions()
             )
@@ -233,7 +222,7 @@ class SkillRegistry(BaseModel):
                     ref=skill.ref,
                     name=skill.metadata.name,
                     description=skill.metadata.description.strip(),
-                    scope=skill.scope,
+                    source=skill.source,
                 )
                 for skill in self.list_skill_definitions()
             )
@@ -251,34 +240,20 @@ class SkillRegistry(BaseModel):
             operation="get_instruction_entries",
             attributes={"skill_names": list(skill_names)},
         ):
-            skill_map, resolved_refs, missing, ambiguous = self._resolve_skill_names(
-                skill_names,
-                strict=True,
-                consumer=None,
-            )
-            error_messages: list[str] = []
+            resolved_names, missing = self._resolve_skill_names(skill_names)
             if missing:
-                error_messages.append(f"Unknown skills: {list(missing)}")
-            if ambiguous:
-                error_messages.append(_format_ambiguous_skills_error(ambiguous))
-            if error_messages:
-                raise ValueError("; ".join(error_messages))
-            name_counts = _build_name_counts(
-                tuple(skill_map[ref] for ref in resolved_refs if ref in skill_map)
-            )
+                raise ValueError(f"Unknown skills: {list(missing)}")
+            skill_map = self._get_effective_skill_map()
             entries: list[SkillInstructionEntry] = []
-            for ref in resolved_refs:
-                skill = skill_map.get(ref)
+            for name in resolved_names:
+                skill = skill_map.get(name)
                 if skill is None:
                     continue
                 description = skill.metadata.description.strip()
                 if description:
                     entries.append(
                         SkillInstructionEntry(
-                            name=_instruction_entry_name(
-                                skill=skill,
-                                name_counts=name_counts,
-                            ),
+                            name=skill.metadata.name,
                             description=description,
                         )
                     )
@@ -296,11 +271,12 @@ class SkillRegistry(BaseModel):
 
     async def load_skill(self, ctx: ToolContext, name: str) -> dict[str, JsonValue]:
         async def _action() -> JsonValue:
+            requested_name = name.strip()
             with trace_span(
                 LOGGER,
                 component="skills.registry",
                 operation="load_skill",
-                attributes={"skill_name": name},
+                attributes={"skill_name": requested_name},
                 trace_id=ctx.deps.trace_id,
                 run_id=ctx.deps.run_id,
                 task_id=ctx.deps.task_id,
@@ -313,21 +289,18 @@ class SkillRegistry(BaseModel):
                     skill_registry=self,
                     ctx=ctx,
                 )
-                _raise_if_skill_unauthorized(
-                    skill_registry=self,
-                    ctx=ctx,
-                    skill_name=name,
-                )
-                resolved_name = _resolve_skill_ref_for_role(
+                resolved_name = _resolve_skill_name_for_role(
                     skill_registry=self,
                     role=role,
-                    requested_name=name,
+                    requested_name=requested_name,
                 )
                 if resolved_name is None:
-                    raise KeyError(f"Skill not found: {name}")
+                    raise PermissionError(
+                        f"Role {role.role_id} is not authorized to load skill: {requested_name}"
+                    )
                 skill = self.get_skill_definition(resolved_name)
                 if skill is None:
-                    raise KeyError(f"Skill not found: {name}")
+                    raise KeyError(f"Skill not found: {requested_name}")
                 result = _skill_to_json(skill)
                 omitted_count_value = result.get("files_omitted_count")
                 omitted_count = (
@@ -364,58 +337,26 @@ class SkillRegistry(BaseModel):
         self,
         skill_names: tuple[str, ...],
         *,
-        strict: bool,
-        consumer: str | None,
-    ) -> tuple[
-        dict[str, Skill], tuple[str, ...], tuple[str, ...], dict[str, tuple[str, ...]]
-    ]:
+        strict: bool = False,
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         skill_map = self._get_effective_skill_map()
-        skill_name_index = self._get_skill_name_index(skill_map)
         resolved_names: list[str] = []
         missing_names: list[str] = []
-        ambiguous_names: dict[str, tuple[str, ...]] = {}
         for raw_name in skill_names:
             name = raw_name.strip()
-            if name in skill_map:
-                resolved_names.append(name)
-                continue
-            parsed_ref = parse_skill_ref(name)
-            if parsed_ref is not None and name not in skill_map:
-                missing_names.append(name)
-                continue
-            candidates = skill_name_index.get(name, ())
-            if len(candidates) == 1:
-                resolved_names.append(candidates[0].ref)
-            elif len(candidates) > 1:
-                candidate_refs = tuple(skill.ref for skill in candidates)
+            if not name:
                 if strict:
-                    ambiguous_names[name] = candidate_refs
-                    continue
-                chosen_skill = candidates[0]
-                resolved_names.append(chosen_skill.ref)
-                self._log_ambiguous_skill_name_resolution(
-                    requested_name=name,
-                    chosen_ref=chosen_skill.ref,
-                    candidate_refs=candidate_refs,
-                    consumer=consumer,
-                )
+                    missing_names.append("")
+                continue
+            normalized_name = _normalize_legacy_scoped_skill_name(
+                name=name,
+                skill_map=skill_map,
+            )
+            if normalized_name in skill_map:
+                resolved_names.append(normalized_name)
             else:
                 missing_names.append(name)
-        return (
-            skill_map,
-            tuple(resolved_names),
-            tuple(missing_names),
-            ambiguous_names,
-        )
-
-    def _get_skill_name_index(
-        self,
-        skill_map: dict[str, Skill],
-    ) -> dict[str, tuple[Skill, ...]]:
-        indexed: dict[str, list[Skill]] = {}
-        for skill in sorted(skill_map.values(), key=_skill_sort_key):
-            indexed.setdefault(skill.metadata.name, []).append(skill)
-        return {name: tuple(skills) for name, skills in indexed.items()}
+        return (tuple(resolved_names), tuple(missing_names))
 
     def _log_ignored_unknown_skills(
         self,
@@ -440,29 +381,6 @@ class SkillRegistry(BaseModel):
             payload=payload,
         )
 
-    def _log_ambiguous_skill_name_resolution(
-        self,
-        *,
-        requested_name: str,
-        chosen_ref: str,
-        candidate_refs: tuple[str, ...],
-        consumer: str | None,
-    ) -> None:
-        payload: dict[str, JsonValue] = {
-            "requested_skill_name": requested_name,
-            "resolved_skill_ref": chosen_ref,
-            "candidate_skill_refs": list(candidate_refs),
-        }
-        if consumer is not None:
-            payload["consumer"] = consumer
-        log_event(
-            LOGGER,
-            logging.WARNING,
-            event="skills.registry.ambiguous_name_resolved",
-            message="Resolved ambiguous skill name to preferred canonical ref",
-            payload=payload,
-        )
-
     def _get_effective_skill_map(self) -> dict[str, Skill]:
         with trace_span(
             LOGGER,
@@ -470,7 +388,9 @@ class SkillRegistry(BaseModel):
             operation="build_effective_skill_map",
         ):
             self.directory.discover()
-            return {skill.ref: skill for skill in self.directory.list_skills()}
+            return {
+                skill.metadata.name: skill for skill in self.directory.list_skills()
+            }
 
 
 def _skill_to_json(skill: Skill) -> dict[str, JsonValue]:
@@ -483,7 +403,7 @@ def _skill_to_json(skill: Skill) -> dict[str, JsonValue]:
         "manifest_path": _normalize_skill_path(manifest_path),
         "manifest_content": manifest_path.read_text(encoding="utf-8"),
         "instructions": metadata.instructions,
-        "scope": skill.scope.value,
+        "source": skill.source.value,
         "directory": _normalize_skill_path(skill.directory),
         "resources": {
             name: {
@@ -516,6 +436,24 @@ def _skill_to_json(skill: Skill) -> dict[str, JsonValue]:
 
 def _normalize_skill_path(path: Path) -> str:
     return path.resolve().as_posix()
+
+
+def _normalize_legacy_scoped_skill_name(
+    *,
+    name: str,
+    skill_map: dict[str, Skill],
+) -> str:
+    prefix, separator, suffix = name.partition(":")
+    if separator != ":":
+        return name
+    if prefix.strip().lower() not in _LEGACY_SCOPED_SKILL_PREFIXES:
+        return name
+    normalized_name = suffix.strip()
+    if not normalized_name:
+        return name
+    if normalized_name not in skill_map:
+        return name
+    return normalized_name
 
 
 def _iter_skill_files(skill_dir: Path) -> tuple[Path, ...]:
@@ -597,14 +535,12 @@ def _raise_if_skill_unauthorized(
         skill_registry=skill_registry,
         ctx=ctx,
     )
-    if (
-        _resolve_skill_ref_for_role(
-            skill_registry=skill_registry,
-            role=role,
-            requested_name=skill_name,
-        )
-        is not None
-    ):
+    resolved_name = _resolve_skill_name_for_role(
+        skill_registry=skill_registry,
+        role=role,
+        requested_name=skill_name,
+    )
+    if resolved_name is not None:
         return
     raise PermissionError(
         f"Role {role.role_id} is not authorized to load skill: {skill_name}"
@@ -616,6 +552,7 @@ def _get_effective_role_for_skill_load(
     skill_registry: SkillRegistry,
     ctx: ToolContext,
 ):
+    _ = skill_registry
     runtime_role_resolver = getattr(ctx.deps, "runtime_role_resolver", None)
     if runtime_role_resolver is not None:
         try:
@@ -628,7 +565,7 @@ def _get_effective_role_for_skill_load(
     return ctx.deps.role_registry.get(ctx.deps.role_id)
 
 
-def _resolve_skill_ref_for_role(
+def _resolve_skill_name_for_role(
     *,
     skill_registry: SkillRegistry,
     role: object,
@@ -637,50 +574,26 @@ def _resolve_skill_ref_for_role(
     requested = requested_name.strip()
     if not requested:
         return None
-    authorized_refs = skill_registry.resolve_known(
-        tuple(str(item) for item in getattr(role, "skills", ())),
-        strict=False,
-        consumer="skills.registry.load_skill.authorization",
-    )
-    authorized_set = set(authorized_refs)
-    skill_map = skill_registry._get_effective_skill_map()
-    if requested in skill_map:
-        return requested if requested in authorized_set else None
-    parsed_ref = parse_skill_ref(requested)
-    if parsed_ref is not None:
+    authorized_set = {
+        _normalize_legacy_scoped_skill_ref(str(item).strip())
+        for item in getattr(role, "skills", ())
+        if str(item).strip()
+    }
+    normalized_requested = _normalize_legacy_scoped_skill_ref(requested)
+    if normalized_requested not in authorized_set:
         return None
-    candidates = skill_registry._get_skill_name_index(skill_map).get(requested, ())
-    for candidate in candidates:
-        if candidate.ref in authorized_set:
-            return candidate.ref
-    if requested in authorized_set:
-        return requested
-    return None
+    return normalized_requested
 
 
-def _skill_sort_key(skill: Skill) -> tuple[str, int, str]:
-    scope_priority = 0 if skill.scope == SkillScope.APP else 1
-    return (skill.metadata.name, scope_priority, skill.ref)
+def _normalize_legacy_scoped_skill_ref(name: str) -> str:
+    prefix, separator, suffix = name.partition(":")
+    if separator != ":":
+        return name
+    if prefix.strip().lower() not in _LEGACY_SCOPED_SKILL_PREFIXES:
+        return name
+    normalized_name = suffix.strip()
+    return normalized_name if normalized_name else name
 
 
-def _build_name_counts(skills: tuple[Skill, ...]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for skill in skills:
-        counts[skill.metadata.name] = counts.get(skill.metadata.name, 0) + 1
-    return counts
-
-
-def _instruction_entry_name(*, skill: Skill, name_counts: dict[str, int]) -> str:
-    if name_counts.get(skill.metadata.name, 0) <= 1:
-        return skill.metadata.name
-    return f"{skill.metadata.name} ({skill.scope.value})"
-
-
-def _format_ambiguous_skills_error(
-    ambiguous_names: dict[str, tuple[str, ...]],
-) -> str:
-    segments = [
-        f"{name} -> {list(candidate_refs)}"
-        for name, candidate_refs in sorted(ambiguous_names.items())
-    ]
-    return "Ambiguous skills require canonical refs: " + "; ".join(segments)
+def _skill_sort_key(skill: Skill) -> tuple[str]:
+    return (skill.metadata.name,)

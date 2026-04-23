@@ -21,7 +21,7 @@ from relay_teams.gateway.gateway_session_model_profile_store import (
     GatewaySessionModelProfileStore,
 )
 from relay_teams.gateway.gateway_session_repository import GatewaySessionRepository
-from relay_teams.sessions import SessionService
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.workspace import WorkspaceService
 

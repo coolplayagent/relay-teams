@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Callable
+import logging
 from pathlib import Path
 
 from relay_teams.env.github_config_models import (
@@ -9,14 +9,6 @@ from relay_teams.env.github_config_models import (
     GitHubConfigUpdate,
     GitHubTokenRevealView,
     GitHubConfigView,
-)
-from relay_teams.env.github_connectivity import (
-    GitHubConnectivityProbeRequest,
-    GitHubConnectivityProbeResult,
-    GitHubConnectivityProbeService,
-    GitHubWebhookConnectivityProbeRequest,
-    GitHubWebhookConnectivityProbeResult,
-    GitHubWebhookConnectivityProbeService,
 )
 from relay_teams.env.github_env import (
     GH_TOKEN_ENV_KEY,
@@ -28,12 +20,10 @@ from relay_teams.env.github_secret_store import (
     GitHubSecretStore,
     get_github_secret_store,
 )
-from relay_teams.env.proxy_env import ProxyEnvConfig
 from relay_teams.env.runtime_env import load_env_file, sync_app_env_to_process_env
-from relay_teams.logger import get_logger
 
 _WEBHOOK_BASE_URL_ENV_KEY = "AGENT_TEAMS_GITHUB_WEBHOOK_BASE_URL"
-LOGGER = get_logger(__name__)
+LOGGER = logging.getLogger("relay_teams.backend.env.github_config_service")
 
 
 class GitHubConfigService:
@@ -42,27 +32,10 @@ class GitHubConfigService:
         *,
         config_dir: Path,
         secret_store: GitHubSecretStore | None = None,
-        get_proxy_config: Callable[[], ProxyEnvConfig] | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._secret_store = (
             get_github_secret_store() if secret_store is None else secret_store
-        )
-        self._probe_service = GitHubConnectivityProbeService(
-            get_github_config=self.get_github_config,
-            get_proxy_config=(
-                (lambda: ProxyEnvConfig())
-                if get_proxy_config is None
-                else get_proxy_config
-            ),
-        )
-        self._webhook_probe_service = GitHubWebhookConnectivityProbeService(
-            get_github_config=self.get_github_config,
-            get_proxy_config=(
-                (lambda: ProxyEnvConfig())
-                if get_proxy_config is None
-                else get_proxy_config
-            ),
         )
 
     def get_github_config(self) -> GitHubConfig:
@@ -128,18 +101,6 @@ class GitHubConfigService:
         )
         self.save_github_config(next_config)
         return next_config
-
-    def probe_connectivity(
-        self,
-        request: GitHubConnectivityProbeRequest,
-    ) -> GitHubConnectivityProbeResult:
-        return self._probe_service.probe(request)
-
-    def probe_webhook_connectivity(
-        self,
-        request: GitHubWebhookConnectivityProbeRequest,
-    ) -> GitHubWebhookConnectivityProbeResult:
-        return self._webhook_probe_service.probe(request)
 
     def _write_env_file(
         self,

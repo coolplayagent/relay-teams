@@ -9,6 +9,10 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 concurrency:
   group: pr-checks-${{ github.event.pull_request.number || github.ref }}
@@ -21,11 +25,13 @@ permissions:
 
 jobs:
   agents-self-check:
-    if: github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,6 +39,7 @@ jobs:
           python-version: "3.12"
 
       - name: Require linked issue for PRs into main
+        if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
@@ -45,17 +52,41 @@ jobs:
       - name: Install dev dependencies
         run: uv sync --extra dev --no-default-groups
 
-      - name: Ruff check --fix
-        run: uv run --extra dev ruff check --fix
+      - name: Ruff lint gate
+        run: uv run --extra dev ruff check --no-cache --force-exclude .
 
-      - name: Ruff format
-        run: uv run --extra dev ruff format --no-cache --force-exclude
+      - name: Ruff format gate
+        run: uv run --extra dev ruff format --check --no-cache --force-exclude .
 
-      - name: basedpyright
+      - name: basedpyright type gate
         run: uv run --extra dev basedpyright
 
-      - name: Unit tests
-        run: uv run --extra dev pytest -q tests/unit_tests
+      - name: Bandit security gate
+        run: >
+          uv run --extra dev bandit -r src
+          --configfile pyproject.toml
+          --severity-level high
+          --confidence-level medium
+
+      - name: Radon complexity gate
+        run: >
+          uv run --extra dev xenon
+          --max-absolute F
+          --max-modules C
+          --max-average B
+          --exclude src/relay_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx
+          src/relay_teams
+          src/relay_teams_evals
+
+      - name: Unit tests with coverage
+        run: >
+          uv run --extra dev pytest -q tests/unit_tests
+          --cov=src/relay_teams
+          --cov=src/relay_teams_evals
+          --cov-report=xml:coverage.xml
+
+      - name: Enforce changed-line unit coverage
+        run: uv run --extra dev diff-cover coverage.xml --config-file pyproject.toml
 
       - name: Install Playwright Chromium
         run: uv run --extra dev python -m playwright install --with-deps chromium

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from relay_teams.automation import AutomationProjectRecord
+from relay_teams.automation.automation_models import AutomationProjectRecord
 from relay_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
     FEISHU_METADATA_CHAT_TYPE_KEY,

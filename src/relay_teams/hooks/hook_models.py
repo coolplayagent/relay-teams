@@ -16,11 +16,19 @@ class HookEventName(str, Enum):
     POST_TOOL_USE_FAILURE = "PostToolUseFailure"
     STOP = "Stop"
     STOP_FAILURE = "StopFailure"
+    SUBAGENT_START = "SubagentStart"
+    SUBAGENT_STOP = "SubagentStop"
+    TASK_CREATED = "TaskCreated"
+    TASK_COMPLETED = "TaskCompleted"
+    PRE_COMPACT = "PreCompact"
+    POST_COMPACT = "PostCompact"
 
 
 class HookHandlerType(str, Enum):
     COMMAND = "command"
     HTTP = "http"
+    PROMPT = "prompt"
+    AGENT = "agent"
 
 
 class HookDecisionType(str, Enum):
@@ -46,6 +54,8 @@ class HookSourceScope(str, Enum):
     USER = "user"
     PROJECT = "project"
     PROJECT_LOCAL = "project_local"
+    ROLE = "role"
+    SKILL = "skill"
 
 
 class HookSourceInfo(BaseModel):
@@ -77,6 +87,9 @@ class HookHandlerConfig(BaseModel):
     command: str | None = None
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
+    prompt: str | None = None
+    model: str | None = None
+    role_id: str | None = None
 
 
 class HookMatcherGroup(BaseModel):

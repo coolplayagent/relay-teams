@@ -6,7 +6,7 @@ import { fetchModelProfiles, fetchRunTokenUsage } from '../core/api.js';
 import { state, getPrimaryRoleId } from '../core/state.js';
 import { els } from '../utils/dom.js';
 import { formatMessage, t } from '../utils/i18n.js';
-import { currentRounds } from './rounds.js';
+import { currentRounds } from './rounds/timeline.js';
 import {
     getActiveInstanceId,
     getPanel,

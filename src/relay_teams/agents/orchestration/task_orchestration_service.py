@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import JsonValue
 
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.models import create_subagent_instance
-from relay_teams.agents.orchestration.task_execution_service import (
-    TaskExecutionService,
+from relay_teams.agents.orchestration.task_contracts import (
+    TaskDraft,
+    TaskExecutionServiceLike,
+    TaskUpdate,
 )
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
@@ -21,26 +23,8 @@ from relay_teams.agents.tasks.models import (
     TaskRecord,
     VerificationPlan,
 )
-
-
-class TaskDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    objective: str = Field(min_length=1)
-    title: str | None = None
-
-
-class TaskUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    objective: str | None = None
-    title: str | None = None
-
-    @model_validator(mode="after")
-    def validate_non_empty_patch(self) -> TaskUpdate:
-        if self.objective is None and self.title is None:
-            raise ValueError("update must include at least one field")
-        return self
+from relay_teams.hooks import HookEventName, HookService, TaskCreatedInput
+from relay_teams.sessions.runs.event_stream import RunEventHub
 
 
 class TaskOrchestrationService:
@@ -50,10 +34,12 @@ class TaskOrchestrationService:
         task_repo: TaskRepository,
         role_registry: RoleRegistry,
         agent_repo: AgentInstanceRepository,
-        task_execution_service: TaskExecutionService,
+        task_execution_service: TaskExecutionServiceLike,
         message_repo: MessageRepository,
         session_repo: SessionRepository | None = None,
         runtime_role_resolver: RuntimeRoleResolver | None = None,
+        hook_service: HookService | None = None,
+        run_event_hub: RunEventHub | None = None,
     ) -> None:
         self._task_repo = task_repo
         self._role_registry = role_registry
@@ -62,6 +48,8 @@ class TaskOrchestrationService:
         self._message_repo = message_repo
         self._session_repo = session_repo
         self._runtime_role_resolver = runtime_role_resolver
+        self._hook_service = hook_service
+        self._run_event_hub = run_event_hub
 
     async def create_tasks(
         self,
@@ -75,28 +63,46 @@ class TaskOrchestrationService:
         root = self._get_root_task(run_id)
         created_records: list[TaskRecord] = []
         for draft in tasks:
-            created_records.append(
-                self._task_repo.create(
-                    TaskEnvelope(
-                        task_id=new_task_id().value,
-                        session_id=root.envelope.session_id,
-                        parent_task_id=root.envelope.task_id,
-                        trace_id=root.envelope.trace_id,
-                        role_id=None,
-                        title=_resolved_title(draft.title, draft.objective),
-                        objective=draft.objective,
-                        verification=VerificationPlan(
-                            checklist=("non_empty_response",)
-                        ),
-                    )
+            record = self._task_repo.create(
+                TaskEnvelope(
+                    task_id=new_task_id().value,
+                    session_id=root.envelope.session_id,
+                    parent_task_id=root.envelope.task_id,
+                    trace_id=root.envelope.trace_id,
+                    role_id=None,
+                    title=_resolved_title(draft.title, draft.objective),
+                    objective=draft.objective,
+                    verification=VerificationPlan(checklist=("non_empty_response",)),
                 )
             )
+            created_records.append(record)
+            await self._execute_task_created_hooks(record=record)
 
         response: dict[str, JsonValue] = {
             "created_count": len(created_records),
             "tasks": [_task_projection(record) for record in created_records],
         }
         return response
+
+    async def _execute_task_created_hooks(self, *, record: TaskRecord) -> None:
+        if self._hook_service is None:
+            return
+        envelope = record.envelope
+        _ = await self._hook_service.execute(
+            event_input=TaskCreatedInput(
+                event_name=HookEventName.TASK_CREATED,
+                session_id=envelope.session_id,
+                run_id=envelope.trace_id,
+                trace_id=envelope.trace_id,
+                task_id=envelope.task_id,
+                role_id=envelope.role_id,
+                created_task_id=envelope.task_id,
+                parent_task_id=envelope.parent_task_id,
+                title=envelope.title or "",
+                objective=envelope.objective,
+            ),
+            run_event_hub=self._run_event_hub,
+        )
 
     def update_task(
         self,
@@ -158,6 +164,9 @@ class TaskOrchestrationService:
         include_root: bool = False,
     ) -> dict[str, JsonValue]:
         return self.list_delegated_tasks(run_id=run_id, include_root=include_root)
+
+    def list_tasks(self) -> tuple[TaskRecord, ...]:
+        return self._task_repo.list_all()
 
     async def dispatch_task(
         self,

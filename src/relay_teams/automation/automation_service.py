@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import JsonValue
 
-from relay_teams.interfaces.server.api_write_validation import (
+from relay_teams.validation import (
     require_cascade_delete,
     require_force_delete,
 )
@@ -32,10 +32,8 @@ from relay_teams.automation.automation_models import (
     AutomationProjectUpdateInput,
     AutomationScheduleMode,
 )
-from relay_teams.automation.automation_repository import (
-    AutomationProjectNameConflictError,
-    AutomationProjectRepository,
-)
+from relay_teams.automation.automation_repository import AutomationProjectRepository
+from relay_teams.automation.errors import AutomationProjectNameConflictError
 from relay_teams.automation.feishu_binding_service import (
     AutomationFeishuBindingService,
 )
@@ -45,7 +43,7 @@ from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressService,
 )
 from relay_teams.media import content_parts_from_text
-from relay_teams.sessions import ProjectKind
+from relay_teams.sessions.session_models import ProjectKind
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.session_service import SessionService

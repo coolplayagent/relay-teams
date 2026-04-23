@@ -35,7 +35,7 @@ from relay_teams.roles import (
     SystemRolesUnavailableError,
     RoleValidationResult,
 )
-from relay_teams.skills.skill_models import SkillOptionEntry, SkillScope
+from relay_teams.skills.skill_models import SkillOptionEntry, SkillSource
 from relay_teams.roles import default_memory_profile
 
 
@@ -130,16 +130,16 @@ class _FakeSkillRegistry:
     ) -> None:
         self._options = options or (
             SkillOptionEntry(
-                ref="builtin:diff",
+                ref="diff",
                 name="diff",
                 description="Inspect file changes.",
-                scope=SkillScope.BUILTIN,
+                source=SkillSource.BUILTIN,
             ),
             SkillOptionEntry(
-                ref="app:time",
+                ref="time",
                 name="time",
                 description="Read the current time.",
-                scope=SkillScope.APP,
+                source=SkillSource.USER_RELAY_TEAMS,
             ),
         )
 
@@ -440,16 +440,16 @@ def test_get_role_config_options() -> None:
         mcp_servers=("docs",),
         skills=(
             RoleSkillOption(
-                ref="builtin:diff",
+                ref="diff",
                 name="diff",
                 description="Inspect file changes.",
-                scope=SkillScope.BUILTIN,
+                source="builtin",
             ),
             RoleSkillOption(
-                ref="app:time",
+                ref="time",
                 name="time",
                 description="Read the current time.",
-                scope=SkillScope.APP,
+                source="user_relay_teams",
             ),
         ),
         agents=(
@@ -484,7 +484,7 @@ def test_get_role_config_options_reloads_missing_builtin_skills() -> None:
             description="Executes normal-mode runs.",
             version="1.0.0",
             tools=("orch_dispatch_task",),
-            skills=("builtin:skill-installer",),
+            skills=("skill-installer",),
             model_profile="default",
             system_prompt="Handle the run directly.",
         )
@@ -492,20 +492,20 @@ def test_get_role_config_options_reloads_missing_builtin_skills() -> None:
     skill_registry = _FakeSkillRegistry(
         (
             SkillOptionEntry(
-                ref="app:time",
+                ref="time",
                 name="time",
                 description="Read the current time.",
-                scope=SkillScope.APP,
+                source=SkillSource.USER_RELAY_TEAMS,
             ),
         )
     )
     reloaded_registry = _FakeSkillRegistry(
         (
             SkillOptionEntry(
-                ref="builtin:skill-installer",
+                ref="skill-installer",
                 name="skill-installer",
                 description="Install skills.",
-                scope=SkillScope.BUILTIN,
+                source=SkillSource.BUILTIN,
             ),
         )
     )
@@ -522,10 +522,10 @@ def test_get_role_config_options_reloads_missing_builtin_skills() -> None:
     payload = response.json()
     assert payload["skills"] == [
         {
-            "ref": "builtin:skill-installer",
+            "ref": "skill-installer",
             "name": "skill-installer",
             "description": "Install skills.",
-            "scope": "builtin",
+            "source": "builtin",
         }
     ]
     assert reload_service.reload_calls == 1
@@ -553,7 +553,7 @@ def test_get_role_config_options_returns_503_when_builtin_skills_still_missing()
             description="Executes normal-mode runs.",
             version="1.0.0",
             tools=("orch_dispatch_task",),
-            skills=("builtin:skill-installer",),
+            skills=("skill-installer",),
             model_profile="default",
             system_prompt="Handle the run directly.",
         )
@@ -561,10 +561,10 @@ def test_get_role_config_options_returns_503_when_builtin_skills_still_missing()
     skill_registry = _FakeSkillRegistry(
         (
             SkillOptionEntry(
-                ref="app:time",
+                ref="time",
                 name="time",
                 description="Read the current time.",
-                scope=SkillScope.APP,
+                source=SkillSource.USER_RELAY_TEAMS,
             ),
         )
     )
@@ -579,6 +579,254 @@ def test_get_role_config_options_returns_503_when_builtin_skills_still_missing()
 
     assert response.status_code == 503
     assert response.json() == {
-        "detail": "Builtin skills are unavailable: ['builtin:skill-installer']"
+        "detail": "Builtin skills are unavailable: ['skill-installer']"
     }
+    assert reload_service.reload_calls == 1
+
+
+def test_get_role_config_options_ignores_missing_non_system_role_skills() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates the run.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            model_profile="default",
+            system_prompt="Coordinate the run.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Executes normal-mode runs.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            model_profile="default",
+            system_prompt="Handle the run directly.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="Writer",
+            name="Writer",
+            description="Drafts user-facing content.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            skills=("project-planner",),
+            model_profile="default",
+            system_prompt="Write clearly.",
+        )
+    )
+    skill_registry = _FakeSkillRegistry(
+        (
+            SkillOptionEntry(
+                ref="time",
+                name="time",
+                description="Read the current time.",
+                source=SkillSource.USER_RELAY_TEAMS,
+            ),
+        )
+    )
+    reload_service = _FakeSkillsReloadService(skill_registry)
+    client = _create_test_client(
+        registry=registry,
+        skill_registry=skill_registry,
+        skills_reload_service=reload_service,
+    )
+
+    response = client.get("/api/roles:options")
+
+    assert response.status_code == 200
+    assert response.json()["skills"] == [
+        {
+            "ref": "time",
+            "name": "time",
+            "description": "Read the current time.",
+            "source": "user_relay_teams",
+        }
+    ]
+    assert reload_service.reload_calls == 0
+
+
+def test_get_role_config_options_ignores_missing_custom_reserved_role_skills() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates the run.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            skills=("project-planner",),
+            model_profile="default",
+            system_prompt="Coordinate the run.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Executes normal-mode runs.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            model_profile="default",
+            system_prompt="Handle the run directly.",
+        )
+    )
+    skill_registry = _FakeSkillRegistry(
+        (
+            SkillOptionEntry(
+                ref="time",
+                name="time",
+                description="Read the current time.",
+                source=SkillSource.USER_RELAY_TEAMS,
+            ),
+        )
+    )
+    reload_service = _FakeSkillsReloadService(skill_registry)
+    client = _create_test_client(
+        registry=registry,
+        skill_registry=skill_registry,
+        skills_reload_service=reload_service,
+    )
+
+    response = client.get("/api/roles:options")
+
+    assert response.status_code == 200
+    assert response.json()["skills"] == [
+        {
+            "ref": "time",
+            "name": "time",
+            "description": "Read the current time.",
+            "source": "user_relay_teams",
+        }
+    ]
+    assert reload_service.reload_calls == 0
+
+
+def test_get_role_config_options_uses_available_project_skill_without_reload() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates the run.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            model_profile="default",
+            system_prompt="Coordinate the run.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Executes normal-mode runs.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            skills=("time",),
+            model_profile="default",
+            system_prompt="Handle the run directly.",
+        )
+    )
+    skill_registry = _FakeSkillRegistry(
+        (
+            SkillOptionEntry(
+                ref="time",
+                name="time",
+                description="Read the current time from the project override.",
+                source=SkillSource.PROJECT_AGENTS,
+            ),
+        )
+    )
+    reload_service = _FakeSkillsReloadService(skill_registry)
+    client = _create_test_client(
+        registry=registry,
+        skill_registry=skill_registry,
+        skills_reload_service=reload_service,
+    )
+
+    response = client.get("/api/roles:options")
+
+    assert response.status_code == 200
+    assert response.json()["skills"] == [
+        {
+            "ref": "time",
+            "name": "time",
+            "description": "Read the current time from the project override.",
+            "source": "project_agents",
+        }
+    ]
+    assert reload_service.reload_calls == 0
+
+
+def test_get_role_config_options_recomputes_required_builtin_skills_after_reload() -> (
+    None
+):
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates the run.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            skills=("skill-installer", "project-planner"),
+            model_profile="default",
+            system_prompt="Coordinate the run.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Executes normal-mode runs.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            model_profile="default",
+            system_prompt="Handle the run directly.",
+        )
+    )
+    skill_registry = _FakeSkillRegistry(
+        (
+            SkillOptionEntry(
+                ref="project-planner",
+                name="project-planner",
+                description="Temporarily exposed as builtin before reload.",
+                source=SkillSource.BUILTIN,
+            ),
+        )
+    )
+    reload_service = _FakeSkillsReloadService(
+        _FakeSkillRegistry(
+            (
+                SkillOptionEntry(
+                    ref="skill-installer",
+                    name="skill-installer",
+                    description="Reload restored the required builtin skill.",
+                    source=SkillSource.BUILTIN,
+                ),
+            )
+        )
+    )
+    client = _create_test_client(
+        registry=registry,
+        skill_registry=skill_registry,
+        skills_reload_service=reload_service,
+    )
+
+    response = client.get("/api/roles:options")
+
+    assert response.status_code == 200
+    assert response.json()["skills"] == [
+        {
+            "ref": "skill-installer",
+            "name": "skill-installer",
+            "description": "Reload restored the required builtin skill.",
+            "source": "builtin",
+        }
+    ]
     assert reload_service.reload_calls == 1

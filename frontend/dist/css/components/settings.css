@@ -1424,7 +1424,9 @@
 }
 
 .workspace-profile-grid .form-group label {
-    min-height: 1rem;
+    display: flex;
+    align-items: flex-end;
+    min-height: 2.4em;
     line-height: 1.2;
 }
 
@@ -1495,7 +1497,9 @@
 }
 
 .workspace-private-key-textarea {
+    display: block;
     min-height: 180px;
+    margin: 0;
 }
 
 .workspace-auth-state {
@@ -1527,6 +1531,7 @@
 }
 
 .workspace-private-key-label-row {
+    align-items: flex-end;
     margin-bottom: 0.375rem;
 }
 

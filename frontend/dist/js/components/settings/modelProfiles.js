@@ -25,6 +25,7 @@ let draftModelDiscoveryState = null;
 let draftApiKeyState = createDraftSecretState();
 let draftMaasPasswordState = createDraftSecretState();
 let isModelMenuOpen = false;
+let languageBound = false;
 
 const DEFAULT_MAAS_BASE_URL = 'http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/';
 
@@ -37,6 +38,10 @@ const IMAGE_CAPABILITY_MODES = {
     FOLLOW_DETECTION: 'follow_detection',
     SUPPORTED: 'supported',
     UNSUPPORTED: 'unsupported',
+};
+const FALLBACK_POLICY_TRANSLATION_KEYS = {
+    same_provider_then_other_provider: 'settings.model.fallback_policy_same_provider_then_other_provider',
+    other_provider_only: 'settings.model.fallback_policy_other_provider_only',
 };
 let draftImageCapabilityMode = IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
 
@@ -144,6 +149,11 @@ export function bindModelProfileHandlers() {
     if (imageCapabilityInput) {
         imageCapabilityInput.onchange = syncDraftImageCapabilityMode;
     }
+
+    if (!languageBound && typeof document.addEventListener === 'function') {
+        document.addEventListener('agent-teams-language-changed', handleModelProfileLanguageChanged);
+        languageBound = true;
+    }
 }
 
 export async function loadModelProfilesPanel() {
@@ -164,6 +174,23 @@ export async function loadModelProfilesPanel() {
             errorToPayload(e),
         );
     }
+}
+
+function handleModelProfileLanguageChanged() {
+    const profileEditor = document.getElementById('profile-editor');
+    const editorVisible = profileEditor?.style.display !== 'none';
+    if (editorVisible) {
+        renderProfileEditorTitle();
+        renderFallbackPolicyOptions();
+        renderDraftApiKeyField();
+        renderDraftProviderFields();
+        renderDraftImageCapability();
+        renderDraftProbeState();
+        renderDraftModelDiscoveryState();
+        renderDiscoveredModels();
+        return;
+    }
+    renderProfiles();
 }
 
 function renderProfiles() {
@@ -1523,8 +1550,11 @@ function renderProfileCard(name, profile, index) {
     const baseUrlLabel = profile.base_url || t('settings.model.no_endpoint');
     const fallbackLabel = profile.fallback_policy_id
         ? formatFallbackPolicyLabel(profile.fallback_policy_id)
-        : 'Fallback disabled';
+        : t('settings.model.fallback_disabled');
     const fallbackPriority = Number(profile.fallback_priority || 0);
+    const fallbackPriorityLabel = formatMessage('settings.model.priority_compact', {
+        priority: fallbackPriority,
+    });
 
     return `
         <div class="profile-record profile-card" data-profile-name="${escapeHtml(name)}" style="--profile-index:${index};">
@@ -1547,7 +1577,7 @@ function renderProfileCard(name, profile, index) {
                         <div class="profile-record-summary" title="${escapeHtml(fallbackLabel)}">
                             <span class="profile-record-summary-primary">${escapeHtml(fallbackLabel)}</span>
                             <span class="profile-record-summary-separator">/</span>
-                            <span class="profile-record-summary-secondary">Priority ${escapeHtml(String(fallbackPriority))}</span>
+                            <span class="profile-record-summary-secondary">${escapeHtml(fallbackPriorityLabel)}</span>
                         </div>
                     </div>
                 </div>
@@ -1725,23 +1755,43 @@ function renderFallbackPolicyOptions() {
     if (!select) {
         return;
     }
+    const selectedValue = String(select.value || '').trim();
     const policies = Array.isArray(fallbackConfig?.policies) ? fallbackConfig.policies : [];
     const options = [
-        '<option value="">Disabled</option>',
+        `<option value="">${escapeHtml(t('settings.model.disabled'))}</option>`,
         ...policies.map(policy => (
-            `<option value="${escapeHtml(policy.policy_id)}">${escapeHtml(policy.name || policy.policy_id)}</option>`
+            `<option value="${escapeHtml(policy.policy_id)}">${escapeHtml(formatFallbackPolicyDisplayName(policy.policy_id, policy.name))}</option>`
         )),
     ];
     select.innerHTML = options.join('');
+    if (
+        selectedValue === ''
+        || policies.some(policy => String(policy?.policy_id || '').trim() === selectedValue)
+    ) {
+        select.value = selectedValue;
+    }
 }
 
 function formatFallbackPolicyLabel(policyId) {
     const policies = Array.isArray(fallbackConfig?.policies) ? fallbackConfig.policies : [];
     const matched = policies.find(policy => policy?.policy_id === policyId);
-    if (matched?.name) {
-        return matched.name;
+    return formatFallbackPolicyDisplayName(policyId, matched?.name);
+}
+
+function formatFallbackPolicyDisplayName(policyId, fallbackName = '') {
+    const normalizedPolicyId = String(policyId || '').trim();
+    const translationKey = FALLBACK_POLICY_TRANSLATION_KEYS[normalizedPolicyId] || null;
+    if (translationKey) {
+        const translated = t(translationKey);
+        if (translated !== translationKey) {
+            return translated;
+        }
     }
-    return policyId;
+    const normalizedFallbackName = String(fallbackName || '').trim();
+    if (normalizedFallbackName) {
+        return normalizedFallbackName;
+    }
+    return normalizedPolicyId;
 }
 
 function escapeHtml(value) {

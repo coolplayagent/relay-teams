@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from relay_teams.interfaces.server.api_write_validation import require_non_empty_patch
+from relay_teams.validation import require_non_empty_patch
 from relay_teams.sessions.runs.enums import ExecutionMode
 from relay_teams.sessions.runs.run_models import RunThinkingConfig
 from relay_teams.sessions.session_models import SessionMode

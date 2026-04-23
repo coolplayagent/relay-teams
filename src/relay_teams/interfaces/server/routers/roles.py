@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from relay_teams.computer import ExecutionSurface
+from relay_teams.builtin import get_builtin_roles_dir
 from relay_teams.interfaces.server.deps import (
     get_external_agent_config_service,
     get_mcp_service,
@@ -30,12 +31,15 @@ from relay_teams.roles import (
     RoleToolGroupOption,
     SystemRolesUnavailableError,
     RoleValidationResult,
+    RoleLoader,
     ensure_required_system_roles,
 )
+from relay_teams.roles.role_registry import is_reserved_system_role_definition
 from relay_teams.external_agents import ExternalAgentConfigService
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.roles.settings_service import RoleSettingsService
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
+from relay_teams.skills.skill_models import SkillOptionEntry, SkillSource
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry, list_default_tool_groups
 from relay_teams.validation import RequiredIdentifierStr
@@ -216,32 +220,58 @@ def _load_role_skill_options(
     skills_reload_service: SkillsConfigReloadService,
 ) -> tuple[RoleSkillOption, ...]:
     skill_options = tuple(skill_registry.list_skill_options())
-    required_builtin_refs = _collect_required_builtin_skill_refs(role_registry)
-    available_refs = {skill.ref for skill in skill_options}
-    if not required_builtin_refs.issubset(available_refs):
+    required_builtin_names = _collect_required_builtin_skill_names(
+        role_registry,
+        skill_options=skill_options,
+    )
+    available_names = {skill.name for skill in skill_options}
+    if not required_builtin_names.issubset(available_names):
         reloaded_registry = skills_reload_service.reload_skills_config()
         skill_options = tuple(reloaded_registry.list_skill_options())
-        available_refs = {skill.ref for skill in skill_options}
-        missing_refs = sorted(required_builtin_refs.difference(available_refs))
-        if missing_refs:
-            raise ValueError(f"Builtin skills are unavailable: {missing_refs}")
+        required_builtin_names = _collect_required_builtin_skill_names(
+            role_registry,
+            skill_options=skill_options,
+        )
+        available_names = {skill.name for skill in skill_options}
+        missing_names = sorted(required_builtin_names.difference(available_names))
+        if missing_names:
+            raise ValueError(f"Builtin skills are unavailable: {missing_names}")
     return tuple(
         RoleSkillOption(
             ref=skill.ref,
             name=skill.name,
             description=skill.description,
-            scope=skill.scope,
+            source=skill.source.value,
         )
         for skill in skill_options
     )
 
 
-def _collect_required_builtin_skill_refs(role_registry: RoleRegistry) -> frozenset[str]:
+def _collect_required_builtin_skill_names(
+    role_registry: RoleRegistry,
+    *,
+    skill_options: tuple[SkillOptionEntry, ...],
+) -> frozenset[str]:
+    builtin_required_names = _collect_builtin_reserved_role_skill_names()
+    available_builtin_names = {
+        skill.name for skill in skill_options if skill.source == SkillSource.BUILTIN
+    }
     return frozenset(
         skill_name
         for role in role_registry.list_roles()
+        if is_reserved_system_role_definition(role)
         for skill_name in role.skills
-        if skill_name.startswith("builtin:")
+        if skill_name in builtin_required_names or skill_name in available_builtin_names
+    )
+
+
+def _collect_builtin_reserved_role_skill_names() -> frozenset[str]:
+    registry = RoleLoader().load_all(get_builtin_roles_dir(), allow_empty=True)
+    return frozenset(
+        skill_name
+        for role in registry.list_roles()
+        if is_reserved_system_role_definition(role)
+        for skill_name in role.skills
     )
 
 

@@ -1486,7 +1486,12 @@ function resolveSkillScopeLabel(scope) {
     if (normalizedScope === 'builtin') {
         return t('feature.skills.scope_builtin');
     }
-    if (normalizedScope === 'app') {
+    if (
+        normalizedScope === 'user_relay_teams'
+        || normalizedScope === 'user_agents'
+        || normalizedScope === 'project_relay_teams'
+        || normalizedScope === 'project_agents'
+    ) {
         return t('feature.skills.scope_app');
     }
     return t('feature.skills.scope_unknown');
@@ -2537,7 +2542,8 @@ function syncActionLabels() {
 }
 
 export async function openWorkspaceProjectView(workspace) {
-    const workspaceId = String(workspace?.workspace_id || '').trim();
+    const orderedWorkspace = normalizeWorkspaceRecordMountOrder(workspace);
+    const workspaceId = String(orderedWorkspace?.workspace_id || '').trim();
     if (!workspaceId) {
         return;
     }
@@ -2547,7 +2553,7 @@ export async function openWorkspaceProjectView(workspace) {
     currentAutomationProject = null;
     currentFeatureViewId = '';
     state.currentFeatureViewId = null;
-    currentWorkspace = workspace;
+    currentWorkspace = orderedWorkspace;
     currentSnapshotWorkspaceId = workspaceId;
     state.currentMainView = 'project';
     state.currentProjectViewWorkspaceId = workspaceId;
@@ -2560,18 +2566,18 @@ export async function openWorkspaceProjectView(workspace) {
 
     const restoredFromCache = restoreProjectViewState(workspaceId);
     if (restoredFromCache && currentSnapshot) {
-        renderWorkspaceSnapshot(workspace, currentSnapshot);
+        renderWorkspaceSnapshot(orderedWorkspace, currentSnapshot);
         if (selectedTreePath && findDiffSummary(selectedTreePath)) {
             void ensureDiffFileLoaded(selectedTreePath);
         }
     } else {
         resetProjectViewState(workspaceId);
-        currentMountName = resolveWorkspaceInitialMountName(workspace);
+        currentMountName = resolveWorkspaceInitialMountName(orderedWorkspace);
         currentDiffState = {
             ...createInitialDiffState(),
             status: 'loading',
         };
-        renderLoadingState(workspace);
+        renderLoadingState(orderedWorkspace);
     }
 
     const loadToken = ++currentLoadToken;
@@ -3001,7 +3007,7 @@ function renderSkillsFeatureView() {
                                 <div class="skills-directory-main">
                                     <div class="skills-directory-title-row">
                                         <strong>${escapeHtml(String(skill?.name || skill?.ref || ''))}</strong>
-                                        ${renderFeatureStatusPill(resolveSkillScopeLabel(skill?.scope), 'neutral')}
+                                        ${renderFeatureStatusPill(resolveSkillScopeLabel(skill?.source || skill?.scope), 'neutral')}
                                     </div>
                                     <p>${escapeHtml(String(skill?.description || ''))}</p>
                                 </div>
@@ -5241,7 +5247,8 @@ function resolveWorkspaceInitialMountName(workspace) {
     if (explicitMountName) {
         return explicitMountName;
     }
-    const firstMount = Array.isArray(workspace?.mounts) ? workspace.mounts.find(Boolean) : null;
+    const mounts = Array.isArray(workspace?.mounts) ? sortWorkspaceMounts(workspace.mounts) : [];
+    const firstMount = mounts.find(Boolean) || null;
     return String(firstMount?.mount_name || '').trim() || null;
 }
 
@@ -5253,18 +5260,28 @@ function isMountShellSnapshot(snapshot) {
         || Object.prototype.hasOwnProperty.call(snapshot, 'default_mount_root');
 }
 
+function normalizeWorkspaceRecordMountOrder(workspace) {
+    if (!workspace || typeof workspace !== 'object' || !Array.isArray(workspace.mounts)) {
+        return workspace;
+    }
+    return {
+        ...workspace,
+        mounts: sortWorkspaceMounts(workspace.mounts),
+    };
+}
+
 function normalizeWorkspaceMounts(workspace, snapshot, defaultMountName, rootPath) {
     const workspaceMounts = Array.isArray(workspace?.mounts)
-        ? workspace.mounts
+        ? sortWorkspaceMounts(workspace.mounts)
             .map(mount => normalizeWorkspaceMount(mount, defaultMountName, rootPath))
             .filter(Boolean)
         : [];
     if (workspaceMounts.length > 0) {
-        return workspaceMounts;
+        return sortWorkspaceMounts(workspaceMounts);
     }
     const shellChildren = Array.isArray(snapshot?.tree?.children) ? snapshot.tree.children : [];
     if (shellChildren.length > 0 && isMountShellSnapshot(snapshot)) {
-        const mounts = shellChildren
+        const mounts = sortWorkspaceMounts(shellChildren
             .map(child => {
                 const mountName = String(child?.path || child?.name || '').trim();
                 if (!mountName) {
@@ -5280,7 +5297,7 @@ function normalizeWorkspaceMounts(workspace, snapshot, defaultMountName, rootPat
                     hasChildren: child?.has_children === true || child?.hasChildren === true,
                 };
             })
-            .filter(Boolean);
+            .filter(Boolean));
         if (mounts.length > 0) {
             return mounts;
         }
@@ -5295,6 +5312,53 @@ function normalizeWorkspaceMounts(workspace, snapshot, defaultMountName, rootPat
             hasChildren: snapshot?.tree?.has_children === true || snapshot?.tree?.hasChildren === true,
         },
     ];
+}
+
+function sortWorkspaceMounts(mounts = []) {
+    return [...mounts].sort(compareWorkspaceMounts);
+}
+
+function compareWorkspaceMounts(left, right) {
+    const providerDelta = workspaceMountProviderOrder(left) - workspaceMountProviderOrder(right);
+    if (providerDelta !== 0) {
+        return providerDelta;
+    }
+    return compareWorkspaceMountNames(workspaceMountSortName(left), workspaceMountSortName(right));
+}
+
+function workspaceMountProviderOrder(mount) {
+    const provider = String(mount?.provider || '').trim();
+    if (provider === 'local') {
+        return 0;
+    }
+    if (provider === 'ssh') {
+        return 1;
+    }
+    return 2;
+}
+
+function workspaceMountSortName(mount) {
+    return String(mount?.mount_name || mount?.mountName || '').trim();
+}
+
+function compareWorkspaceMountNames(leftName, rightName) {
+    const left = String(leftName || '').toLowerCase();
+    const right = String(rightName || '').toLowerCase();
+    if (left < right) {
+        return -1;
+    }
+    if (left > right) {
+        return 1;
+    }
+    const originalLeft = String(leftName || '');
+    const originalRight = String(rightName || '');
+    if (originalLeft < originalRight) {
+        return -1;
+    }
+    if (originalLeft > originalRight) {
+        return 1;
+    }
+    return 0;
 }
 
 function normalizeWorkspaceMount(mount, defaultMountName, rootPath) {
@@ -5323,7 +5387,7 @@ function normalizeWorkspaceMount(mount, defaultMountName, rootPath) {
 }
 
 function renderWorkspaceMountStrip(snapshot) {
-    const mounts = Array.isArray(snapshot?.mounts) ? snapshot.mounts : [];
+    const mounts = Array.isArray(snapshot?.mounts) ? sortWorkspaceMounts(snapshot.mounts) : [];
     if (!shouldRenderWorkspaceMountStrip(snapshot)) {
         return '';
     }
@@ -5384,7 +5448,7 @@ function renderMountProviderLabel(mount) {
 }
 
 function resolveWorkspaceMountName(candidateMountName, snapshot) {
-    const mounts = Array.isArray(snapshot?.mounts) ? snapshot.mounts : [];
+    const mounts = Array.isArray(snapshot?.mounts) ? sortWorkspaceMounts(snapshot.mounts) : [];
     const normalizedCandidate = String(candidateMountName || '').trim();
     if (normalizedCandidate && mounts.some(mount => mount?.mountName === normalizedCandidate)) {
         return normalizedCandidate;
@@ -6049,7 +6113,9 @@ async function handleDeleteWorkspaceMount() {
     if (confirmed !== true) {
         return;
     }
-    const nextMounts = mounts.filter(mount => String(mount?.mount_name || '').trim() !== activeMount.mountName);
+    const nextMounts = sortWorkspaceMounts(
+        mounts.filter(mount => String(mount?.mount_name || '').trim() !== activeMount.mountName),
+    );
     const nextDefaultMountName = resolveUpdatedDefaultMountName({
         nextMounts,
         requestedDefaultMountName: String(currentWorkspace.default_mount_name || '').trim(),
@@ -6208,11 +6274,11 @@ async function submitWorkspaceMountChange({
         sourceMountName: normalizedSourceMountName,
         existingMounts,
     });
-    const nextMounts = mode === 'edit'
+    const nextMounts = sortWorkspaceMounts(mode === 'edit'
         ? existingMounts.map(mount => {
             return String(mount?.mount_name || '').trim() === normalizedSourceMountName ? nextMountRecord : mount;
         })
-        : [...existingMounts, nextMountRecord];
+        : [...existingMounts, nextMountRecord]);
     const nextDefaultMountName = resolveUpdatedDefaultMountName({
         nextMounts,
         requestedDefaultMountName: values?.set_default === true && String(nextMountRecord?.provider || '').trim() === 'local'
@@ -6350,17 +6416,18 @@ function resolveUpdatedDefaultMountName({
     removedMountName = '',
     replacementMountName = '',
 } = {}) {
+    const orderedMounts = sortWorkspaceMounts(nextMounts);
     const normalizedRequested = String(requestedDefaultMountName || '').trim();
     const normalizedRemoved = String(removedMountName || '').trim();
     const normalizedReplacement = String(replacementMountName || '').trim();
-    const nextMountNames = nextMounts
+    const nextMountNames = orderedMounts
         .map(mount => String(mount?.mount_name || '').trim())
         .filter(Boolean);
-    const requestedMount = findWorkspaceMountByName(nextMounts, normalizedRequested);
+    const requestedMount = findWorkspaceMountByName(orderedMounts, normalizedRequested);
     if (requestedMount && isLocalWorkspaceMount(requestedMount)) {
         return normalizedRequested;
     }
-    const replacementMount = findWorkspaceMountByName(nextMounts, normalizedReplacement);
+    const replacementMount = findWorkspaceMountByName(orderedMounts, normalizedReplacement);
     if (
         normalizedRequested
         && normalizedRemoved
@@ -6370,7 +6437,7 @@ function resolveUpdatedDefaultMountName({
     ) {
         return normalizedReplacement;
     }
-    const firstLocalMount = nextMounts.find(mount => isLocalWorkspaceMount(mount)) || null;
+    const firstLocalMount = orderedMounts.find(mount => isLocalWorkspaceMount(mount)) || null;
     if (firstLocalMount) {
         return String(firstLocalMount.mount_name || '').trim() || 'default';
     }
@@ -6390,22 +6457,23 @@ function isLocalWorkspaceMount(mount) {
 }
 
 async function applyUpdatedWorkspaceRecord(updatedWorkspace, preferredMountName = '') {
-    const workspaceId = String(updatedWorkspace?.workspace_id || '').trim();
+    const orderedWorkspace = normalizeWorkspaceRecordMountOrder(updatedWorkspace);
+    const workspaceId = String(orderedWorkspace?.workspace_id || '').trim();
     if (!workspaceId) {
         return;
     }
-    currentWorkspace = updatedWorkspace;
+    currentWorkspace = orderedWorkspace;
     currentSnapshotWorkspaceId = workspaceId;
     state.currentWorkspaceId = workspaceId;
     workspaceViewCache.delete(workspaceId);
     resetProjectViewState(workspaceId);
-    currentMountName = String(preferredMountName || updatedWorkspace.default_mount_name || '').trim() || resolveWorkspaceInitialMountName(updatedWorkspace);
+    currentMountName = String(preferredMountName || orderedWorkspace.default_mount_name || '').trim() || resolveWorkspaceInitialMountName(orderedWorkspace);
     currentDiffState = {
         ...createInitialDiffState(),
         status: 'loading',
         mountName: currentMountName,
     };
-    renderLoadingState(updatedWorkspace);
+    renderLoadingState(orderedWorkspace);
     const loadToken = ++currentLoadToken;
     void loadWorkspaceSnapshot(workspaceId, loadToken);
     void loadWorkspaceDiffs(workspaceId, loadToken);

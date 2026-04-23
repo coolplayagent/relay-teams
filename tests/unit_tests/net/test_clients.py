@@ -1,8 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import httpx
+from collections.abc import Mapping
+from typing import cast
 
+import httpx
+import pytest
+
+import relay_teams.net.clients as clients_module
+from relay_teams.env.proxy_env import ProxyEnvConfig
 from relay_teams.net.clients import create_sync_http_client
 
 _SSL_VERIFY_DISABLED = 0
@@ -53,3 +59,44 @@ def test_create_sync_http_client_disables_ssl_verification_when_configured() -> 
         )
 
     assert verify_mode == _SSL_VERIFY_DISABLED
+
+
+def test_create_runtime_sync_http_client_uses_hydrated_proxy_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy_config = ProxyEnvConfig(https_proxy="http://user:secret@proxy.example:8443")
+    captured_proxy_configs: list[ProxyEnvConfig | None] = []
+
+    def fake_create_sync_http_client(
+        *,
+        merged_env: Mapping[str, str] | None = None,
+        proxy_config: ProxyEnvConfig | None = None,
+        ssl_verify: bool | None = None,
+        timeout_seconds: float = 0.0,
+        connect_timeout_seconds: float = 0.0,
+        follow_redirects: bool = False,
+    ) -> httpx.Client:
+        _ = (
+            merged_env,
+            ssl_verify,
+            timeout_seconds,
+            connect_timeout_seconds,
+            follow_redirects,
+        )
+        captured_proxy_configs.append(proxy_config)
+        return cast(httpx.Client, object())
+
+    monkeypatch.setattr(
+        clients_module,
+        "load_proxy_env_config",
+        lambda: proxy_config,
+    )
+    monkeypatch.setattr(
+        clients_module,
+        "create_sync_http_client",
+        fake_create_sync_http_client,
+    )
+
+    _ = clients_module.create_runtime_sync_http_client()
+
+    assert captured_proxy_configs == [proxy_config]

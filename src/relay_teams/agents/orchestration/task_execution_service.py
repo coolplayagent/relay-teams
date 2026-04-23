@@ -6,7 +6,7 @@ import json
 import logging
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai.messages import ModelRequest, UserContent, UserPromptPart
@@ -49,6 +49,7 @@ from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
@@ -64,37 +65,27 @@ from relay_teams.sessions.runs.assistant_errors import (
     build_assistant_error_message,
     build_assistant_error_response,
 )
+from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from relay_teams.tools.registry.registry import ToolResolutionContext
+from relay_teams.hooks import HookEventName, HookService, TaskCompletedInput
+from relay_teams.skills.skill_models import SkillInstructionEntry
+from relay_teams.skills.skill_registry import SkillRegistry
+from relay_teams.skills.skill_routing_service import SkillRuntimeService
+from relay_teams.tools.registry.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.registry.runtime_activation import (
     build_initial_active_tools,
     validate_activation_request,
 )
-
-if TYPE_CHECKING:
-    from relay_teams.skills.skill_registry import SkillRegistry
-    from relay_teams.skills.skill_models import SkillInstructionEntry
-    from relay_teams.skills.skill_routing_service import SkillRuntimeService
-    from relay_teams.tools.registry import ToolRegistry
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
 
 LOGGER = get_logger(__name__)
 ProviderUserPromptContent = str | tuple[UserContent, ...]
-
-
-class TaskExecutionResult(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    output: str
-    completion_reason: RunCompletionReason = RunCompletionReason.ASSISTANT_RESPONSE
-    error_code: str | None = None
-    error_message: str | None = None
 
 
 class TaskExecutionService(BaseModel):
@@ -108,6 +99,7 @@ class TaskExecutionService(BaseModel):
     message_repo: MessageRepository
     approval_ticket_repo: ApprovalTicketRepository
     run_runtime_repo: RunRuntimeRepository
+    run_event_hub: RunEventHub | None = None
     workspace_manager: WorkspaceManager
     prompt_builder: RuntimePromptBuilder
     provider_factory: Callable[[RoleDefinition, str | None], object]
@@ -121,6 +113,7 @@ class TaskExecutionService(BaseModel):
     runtime_role_resolver: RuntimeRoleResolver | None = None
     run_intent_repo: RunIntentRepository | None = None
     media_asset_service: MediaAssetService | None = None
+    hook_service: HookService | None = None
 
     async def execute(
         self,
@@ -324,6 +317,12 @@ class TaskExecutionService(BaseModel):
                     payload_json="{}",
                 )
             )
+            await self._execute_task_completed_hooks(
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+                output_text=result,
+            )
             self._record_memory_if_needed(
                 role_id=role_id,
                 workspace_id=workspace.ref.workspace_id,
@@ -506,6 +505,34 @@ class TaskExecutionService(BaseModel):
             return self.run_intent_repo.get(run_id).thinking
         except KeyError:
             return RunThinkingConfig()
+
+    async def _execute_task_completed_hooks(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        output_text: str,
+    ) -> None:
+        if self.hook_service is None or task.parent_task_id is None:
+            return
+        _ = await self.hook_service.execute(
+            event_input=TaskCompletedInput(
+                event_name=HookEventName.TASK_COMPLETED,
+                session_id=task.session_id,
+                run_id=task.trace_id,
+                trace_id=task.trace_id,
+                task_id=task.task_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                completed_task_id=task.task_id,
+                title=task.title or "",
+                objective=task.objective,
+                output_text=output_text,
+                completion_reason=TaskStatus.COMPLETED.value,
+            ),
+            run_event_hub=self.run_event_hub,
+        )
 
     def _complete_with_assistant_error(
         self,
@@ -724,8 +751,8 @@ class TaskExecutionService(BaseModel):
         role: RoleDefinition,
         task: TaskEnvelope | None = None,
     ) -> RuntimeToolsSnapshot:
-        skill_registry = cast("SkillRegistry", self.skill_registry)
-        tool_registry = cast("ToolRegistry", self.tool_registry)
+        skill_registry = cast(SkillRegistry, self.skill_registry)
+        tool_registry = cast(ToolRegistry, self.tool_registry)
         resolved_skills = skill_registry.resolve_known(
             role.skills,
             strict=False,
@@ -1041,7 +1068,7 @@ class TaskExecutionService(BaseModel):
                 (),
             )
         skill_runtime_service = cast(
-            "SkillRuntimeService",
+            SkillRuntimeService,
             self.skill_runtime_service,
         )
         prepared_prompt = skill_runtime_service.prepare_prompt(
@@ -1061,7 +1088,7 @@ class TaskExecutionService(BaseModel):
 
     def _to_prompt_skill_instructions(
         self,
-        entries: tuple["SkillInstructionEntry", ...],
+        entries: tuple[SkillInstructionEntry, ...],
     ) -> tuple[PromptSkillInstruction, ...]:
         return tuple(
             PromptSkillInstruction(name=entry.name, description=entry.description)

@@ -83,9 +83,10 @@ if TYPE_CHECKING:
     )
     from relay_teams.sessions.runs.todo_service import TodoService
     from relay_teams.skills.skill_registry import SkillRegistry
-    from relay_teams.gateway.im import ImToolService
+    from relay_teams.gateway.im.service import ImToolService
     from relay_teams.tools.registry import ToolRegistry
-    from relay_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
+    from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+    from relay_teams.tools.runtime.policy import ToolApprovalPolicy
     from relay_teams.tools.runtime.approval_ticket_repo import (
         ApprovalTicketRepository,
     )

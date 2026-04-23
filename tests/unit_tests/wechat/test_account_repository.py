@@ -7,7 +7,8 @@ import sqlite3
 import pytest
 from relay_teams.sessions.runs.run_models import RunThinkingConfig
 from relay_teams.sessions.session_models import SessionMode
-from relay_teams.gateway.wechat import WeChatAccountRecord, WeChatAccountRepository
+from relay_teams.gateway.wechat.account_repository import WeChatAccountRepository
+from relay_teams.gateway.wechat.models import WeChatAccountRecord
 
 
 def test_wechat_account_repository_round_trips_account_settings(

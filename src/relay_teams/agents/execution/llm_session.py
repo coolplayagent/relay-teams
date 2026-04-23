@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import replace
 from enum import StrEnum
 from json import dumps
-from typing import TYPE_CHECKING, Literal, Protocol, cast, runtime_checkable
+from typing import Literal, Protocol, cast, runtime_checkable
 
 from pydantic_ai._agent_graph import ModelRequestNode
 from pydantic_ai.exceptions import ModelAPIError
@@ -105,8 +105,9 @@ from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
 from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
-from relay_teams.agents.orchestration.task_orchestration_service import (
-    TaskOrchestrationService,
+from relay_teams.agents.orchestration.task_contracts import (
+    TaskExecutionServiceLike,
+    TaskOrchestrationServiceLike,
 )
 from relay_teams.agents.execution.coordination_agent_builder import (
     build_coordination_agent,
@@ -119,6 +120,7 @@ from relay_teams.agents.tasks.task_status_sanitizer import (
     sanitize_task_status_payload,
 )
 from relay_teams.computer import (
+    ComputerRuntime,
     ComputerActionDescriptor,
     build_computer_tool_payload,
     describe_builtin_tool,
@@ -137,11 +139,9 @@ from relay_teams.media import (
 )
 from relay_teams.monitors import MonitorService
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
-from relay_teams.tools.runtime import (
-    ToolApprovalManager,
-    ToolApprovalPolicy,
-    ToolDeps,
-)
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.context import ImToolServiceLike, ToolDeps
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.runtime.persisted_state import (
     PersistedToolCallState,
     ToolExecutionStatus,
@@ -156,6 +156,7 @@ from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.notifications import NotificationService
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.roles.memory_service import RoleMemoryService
+from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.workspace import (
@@ -166,16 +167,10 @@ from relay_teams.hooks import (
     HookDecisionType,
     HookEventName,
     HookService,
+    PostCompactInput,
+    PreCompactInput,
     UserPromptSubmitInput,
 )
-
-if TYPE_CHECKING:
-    from relay_teams.agents.orchestration.task_execution_service import (
-        TaskExecutionService,
-    )
-    from relay_teams.computer import ComputerRuntime
-    from relay_teams.roles.role_registry import RoleRegistry
-    from relay_teams.gateway.im import ImToolService
 
 LOGGER = get_logger(__name__)
 LLM_REQUEST_LIMIT = 500
@@ -323,7 +318,8 @@ class _AttemptRecoveryOutcome(BaseModel):
 
 class _AgentRunResult(Protocol):
     @property
-    def response(self) -> object: ...
+    def response(self) -> object:
+        raise NotImplementedError
 
     def new_messages(self) -> Sequence[ModelMessage]: ...
 
@@ -513,9 +509,9 @@ class AgentLlmSession:
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
         message_repo: MessageRepository,
-        role_registry: "RoleRegistry",
-        task_execution_service: "TaskExecutionService",
-        task_service: TaskOrchestrationService,
+        role_registry: RoleRegistry,
+        task_execution_service: TaskExecutionServiceLike,
+        task_service: TaskOrchestrationServiceLike,
         run_control_manager: RunControlManager,
         tool_approval_manager: ToolApprovalManager,
         user_question_manager: UserQuestionManager | None = None,
@@ -527,8 +523,8 @@ class AgentLlmSession:
         fallback_middleware: LlmFallbackMiddleware
         | DisabledLlmFallbackMiddleware
         | None = None,
-        im_tool_service: "ImToolService | None" = None,
-        computer_runtime: "ComputerRuntime | None" = None,
+        im_tool_service: ImToolServiceLike | None = None,
+        computer_runtime: ComputerRuntime | None = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
         hook_service: HookService | None = None,
     ) -> None:
@@ -3820,7 +3816,36 @@ class AgentLlmSession:
     ) -> list[ModelRequest | ModelResponse]:
         if self._conversation_compaction_service is None:
             return history
-        return await self._conversation_compaction_service.maybe_compact(
+        plan = self._conversation_compaction_service.plan_compaction(
+            history=history,
+            budget=budget,
+        )
+        if not plan.should_compact:
+            return history
+        hook_service = getattr(self, "_hook_service", None)
+        if hook_service is not None:
+            _ = await hook_service.execute(
+                event_input=PreCompactInput(
+                    event_name=HookEventName.PRE_COMPACT,
+                    session_id=request.session_id,
+                    run_id=request.run_id,
+                    trace_id=request.trace_id,
+                    task_id=request.task_id,
+                    instance_id=request.instance_id,
+                    role_id=request.role_id,
+                    run_kind=request.run_kind.value,
+                    conversation_id=conversation_id,
+                    message_count_before=len(history),
+                    estimated_tokens_before=estimated_tokens_before_microcompact or 0,
+                    estimated_tokens_after_microcompact=(
+                        estimated_tokens_after_microcompact or 0
+                    ),
+                    threshold_tokens=plan.threshold_tokens,
+                    target_tokens=plan.target_tokens,
+                ),
+                run_event_hub=self._run_event_hub,
+            )
+        compacted_result = await self._conversation_compaction_service.maybe_compact_with_result(
             session_id=request.session_id,
             role_id=request.role_id,
             conversation_id=conversation_id,
@@ -3829,7 +3854,31 @@ class AgentLlmSession:
             budget=budget,
             estimated_tokens_before_microcompact=estimated_tokens_before_microcompact,
             estimated_tokens_after_microcompact=estimated_tokens_after_microcompact,
+            plan=plan,
         )
+        compacted_history = list(compacted_result.messages)
+        if hook_service is not None and compacted_result.applied:
+            _ = await hook_service.execute(
+                event_input=PostCompactInput(
+                    event_name=HookEventName.POST_COMPACT,
+                    session_id=request.session_id,
+                    run_id=request.run_id,
+                    trace_id=request.trace_id,
+                    task_id=request.task_id,
+                    instance_id=request.instance_id,
+                    role_id=request.role_id,
+                    run_kind=request.run_kind.value,
+                    conversation_id=conversation_id,
+                    message_count_before=len(history),
+                    message_count_after=len(compacted_history),
+                    estimated_tokens_before=estimated_tokens_before_microcompact or 0,
+                    estimated_tokens_after=ConversationTokenEstimator().estimate_history_tokens(
+                        compacted_history
+                    ),
+                ),
+                run_event_hub=self._run_event_hub,
+            )
+        return compacted_history
 
     def _inject_compaction_summary(
         self,

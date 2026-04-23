@@ -4,21 +4,32 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
+from typing import FrozenSet, List, Optional, Tuple
 
 from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
-from relay_teams.automation import (
+from relay_teams.automation.automation_bound_session_queue_repository import (
     AutomationBoundSessionQueueRepository,
+)
+from relay_teams.automation.automation_bound_session_queue_service import (
     AutomationBoundSessionQueueService,
     AutomationBoundSessionQueueWorker,
+)
+from relay_teams.automation.automation_delivery_repository import (
     AutomationDeliveryRepository,
-    AutomationEventRepository,
+)
+from relay_teams.automation.automation_delivery_service import (
     AutomationDeliveryService,
     AutomationDeliveryWorker,
-    AutomationFeishuBindingService,
-    AutomationProjectRepository,
-    AutomationSchedulerService,
-    AutomationService,
 )
+from relay_teams.automation.automation_event_repository import (
+    AutomationEventRepository,
+)
+from relay_teams.automation.automation_repository import AutomationProjectRepository
+from relay_teams.automation.automation_service import AutomationService
+from relay_teams.automation.feishu_binding_service import (
+    AutomationFeishuBindingService,
+)
+from relay_teams.automation.scheduler_service import AutomationSchedulerService
 from relay_teams.builtin import (
     ensure_app_config_bootstrap,
     get_builtin_roles_dir,
@@ -26,8 +37,10 @@ from relay_teams.builtin import (
 )
 from relay_teams.computer import build_default_computer_runtime
 from relay_teams.agents.orchestration.meta_agent import MetaAgent
-from relay_teams.agents.orchestration import (
+from relay_teams.agents.orchestration.settings_config_manager import (
     OrchestrationSettingsConfigManager,
+)
+from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
 from relay_teams.agents.orchestration.coordinator import CoordinatorGraph
@@ -48,25 +61,25 @@ from relay_teams.external_agents import (
     ExternalAgentSessionRepository,
 )
 from relay_teams.external_agents.provider import ExternalAcpSessionManager
-from relay_teams.gateway.feishu import (
-    FeishuAccountRepository,
-    FeishuClient,
-    FeishuGatewayService,
-    FeishuInboundRuntime,
+from relay_teams.gateway.feishu.account_repository import FeishuAccountRepository
+from relay_teams.gateway.feishu.client import FeishuClient
+from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
+from relay_teams.gateway.feishu.inbound_runtime import FeishuInboundRuntime
+from relay_teams.gateway.feishu.message_pool_repository import (
     FeishuMessagePoolRepository,
-    FeishuMessagePoolService,
-    FeishuNotificationDispatcher,
-    FeishuSubscriptionService,
-    FeishuTriggerHandler,
 )
+from relay_teams.gateway.feishu.message_pool_service import FeishuMessagePoolService
+from relay_teams.gateway.feishu.notification_delivery import (
+    FeishuNotificationDispatcher,
+)
+from relay_teams.gateway.feishu.subscription_service import FeishuSubscriptionService
+from relay_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
 from relay_teams.gateway.feishu.notification_delivery import (
     CompositeTerminalNotificationSuppressor,
 )
-from relay_teams.gateway.im import (
-    ImSessionCommandService,
-    ImToolContextResolver,
-    ImToolService,
-)
+from relay_teams.gateway.im.command_service import ImSessionCommandService
+from relay_teams.gateway.im.context import ImToolContextResolver
+from relay_teams.gateway.im.service import ImToolService
 from relay_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
 from relay_teams.gateway.session_ingress_service import GatewaySessionIngressService
@@ -105,10 +118,17 @@ from relay_teams.providers.model_fallback_config_manager import (
 )
 from relay_teams.providers.model_fallback import LlmFallbackMiddleware
 from relay_teams.net.llm_client import clear_llm_http_client_cache
+from relay_teams.net.clawhub_connectivity import ClawHubConnectivityProbeService
+from relay_teams.net.github_connectivity import (
+    GitHubConnectivityProbeService,
+    GitHubWebhookConnectivityProbeService,
+)
+from relay_teams.net.web_connectivity import WebConnectivityProbeService
 from relay_teams.providers.provider_factory import (
     apply_default_model_profile_override,
     create_provider_factory,
     resolve_model_profile_config,
+    resolve_model_profile_name,
 )
 from relay_teams.agents.orchestration.task_execution_service_factory import (
     create_task_execution_service,
@@ -129,11 +149,13 @@ from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig, load_runtime_config
-from relay_teams.sessions import (
+from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
-    SessionHistoryMarkerRepository,
-    SessionService,
 )
+from relay_teams.sessions.session_history_marker_repository import (
+    SessionHistoryMarkerRepository,
+)
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.skills.skill_registry import SkillRegistry
@@ -164,15 +186,10 @@ from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
-from relay_teams.tools.registry import (
-    ToolRegistry,
-    ToolResolutionContext,
-    build_default_registry,
-)
-from relay_teams.tools.runtime import (
-    ToolApprovalManager,
-    ToolApprovalPolicy,
-)
+from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
+from relay_teams.tools.registry.defaults import build_default_registry
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
 )
@@ -183,16 +200,18 @@ from relay_teams.triggers import (
     TriggerRepository,
     get_github_trigger_secret_store,
 )
-from relay_teams.gateway.wechat import (
-    WeChatAccountRepository,
-    WeChatClient,
-    WeChatGatewayService,
+from relay_teams.gateway.wechat.account_repository import WeChatAccountRepository
+from relay_teams.gateway.wechat.client import WeChatClient
+from relay_teams.gateway.wechat.inbound_queue_repository import (
     WeChatInboundQueueRepository,
-    get_wechat_secret_store,
 )
+from relay_teams.gateway.wechat.secret_store import get_wechat_secret_store
+from relay_teams.gateway.wechat.service import WeChatGatewayService
 from relay_teams.hooks import HookLoader, HookRuntimeState, HookService
+from relay_teams.hooks.executors.agent_executor import AgentHookExecutor
 from relay_teams.hooks.executors.command_executor import CommandHookExecutor
 from relay_teams.hooks.executors.http_executor import HttpHookExecutor
+from relay_teams.hooks.executors.prompt_executor import PromptHookExecutor
 from relay_teams.workspace import (
     SshProfileRepository,
     SshProfileService,
@@ -210,11 +229,12 @@ class ServerContainer:
         self,
         *,
         config_dir: Path,
-        roles_dir: Path | None = None,
-        db_path: Path | None = None,
+        roles_dir: Optional[Path] = None,
+        db_path: Optional[Path] = None,
         manage_runtime_state: bool = True,
-        session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
-        | None = None,
+        session_model_profile_lookup: Optional[
+            Callable[[str], Optional[ModelEndpointConfig]]
+        ] = None,
     ) -> None:
         runtime = load_runtime_config(
             config_dir=config_dir,
@@ -225,6 +245,7 @@ class ServerContainer:
         ensure_app_config_bootstrap(app_config_dir)
         self.config_dir: Path = app_config_dir
         self.runtime: RuntimeConfig = runtime
+        self._project_start_dir = Path.cwd().resolve()
         self._session_model_profile_lookup = session_model_profile_lookup
 
         self.model_config_manager: ModelConfigManager = ModelConfigManager(
@@ -244,11 +265,20 @@ class ServerContainer:
             on_proxy_reloaded=self._on_proxy_reloaded,
         )
         self.hook_service = HookService(
-            loader=HookLoader(app_config_dir=app_config_dir, project_root=Path.cwd()),
+            loader=HookLoader(
+                app_config_dir=app_config_dir,
+                project_root=Path.cwd(),
+                get_role_registry=lambda: self.role_registry,
+                get_skill_registry=lambda: self.skill_registry,
+            ),
             runtime_state=HookRuntimeState(),
             command_executor=CommandHookExecutor(),
             http_executor=HttpHookExecutor(
                 get_proxy_config=self.proxy_config_service.get_proxy_config
+            ),
+            prompt_executor=PromptHookExecutor(
+                resolve_model_config=self._resolve_hook_model_config,
+                retry_config=runtime.llm_retry,
             ),
         )
         self.web_config_service: WebConfigService = WebConfigService(
@@ -256,11 +286,27 @@ class ServerContainer:
         )
         self.github_config_service: GitHubConfigService = GitHubConfigService(
             config_dir=app_config_dir,
-            get_proxy_config=self.proxy_config_service.get_proxy_config,
         )
         self.localhost_run_tunnel_service = LocalhostRunTunnelService()
         self.clawhub_config_service: ClawHubConfigService = ClawHubConfigService(
             config_dir=app_config_dir
+        )
+        self.web_connectivity_probe_service = WebConnectivityProbeService(
+            get_proxy_config=self.proxy_config_service.get_proxy_config,
+        )
+        self.github_connectivity_probe_service = GitHubConnectivityProbeService(
+            get_github_config=self.github_config_service.get_github_config,
+            get_proxy_config=self.proxy_config_service.get_proxy_config,
+        )
+        self.github_webhook_connectivity_probe_service = (
+            GitHubWebhookConnectivityProbeService(
+                get_github_config=self.github_config_service.get_github_config,
+                get_proxy_config=self.proxy_config_service.get_proxy_config,
+            )
+        )
+        self.clawhub_connectivity_probe_service = ClawHubConnectivityProbeService(
+            config_dir=app_config_dir,
+            get_clawhub_config=self.clawhub_config_service.get_clawhub_config,
         )
         self.ui_language_settings_service = UiLanguageSettingsService(
             config_dir=app_config_dir
@@ -281,7 +327,8 @@ class ServerContainer:
         self.mcp_registry: McpRegistry = self.mcp_config_manager.load_registry()
         self.mcp_service: McpService = McpService(registry=self.mcp_registry)
         self.skill_registry: SkillRegistry = SkillRegistry.from_config_dirs(
-            app_config_dir=app_config_dir
+            app_config_dir=app_config_dir,
+            project_start_dir=self._project_start_dir,
         )
         self.role_registry = self._sanitize_role_registry(
             RoleLoader().load_builtin_and_app(
@@ -464,6 +511,13 @@ class ServerContainer:
             background_task_manager=self.background_task_manager,
             repository=self.background_task_repository,
             run_event_hub=self.run_event_hub,
+            hook_service=self.hook_service,
+        )
+        self.hook_service.set_agent_executor(
+            AgentHookExecutor(
+                background_task_service=self.background_task_service,
+                session_repo=self.session_repo,
+            )
         )
         self.todo_service = TodoService(
             repository=self.todo_repository,
@@ -572,7 +626,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
         )
 
-        self._provider_factory: Callable[[RoleDefinition, str | None], LLMProvider]
+        self._provider_factory: Callable[[RoleDefinition, Optional[str]], LLMProvider]
         self.task_execution_service: TaskExecutionService
         self.task_service: TaskOrchestrationService
         self._build_runtime_services()
@@ -603,6 +657,7 @@ class ServerContainer:
             task_execution_service=self.task_execution_service,
             run_runtime_repo=self.run_runtime_repo,
             run_control_manager=self.run_control_manager,
+            hook_service=self.hook_service,
             session_repo=self.session_repo,
             gate_manager=self.gate_manager,
             run_event_hub=self.run_event_hub,
@@ -853,6 +908,7 @@ class ServerContainer:
         self.skills_config_reload_service: SkillsConfigReloadService = (
             SkillsConfigReloadService(
                 config_dir=app_config_dir,
+                project_start_dir=self._project_start_dir,
                 role_registry=self.role_registry,
                 on_skill_reloaded=self._on_skill_reloaded,
             )
@@ -919,6 +975,7 @@ class ServerContainer:
             message_repo=self.message_repo,
             approval_ticket_repo=self.approval_ticket_repo,
             run_runtime_repo=self.run_runtime_repo,
+            run_event_hub=self.run_event_hub,
             run_intent_repo=self.run_intent_repo,
             workspace_manager=self.workspace_manager,
             media_asset_service=self.media_asset_service,
@@ -933,6 +990,7 @@ class ServerContainer:
             run_control_manager=self.run_control_manager,
             role_memory_service=self.role_memory_service,
             runtime_role_resolver=self.runtime_role_resolver,
+            hook_service=self.hook_service,
         )
         self.task_service = TaskOrchestrationService(
             task_repo=self.task_repo,
@@ -942,27 +1000,49 @@ class ServerContainer:
             message_repo=self.message_repo,
             session_repo=self.session_repo,
             runtime_role_resolver=self.runtime_role_resolver,
+            hook_service=self.hook_service,
+            run_event_hub=self.run_event_hub,
         )
 
-    def _resolve_reflection_model_config(self) -> ModelEndpointConfig | None:
+    def _resolve_reflection_model_config(self) -> Optional[ModelEndpointConfig]:
         if self.runtime.default_model_profile is not None:
             return self.runtime.llm_profiles.get(self.runtime.default_model_profile)
         for profile in self.runtime.llm_profiles.values():
             return profile
         return None
 
-    def _resolve_reflection_model_profile_name(self) -> str | None:
+    def _resolve_reflection_model_profile_name(self) -> Optional[str]:
         if self.runtime.default_model_profile is not None:
             return self.runtime.default_model_profile
         for profile_name in self.runtime.llm_profiles.keys():
             return profile_name
         return None
 
+    def _resolve_hook_model_config(
+        self,
+        model_profile: Optional[str],
+    ) -> Tuple[Optional[ModelEndpointConfig], Optional[str]]:
+        profile_name = (
+            model_profile.strip()
+            if model_profile is not None and model_profile.strip()
+            else "default"
+        )
+        return (
+            resolve_model_profile_config(
+                runtime=self.runtime,
+                profile_name=profile_name,
+            ),
+            resolve_model_profile_name(
+                runtime=self.runtime,
+                profile_name=profile_name,
+            ),
+        )
+
     def _resolve_external_agent_model_config(
         self,
         role: RoleDefinition,
         request: LLMRequest,
-    ) -> ModelEndpointConfig | None:
+    ) -> Optional[ModelEndpointConfig]:
         runtime_to_use = self.runtime
         if (
             self._session_model_profile_lookup is not None
@@ -980,7 +1060,7 @@ class ServerContainer:
 
     def _build_subagent_reflection_service(
         self,
-    ) -> SubagentReflectionService | None:
+    ) -> Optional[SubagentReflectionService]:
         reflection_config = self._resolve_reflection_model_config()
         if reflection_config is None:
             return None
@@ -1049,6 +1129,11 @@ class ServerContainer:
             )
         return sanitized_registry
 
+    def replace_mcp_registry(self, mcp_registry: McpRegistry) -> None:
+        self.mcp_registry = mcp_registry
+        self.mcp_service.replace_registry(mcp_registry)
+        self._refresh_coordinator_runtime()
+
     def _refresh_coordinator_runtime(self) -> None:
         self._build_runtime_services()
         self.meta_agent.coordinator.role_registry = self.role_registry
@@ -1092,6 +1177,7 @@ class ServerContainer:
         )
         self.skills_config_reload_service = SkillsConfigReloadService(
             config_dir=self.runtime.paths.config_dir,
+            project_start_dir=self._project_start_dir,
             role_registry=self.role_registry,
             on_skill_reloaded=self._on_skill_reloaded,
         )
@@ -1103,9 +1189,7 @@ class ServerContainer:
         self._refresh_runtime_dependents()
 
     def _on_mcp_reloaded(self, mcp_registry: McpRegistry) -> None:
-        self.mcp_registry = mcp_registry
-        self.mcp_service.replace_registry(mcp_registry)
-        self._refresh_coordinator_runtime()
+        self.replace_mcp_registry(mcp_registry)
 
     def _reload_skills_config(self) -> None:
         self.skills_config_reload_service.reload_skills_config()
@@ -1143,7 +1227,7 @@ class ServerContainer:
                 exc,
             )
 
-    def _on_app_environment_changed(self, changed_keys: frozenset[str]) -> None:
+    def _on_app_environment_changed(self, changed_keys: FrozenSet[str]) -> None:
         self.model_config_service.reload_model_config()
         proxy_related_keys = {
             "HTTP_PROXY",
@@ -1169,7 +1253,7 @@ class ServerContainer:
 
     def _interrupt_transient_background_tasks(self) -> int:
         interrupted = self.background_task_repository.list_interruptible()
-        interrupted_ids: list[str] = []
+        interrupted_ids: List[str] = []
         for record in interrupted:
             if record.pid is None:
                 LOGGER.warning(

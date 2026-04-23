@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from relay_teams.skills.skill_models import SkillScope
+from relay_teams.skills.skill_models import SkillSource
 from relay_teams.validation import RequiredIdentifierStr
 
 ClawHubFileEncoding = Literal["utf-8", "base64"]
@@ -35,7 +35,7 @@ class ClawHubSkillSummary(BaseModel):
     runtime_name: str | None = None
     description: str = ""
     ref: str | None = None
-    scope: SkillScope = SkillScope.APP
+    source: SkillSource = SkillSource.USER_RELAY_TEAMS
     directory: str
     manifest_path: str
     valid: bool = True

@@ -21,7 +21,7 @@ from relay_teams.retrieval import (
 )
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.sessions.runs.run_models import RuntimePromptConversationContext
-from relay_teams.skills.skill_models import Skill, SkillInstructionEntry, SkillScope
+from relay_teams.skills.skill_models import Skill, SkillInstructionEntry
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_models import (
     SkillPromptResult,
@@ -72,7 +72,7 @@ class SkillIndexService:
     ) -> tuple[RetrievalDocument, ...]:
         return tuple(
             _build_skill_document(skill=skill, scope_config=self._scope_config)
-            for skill in _preferred_skills(skill_registry.list_skill_definitions())
+            for skill in skill_registry.list_skill_definitions()
         )
 
 
@@ -370,26 +370,23 @@ class SkillRuntimeService:
         skill_names: tuple[str, ...],
         consumer: str,
     ) -> tuple[Skill, ...]:
-        resolved_refs = self._skill_registry.resolve_known(
+        resolved_names = self._skill_registry.resolve_known(
             skill_names,
             strict=False,
             consumer=consumer,
         )
-        ordered_names: list[str] = []
-        preferred_by_name: dict[str, Skill] = {}
-        for ref in resolved_refs:
-            skill = self._skill_registry.get_skill_definition(ref)
+        resolved_skills: list[Skill] = []
+        seen_names: set[str] = set()
+        for name in resolved_names:
+            skill = self._skill_registry.get_skill_definition(name)
             if skill is None:
                 continue
-            name = skill.metadata.name
-            if name not in preferred_by_name:
-                ordered_names.append(name)
-                preferred_by_name[name] = skill
+            normalized_name = skill.metadata.name
+            if normalized_name in seen_names:
                 continue
-            current = preferred_by_name[name]
-            if _skill_display_sort_key(skill) < _skill_display_sort_key(current):
-                preferred_by_name[name] = skill
-        return tuple(preferred_by_name[name] for name in ordered_names)
+            seen_names.add(normalized_name)
+            resolved_skills.append(skill)
+        return tuple(resolved_skills)
 
     def _instruction_entries_for_names(
         self,
@@ -486,7 +483,7 @@ def _build_skill_keywords(skill: Skill) -> tuple[str, ...]:
     raw_values: list[str] = [
         skill.metadata.name,
         skill.metadata.description,
-        skill.scope.value,
+        skill.source.value,
         *(script.name for script in skill.metadata.scripts.values()),
         *(resource.name for resource in skill.metadata.resources.values()),
     ]
@@ -550,17 +547,9 @@ def _select_visible_skills(
     return tuple(visible_skills)
 
 
-def _preferred_skills(skills: Sequence[Skill]) -> tuple[Skill, ...]:
-    preferred_by_name: dict[str, Skill] = {}
-    for skill in sorted(skills, key=_skill_display_sort_key):
-        preferred_by_name.setdefault(skill.metadata.name, skill)
-    return tuple(preferred_by_name[name] for name in sorted(preferred_by_name))
-
-
 def _skill_map_by_name(skills: Sequence[Skill]) -> dict[str, Skill]:
     return {skill.metadata.name: skill for skill in skills}
 
 
-def _skill_display_sort_key(skill: Skill) -> tuple[str, int, str]:
-    scope_priority = 0 if skill.scope == SkillScope.APP else 1
-    return (skill.metadata.name, scope_priority, skill.ref)
+def _skill_display_sort_key(skill: Skill) -> tuple[str]:
+    return (skill.metadata.name,)

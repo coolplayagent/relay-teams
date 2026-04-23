@@ -42,6 +42,8 @@ from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.agents.execution.system_prompts import PromptSkillInstruction
 from relay_teams.agents.execution.conversation_compaction import (
     build_conversation_compaction_budget,
+    ConversationCompactionPlan,
+    ConversationCompactionResult,
     ConversationCompactionService,
 )
 from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
@@ -78,7 +80,8 @@ from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.tools.registry import ToolRegistry
-from relay_teams.tools.runtime import ToolApprovalManager, ToolApprovalPolicy
+from relay_teams.tools.runtime.approval_state import ToolApprovalManager
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.workspace import WorkspaceManager, build_conversation_id
 
 
@@ -136,29 +139,36 @@ class _FakeConversationCompactionService:
     def __init__(self, prompt_sections: list[str]) -> None:
         self._prompt_sections = list(prompt_sections)
         self._build_calls = 0
+        self._plan = ConversationCompactionPlan(should_compact=False)
 
-    async def maybe_compact(
+    def plan_compaction(
         self,
         *,
-        session_id: str,
-        role_id: str,
-        conversation_id: str,
         history: list[ModelRequest | ModelResponse],
-        source_history: list[ModelRequest | ModelResponse] | None = None,
-        budget: object | None = None,
-        estimated_tokens_before_microcompact: int | None = None,
-        estimated_tokens_after_microcompact: int | None = None,
-    ) -> list[ModelRequest | ModelResponse]:
+        budget: object,
+    ) -> ConversationCompactionPlan:
+        _ = (history, budget)
+        return self._plan
+
+    async def maybe_compact_with_result(
+        self, **kwargs: object
+    ) -> ConversationCompactionResult:
+        history = kwargs["history"]
+        assert isinstance(history, list)
         _ = (
-            session_id,
-            role_id,
-            conversation_id,
-            budget,
-            source_history,
-            estimated_tokens_before_microcompact,
-            estimated_tokens_after_microcompact,
+            kwargs["session_id"],
+            kwargs["role_id"],
+            kwargs["conversation_id"],
+            kwargs.get("budget"),
+            kwargs.get("source_history"),
+            kwargs.get("estimated_tokens_before_microcompact"),
+            kwargs.get("estimated_tokens_after_microcompact"),
         )
-        return list(history)
+        return ConversationCompactionResult(
+            messages=tuple(history),
+            applied=False,
+            plan=self._plan,
+        )
 
     def build_prompt_section(
         self,

@@ -6,6 +6,8 @@ from pathlib import Path
 import yaml
 
 from relay_teams.computer import ExecutionSurface
+from relay_teams.hooks.hook_models import HooksConfig
+from relay_teams.logger import get_logger
 from relay_teams.roles.default_role_tools import (
     COORDINATOR_IDENTIFIERS,
     COORDINATOR_REQUIRED_TOOLS,
@@ -16,6 +18,7 @@ from relay_teams.roles.role_models import RoleConfigSource, RoleDefinition, Role
 
 MAIN_AGENT_ROLE_ID = "MainAgent"
 MAIN_AGENT_IDENTIFIERS = frozenset(("mainagent", "main agent", "main_agent"))
+LOGGER = get_logger(__name__)
 
 
 def is_coordinator_role_definition(role: RoleDefinition) -> bool:
@@ -301,6 +304,11 @@ class RoleLoader:
             ),
             mode=RoleMode(str(parsed.get("mode", RoleMode.PRIMARY.value))),
             memory_profile=memory_profile,
+            hooks=_parse_frontmatter_hooks(
+                parsed.get("hooks"),
+                source_name=source_name,
+            ),
+            source_path=Path(source_name) if source_name else None,
             system_prompt=body.strip(),
         )
 
@@ -349,3 +357,21 @@ def _role_available_in_normal_mode(role: RoleDefinition) -> bool:
 
 def _role_available_as_subagent(role: RoleDefinition) -> bool:
     return role.mode in {RoleMode.SUBAGENT, RoleMode.ALL}
+
+
+def _parse_frontmatter_hooks(
+    value: object,
+    *,
+    source_name: str,
+) -> HooksConfig:
+    try:
+        if isinstance(value, dict) and "hooks" in value:
+            return HooksConfig.model_validate(value)
+        if isinstance(value, dict):
+            return HooksConfig.model_validate({"hooks": value})
+    except Exception as exc:
+        LOGGER.warning(
+            "Ignoring invalid role frontmatter hooks",
+            extra={"source_name": source_name, "error": str(exc)},
+        )
+    return HooksConfig()

@@ -19,12 +19,12 @@ from relay_teams.paths import (
     unlink_path,
 )
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.runtime import (
+from relay_teams.tools.runtime.context import (
     ToolContext,
     ToolDeps,
-    ToolResultProjection,
-    execute_tool_call,
 )
+from relay_teams.tools.runtime.execution import execute_tool_call
+from relay_teams.tools.runtime.models import ToolResultProjection
 
 
 def generate_diff(old_path: str, old_content: str, new_content: str) -> str:

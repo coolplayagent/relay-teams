@@ -7,7 +7,7 @@ import pytest
 
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.models import AgentRuntimeRecord
-from relay_teams.agents.orchestration import (
+from relay_teams.agents.orchestration.role_communication import (
     FeedbackLoopSpec,
     RoleAgentBinding,
     RoleCommunicationExchange,

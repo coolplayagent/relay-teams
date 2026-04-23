@@ -4,7 +4,7 @@
  */
 import {
   createLiveRound,
-} from "../components/rounds.js";
+} from "../components/rounds/timeline.js";
 import { refreshVisibleContextIndicators } from "../components/contextIndicators.js";
 import { clearAllStreamState } from "../components/messageRenderer.js";
 import {

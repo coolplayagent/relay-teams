@@ -41,7 +41,7 @@ There were two separate causes:
 
 The working runtime authorization was:
 
-- `app:skill-creator`
+- `skill-creator`
 
 not:
 
@@ -78,15 +78,20 @@ This is why a directory named `skill-creator-2/` was discovered by Agent Teams a
 
 ### Role authorization behavior
 
-Role skill authorization resolves against the discovered runtime name or canonical ref:
+Role skill authorization resolves against the discovered runtime name:
 
 - `src/relay_teams/skills/skill_registry.py:161`
 - `src/relay_teams/skills/skill_registry.py:172`
 - `src/relay_teams/skills/skill_registry.py:178`
 
-When app and builtin scopes may collide, canonical refs are the stable choice:
+When multiple sources define the same name, the later source wins in the
+effective registry:
 
-- `app:skill-creator`
+- `builtin`
+- `~/.relay-teams/skills`
+- `~/.agents/skills`
+- project `.relay-teams/skills`
+- project `.agents/skills`
 
 ---
 
@@ -116,18 +121,12 @@ The frontmatter `name` is the actual runtime identity used by Agent Teams.
 
 ### Rule 3: Bind roles to the runtime name, not the publish slug
 
-If the installed slug and runtime name differ, role config must use the runtime name or canonical ref.
-
-Preferred form:
-
-```text
-app:<skill_name_from_SKILL_md>
-```
+If the installed slug and runtime name differ, role config must use the runtime name from `SKILL.md`.
 
 Example:
 
 ```text
-app:skill-creator
+skill-creator
 ```
 
 ### Rule 4: Verify through the runtime registry, not only the installer
@@ -172,7 +171,7 @@ Ideal output:
 
 - installed slug
 - discovered runtime name
-- canonical runtime ref
+- effective runtime name
 - bindable role value
 - any ambiguity or scope conflict
 
@@ -193,8 +192,8 @@ A good `skills list` or install response would show:
 
 - source slug
 - discovered name
-- scope
-- canonical ref
+- source
+- effective runtime name
 - install path
 
 Example:
@@ -202,8 +201,8 @@ Example:
 ```text
 slug: skill-creator-2
 name: skill-creator
-scope: app
-ref: app:skill-creator
+source: user_relay_teams
+ref: skill-creator
 path: ~/.relay-teams/skills/skill-creator-2
 ```
 
@@ -266,7 +265,7 @@ This would make future capability upgrades much stronger because the operator ca
 
 1. add a native ClawHub install helper in Agent Teams
 2. add post-install skill discovery verification
-3. expose canonical bindable refs in skill listing and install output
+3. expose effective bindable skill names in skill listing and install output
 4. support install-and-bind in one operation
 5. show security and dependency warnings in one place
 
@@ -274,14 +273,14 @@ This would make future capability upgrades much stronger because the operator ca
 
 1. document that Agent Teams runtime app skills live under `~/.relay-teams/skills` by default
 2. document that ClawHub slug may differ from Agent Teams runtime skill name
-3. recommend canonical refs when binding app skills to roles
+3. recommend binding roles with the effective runtime skill name
 4. document the verification workflow after installation
 
 ### Testing
 
 1. add coverage for app skill discovery from the user config dir
 2. add coverage for slug-directory vs internal-name mismatch
-3. add coverage for role binding using canonical refs after install
+3. add coverage for role binding using runtime skill names after install
 4. add coverage for ambiguous app/builtin skill names in role config
 
 ---
@@ -293,7 +292,7 @@ When installing a new ClawHub skill for Agent Teams runtime use:
 1. install into `~/.relay-teams`
 2. inspect the installed `SKILL.md`
 3. read the frontmatter `name`
-4. bind the role using `app:<name>`
+4. bind the role using `<name>`
 5. reload or reinitialize runtime discovery if needed
 6. verify the skill registry can resolve it
 7. only then treat the upgrade as complete

@@ -7,7 +7,7 @@ from relay_teams.interfaces.server.deps import get_session_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.interfaces.server.write_models import DeleteRequest
 from relay_teams.roles import SystemRolesUnavailableError
-from relay_teams.sessions import SessionService
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.session_models import (
     SessionCreateMetadata,
     SessionMetadataPatch,

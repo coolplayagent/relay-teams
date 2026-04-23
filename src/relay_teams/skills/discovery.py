@@ -8,15 +8,15 @@ from threading import RLock
 import yaml
 
 from relay_teams.builtin import get_builtin_skills_dir
+from relay_teams.hooks.hook_models import HooksConfig
 from relay_teams.logger import get_logger
-from relay_teams.paths import get_app_config_dir
+from relay_teams.paths import get_app_config_dir, get_project_root_or_none
 from relay_teams.skills.skill_models import (
     Skill,
     SkillMetadata,
     SkillResource,
-    SkillScope,
     SkillScript,
-    build_skill_ref,
+    SkillSource,
 )
 from relay_teams.trace import trace_span
 
@@ -39,21 +39,27 @@ def get_user_skills_dir(user_home_dir: Path | None = None) -> Path:
     return get_app_skills_dir(user_home_dir=user_home_dir)
 
 
+def get_agents_skills_dir(user_home_dir: Path | None = None) -> Path:
+    app_config_dir = get_app_config_dir(user_home_dir=user_home_dir)
+    return app_config_dir.parent / ".agents" / "skills"
+
+
 def get_project_skills_dir(project_root: Path | None = None) -> Path:
-    _ = project_root
-    return get_app_skills_dir()
+    resolved_root = _resolve_start_dir(project_root)
+    return resolved_root / ".relay-teams" / "skills"
 
 
 class SkillsDirectory:
     def __init__(
         self,
-        base_dir: Path,
+        *,
+        sources: tuple[tuple[SkillSource, Path], ...],
         max_depth: int = 3,
-        fallback_dirs: tuple[Path, ...] = (),
     ) -> None:
-        self.base_dir = _resolve_dir(base_dir)
         self.max_depth = max_depth
-        self.fallback_dirs = tuple(_resolve_dir(item) for item in fallback_dirs)
+        self.sources = tuple(
+            (source, _resolve_dir(base_dir)) for source, base_dir in sources
+        )
         self._skills: dict[str, Skill] = {}
         self._lock = RLock()
 
@@ -65,18 +71,11 @@ class SkillsDirectory:
         builtin_skills_dir: Path | None = None,
         max_depth: int = 3,
     ) -> SkillsDirectory:
-        resolved_app_skills_dir = _resolve_dir(app_skills_dir)
-        resolved_app_skills_dir.mkdir(parents=True, exist_ok=True)
-        fallback_dirs = (
-            (_resolve_dir(builtin_skills_dir),)
-            if builtin_skills_dir is not None
-            else ()
-        )
-        return cls(
-            base_dir=resolved_app_skills_dir,
-            max_depth=max_depth,
-            fallback_dirs=fallback_dirs,
-        )
+        sources: list[tuple[SkillSource, Path]] = []
+        if builtin_skills_dir is not None:
+            sources.append((SkillSource.BUILTIN, _resolve_dir(builtin_skills_dir)))
+        sources.append((SkillSource.USER_RELAY_TEAMS, _resolve_dir(app_skills_dir)))
+        return cls(sources=tuple(sources), max_depth=max_depth)
 
     @classmethod
     def from_config_dirs(
@@ -84,10 +83,16 @@ class SkillsDirectory:
         *,
         app_config_dir: Path,
         max_depth: int = 3,
+        project_start_dir: Path | None = None,
     ) -> SkillsDirectory:
-        return cls.from_skill_dirs(
-            app_skills_dir=_resolve_dir(app_config_dir) / "skills",
-            builtin_skills_dir=get_builtin_skills_dir_path(),
+        resolved_app_config_dir = _resolve_dir(app_config_dir)
+        return cls(
+            sources=_build_default_sources(
+                builtin_skills_dir=get_builtin_skills_dir_path(),
+                relay_teams_skills_dir=resolved_app_config_dir / "skills",
+                agents_skills_dir=resolved_app_config_dir.parent / ".agents" / "skills",
+                project_start_dir=project_start_dir,
+            ),
             max_depth=max_depth,
         )
 
@@ -97,10 +102,15 @@ class SkillsDirectory:
         *,
         user_home_dir: Path | None = None,
         max_depth: int = 3,
+        start_dir: Path | None = None,
     ) -> SkillsDirectory:
-        return cls.from_skill_dirs(
-            app_skills_dir=get_app_skills_dir(user_home_dir=user_home_dir),
-            builtin_skills_dir=get_builtin_skills_dir_path(),
+        return cls(
+            sources=_build_default_sources(
+                builtin_skills_dir=get_builtin_skills_dir_path(),
+                relay_teams_skills_dir=get_app_skills_dir(user_home_dir=user_home_dir),
+                agents_skills_dir=get_agents_skills_dir(user_home_dir=user_home_dir),
+                project_start_dir=start_dir,
+            ),
             max_depth=max_depth,
         )
 
@@ -110,13 +120,15 @@ class SkillsDirectory:
             component="skills.discovery",
             operation="discover",
             attributes={
-                "base_dir": str(self.base_dir),
-                "fallback_dirs": [str(path) for path in self.fallback_dirs],
+                "sources": [
+                    {"source": source.value, "base_dir": str(path)}
+                    for source, path in self.sources
+                ],
                 "max_depth": self.max_depth,
             },
         ):
             discovered_skills: dict[str, Skill] = {}
-            for scope, base_dir in self._iter_sources():
+            for source, base_dir in self.sources:
                 if not base_dir.exists():
                     continue
                 for path in sorted(base_dir.rglob("SKILL.md")):
@@ -124,9 +136,20 @@ class SkillsDirectory:
                         rel = path.relative_to(base_dir)
                         if len(rel.parts) > self.max_depth + 1:
                             continue
-                        skill = self._load_skill(path=path, scope=scope)
-                        if skill is not None:
-                            discovered_skills[skill.ref] = skill
+                        skill = self._load_skill(path=path, source=source)
+                        if skill is None:
+                            continue
+                        existing_skill = discovered_skills.get(skill.metadata.name)
+                        if existing_skill is not None:
+                            logger.warning(
+                                "Overriding duplicate skill %s from %s (%s) with %s (%s)",
+                                skill.metadata.name,
+                                existing_skill.directory,
+                                existing_skill.source.value,
+                                skill.directory,
+                                skill.source.value,
+                            )
+                        discovered_skills[skill.metadata.name] = skill
                     except Exception as exc:
                         logger.warning("Failed to load skill at %s: %s", path, exc)
             with self._lock:
@@ -138,13 +161,7 @@ class SkillsDirectory:
 
     def get_skill(self, name: str) -> Skill | None:
         with self._lock:
-            return self._skills.get(name)
-
-    def _iter_sources(self) -> tuple[tuple[SkillScope, Path], ...]:
-        fallback_sources = tuple(
-            (SkillScope.BUILTIN, base_dir) for base_dir in self.fallback_dirs
-        )
-        return (*fallback_sources, (SkillScope.APP, self.base_dir))
+            return self._skills.get(name.strip())
 
     def _split_front_matter(self, content: str) -> tuple[str, str]:
         if not content.startswith("---"):
@@ -167,12 +184,12 @@ class SkillsDirectory:
         body = "".join(lines[end_index + 1 :])
         return front_matter, body
 
-    def _load_skill(self, *, path: Path, scope: SkillScope) -> Skill | None:
+    def _load_skill(self, *, path: Path, source: SkillSource) -> Skill | None:
         with trace_span(
             logger,
             component="skills.discovery",
             operation="load_skill",
-            attributes={"path": str(path), "scope": scope.value},
+            attributes={"path": str(path), "source": source.value},
         ):
             raw = path.read_text(encoding="utf-8")
             try:
@@ -252,13 +269,75 @@ class SkillsDirectory:
                 instructions=body.strip(),
                 resources=resources,
                 scripts=scripts,
+                hooks=_parse_frontmatter_hooks(data.get("hooks")),
             )
             return Skill(
-                ref=build_skill_ref(scope=scope, name=name),
+                ref=name,
                 metadata=metadata,
                 directory=path.parent,
-                scope=scope,
+                source=source,
             )
+
+
+def _build_default_sources(
+    *,
+    builtin_skills_dir: Path,
+    relay_teams_skills_dir: Path,
+    agents_skills_dir: Path,
+    project_start_dir: Path | None,
+) -> tuple[tuple[SkillSource, Path], ...]:
+    sources: list[tuple[SkillSource, Path]] = [
+        (SkillSource.BUILTIN, _resolve_dir(builtin_skills_dir)),
+        (SkillSource.USER_RELAY_TEAMS, _resolve_dir(relay_teams_skills_dir)),
+        (SkillSource.USER_AGENTS, _resolve_dir(agents_skills_dir)),
+    ]
+    if project_start_dir is not None:
+        sources.extend(_project_skill_sources(start_dir=project_start_dir))
+    return tuple(sources)
+
+
+def _project_skill_sources(*, start_dir: Path) -> tuple[tuple[SkillSource, Path], ...]:
+    resolved_start_dir = _resolve_start_dir(start_dir)
+    project_root = get_project_root_or_none(start_dir=resolved_start_dir)
+    stop_dir = resolved_start_dir if project_root is None else project_root
+    parent_dirs = _iter_parent_dirs(resolved_start_dir, stop_dir)
+    relay_teams_sources = [
+        (
+            SkillSource.PROJECT_RELAY_TEAMS,
+            current_dir / ".relay-teams" / "skills",
+        )
+        for current_dir in parent_dirs
+    ]
+    agents_sources = [
+        (
+            SkillSource.PROJECT_AGENTS,
+            current_dir / ".agents" / "skills",
+        )
+        for current_dir in parent_dirs
+    ]
+    sources = relay_teams_sources + agents_sources
+    return tuple((_source, _resolve_dir(path)) for _source, path in sources)
+
+
+def _iter_parent_dirs(start_dir: Path, stop_dir: Path) -> tuple[Path, ...]:
+    current_dir = _resolve_start_dir(start_dir)
+    resolved_stop_dir = _resolve_start_dir(stop_dir)
+    directories: list[Path] = []
+    while True:
+        directories.append(current_dir)
+        if current_dir == resolved_stop_dir or current_dir.parent == current_dir:
+            break
+        current_dir = current_dir.parent
+    return tuple(directories)
+
+
+def _resolve_start_dir(path: Path | None) -> Path:
+    if path is None:
+        return Path.cwd().resolve()
+    resolved = path.expanduser().resolve()
+    if resolved.is_file():
+        return resolved.parent
+    return resolved
 
 
 def _resolve_dir(path: Path) -> Path:
@@ -279,3 +358,11 @@ def _resolve_optional_path(base_dir: Path, value: object) -> Path | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return base_dir / value
+
+
+def _parse_frontmatter_hooks(value: object) -> HooksConfig:
+    if isinstance(value, dict) and "hooks" in value:
+        return HooksConfig.model_validate(value)
+    if isinstance(value, dict):
+        return HooksConfig.model_validate({"hooks": value})
+    return HooksConfig()

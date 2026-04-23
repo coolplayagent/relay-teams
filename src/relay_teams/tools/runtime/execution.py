@@ -54,7 +54,7 @@ from relay_teams.tools.registry.runtime_activation import (
     build_initial_active_tools,
     validate_activation_request,
 )
-from relay_teams.tools.runtime.hook_runtime_env import (
+from relay_teams.env.hook_runtime_env import (
     reset_tool_hook_runtime_env,
     set_tool_hook_runtime_env,
 )

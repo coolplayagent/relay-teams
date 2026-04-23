@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -12,12 +13,11 @@ from typing import IO, Callable, Iterator, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from relay_teams.logger import get_logger
 from relay_teams.sessions.runs.background_tasks.command_runtime import (
     kill_process_tree_by_pid,
 )
 
-LOGGER = get_logger(__name__)
+LOGGER = logging.getLogger("relay_teams.backend.env.localhost_run_tunnel_service")
 _LOCALHOST_RUN_PROVIDER = "localhost.run"
 _DEFAULT_LOCAL_HOST = "127.0.0.1"
 _DEFAULT_LOCAL_PORT = 8000
@@ -244,8 +244,8 @@ class LocalhostRunTunnelService:
         return self._wait_for_status(request.wait_timeout_ms)
 
     def stop(self) -> LocalhostRunTunnelStatus:
-        process: subprocess.Popen[str] | None
-        reader_thread: threading.Thread | None
+        process: subprocess.Popen[str] | None = None
+        reader_thread: threading.Thread | None = None
         with self._lock:
             self._refresh_process_state_locked()
             process = self._process

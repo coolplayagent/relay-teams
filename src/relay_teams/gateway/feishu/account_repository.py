@@ -10,6 +10,7 @@ from threading import RLock
 
 from pydantic import JsonValue, ValidationError
 
+from relay_teams.gateway.feishu.errors import FeishuAccountNameConflictError
 from relay_teams.gateway.feishu.models import (
     FEISHU_PLATFORM,
     FeishuGatewayAccountRecord,
@@ -24,10 +25,6 @@ from relay_teams.validation import (
 )
 
 LOGGER = get_logger(__name__)
-
-
-class FeishuAccountNameConflictError(ValueError):
-    pass
 
 
 class FeishuAccountRepository:

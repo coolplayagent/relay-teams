@@ -1,69 +1,20 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import Protocol, TypeVar, cast
+from relay_teams.validation.write_validation import (
+    normalize_optional_string,
+    normalize_optional_text_field,
+    reject_empty_mapping_patch,
+    require_cascade_delete,
+    require_force_delete,
+    require_non_empty_patch,
+)
 
-
-class _HasModelFieldsSet(Protocol):
-    @property
-    def model_fields_set(self) -> set[str]: ...
-
-
-ModelT = TypeVar("ModelT", bound=_HasModelFieldsSet)
-
-
-def require_non_empty_patch(
-    model: ModelT,
-    *,
-    message: str = "update must include at least one field",
-) -> ModelT:
-    if not model.model_fields_set:
-        raise ValueError(message)
-    return model
-
-
-def normalize_optional_text_field(
-    value: object,
-    *,
-    field_name: str,
-    empty_to_none: bool = False,
-) -> object:
-    if not isinstance(value, str):
-        return value
-    normalized = value.strip()
-    if normalized:
-        return normalized
-    if empty_to_none:
-        return None
-    raise ValueError(f"{field_name} must not be empty")
-
-
-def normalize_optional_string(
-    value: str | None,
-    *,
-    field_name: str,
-    empty_to_none: bool = False,
-) -> str | None:
-    return cast(
-        str | None,
-        normalize_optional_text_field(
-            value,
-            field_name=field_name,
-            empty_to_none=empty_to_none,
-        ),
-    )
-
-
-def reject_empty_mapping_patch(value: object, *, message: str) -> object:
-    if isinstance(value, dict) and not value:
-        raise ValueError(message)
-    return value
-
-
-def require_force_delete(force: bool, *, message: str) -> None:
-    if not force:
-        raise RuntimeError(message)
-
-
-def require_cascade_delete(cascade: bool, *, message: str) -> None:
-    if not cascade:
-        raise RuntimeError(message)
+__all__ = [
+    "normalize_optional_string",
+    "normalize_optional_text_field",
+    "reject_empty_mapping_patch",
+    "require_cascade_delete",
+    "require_force_delete",
+    "require_non_empty_patch",
+]

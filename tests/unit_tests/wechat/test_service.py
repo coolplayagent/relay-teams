@@ -17,7 +17,8 @@ from pydantic import JsonValue
 
 from relay_teams.gateway.gateway_models import GatewayChannelType, GatewaySessionRecord
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
-from relay_teams.gateway.im import ImSessionCommandService, ImToolService
+from relay_teams.gateway.im.command_service import ImSessionCommandService
+from relay_teams.gateway.im.service import ImToolService
 from relay_teams.gateway.wechat.account_repository import WeChatAccountRepository
 from relay_teams.gateway.wechat.client import WeChatClient
 from relay_teams.gateway.wechat.inbound_queue_repository import (
@@ -34,7 +35,7 @@ from relay_teams.gateway.wechat.models import (
 from relay_teams.gateway.wechat.secret_store import WeChatSecretStore
 from relay_teams.gateway.wechat.service import WeChatGatewayService
 from relay_teams.media import content_parts_from_text
-from relay_teams.sessions import SessionService
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.run_models import RunEvent, RunResult

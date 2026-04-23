@@ -138,7 +138,8 @@ def test_prompt_controls_toggle_mode_specific_fields_and_thinking_effort(
     temp_dir.mkdir()
 
     (temp_dir / "prompt.js").write_text(
-        source.replace("../components/rounds.js", "./mockRounds.mjs")
+        source.replace("../components/rounds/timeline.js", "./mockRounds.mjs")
+        .replace("../components/rounds.js", "./mockRounds.mjs")
         .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
         .replace("../core/api.js", "./mockApi.mjs")
@@ -539,7 +540,8 @@ def test_handle_send_strips_leading_role_mention_and_targets_run_role(
     temp_dir.mkdir()
 
     (temp_dir / "prompt.js").write_text(
-        source.replace("../components/rounds.js", "./mockRounds.mjs")
+        source.replace("../components/rounds/timeline.js", "./mockRounds.mjs")
+        .replace("../components/rounds.js", "./mockRounds.mjs")
         .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
         .replace("../core/api.js", "./mockApi.mjs")
@@ -856,7 +858,8 @@ def test_prompt_role_mentions_offer_autocomplete_and_insert_selection(
     temp_dir.mkdir()
 
     (temp_dir / "prompt.js").write_text(
-        source.replace("../components/rounds.js", "./mockRounds.mjs")
+        source.replace("../components/rounds/timeline.js", "./mockRounds.mjs")
+        .replace("../components/rounds.js", "./mockRounds.mjs")
         .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
         .replace("../core/api.js", "./mockApi.mjs")
@@ -1520,7 +1523,8 @@ def _write_multimodal_prompt_fixture(
     )
     temp_dir.mkdir()
     (temp_dir / "prompt.js").write_text(
-        source.replace("../components/rounds.js", "./mockRounds.mjs")
+        source.replace("../components/rounds/timeline.js", "./mockRounds.mjs")
+        .replace("../components/rounds.js", "./mockRounds.mjs")
         .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
         .replace("../core/api.js", "./mockApi.mjs")

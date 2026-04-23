@@ -9,8 +9,8 @@ if TYPE_CHECKING:
     from relay_teams.tools.registry.runtime_activation import (
         ActivationApplyResult,
         ActivationValidationResult,
-        build_initial_active_tools,
         apply_tool_activation,
+        build_initial_active_tools,
         validate_activation_request,
     )
     from relay_teams.tools.registry.registry import (

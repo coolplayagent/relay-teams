@@ -16,7 +16,7 @@ from relay_teams.roles import (
 )
 from relay_teams.roles.settings_service import RoleSettingsService
 from relay_teams.skills.skill_registry import SkillRegistry
-from relay_teams.tools.registry import build_default_registry
+from relay_teams.tools.registry.defaults import build_default_registry
 
 
 def test_save_role_document_renames_role_file_and_reloads_registry(
@@ -221,7 +221,7 @@ def test_get_role_document_canonicalizes_unique_skill_names(tmp_path: Path) -> N
 
     record = service.get_role_document("reviewer")
 
-    assert record.skills == ("app:time",)
+    assert record.skills == ("time",)
 
 
 def test_get_role_document_preserves_unknown_tool_names_without_aliases(
@@ -500,7 +500,7 @@ def test_validate_all_roles_rejects_unknown_capabilities_in_persisted_roles(
         raise AssertionError("Expected strict persisted role validation to fail")
 
 
-def test_validate_role_document_rejects_ambiguous_plain_skill_name(
+def test_validate_role_document_uses_user_override_for_duplicate_skill_name(
     tmp_path: Path,
 ) -> None:
     roles_dir = tmp_path / "roles"
@@ -530,24 +530,26 @@ def test_validate_role_document_rejects_ambiguous_plain_skill_name(
         on_roles_reloaded=lambda registry: None,
     )
 
-    with pytest.raises(ValueError, match="Ambiguous skills require canonical refs"):
-        service.validate_role_document(
-            RoleDocumentDraft(
-                role_id="writer",
-                name="Writer",
-                description="Drafts user-facing content.",
-                version="1.0.0",
-                tools=("orch_dispatch_task",),
-                mcp_servers=(),
-                skills=("time",),
-                model_profile="default",
-                memory_profile=default_memory_profile(),
-                system_prompt="Write clearly.",
-            )
+    result = service.validate_role_document(
+        RoleDocumentDraft(
+            role_id="writer",
+            name="Writer",
+            description="Drafts user-facing content.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            mcp_servers=(),
+            skills=("time",),
+            model_profile="default",
+            memory_profile=default_memory_profile(),
+            system_prompt="Write clearly.",
         )
+    )
+
+    assert result.valid is True
+    assert result.role.skills == ("time",)
 
 
-def test_validate_role_document_reloads_builtin_skills_once_for_unknown_builtin_refs(
+def test_validate_role_document_reloads_skills_once_for_unknown_skill(
     tmp_path: Path,
 ) -> None:
     roles_dir = tmp_path / "roles"
@@ -593,7 +595,7 @@ def test_validate_role_document_reloads_builtin_skills_once_for_unknown_builtin_
             version="1.0.0",
             tools=("orch_dispatch_task",),
             mcp_servers=(),
-            skills=("builtin:skill-installer",),
+            skills=("skill-installer",),
             model_profile="default",
             memory_profile=default_memory_profile(),
             system_prompt="Write clearly.",
@@ -601,11 +603,11 @@ def test_validate_role_document_reloads_builtin_skills_once_for_unknown_builtin_
     )
 
     assert result.valid is True
-    assert result.role.skills == ("builtin:skill-installer",)
+    assert result.role.skills == ("skill-installer",)
     assert len(reload_calls) == 1
 
 
-def test_save_role_document_reloads_builtin_skills_once_for_unknown_builtin_refs(
+def test_save_role_document_reloads_skills_once_for_unknown_skill(
     tmp_path: Path,
 ) -> None:
     roles_dir = tmp_path / "roles"
@@ -652,18 +654,18 @@ def test_save_role_document_reloads_builtin_skills_once_for_unknown_builtin_refs
             version="1.0.0",
             tools=("orch_dispatch_task",),
             mcp_servers=(),
-            skills=("builtin:skill-installer",),
+            skills=("skill-installer",),
             model_profile="default",
             memory_profile=default_memory_profile(),
             system_prompt="Write clearly.",
         ),
     )
 
-    assert saved.skills == ("builtin:skill-installer",)
+    assert saved.skills == ("skill-installer",)
     assert len(reload_calls) == 1
 
 
-def test_validate_role_document_reports_final_error_when_builtin_skill_reload_fails(
+def test_validate_role_document_reports_final_error_when_skill_reload_fails(
     tmp_path: Path,
 ) -> None:
     roles_dir = tmp_path / "roles"
@@ -689,7 +691,7 @@ def test_validate_role_document_reports_final_error_when_builtin_skill_reload_fa
 
     with pytest.raises(
         ValueError,
-        match="Unknown skills: \\['builtin:skill-installer'\\]",
+        match="Unknown skills: \\['skill-installer'\\]",
     ):
         service.validate_role_document(
             RoleDocumentDraft(
@@ -699,7 +701,7 @@ def test_validate_role_document_reports_final_error_when_builtin_skill_reload_fa
                 version="1.0.0",
                 tools=("orch_dispatch_task",),
                 mcp_servers=(),
-                skills=("builtin:skill-installer",),
+                skills=("skill-installer",),
                 model_profile="default",
                 memory_profile=default_memory_profile(),
                 system_prompt="Write clearly.",
@@ -709,7 +711,7 @@ def test_validate_role_document_reports_final_error_when_builtin_skill_reload_fa
     assert len(reload_calls) == 1
 
 
-def test_validate_role_document_does_not_reload_non_builtin_unknown_skills(
+def test_validate_role_document_reloads_and_reports_unknown_skill_when_still_missing(
     tmp_path: Path,
 ) -> None:
     roles_dir = tmp_path / "roles"
@@ -749,7 +751,7 @@ def test_validate_role_document_does_not_reload_non_builtin_unknown_skills(
             )
         )
 
-    assert reload_calls == []
+    assert reload_calls == [1]
 
 
 def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:

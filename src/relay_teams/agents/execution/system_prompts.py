@@ -495,7 +495,7 @@ def _get_github_cli_environment_status() -> tuple[bool, Path | None]:
     try:
         from relay_teams.env.github_config_service import GitHubConfigService
         from relay_teams.paths import get_app_config_dir
-        from relay_teams.tools.workspace_tools.github_cli import resolve_system_gh_path
+        from relay_teams.net.github_cli import resolve_system_gh_path
     except Exception:
         return False, None
 

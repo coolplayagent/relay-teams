@@ -11,7 +11,11 @@ from relay_teams.monitors import (
     MonitorSourceKind,
 )
 from relay_teams.tools._description_loader import load_tool_description
-from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool
+from relay_teams.tools.runtime.context import (
+    ToolContext,
+    ToolDeps,
+)
+from relay_teams.tools.runtime.execution import execute_tool
 from relay_teams.tools.workspace_tools.background_task_tool_support import (
     require_background_task_service,
 )

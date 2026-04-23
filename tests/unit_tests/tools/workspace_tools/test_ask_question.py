@@ -36,7 +36,11 @@ from relay_teams.sessions.runs.user_question_repository import (
     UserQuestionRepository,
     UserQuestionStatusConflictError,
 )
-from relay_teams.tools.runtime import ToolContext, ToolDeps, ToolResultProjection
+from relay_teams.tools.runtime.context import (
+    ToolContext,
+    ToolDeps,
+)
+from relay_teams.tools.runtime.models import ToolResultProjection
 from relay_teams.tools.task_tools.ask_question import register
 
 

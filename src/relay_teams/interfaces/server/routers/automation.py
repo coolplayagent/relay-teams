@@ -5,15 +5,15 @@ from typing import Annotated
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import JsonValue
 
-from relay_teams.automation import (
+from relay_teams.automation.automation_models import (
     AutomationFeishuBindingCandidate,
     AutomationProjectCreateInput,
-    AutomationProjectNameConflictError,
     AutomationProjectRecord,
     AutomationProjectStatus,
     AutomationProjectUpdateInput,
-    AutomationService,
 )
+from relay_teams.automation.automation_service import AutomationService
+from relay_teams.automation.errors import AutomationProjectNameConflictError
 from relay_teams.interfaces.server.deps import get_automation_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.interfaces.server.write_models import DeleteRequest

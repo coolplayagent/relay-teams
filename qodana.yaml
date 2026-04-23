@@ -1,0 +1,18 @@
+version: "1.0"
+linter: qodana-python-community
+failThreshold: 0
+profile:
+  name: qodana.recommended
+exclude:
+  - name: All
+    paths:
+      - .agent_teams
+      - .codex
+      - .pytest_cache
+      - .ruff_cache
+      - .tmp
+      - .venv
+      - docs
+      - frontend/dist
+      - openspec
+      - src/relay_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx

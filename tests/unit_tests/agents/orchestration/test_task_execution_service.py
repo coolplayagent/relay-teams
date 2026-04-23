@@ -72,6 +72,7 @@ from relay_teams.workspace import (
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.hooks import HookService
 
 
 class _CapturingProvider:
@@ -133,6 +134,20 @@ class _RecoverablePauseProvider:
                 total_attempts=3,
             )
         )
+
+
+class _CapturingHookService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, object | None]] = []
+
+    async def execute(
+        self,
+        *,
+        event_input: object,
+        run_event_hub: object | None,
+    ) -> object:
+        self.calls.append((event_input, run_event_hub))
+        return object()
 
 
 def _build_service(
@@ -395,6 +410,37 @@ async def test_execute_persists_objective_before_first_turn(
     assert runtime_tools["skill_tools"] == []
     assert runtime_tools["mcp_tools"] == []
     assert runtime_active_tools == ["tool_search", "activate_tools"]
+
+
+@pytest.mark.asyncio
+async def test_execute_does_not_emit_task_completed_hook_for_root_task(
+    tmp_path: Path,
+) -> None:
+    provider = _CapturingProvider()
+    service, task_repo, _agent_repo, _message_repo = _build_service(
+        tmp_path / "task_execution_service_root_hook.db",
+        provider,
+    )
+    hook_service = _CapturingHookService()
+    service.hook_service = cast(HookService, hook_service)
+    root_task = TaskEnvelope(
+        task_id="task-root",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        objective="handle user intent",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+
+    await service._execute_task_completed_hooks(
+        task=root_task,
+        instance_id="inst-root",
+        role_id="time",
+        output_text="ok",
+    )
+
+    assert hook_service.calls == []
 
 
 @pytest.mark.asyncio

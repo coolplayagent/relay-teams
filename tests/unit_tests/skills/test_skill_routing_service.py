@@ -16,6 +16,7 @@ from relay_teams.skills import (
     SkillsDirectory,
     build_skill_routing_query_text,
 )
+from relay_teams.skills.skill_models import SkillSource
 from relay_teams.skills.skill_models import SkillInstructionEntry
 
 
@@ -42,7 +43,11 @@ def test_skill_index_documents_include_instruction_script_and_resource_summaries
         "- lint: Validate timezone conversions (scripts/lint.py)\n",
         encoding="utf-8",
     )
-    registry = SkillRegistry(directory=SkillsDirectory(base_dir=tmp_path / "skills"))
+    registry = SkillRegistry(
+        directory=SkillsDirectory(
+            sources=((SkillSource.USER_RELAY_TEAMS, tmp_path / "skills"),)
+        )
+    )
     index_service = SkillIndexService(
         retrieval_service=_build_retrieval_service(tmp_path)
     )
@@ -240,7 +245,7 @@ def test_skill_runtime_service_falls_back_when_search_has_no_hits(
     assert result.routing.visible_skills == result.routing.authorized_skills
 
 
-def test_skill_runtime_service_prefers_app_variant_for_duplicate_display_name(
+def test_skill_runtime_service_uses_user_override_for_duplicate_skill_name(
     tmp_path: Path,
 ) -> None:
     app_skill_dir = tmp_path / ".agent-teams" / "skills" / "time"
@@ -264,7 +269,7 @@ def test_skill_runtime_service_prefers_app_variant_for_duplicate_display_name(
         retrieval_service=_build_retrieval_service(tmp_path),
     )
     _ = service.rebuild_index()
-    role = _build_role(("app:time", "builtin:time"))
+    role = _build_role(("time",))
 
     result = service.prepare_prompt(
         role=role,
@@ -295,7 +300,9 @@ def _build_registry(
             name=name,
             description=description,
         )
-    return SkillRegistry(directory=SkillsDirectory(base_dir=skills_dir))
+    return SkillRegistry(
+        directory=SkillsDirectory(sources=((SkillSource.USER_RELAY_TEAMS, skills_dir),))
+    )
 
 
 def _build_retrieval_service(tmp_path: Path) -> RetrievalService:

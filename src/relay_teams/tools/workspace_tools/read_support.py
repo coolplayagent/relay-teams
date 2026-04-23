@@ -10,7 +10,8 @@ from relay_teams.agents.execution.prompt_instruction_state import (
     record_prompt_instruction_paths_loaded,
 )
 from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
-from relay_teams.tools.runtime import ToolDeps, ToolResultProjection
+from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.runtime.models import ToolResultProjection
 
 DEFAULT_READ_LIMIT = 2000
 MAX_LINE_LENGTH = 2000

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from relay_teams.skills.discovery import (
     SkillsDirectory,
+    get_agents_skills_dir,
     get_project_skills_dir,
     get_user_skills_dir,
 )
@@ -20,11 +21,9 @@ from relay_teams.skills.skill_models import (
     SkillMetadata,
     SkillOptionEntry,
     SkillResource,
-    SkillScope,
+    SkillSource,
     SkillScript,
     SkillSummaryEntry,
-    build_skill_ref,
-    parse_skill_ref,
 )
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_models import (
@@ -60,19 +59,18 @@ __all__ = [
     "SkillRoutingResult",
     "SkillRuntimeService",
     "SkillRoutingService",
-    "SkillScope",
+    "SkillSource",
     "SkillScript",
     "SkillSummaryEntry",
     "SkillsDirectory",
     "SkillRegistry",
     "build_skill_routing_query_text",
-    "build_skill_ref",
     "ClawHubSkillDetail",
     "ClawHubSkillFile",
     "ClawHubSkillService",
     "ClawHubSkillSummary",
     "ClawHubSkillWriteRequest",
+    "get_agents_skills_dir",
     "get_project_skills_dir",
     "get_user_skills_dir",
-    "parse_skill_ref",
 ]
