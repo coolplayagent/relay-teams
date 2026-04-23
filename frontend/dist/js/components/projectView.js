@@ -966,22 +966,26 @@ function createAutomationEditorDraft(project, workspaces, normalRoles = [], orch
     const workspaceList = Array.isArray(workspaces) ? workspaces : [];
     const firstWorkspaceId = String(workspaceList[0]?.workspace_id || '').trim();
     const runConfig = project?.run_config && typeof project.run_config === 'object' ? project.run_config : {};
+    const isEditing = String(project?.automation_project_id || '').trim().length > 0;
     const sessionMode = String(runConfig?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
     const defaultNormalRootRoleId = String(normalRoles[0]?.role_id || '').trim();
     const defaultOrchestrationPresetId = String(orchestrationPresets[0]?.preset_id || '').trim();
     const timezone = String(project?.timezone || DEFAULT_AUTOMATION_TIMEZONE).trim() || DEFAULT_AUTOMATION_TIMEZONE;
     const schedule = parseAutomationScheduleDraft(project, timezone);
     const deliveryEvents = buildAutomationDeliveryEvents(project);
+    const persistedNormalRootRoleId = String(runConfig?.normal_root_role_id || '').trim();
+    const persistedOrchestrationPresetId = String(runConfig?.orchestration_preset_id || '').trim();
     return {
         display_name: String(project?.display_name || project?.name || '').trim(),
         workspace_id: String(project?.workspace_id || firstWorkspaceId).trim(),
         prompt: String(project?.prompt || '').trim(),
         timezone,
         session_mode: sessionMode,
-        normal_root_role_id: String(runConfig?.normal_root_role_id || defaultNormalRootRoleId).trim(),
+        normal_root_role_id: isEditing ? persistedNormalRootRoleId : defaultNormalRootRoleId,
         orchestration_preset_id: String(
-            runConfig?.orchestration_preset_id
-            || (sessionMode === 'orchestration' ? defaultOrchestrationPresetId : '')
+            isEditing
+                ? persistedOrchestrationPresetId
+                : (sessionMode === 'orchestration' ? defaultOrchestrationPresetId : '')
             || '',
         ).trim(),
         execution_mode: String(runConfig?.execution_mode || 'ai').trim() || 'ai',
