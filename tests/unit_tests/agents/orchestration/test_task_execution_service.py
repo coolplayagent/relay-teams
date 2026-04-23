@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -10,6 +11,9 @@ from typing import cast
 import pytest
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
+import relay_teams.agents.execution.coordination_agent_builder as coordination_agent_builder
+import relay_teams.agents.execution.system_prompts as system_prompts
+import relay_teams.net.llm_client as llm_client
 from relay_teams.media import (
     MediaAssetRepository,
     MediaAssetService,
@@ -73,6 +77,8 @@ from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.hooks import HookService
+
+pytestmark = pytest.mark.timeout(5)
 
 
 class _CapturingProvider:
@@ -148,6 +154,52 @@ class _CapturingHookService:
     ) -> object:
         self.calls.append((event_input, run_event_hub))
         return object()
+
+
+@pytest.fixture(autouse=True)
+def _stub_runtime_environment_probes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    def _build_test_http_client(
+        *,
+        connect_timeout_seconds: float,
+        cache_scope: str | None = None,
+        ssl_verify: bool | None = None,
+        merged_env: dict[str, str] | None = None,
+    ) -> object:
+        return llm_client.build_llm_http_client(
+            merged_env={} if merged_env is None else merged_env,
+            ssl_verify=ssl_verify,
+            connect_timeout_seconds=connect_timeout_seconds,
+            cache_scope=cache_scope,
+        )
+
+    monkeypatch.setattr(
+        coordination_agent_builder,
+        "build_llm_http_client",
+        _build_test_http_client,
+    )
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_github_cli_environment_status",
+        lambda: (False, None),
+    )
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_clawhub_environment_status",
+        lambda: (False, None),
+    )
+
+    async def _load_test_runtime_prompt_instructions(**_: object) -> object:
+        return system_prompts.LoadedPromptInstructions()
+
+    monkeypatch.setattr(
+        system_prompts,
+        "_load_runtime_prompt_instructions",
+        _load_test_runtime_prompt_instructions,
+    )
+    yield
+    llm_client.clear_llm_http_client_cache()
 
 
 def _build_service(

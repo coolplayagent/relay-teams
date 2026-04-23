@@ -54,6 +54,8 @@ from relay_teams.workspace import (
     build_local_workspace_mount,
 )
 
+pytestmark = pytest.mark.timeout(5)
+
 
 @pytest.fixture(autouse=True)
 def _suppress_host_github_prompt_line(
