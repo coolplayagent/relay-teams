@@ -152,6 +152,8 @@ function createInitialAutomationHomeDetail() {
         sessions: [],
         workspace: null,
         feishuBindings: [],
+        normalRoles: [],
+        orchestrationPresets: [],
     };
 }
 
@@ -175,6 +177,8 @@ function createInitialAutomationEditorState() {
         confirmLabel: '',
         workspaces: [],
         feishuBindings: [],
+        normalRoles: [],
+        orchestrationPresets: [],
         draft: null,
         resolve: null,
         errorMessage: '',
@@ -705,16 +709,25 @@ function formatAutomationRunLogMessage(result) {
 }
 
 export async function requestAutomationProjectInput(project = {}, dialogOptions = {}) {
-    const [workspaces, feishuBindings] = await Promise.all([
+    const [workspaces, feishuBindings, roleOptions, orchestrationConfig] = await Promise.all([
         fetchWorkspaces(),
         fetchAutomationFeishuBindings(),
+        fetchRoleConfigOptions(),
+        fetchOrchestrationConfig(),
     ]);
     const workspaceList = Array.isArray(workspaces) ? workspaces : [];
     if (workspaceList.length === 0) {
         return null;
     }
+    const normalRoles = normalizeRoleOptions(roleOptions);
+    const orchestrationPresets = normalizeOrchestrationPresets(orchestrationConfig);
     const isEditing = String(project?.automation_project_id || '').trim().length > 0;
-    const draft = createAutomationEditorDraft(project, workspaceList);
+    const draft = createAutomationEditorDraft(
+        project,
+        workspaceList,
+        normalRoles,
+        orchestrationPresets,
+    );
     const defaultTitle = isEditing ? t('automation.edit.title') : t('sidebar.new_automation_title');
     const defaultMessage = isEditing ? t('automation.edit.message') : t('sidebar.new_automation_message');
     const defaultConfirmLabel = isEditing ? t('automation.edit.save') : t('sidebar.new_automation_create');
@@ -729,6 +742,8 @@ export async function requestAutomationProjectInput(project = {}, dialogOptions 
             confirmLabel: String(dialogOptions?.confirmLabel || defaultConfirmLabel).trim() || defaultConfirmLabel,
             workspaces: workspaceList,
             feishuBindings,
+            normalRoles,
+            orchestrationPresets,
             draft,
             resolve,
             errorMessage: '',
@@ -912,9 +927,13 @@ function parseAutomationScheduleDraft(project, timezone) {
     };
 }
 
-function createAutomationEditorDraft(project, workspaces) {
+function createAutomationEditorDraft(project, workspaces, normalRoles = [], orchestrationPresets = []) {
     const workspaceList = Array.isArray(workspaces) ? workspaces : [];
     const firstWorkspaceId = String(workspaceList[0]?.workspace_id || '').trim();
+    const runConfig = project?.run_config && typeof project.run_config === 'object' ? project.run_config : {};
+    const sessionMode = String(runConfig?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+    const defaultNormalRootRoleId = String(normalRoles[0]?.role_id || '').trim();
+    const defaultOrchestrationPresetId = String(orchestrationPresets[0]?.preset_id || '').trim();
     const timezone = String(project?.timezone || DEFAULT_AUTOMATION_TIMEZONE).trim() || DEFAULT_AUTOMATION_TIMEZONE;
     const schedule = parseAutomationScheduleDraft(project, timezone);
     const deliveryEvents = buildAutomationDeliveryEvents(project);
@@ -923,6 +942,17 @@ function createAutomationEditorDraft(project, workspaces) {
         workspace_id: String(project?.workspace_id || firstWorkspaceId).trim(),
         prompt: String(project?.prompt || '').trim(),
         timezone,
+        session_mode: sessionMode,
+        normal_root_role_id: String(runConfig?.normal_root_role_id || defaultNormalRootRoleId).trim(),
+        orchestration_preset_id: String(
+            runConfig?.orchestration_preset_id
+            || (sessionMode === 'orchestration' ? defaultOrchestrationPresetId : '')
+            || '',
+        ).trim(),
+        execution_mode: String(runConfig?.execution_mode || 'ai').trim() || 'ai',
+        yolo: runConfig?.yolo !== false,
+        thinking_enabled: runConfig?.thinking?.enabled === true,
+        thinking_effort: String(runConfig?.thinking?.effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT,
         delivery_binding_key: buildFeishuBindingKey(project?.delivery_binding),
         delivery_event_started: deliveryEvents.started || !project?.automation_project_id,
         delivery_event_completed: deliveryEvents.completed || !project?.automation_project_id,
@@ -1027,6 +1057,9 @@ function buildAutomationProjectPayload(draft, feishuBindings, project) {
     const workspaceId = String(draft?.workspace_id || '').trim();
     const prompt = String(draft?.prompt || '').trim();
     const timezone = String(draft?.timezone || DEFAULT_AUTOMATION_TIMEZONE).trim() || DEFAULT_AUTOMATION_TIMEZONE;
+    const sessionMode = String(draft?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+    const normalRootRoleId = String(draft?.normal_root_role_id || '').trim();
+    const orchestrationPresetId = String(draft?.orchestration_preset_id || '').trim();
     if (!displayName) {
         throw new Error(t('automation.schedule.validation.name'));
     }
@@ -1035,6 +1068,9 @@ function buildAutomationProjectPayload(draft, feishuBindings, project) {
     }
     if (!prompt) {
         throw new Error(t('automation.schedule.validation.prompt'));
+    }
+    if (sessionMode === 'orchestration' && !orchestrationPresetId) {
+        throw new Error(t('settings.triggers.missing_orchestration_preset_id'));
     }
     const schedulePayload = buildAutomationSchedulePayload({ ...draft, timezone });
     const selectedBindingKey = String(draft?.delivery_binding_key || '').trim();
@@ -1058,6 +1094,19 @@ function buildAutomationProjectPayload(draft, feishuBindings, project) {
         prompt,
         timezone,
         enabled: hasExistingProject ? preservedEnabled : true,
+        run_config: {
+            session_mode: sessionMode,
+            normal_root_role_id: sessionMode === 'normal' ? (normalRootRoleId || null) : null,
+            orchestration_preset_id: sessionMode === 'orchestration' ? orchestrationPresetId : null,
+            execution_mode: String(draft?.execution_mode || 'ai').trim() || 'ai',
+            yolo: draft?.yolo !== false,
+            thinking: {
+                enabled: draft?.thinking_enabled === true,
+                effort: draft?.thinking_enabled === true
+                    ? (String(draft?.thinking_effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT)
+                    : null,
+            },
+        },
         ...schedulePayload,
         delivery_binding: selectedBinding ? {
             provider: 'feishu',
@@ -1103,6 +1152,9 @@ function syncAutomationEditorDraftFromDom() {
         workspace_id: readAutomationEditorValue('automation-editor-workspace-id-input', currentAutomationEditorState.draft.workspace_id),
         prompt: readAutomationEditorValue('automation-editor-prompt-input', currentAutomationEditorState.draft.prompt),
         timezone: readAutomationEditorValue('automation-editor-timezone-input', currentAutomationEditorState.draft.timezone),
+        session_mode: readAutomationEditorValue('automation-editor-session-mode-input', currentAutomationEditorState.draft.session_mode),
+        normal_root_role_id: readAutomationEditorValue('automation-editor-normal-root-role-id-input', currentAutomationEditorState.draft.normal_root_role_id),
+        orchestration_preset_id: readAutomationEditorValue('automation-editor-orchestration-preset-id-input', currentAutomationEditorState.draft.orchestration_preset_id),
         delivery_binding_key: readAutomationEditorValue('automation-editor-delivery-binding-input', currentAutomationEditorState.draft.delivery_binding_key),
         delivery_event_started: readAutomationEditorChecked('automation-editor-delivery-started-input', currentAutomationEditorState.draft.delivery_event_started),
         delivery_event_completed: readAutomationEditorChecked('automation-editor-delivery-completed-input', currentAutomationEditorState.draft.delivery_event_completed),
@@ -1138,6 +1190,13 @@ function renderAutomationEditorWeekdayOptions(selectedValue) {
         { value: '6', label: t('automation.cron.weekday.sat') },
         { value: '0', label: t('automation.cron.weekday.sun') },
     ], selectedValue);
+}
+
+function resolveAutomationSessionModeOptions() {
+    return [
+        { value: 'normal', label: t('composer.mode_normal') },
+        { value: 'orchestration', label: t('composer.mode_orchestration') },
+    ];
 }
 
 function renderAutomationEditorScheduleDetail(draft) {
@@ -1208,6 +1267,9 @@ function renderAutomationEditorModal() {
         value: String(workspace?.workspace_id || '').trim(),
         label: formatWorkspaceOptionLabel(workspace),
     })).filter(option => option.value);
+    const sessionMode = String(draft.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+    const normalRoleOptions = resolveRoleOptionsForForms(currentAutomationEditorState.normalRoles);
+    const orchestrationPresetOptions = resolvePresetOptionsForForms(currentAutomationEditorState.orchestrationPresets);
     const bindingSelected = String(draft.delivery_binding_key || '').trim().length > 0;
     const scheduleLocked = draft.requires_schedule_reset === true && draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.unsupported;
     root.innerHTML = `
@@ -1284,6 +1346,34 @@ function renderAutomationEditorModal() {
                                 ? `<div class="automation-editor-grid automation-editor-grid-2">${renderAutomationEditorScheduleDetail(draft)}</div>`
                                 : ''
                             }
+                        </section>
+                        <section class="automation-editor-block">
+                            <div class="automation-editor-section-head">
+                                <h4>${escapeHtml(t('settings.triggers.session_configuration'))}</h4>
+                            </div>
+                            <div class="automation-editor-grid automation-editor-grid-2">
+                                <label class="automation-editor-field">
+                                    <span>${escapeHtml(t('settings.triggers.mode'))}</span>
+                                    <select id="automation-editor-session-mode-input" data-automation-editor-session-mode>
+                                        ${renderAutomationEditorFieldOptions(resolveAutomationSessionModeOptions(), sessionMode)}
+                                    </select>
+                                </label>
+                                ${sessionMode === 'normal' ? `
+                                    <label class="automation-editor-field">
+                                        <span>${escapeHtml(t('settings.triggers.normal_root_role_id'))}</span>
+                                        <select id="automation-editor-normal-root-role-id-input" data-automation-editor-normal-root-role-id>
+                                            ${renderAutomationEditorFieldOptions(normalRoleOptions, draft.normal_root_role_id)}
+                                        </select>
+                                    </label>
+                                ` : `
+                                    <label class="automation-editor-field">
+                                        <span>${escapeHtml(t('settings.triggers.orchestration_preset_id'))}</span>
+                                        <select id="automation-editor-orchestration-preset-id-input" data-automation-editor-orchestration-preset-id>
+                                            ${renderAutomationEditorFieldOptions(orchestrationPresetOptions, draft.orchestration_preset_id)}
+                                        </select>
+                                    </label>
+                                `}
+                            </div>
                         </section>
                         <section class="automation-editor-block">
                             <div class="automation-editor-section-head">
@@ -1371,6 +1461,21 @@ function bindAutomationEditorModal() {
                 ...draft,
                 schedule_kind: String(event?.target?.value || AUTOMATION_SCHEDULE_KINDS.daily).trim() || AUTOMATION_SCHEDULE_KINDS.daily,
                 requires_schedule_reset: false,
+            },
+        };
+        renderAutomationEditorModal();
+    });
+    root.querySelector('[data-automation-editor-session-mode]')?.addEventListener('change', event => {
+        const draft = syncAutomationEditorDraftFromDom();
+        const nextSessionMode = String(event?.target?.value || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+        currentAutomationEditorState = {
+            ...currentAutomationEditorState,
+            errorMessage: '',
+            draft: {
+                ...draft,
+                session_mode: nextSessionMode,
+                normal_root_role_id: nextSessionMode === 'normal' ? draft.normal_root_role_id : '',
+                orchestration_preset_id: nextSessionMode === 'orchestration' ? draft.orchestration_preset_id : '',
             },
         };
         renderAutomationEditorModal();
@@ -1535,6 +1640,28 @@ function resolvePresetOptionsForForms(presets) {
     ];
 }
 
+function resolveAutomationRoleDisplayName(roleId, roles) {
+    const normalizedRoleId = String(roleId || '').trim();
+    if (!normalizedRoleId) {
+        return t('automation.detail.none');
+    }
+    const role = (Array.isArray(roles) ? roles : []).find(
+        item => String(item?.role_id || '').trim() === normalizedRoleId,
+    );
+    return String(role?.name || normalizedRoleId).trim() || normalizedRoleId;
+}
+
+function resolveAutomationPresetDisplayName(presetId, presets) {
+    const normalizedPresetId = String(presetId || '').trim();
+    if (!normalizedPresetId) {
+        return t('automation.detail.none');
+    }
+    const preset = (Array.isArray(presets) ? presets : []).find(
+        item => String(item?.preset_id || '').trim() === normalizedPresetId,
+    );
+    return String(preset?.name || normalizedPresetId).trim() || normalizedPresetId;
+}
+
 function renderFeatureStatusPill(label, tone = 'neutral') {
     return `<span class="feature-status-pill is-${escapeHtml(tone)}">${escapeHtml(label)}</span>`;
 }
@@ -1588,17 +1715,21 @@ async function loadAutomationHomeDetail(projectId) {
         currentAutomationProject = null;
         return;
     }
-    const [project, sessions, workspaces, feishuBindings] = await Promise.all([
+    const [project, sessions, workspaces, feishuBindings, roleOptions, orchestrationConfig] = await Promise.all([
         fetchAutomationProject(normalizedProjectId),
         fetchAutomationProjectSessions(normalizedProjectId),
         fetchWorkspaces(),
         fetchAutomationFeishuBindings(),
+        fetchRoleConfigOptions(),
+        fetchOrchestrationConfig(),
     ]);
     currentAutomationHomeDetail = {
         project,
         sessions: Array.isArray(sessions) ? sessions : [],
         workspace: findWorkspaceById(workspaces, project?.workspace_id),
         feishuBindings: Array.isArray(feishuBindings) ? feishuBindings : [],
+        normalRoles: normalizeRoleOptions(roleOptions),
+        orchestrationPresets: normalizeOrchestrationPresets(orchestrationConfig),
     };
     currentAutomationProject = project;
 }
@@ -3706,6 +3837,12 @@ function renderAutomationHomeDetail(detail) {
     const sessions = Array.isArray(detail?.sessions) ? detail.sessions : [];
     const workspaceRecord = detail?.workspace;
     const feishuBindings = Array.isArray(detail?.feishuBindings) ? detail.feishuBindings : [];
+    const normalRoles = Array.isArray(detail?.normalRoles) ? detail.normalRoles : [];
+    const orchestrationPresets = Array.isArray(detail?.orchestrationPresets) ? detail.orchestrationPresets : [];
+    const runConfig = project?.run_config && typeof project.run_config === 'object' ? project.run_config : {};
+    const sessionMode = String(runConfig?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+    const normalRootRoleId = String(runConfig?.normal_root_role_id || '').trim();
+    const orchestrationPresetId = String(runConfig?.orchestration_preset_id || '').trim();
     const status = String(project?.status || '').trim() || 'disabled';
     const statusLabel = t(`automation.status.${status}`);
     const deliveryBinding = project?.delivery_binding && typeof project.delivery_binding === 'object'
@@ -3744,6 +3881,12 @@ function renderAutomationHomeDetail(detail) {
                     <div class="feature-meta-list automation-meta-list">
                         <div><span>${escapeHtml(t('automation.detail.schedule'))}</span><strong>${escapeHtml(String(project?.cron_expression || t('automation.detail.not_scheduled')))}</strong></div>
                         <div><span>${escapeHtml(t('automation.detail.timezone'))}</span><strong>${escapeHtml(String(project?.timezone || 'UTC'))}</strong></div>
+                        <div><span>${escapeHtml(t('settings.triggers.mode'))}</span><strong>${escapeHtml(sessionMode === 'orchestration' ? t('composer.mode_orchestration') : t('composer.mode_normal'))}</strong></div>
+                        <div><span>${escapeHtml(sessionMode === 'orchestration' ? t('settings.triggers.orchestration_preset_id') : t('settings.triggers.normal_root_role_id'))}</span><strong>${escapeHtml(
+                            sessionMode === 'orchestration'
+                                ? resolveAutomationPresetDisplayName(orchestrationPresetId, orchestrationPresets)
+                                : resolveAutomationRoleDisplayName(normalRootRoleId, normalRoles)
+                        )}</strong></div>
                         <div><span>${escapeHtml(t('automation.detail.next_run'))}</span><strong>${escapeHtml(String(project?.next_run_at || t('automation.detail.not_scheduled')))}</strong></div>
                         <div><span>${escapeHtml(t('automation.detail.last_run'))}</span><strong>${escapeHtml(String(project?.last_run_started_at || t('automation.detail.never')))}</strong></div>
                     </div>

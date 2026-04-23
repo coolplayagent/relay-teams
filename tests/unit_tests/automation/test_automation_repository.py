@@ -36,7 +36,12 @@ def test_automation_project_repo_normalizes_legacy_optional_identifiers(
         """,
         (
             "None",
-            json.dumps({"orchestration_preset_id": "None"}),
+            json.dumps(
+                {
+                    "normal_root_role_id": "None",
+                    "orchestration_preset_id": "None",
+                }
+            ),
             json.dumps(
                 {
                     "provider": "feishu",
@@ -57,6 +62,7 @@ def test_automation_project_repo_normalizes_legacy_optional_identifiers(
     loaded = repository.get(record.automation_project_id)
 
     assert loaded.last_session_id is None
+    assert loaded.run_config.normal_root_role_id is None
     assert loaded.run_config.orchestration_preset_id is None
     assert loaded.delivery_binding is not None
     assert loaded.delivery_binding.session_id is None

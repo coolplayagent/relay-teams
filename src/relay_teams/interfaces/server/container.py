@@ -847,6 +847,8 @@ class ServerContainer:
             bound_session_queue_service=self.automation_bound_session_queue_service,
             workspace_service=self.workspace_service,
             session_ingress_service=self.session_ingress_service,
+            role_registry=self.role_registry,
+            orchestration_settings_service=self.orchestration_settings_service,
         )
         self.github_trigger_service = GitHubTriggerService(
             config_dir=app_config_dir,

@@ -364,6 +364,9 @@ def _run_config_from_json(value: object) -> AutomationRunConfig:
     if not isinstance(payload, dict):
         raise ValueError("Invalid automation run config payload")
     normalized = dict(payload)
+    normalized["normal_root_role_id"] = normalize_persisted_text(
+        payload.get("normal_root_role_id")
+    )
     normalized["orchestration_preset_id"] = normalize_persisted_text(
         payload.get("orchestration_preset_id")
     )

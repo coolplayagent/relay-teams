@@ -943,6 +943,14 @@ export async function fetchAutomationProject() {
             source_label: "Release Updates",
         },
         delivery_events: ["started"],
+        run_config: {
+            session_mode: "normal",
+            normal_root_role_id: "Writer",
+            orchestration_preset_id: null,
+            execution_mode: "ai",
+            yolo: true,
+            thinking: { enabled: false, effort: null },
+        },
         next_run_at: "2026-03-14T09:00:00Z",
     };
 }
@@ -1010,7 +1018,7 @@ export async function fetchOrchestrationConfig() {
 }
 
 export async function fetchRoleConfigOptions() {
-    return { normal_mode_roles: [] };
+    return { normal_mode_roles: [{ role_id: "Writer", name: "Writer" }] };
 }
 
 export async function fetchTriggers() {
@@ -1119,8 +1127,13 @@ export async function updateAutomationProject(_automationProjectId, payload) {
     assert update_payload["display_name"] == "Friday Briefing"
     assert update_payload["cron_expression"] == "30 18 * * 5"
     assert update_payload["timezone"] == "Asia/Shanghai"
+    run_config = cast(dict[str, object], update_payload["run_config"])
+    assert run_config["session_mode"] == "normal"
+    assert run_config["normal_root_role_id"] == "Writer"
+    assert run_config["orchestration_preset_id"] is None
     assert "automation-editor-modal-title" in str(payload["modalHtml"])
     assert "feishu_main - Release Updates" in str(payload["contentHtml"])
+    assert "Writer" in str(payload["contentHtml"])
 
 
 def test_project_view_renders_github_automation_section_and_access_panel(
@@ -1775,6 +1788,14 @@ export async function fetchAutomationProject() {
         run_at: "2026-03-14T09:30:00.000Z",
         timezone: "Asia/Shanghai",
         delivery_events: [],
+        run_config: {
+            session_mode: "normal",
+            normal_root_role_id: "Writer",
+            orchestration_preset_id: null,
+            execution_mode: "ai",
+            yolo: true,
+            thinking: { enabled: false, effort: null },
+        },
     };
 }
 
@@ -1823,7 +1844,7 @@ export async function fetchOrchestrationConfig() {
 }
 
 export async function fetchRoleConfigOptions() {
-    return { normal_mode_roles: [] };
+    return { normal_mode_roles: [{ role_id: "Writer", name: "Writer" }] };
 }
 
 export async function fetchTriggers() {
@@ -1894,6 +1915,9 @@ export async function updateAutomationProject(_automationProjectId, payload) {
     assert update_payload["schedule_mode"] == "one_shot"
     assert update_payload["cron_expression"] is None
     assert update_payload["run_at"] == "2026-03-14T09:30:00.000Z"
+    run_config = cast(dict[str, object], update_payload["run_config"])
+    assert run_config["session_mode"] == "normal"
+    assert run_config["normal_root_role_id"] == "Writer"
 
 
 def test_project_view_keeps_automation_view_for_reused_bound_session_run(
