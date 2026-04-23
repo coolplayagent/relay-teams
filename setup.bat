@@ -6,12 +6,9 @@ set "PYTHON_CMD="
 py -3 --version >nul 2>&1
 if %errorlevel% equ 0 (
     set "PYTHON_CMD=py -3"
-) else (
-    python --version >nul 2>&1
-    if %errorlevel% equ 0 (
-        set "PYTHON_CMD=python"
-    )
 )
+if "%PYTHON_CMD%"=="" python --version >nul 2>&1
+if %errorlevel% equ 0 if "%PYTHON_CMD%"=="" set "PYTHON_CMD=python"
 
 if "%PYTHON_CMD%"=="" (
     echo [Error] Python not found.

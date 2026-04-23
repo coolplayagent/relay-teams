@@ -8,6 +8,10 @@ def test_windows_setup_installs_project_entry_points() -> None:
     script = Path("setup.bat").read_text(encoding="utf-8")
 
     assert 'set "PYTHON_CMD=py -3"' in script
+    assert 'if "%PYTHON_CMD%"=="" python --version >nul 2>&1' in script
+    assert (
+        'if %errorlevel% equ 0 if "%PYTHON_CMD%"=="" set "PYTHON_CMD=python"' in script
+    )
     assert "%PYTHON_CMD% -m pip install uv" in script
     assert (
         "%PYTHON_CMD% -m uv sync --all-extras --index-strategy unsafe-best-match"
