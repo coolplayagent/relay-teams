@@ -76,10 +76,7 @@ from relay_teams.skills.skill_models import SkillInstructionEntry
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.tools.registry.registry import ToolRegistry, ToolResolutionContext
-from relay_teams.tools.registry.runtime_activation import (
-    build_initial_active_tools,
-    validate_activation_request,
-)
+from relay_teams.tools.runtime_activation import merge_active_tools
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
@@ -877,22 +874,12 @@ class TaskExecutionService(BaseModel):
         existing_runtime_active_tools_json: str,
     ) -> str:
         authorized_local_tools = tuple(tool.name for tool in runtime_tools.local_tools)
-        initial_active_tools = build_initial_active_tools(authorized_local_tools)
         existing_active_tools = self._parse_runtime_active_tools_json(
             existing_runtime_active_tools_json
         )
-        if existing_active_tools:
-            normalized_existing_active_tools = validate_activation_request(
-                authorized_tools=authorized_local_tools,
-                active_tools=existing_active_tools,
-                requested_tool_names=(),
-            ).active
-        else:
-            normalized_existing_active_tools = ()
-        active_tools = (
-            normalized_existing_active_tools
-            if normalized_existing_active_tools
-            else initial_active_tools
+        active_tools = merge_active_tools(
+            authorized_tools=authorized_local_tools,
+            active_tools=existing_active_tools,
         )
         return json.dumps(list(active_tools), ensure_ascii=False, indent=2)
 
@@ -921,18 +908,12 @@ class TaskExecutionService(BaseModel):
         authorized_local_tools: tuple[str, ...],
         runtime_active_tools_json: str,
     ) -> tuple[str, ...]:
-        existing_active_tools = self._parse_runtime_active_tools_json(
-            runtime_active_tools_json
+        return merge_active_tools(
+            authorized_tools=authorized_local_tools,
+            active_tools=self._parse_runtime_active_tools_json(
+                runtime_active_tools_json
+            ),
         )
-        if existing_active_tools:
-            normalized_existing_active_tools = validate_activation_request(
-                authorized_tools=authorized_local_tools,
-                active_tools=existing_active_tools,
-                requested_tool_names=(),
-            ).active
-            if normalized_existing_active_tools:
-                return normalized_existing_active_tools
-        return build_initial_active_tools(authorized_local_tools)
 
     def _record_memory_if_needed(
         self,

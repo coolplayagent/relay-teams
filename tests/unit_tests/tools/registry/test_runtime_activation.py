@@ -4,6 +4,7 @@ from __future__ import annotations
 from relay_teams.tools.registry.runtime_activation import (
     apply_tool_activation,
     build_initial_active_tools,
+    merge_active_tools,
     validate_activation_request,
 )
 
@@ -28,6 +29,17 @@ def test_build_initial_active_tools_requires_activation_path_for_deferred_mode()
 ):
     assert build_initial_active_tools(("tool_search", "read")) == (
         "tool_search",
+        "read",
+    )
+
+
+def test_merge_active_tools_restores_required_discovery_tools() -> None:
+    assert merge_active_tools(
+        authorized_tools=("tool_search", "activate_tools", "read"),
+        active_tools=("read",),
+    ) == (
+        "tool_search",
+        "activate_tools",
         "read",
     )
 

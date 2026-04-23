@@ -40,6 +40,7 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 from relay_teams.tools.runtime.context import ToolContext
 from relay_teams.tools.runtime.execution import (
+    _resolve_runtime_active_local_tools,
     execute_tool,
     execute_tool_call,
 )
@@ -674,6 +675,17 @@ def test_execute_tool_blocks_deferred_local_tools_until_activation() -> None:
     assert activated_result["ok"] is True
     assert activated_result["data"] == "hello"
     assert action_calls == ["read"]
+
+
+def test_resolve_runtime_active_local_tools_restores_required_discovery_tools() -> None:
+    assert _resolve_runtime_active_local_tools(
+        authorized_local_tools=("tool_search", "activate_tools", "read"),
+        runtime_active_tools_json='["read"]',
+    ) == (
+        "tool_search",
+        "activate_tools",
+        "read",
+    )
 
 
 def test_execute_tool_call_rehydrates_pydantic_model_lists_from_future_annotations() -> (

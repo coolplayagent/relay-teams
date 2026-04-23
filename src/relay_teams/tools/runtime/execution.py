@@ -50,10 +50,7 @@ from relay_teams.tools.runtime.persisted_state import (
     ToolExecutionStatus,
     merge_tool_call_state,
 )
-from relay_teams.tools.registry.runtime_activation import (
-    build_initial_active_tools,
-    validate_activation_request,
-)
+from relay_teams.tools.runtime_activation import merge_active_tools
 from relay_teams.env.hook_runtime_env import (
     reset_tool_hook_runtime_env,
     set_tool_hook_runtime_env,
@@ -509,16 +506,10 @@ def _resolve_runtime_active_local_tools(
     authorized_local_tools: tuple[str, ...],
     runtime_active_tools_json: str,
 ) -> tuple[str, ...]:
-    existing_active_tools = _parse_runtime_active_tools_json(runtime_active_tools_json)
-    if existing_active_tools:
-        normalized_existing_active_tools = validate_activation_request(
-            authorized_tools=authorized_local_tools,
-            active_tools=existing_active_tools,
-            requested_tool_names=(),
-        ).active
-        if normalized_existing_active_tools:
-            return normalized_existing_active_tools
-    return build_initial_active_tools(authorized_local_tools)
+    return merge_active_tools(
+        authorized_tools=authorized_local_tools,
+        active_tools=_parse_runtime_active_tools_json(runtime_active_tools_json),
+    )
 
 
 def _record_tool_metrics(
