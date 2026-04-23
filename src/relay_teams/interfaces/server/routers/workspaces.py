@@ -154,9 +154,13 @@ async def open_workspace_root(
 ) -> dict[str, str]:
     try:
         if mount is None:
-            _ = service.open_workspace_root(workspace_id)
+            _ = await asyncio.to_thread(service.open_workspace_root, workspace_id)
         else:
-            _ = service.open_workspace_root(workspace_id, mount_name=mount)
+            _ = await asyncio.to_thread(
+                service.open_workspace_root,
+                workspace_id,
+                mount_name=mount,
+            )
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
@@ -172,7 +176,7 @@ async def get_workspace_snapshot(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceSnapshot:
     try:
-        return service.get_workspace_snapshot(workspace_id)
+        return await asyncio.to_thread(service.get_workspace_snapshot, workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
     except ValueError as exc:
@@ -213,8 +217,12 @@ async def get_workspace_diffs(
 ) -> WorkspaceDiffListing:
     try:
         if mount is None:
-            return service.get_workspace_diffs(workspace_id)
-        return service.get_workspace_diffs(workspace_id, mount_name=mount)
+            return await asyncio.to_thread(service.get_workspace_diffs, workspace_id)
+        return await asyncio.to_thread(
+            service.get_workspace_diffs,
+            workspace_id,
+            mount_name=mount,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
     except ValueError as exc:
@@ -230,11 +238,13 @@ async def get_workspace_diff_file(
 ) -> WorkspaceDiffFile:
     try:
         if mount is None:
-            return service.get_workspace_diff_file(
+            return await asyncio.to_thread(
+                service.get_workspace_diff_file,
                 workspace_id,
                 path=unquote(path),
             )
-        return service.get_workspace_diff_file(
+        return await asyncio.to_thread(
+            service.get_workspace_diff_file,
             workspace_id,
             path=unquote(path),
             mount_name=mount,
@@ -254,12 +264,14 @@ async def get_workspace_preview_file(
 ) -> FileResponse:
     try:
         if mount is None:
-            resolved_path, media_type = service.get_workspace_image_preview_file(
+            resolved_path, media_type = await asyncio.to_thread(
+                service.get_workspace_image_preview_file,
                 workspace_id,
                 path=unquote(path),
             )
         else:
-            resolved_path, media_type = service.get_workspace_image_preview_file(
+            resolved_path, media_type = await asyncio.to_thread(
+                service.get_workspace_image_preview_file,
                 workspace_id,
                 path=unquote(path),
                 mount_name=mount,
@@ -293,7 +305,9 @@ async def delete_workspace(
                 req.force if req is not None else False,
                 message="Cannot remove workspace directory without force",
             )
-        service.delete_workspace_with_options(
+
+        await asyncio.to_thread(
+            service.delete_workspace_with_options,
             workspace_id=workspace_id,
             remove_directory=should_remove_directory,
         )
@@ -313,7 +327,8 @@ async def fork_workspace(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceRecord:
     try:
-        return service.fork_workspace(
+        return await asyncio.to_thread(
+            service.fork_workspace,
             source_workspace_id=workspace_id,
             name=req.name,
             start_ref=req.start_ref,

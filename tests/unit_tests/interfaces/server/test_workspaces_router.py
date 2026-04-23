@@ -684,6 +684,89 @@ def test_get_workspace_tree_listing_runs_service_call_in_threadpool(
     ]
 
 
+def test_workspace_diff_routes_run_service_calls_in_threadpool(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class DiffWorkspaceService(WorkspaceService):
+        def get_workspace_diffs(
+            self,
+            workspace_id: str,
+            *,
+            mount_name: str | None = None,
+        ) -> WorkspaceDiffListing:
+            record = self.get_workspace(workspace_id)
+            _ = mount_name
+            root_path = record.root_path
+            assert root_path is not None
+            return WorkspaceDiffListing(
+                workspace_id=record.workspace_id,
+                root_path=root_path,
+                diff_files=(),
+                is_git_repository=True,
+                git_root_path=root_path,
+                diff_message=None,
+            )
+
+        def get_workspace_diff_file(
+            self,
+            workspace_id: str,
+            *,
+            path: str,
+            mount_name: str | None = None,
+        ) -> WorkspaceDiffFile:
+            _ = (self.get_workspace(workspace_id), mount_name)
+            return WorkspaceDiffFile(
+                path=path,
+                change_type=WorkspaceDiffChangeType.MODIFIED,
+                diff="patched content",
+                is_binary=False,
+            )
+
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    client, service = _create_test_client(
+        tmp_path,
+        service=DiffWorkspaceService(
+            repository=WorkspaceRepository(tmp_path / "workspaces_router.db")
+        ),
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=tmp_path,
+    )
+    monkeypatch.setattr(workspaces.asyncio, "to_thread", fake_to_thread)
+
+    diffs_response = client.get("/api/workspaces/project-alpha/diffs?mount=ops")
+    diff_file_response = client.get(
+        "/api/workspaces/project-alpha/diff?path=src%2Fapp.py&mount=ops"
+    )
+
+    assert diffs_response.status_code == 200
+    assert diff_file_response.status_code == 200
+    assert calls == [
+        (
+            "get_workspace_diffs",
+            ("project-alpha",),
+            {"mount_name": "ops"},
+        ),
+        (
+            "get_workspace_diff_file",
+            ("project-alpha",),
+            {"path": "src/app.py", "mount_name": "ops"},
+        ),
+    ]
+
+
 def test_get_workspace_preview_file_streams_workspace_image(tmp_path: Path) -> None:
     client, service = _create_test_client(tmp_path)
     root_path = tmp_path / "workspace-root"
