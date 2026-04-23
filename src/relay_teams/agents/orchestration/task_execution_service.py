@@ -883,8 +883,8 @@ class TaskExecutionService(BaseModel):
         )
         return json.dumps(list(active_tools), ensure_ascii=False, indent=2)
 
+    @staticmethod
     def _parse_runtime_active_tools_json(
-        self,
         runtime_active_tools_json: str,
     ) -> tuple[str, ...]:
         raw_payload = runtime_active_tools_json.strip()

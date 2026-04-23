@@ -24,10 +24,10 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Activate runtime-authorized local tools for future model turns."""
 
-        def _action(tool_names: _ToolNamesArg) -> dict[str, JsonValue]:
+        def _action(tool_input: dict[str, JsonValue]) -> dict[str, JsonValue]:
             return _activate_runtime_tools(
                 ctx=ctx,
-                tool_names=tool_names,
+                tool_names=_tool_names_from_tool_input(tool_input),
             )
 
         summary_tool_names: JsonValue = (
@@ -117,6 +117,15 @@ def _normalize_requested_tool_names(
         normalized_name = tool_names.strip()
         return (normalized_name,) if normalized_name else ()
     return tuple(str(name).strip() for name in tool_names if str(name).strip())
+
+
+def _tool_names_from_tool_input(tool_input: dict[str, JsonValue]) -> _ToolNamesArg:
+    raw_tool_names = tool_input.get("tool_names", ())
+    if isinstance(raw_tool_names, str):
+        return raw_tool_names
+    if isinstance(raw_tool_names, list):
+        return [str(name) for name in raw_tool_names]
+    return []
 
 
 def _parse_runtime_tools_snapshot(raw_snapshot: str) -> RuntimeToolsSnapshot:

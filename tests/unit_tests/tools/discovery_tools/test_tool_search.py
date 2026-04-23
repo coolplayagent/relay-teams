@@ -59,6 +59,8 @@ def _invoke_tool_action(
     if raw_args is None:
         return action()
     signature = inspect.signature(action)
+    if "tool_input" in signature.parameters:
+        return action(raw_args)
     bound_args = {
         name: raw_args[name]
         for name in signature.parameters
@@ -163,6 +165,78 @@ async def test_tool_search_keyword_search_returns_compact_matches(
     assert matches[0]["server_name"] == "docs"
     assert matches[0]["activation_state"] == "active"
     assert "parameters_json_schema" not in matches[0]
+
+
+@pytest.mark.asyncio
+async def test_tool_search_uses_rewritten_hook_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_tool_search(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["tool_search"],
+    )
+    agent_repo = AgentInstanceRepository(tmp_path / "instances.db")
+    _seed_runtime_snapshot(
+        agent_repo=agent_repo,
+        instance_id="instance-1",
+        runtime_tools=RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="tool_search",
+                    description="Discover tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read a file or directory from disk.",
+                ),
+            ),
+            mcp_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="mcp",
+                    name="docs_search",
+                    description="Search developer documentation.",
+                    server_name="docs",
+                ),
+            ),
+        ),
+        runtime_active_tools_json='["tool_search"]',
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            agent_repo=agent_repo,
+            instance_id="instance-1",
+        )
+    )
+
+    async def _fake_execute_tool_call(ctx, **kwargs: object) -> dict[str, object]:
+        del ctx
+        return cast(
+            dict[str, object],
+            cast(Callable[..., object], kwargs["action"])(
+                {
+                    "query": "docs search",
+                    "max_results": 1,
+                }
+            ),
+        )
+
+    monkeypatch.setattr(
+        tool_search_module,
+        "execute_tool_call",
+        _fake_execute_tool_call,
+    )
+
+    result = await tool(ctx, query="read", max_results=10)
+
+    assert result["query"] == "docs search"
+    matches = cast(list[dict[str, object]], result["matches"])
+    assert len(matches) == 1
+    assert matches[0]["name"] == "docs_search"
 
 
 @pytest.mark.asyncio

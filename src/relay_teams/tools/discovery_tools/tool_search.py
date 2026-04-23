@@ -88,12 +88,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Discover runtime-authorized tools and inspect their contracts."""
 
-        def _action() -> dict[str, JsonValue]:
-            return _search_runtime_tools(
-                ctx=ctx,
-                query=query.strip(),
-                max_results=_clamp_max_results(max_results),
-            )
+        def _action(tool_input: dict[str, JsonValue]) -> dict[str, JsonValue]:
+            return _search_runtime_tools_from_input(ctx=ctx, tool_input=tool_input)
 
         return await execute_tool_call(
             ctx,
@@ -105,6 +101,35 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             action=_action,
             raw_args=locals(),
         )
+
+
+def _search_runtime_tools_from_input(
+    *,
+    ctx: ToolContext,
+    tool_input: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    query = str(tool_input.get("query", "")).strip()
+    max_results = _coerce_max_results(tool_input.get("max_results"))
+    return _search_runtime_tools(
+        ctx=ctx,
+        query=query,
+        max_results=max_results,
+    )
+
+
+def _coerce_max_results(raw_max_results: JsonValue | None) -> int:
+    if isinstance(raw_max_results, bool):
+        return _DEFAULT_MAX_RESULTS
+    if isinstance(raw_max_results, int):
+        return _clamp_max_results(raw_max_results)
+    if isinstance(raw_max_results, float):
+        return _clamp_max_results(int(raw_max_results))
+    if isinstance(raw_max_results, str):
+        try:
+            return _clamp_max_results(int(raw_max_results))
+        except ValueError:
+            return _DEFAULT_MAX_RESULTS
+    return _DEFAULT_MAX_RESULTS
 
 
 def _search_runtime_tools(

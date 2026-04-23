@@ -45,6 +45,8 @@ def _invoke_tool_action(
     if raw_args is None:
         return action()
     signature = inspect.signature(action)
+    if "tool_input" in signature.parameters:
+        return action(raw_args)
     bound_args = {
         name: raw_args[name]
         for name in signature.parameters
