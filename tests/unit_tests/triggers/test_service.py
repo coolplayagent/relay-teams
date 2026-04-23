@@ -1133,3 +1133,29 @@ def test_github_trigger_action_worker_stop_times_out_for_stalled_processing() ->
         assert await asyncio.to_thread(service.finished.wait, 1.0)
 
     asyncio.run(run_worker())
+
+
+def test_github_trigger_action_worker_stop_swallows_cancellation() -> None:
+    async def run_worker() -> None:
+        service = _BlockingGitHubTriggerActionWorkerService()
+        worker = GitHubTriggerActionWorker(
+            trigger_service=cast(GitHubTriggerService, service),
+            poll_interval_seconds=0.01,
+            stop_timeout_seconds=0.5,
+        )
+
+        await worker.start()
+        assert await asyncio.to_thread(service.entered.wait, 1.0)
+
+        stop_task = asyncio.create_task(worker.stop())
+        await asyncio.sleep(0.03)
+        stop_task.cancel()
+        await asyncio.wait_for(stop_task, timeout=1.0)
+        assert stop_task.cancelled() is False
+        assert stop_task.exception() is None
+
+        service.release.set()
+        assert await asyncio.to_thread(service.finished.wait, 1.0)
+        await asyncio.wait_for(worker.stop(), timeout=1.0)
+
+    asyncio.run(run_worker())

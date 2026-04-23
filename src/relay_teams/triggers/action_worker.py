@@ -45,7 +45,12 @@ class GitHubTriggerActionWorker:
         thread = self._thread
         if thread is None:
             return
-        await asyncio.to_thread(thread.join, self._stop_timeout_seconds)
+        try:
+            await asyncio.to_thread(thread.join, self._stop_timeout_seconds)
+        except asyncio.CancelledError:
+            if not thread.is_alive():
+                self._thread = None
+            return
         if thread.is_alive():
             log_event(
                 LOGGER,
