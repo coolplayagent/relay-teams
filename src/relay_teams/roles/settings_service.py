@@ -105,12 +105,21 @@ class RoleSettingsService:
             strict_capability_validation=True,
             consumer=f"roles.settings_service.validate_role_document.role:{normalized.role_id}",
         )
+        canonical_role = _collapse_wildcard_capabilities(validated_role)
+        canonical_content = self._serialize_role_document(
+            normalized.model_copy(
+                update={
+                    "mcp_servers": canonical_role.mcp_servers,
+                    "skills": canonical_role.skills,
+                }
+            )
+        )
         return RoleValidationResult(
             valid=True,
             role=self._record_from_definition(
-                definition=validated_role,
+                definition=canonical_role,
                 file_name=f"{normalized.role_id}.md",
-                content=content,
+                content=canonical_content,
                 source_role_id=normalized.source_role_id,
                 source=RoleConfigSource.APP,
             ),
@@ -261,10 +270,8 @@ class RoleSettingsService:
                     mode=draft.mode.value,
                     tools=tuple(item.strip() for item in draft.tools if item.strip()),
                 ),
-                "mcp_servers": tuple(
-                    item.strip() for item in draft.mcp_servers if item.strip()
-                ),
-                "skills": tuple(item.strip() for item in draft.skills if item.strip()),
+                "mcp_servers": _normalize_capability_references(draft.mcp_servers),
+                "skills": _normalize_capability_references(draft.skills),
             }
         )
 
@@ -334,6 +341,12 @@ class RoleSettingsService:
                 definition.skills,
                 consumer=consumer,
             )
+            mcp_servers = self._get_mcp_registry().resolve_server_names(
+                mcp_servers,
+                strict=True,
+                consumer=consumer,
+                expand_wildcards=False,
+            )
             definition = definition.model_copy(
                 update={
                     "tools": tools,
@@ -351,11 +364,13 @@ class RoleSettingsService:
                 definition.mcp_servers,
                 strict=False,
                 consumer=consumer,
+                expand_wildcards=False,
             )
             skills = self._get_skill_registry().resolve_known(
                 definition.skills,
                 strict=False,
                 consumer=consumer,
+                expand_wildcards=False,
             )
             definition = definition.model_copy(
                 update={
@@ -395,6 +410,7 @@ class RoleSettingsService:
                 skill_names,
                 strict=True,
                 consumer=consumer,
+                expand_wildcards=False,
             )
         except ValueError as exc:
             if not _should_retry_builtin_skill_resolution(exc):
@@ -406,6 +422,7 @@ class RoleSettingsService:
                 skill_names,
                 strict=True,
                 consumer=consumer,
+                expand_wildcards=False,
             )
 
     def _canonicalize_role_capabilities_for_record(
@@ -437,6 +454,7 @@ class RoleSettingsService:
                 (normalized_skill_name,),
                 strict=False,
                 consumer=consumer,
+                expand_wildcards=False,
             )
             if resolved:
                 normalized_skills.append(resolved[0])
@@ -520,6 +538,21 @@ def _normalize_optional_text(value: str | None) -> str | None:
     if not normalized:
         return None
     return normalized
+
+
+def _normalize_capability_references(values: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(item.strip() for item in values if item.strip())
+
+
+def _collapse_wildcard_capabilities(definition: RoleDefinition) -> RoleDefinition:
+    updates: dict[str, tuple[str, ...]] = {}
+    if "*" in definition.mcp_servers:
+        updates["mcp_servers"] = ("*",)
+    if "*" in definition.skills:
+        updates["skills"] = ("*",)
+    if not updates:
+        return definition
+    return definition.model_copy(update=updates)
 
 
 def _should_retry_builtin_skill_resolution(error: ValueError) -> bool:

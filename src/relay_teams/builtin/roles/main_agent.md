@@ -5,10 +5,10 @@ description: Executes the full user request directly in normal mode.
 model_profile: default
 version: 1.0.0
 mode: primary
+mcp_servers:
+  - '*'
 skills:
-  - skill-installer
-  - pptx-craft
-  - deepresearch
+  - '*'
 tools:
   - grep
   - glob

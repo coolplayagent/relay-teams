@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from relay_teams.computer import ExecutionSurface
+from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles import (
     RoleDocumentDraft,
@@ -462,6 +463,78 @@ def test_save_role_document_filters_unknown_capabilities_from_other_roles(
     assert reloaded_dirty_role.skills == ()
 
 
+def test_save_role_document_preserves_persisted_wildcards_when_filtering_dirty_roles(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    _write_role(
+        roles_dir / "dirty.md",
+        role_id="dirty",
+        name="Dirty",
+        description="Contains stale capability references.",
+        version="1.0.0",
+        tools=("missing_tool",),
+        mcp_servers=("*", "missing_mcp"),
+        skills=("*", "missing_skill"),
+        system_prompt="Continue despite stale capabilities.",
+    )
+    skills_dir = tmp_path / "skills"
+    _write_skill(
+        skills_dir / "time",
+        name="time",
+        description="timezone helper",
+        instructions="Use UTC.",
+    )
+    mcp_registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    captured_registry: list[RoleRegistry] = []
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=lambda: mcp_registry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: captured_registry.append(registry),
+    )
+
+    service.save_role_document(
+        "writer",
+        draft=RoleDocumentDraft(
+            role_id="writer",
+            name="Writer",
+            description="Drafts user-facing content.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            mcp_servers=(),
+            skills=(),
+            model_profile="default",
+            memory_profile=default_memory_profile(),
+            system_prompt="Write clearly.",
+        ),
+    )
+
+    reloaded_dirty_role = captured_registry[-1].get("dirty")
+    assert reloaded_dirty_role.tools == (
+        "office_read_markdown",
+        "todo_write",
+        "todo_read",
+    )
+    assert reloaded_dirty_role.mcp_servers == ("*",)
+    assert reloaded_dirty_role.skills == ("*",)
+
+
 def test_validate_all_roles_rejects_unknown_capabilities_in_persisted_roles(
     tmp_path: Path,
 ) -> None:
@@ -794,6 +867,280 @@ def test_save_role_document_creates_new_role_file(tmp_path: Path) -> None:
     assert captured_registry[-1].get("new_role").name == "New Role"
 
 
+def test_save_role_document_preserves_skill_and_mcp_wildcards(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    skills_dir = tmp_path / "skills"
+    _write_skill(
+        skills_dir / "time",
+        name="time",
+        description="timezone helper",
+        instructions="Use UTC.",
+    )
+    mcp_registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    captured_registry: list[RoleRegistry] = []
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=lambda: mcp_registry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: captured_registry.append(registry),
+    )
+
+    saved = service.save_role_document(
+        "wildcard_role",
+        draft=RoleDocumentDraft(
+            role_id="wildcard_role",
+            name="Wildcard Role",
+            description="Uses wildcard capabilities.",
+            version="1.0.0",
+            tools=("orch_dispatch_task",),
+            mcp_servers=("*",),
+            skills=("*",),
+            model_profile="default",
+            memory_profile=default_memory_profile(),
+            system_prompt="Use all configured capabilities.",
+        ),
+    )
+
+    assert saved.mcp_servers == ("*",)
+    assert saved.skills == ("*",)
+    assert captured_registry[-1].get("wildcard_role").mcp_servers == ("*",)
+    assert captured_registry[-1].get("wildcard_role").skills == ("*",)
+    assert "'*'" in saved.content
+
+
+def test_save_role_document_collapses_mixed_wildcard_capability_selections(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    skills_dir = tmp_path / "skills"
+    _write_skill(
+        skills_dir / "time",
+        name="time",
+        description="timezone helper",
+        instructions="Use UTC.",
+    )
+    mcp_registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=lambda: mcp_registry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    saved = service.save_role_document(
+        "wildcard_role",
+        draft=RoleDocumentDraft(
+            role_id=" wildcard_role ",
+            name=" Wildcard Role ",
+            description=" Uses wildcard capabilities. ",
+            version=" 1.0.0 ",
+            tools=(" orch_dispatch_task ",),
+            mcp_servers=(" filesystem ", " * "),
+            skills=(" app:time ", "*"),
+            model_profile=" default ",
+            memory_profile=default_memory_profile(),
+            system_prompt=" Use all configured capabilities. ",
+        ),
+    )
+
+    assert saved.mcp_servers == ("*",)
+    assert saved.skills == ("*",)
+    assert "- '*'" in saved.content
+    assert "filesystem" not in saved.content
+    assert "app:time" not in saved.content
+
+
+def test_validate_role_document_rejects_partial_mcp_wildcard(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    with pytest.raises(ValueError, match="Unknown MCP servers: \\['mcp-\\*'\\]"):
+        service.validate_role_document(
+            RoleDocumentDraft(
+                role_id="wildcard_role",
+                name="Wildcard Role",
+                description="Uses wildcard capabilities.",
+                version="1.0.0",
+                tools=("orch_dispatch_task",),
+                mcp_servers=("mcp-*",),
+                skills=(),
+                model_profile="default",
+                memory_profile=default_memory_profile(),
+                system_prompt="Use all configured capabilities.",
+            )
+        )
+
+
+def test_validate_role_document_rejects_invalid_mcp_ref_mixed_with_wildcard(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    mcp_registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=lambda: mcp_registry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    with pytest.raises(ValueError, match="Unknown MCP servers: \\['mcp-\\*'\\]"):
+        service.validate_role_document(
+            RoleDocumentDraft(
+                role_id="wildcard_role",
+                name="Wildcard Role",
+                description="Uses wildcard capabilities.",
+                version="1.0.0",
+                tools=("orch_dispatch_task",),
+                mcp_servers=("filesystem", "mcp-*", "*"),
+                skills=(),
+                model_profile="default",
+                memory_profile=default_memory_profile(),
+                system_prompt="Use all configured capabilities.",
+            )
+        )
+
+
+def test_validate_role_document_rejects_partial_skill_wildcard(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    with pytest.raises(ValueError, match="Unknown skills: \\['builtin:\\*'\\]"):
+        service.validate_role_document(
+            RoleDocumentDraft(
+                role_id="wildcard_role",
+                name="Wildcard Role",
+                description="Uses wildcard capabilities.",
+                version="1.0.0",
+                tools=("orch_dispatch_task",),
+                mcp_servers=(),
+                skills=("builtin:*",),
+                model_profile="default",
+                memory_profile=default_memory_profile(),
+                system_prompt="Use all configured capabilities.",
+            )
+        )
+
+
+def test_validate_role_document_rejects_invalid_skill_ref_mixed_with_wildcard(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    skills_dir = tmp_path / "skills"
+    _write_skill(
+        skills_dir / "time",
+        name="time",
+        description="timezone helper",
+        instructions="Use UTC.",
+    )
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    with pytest.raises(ValueError, match="Unknown skills: \\['missing'\\]"):
+        service.validate_role_document(
+            RoleDocumentDraft(
+                role_id="wildcard_role",
+                name="Wildcard Role",
+                description="Uses wildcard capabilities.",
+                version="1.0.0",
+                tools=("orch_dispatch_task",),
+                mcp_servers=(),
+                skills=("app:time", "missing", "*"),
+                model_profile="default",
+                memory_profile=default_memory_profile(),
+                system_prompt="Use all configured capabilities.",
+            )
+        )
+
+
 def test_save_role_document_strips_office_tool_from_coordinator_like_role(
     tmp_path: Path,
 ) -> None:
@@ -1053,24 +1400,30 @@ def _write_role(
         f"version: {version}\n",
         f"mode: {mode.value}\n",
         "tools:\n",
-        *[f"  - {tool}\n" for tool in tools],
+        *[f"  - {_format_yaml_list_item(tool)}\n" for tool in tools],
     ]
     if mcp_servers:
         lines.extend(
             [
                 "mcp_servers:\n",
-                *[f"  - {server}\n" for server in mcp_servers],
+                *[f"  - {_format_yaml_list_item(server)}\n" for server in mcp_servers],
             ]
         )
     if skills:
         lines.extend(
             [
                 "skills:\n",
-                *[f"  - {skill}\n" for skill in skills],
+                *[f"  - {_format_yaml_list_item(skill)}\n" for skill in skills],
             ]
         )
     lines.extend(["---\n\n", system_prompt, "\n"])
     path.write_text("".join(lines), encoding="utf-8")
+
+
+def _format_yaml_list_item(value: str) -> str:
+    if value == "*":
+        return "'*'"
+    return value
 
 
 def _create_builtin_roles_dir(tmp_path: Path) -> Path:

@@ -20,6 +20,7 @@ from relay_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)
 _DEFAULT_STDIO_MCP_TIMEOUT_SECONDS = 15.0
+_CAPABILITY_WILDCARD = "*"
 
 
 class _ListedMcpTool(Protocol):
@@ -66,9 +67,12 @@ class McpRegistry:
         *,
         strict: bool = True,
         consumer: str | None = None,
+        expand_wildcards: bool = True,
     ) -> tuple[str, ...]:
-        resolved_names = tuple(name for name in names if name in self._specs)
-        missing_names = tuple(name for name in names if name not in self._specs)
+        resolved_names, missing_names = self._resolve_names(
+            names,
+            expand_wildcards=expand_wildcards,
+        )
         if missing_names and strict:
             raise ValueError(f"Unknown MCP servers: {list(missing_names)}")
         if missing_names:
@@ -87,6 +91,34 @@ class McpRegistry:
                 payload=payload,
             )
         return resolved_names
+
+    def _resolve_names(
+        self,
+        names: tuple[str, ...],
+        *,
+        expand_wildcards: bool,
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        resolved_names: list[str] = []
+        wildcard_names: set[str] = set()
+        missing_names: list[str] = []
+        for raw_name in names:
+            name = raw_name.strip()
+            if name == _CAPABILITY_WILDCARD:
+                if not expand_wildcards:
+                    if _CAPABILITY_WILDCARD not in resolved_names:
+                        resolved_names.append(_CAPABILITY_WILDCARD)
+                    continue
+                for server_name in self.list_names():
+                    if server_name not in resolved_names:
+                        resolved_names.append(server_name)
+                    wildcard_names.add(server_name)
+                continue
+            if name in self._specs:
+                if name not in wildcard_names:
+                    resolved_names.append(name)
+                continue
+            missing_names.append(name)
+        return tuple(resolved_names), tuple(missing_names)
 
     def list_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._specs.keys()))

@@ -32,6 +32,7 @@ _DEFAULT_GITHUB_BASE = "https://github.com"
 _HTTP_TIMEOUT_SECONDS = 30.0
 _GIT_TIMEOUT_SECONDS = 60.0
 _CURRENT_ROLE_ENV_KEY = "AGENT_TEAMS_CURRENT_ROLE_ID"
+_CAPABILITY_WILDCARD = "*"
 _GITHUB_TREE_URL_RE = re.compile(
     r"https://github\.com/(?P<repo>[^/]+/[^/]+)/(?:tree|blob)/(?P<ref>[^/]+)/(?P<path>[^\"'\s<]+)"
 )
@@ -129,9 +130,10 @@ def render_mount_results_text(
 ) -> str:
     normalized_skill_names = _dedupe_non_empty(skill_names)
     normalized_role_ids = _dedupe_non_empty(role_ids)
+    updated_roles = ", ".join(normalized_role_ids) if normalized_role_ids else "<none>"
     lines = [
         "Bound skills: " + ", ".join(normalized_skill_names),
-        "Updated roles: " + ", ".join(normalized_role_ids),
+        "Updated roles: " + updated_roles,
         "Restart Agent Teams to pick up new skills.",
     ]
     return "\n".join(lines)
@@ -687,8 +689,11 @@ def mount_skills_to_roles(
     except ValueError as exc:
         raise SkillInstallerError(str(exc)) from exc
 
+    updated_role_ids: list[str] = []
     for role_id in normalized_role_ids:
         record = role_service.get_role_document(role_id)
+        if _CAPABILITY_WILDCARD in record.skills:
+            continue
         merged_skills = _merge_names(record.skills, resolved_skill_refs)
         if merged_skills == record.skills:
             continue
@@ -708,7 +713,8 @@ def mount_skills_to_roles(
                 system_prompt=record.system_prompt,
             ),
         )
-    return normalized_role_ids
+        updated_role_ids.append(role_id)
+    return tuple(updated_role_ids)
 
 
 def _normalize_repo_path(path: str) -> str:
