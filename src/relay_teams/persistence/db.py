@@ -23,7 +23,7 @@ LOGGER = get_logger(__name__)
 _WRITE_COORDINATORS: dict[str, RLock] = {}
 _WRITE_COORDINATORS_LOCK = RLock()
 _ASYNC_WRITE_COORDINATORS: dict[str, asyncio.Lock] = {}
-_ResultT = TypeVar("_ResultT")
+ResultT = TypeVar("ResultT")
 
 
 def _configure_connection(
@@ -147,12 +147,12 @@ async def run_async_sqlite_write_with_retry(
     *,
     conn: aiosqlite.Connection,
     db_path: Path,
-    operation: Callable[[], Awaitable[_ResultT]],
+    operation: Callable[[], Awaitable[ResultT]],
     lock: Optional[asyncio.Lock] = None,
     repository_name: str,
     operation_name: str,
     max_retries: int = SQLITE_WRITE_RETRY_ATTEMPTS,
-) -> _ResultT:
+) -> ResultT:
     delay = SQLITE_WRITE_RETRY_INITIAL_DELAY_SECONDS
     write_lock = _async_write_coordinator_for(db_path)
     for attempt in range(max_retries + 1):
@@ -194,12 +194,12 @@ def run_sqlite_write_with_retry(
     *,
     conn: sqlite3.Connection,
     db_path: Path,
-    operation: Callable[[], _ResultT],
+    operation: Callable[[], ResultT],
     lock: Optional[RLock] = None,
     repository_name: str,
     operation_name: str,
     max_retries: int = SQLITE_WRITE_RETRY_ATTEMPTS,
-) -> _ResultT:
+) -> ResultT:
     delay = SQLITE_WRITE_RETRY_INITIAL_DELAY_SECONDS
     write_lock = _write_coordinator_for(db_path)
     for attempt in range(max_retries + 1):

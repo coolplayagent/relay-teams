@@ -25,7 +25,7 @@ from relay_teams_evals.workspace.base import PreparedWorkspace
 AgentTeamsClient = AsyncAgentTeamsClient
 
 _TERMINAL_EVENTS = frozenset({"run_completed", "run_failed", "run_stopped"})
-_T = TypeVar("_T")
+T = TypeVar("T")
 
 
 def _log(item_id: str, msg: str) -> None:
@@ -368,7 +368,7 @@ def _get_agent_teams_client() -> type[AsyncAgentTeamsClient]:
     return AgentTeamsClient
 
 
-async def _maybe_await(value: Union[_T, Awaitable[_T]]) -> _T:
+async def _maybe_await(value: Union[T, Awaitable[T]]) -> T:
     if isawaitable(value):
         return await value
     return value
@@ -438,7 +438,7 @@ class AgentTeamsBackend(AgentBackend):
         try:
             _log(workspace.item_id, "creating session ...")
             session_data = cast(
-                Mapping[str, object],
+                dict[str, object],
                 await _maybe_await(client.create_session(workspace_id=workspace_id)),
             )
             session_id = str(session_data.get("session_id", ""))

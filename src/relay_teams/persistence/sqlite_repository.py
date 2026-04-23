@@ -16,7 +16,7 @@ from relay_teams.persistence.db import (
     run_sqlite_write_with_retry,
 )
 
-_ResultT = TypeVar("_ResultT")
+ResultT = TypeVar("ResultT")
 
 
 class SharedSqliteRepository:
@@ -32,7 +32,7 @@ class SharedSqliteRepository:
         self._lock = RLock()
         self._repository_name = repository_name or type(self).__name__
 
-    def _run_read(self, operation: Callable[[], _ResultT]) -> _ResultT:
+    def _run_read(self, operation: Callable[[], ResultT]) -> ResultT:
         with self._lock:
             return operation()
 
@@ -40,8 +40,8 @@ class SharedSqliteRepository:
         self,
         *,
         operation_name: str,
-        operation: Callable[[], _ResultT],
-    ) -> _ResultT:
+        operation: Callable[[], ResultT],
+    ) -> ResultT:
         return run_sqlite_write_with_retry(
             conn=self._conn,
             db_path=self._db_path,
@@ -89,8 +89,8 @@ class AsyncSharedSqliteRepository:
 
     async def _run_read(
         self,
-        operation: Callable[[], Awaitable[_ResultT]],
-    ) -> _ResultT:
+        operation: Callable[[], Awaitable[ResultT]],
+    ) -> ResultT:
         async with self._lock:
             return await operation()
         raise RuntimeError("Async SQLite read helper exited without a result")
@@ -99,8 +99,8 @@ class AsyncSharedSqliteRepository:
         self,
         *,
         operation_name: str,
-        operation: Callable[[], Awaitable[_ResultT]],
-    ) -> _ResultT:
+        operation: Callable[[], Awaitable[ResultT]],
+    ) -> ResultT:
         return await run_async_sqlite_write_with_retry(
             conn=self._conn,
             db_path=self._db_path,
