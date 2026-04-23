@@ -1255,6 +1255,36 @@ def test_probe_github_webhook_connectivity() -> None:
     }
 
 
+def test_probe_github_webhook_connectivity_runs_service_call_in_threadpool(
+    monkeypatch,
+) -> None:
+    calls: list[GitHubWebhookConnectivityProbeRequest] = []
+
+    async def fake_to_thread(
+        func: Callable[
+            [GitHubWebhookConnectivityProbeRequest],
+            GitHubWebhookConnectivityProbeResult,
+        ],
+        request: GitHubWebhookConnectivityProbeRequest,
+    ) -> GitHubWebhookConnectivityProbeResult:
+        calls.append(request)
+        return func(request)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/github/webhook:probe",
+        json={"webhook_base_url": "https://agent-teams.example.com"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert [call.webhook_base_url for call in calls] == [
+        "https://agent-teams.example.com"
+    ]
+
+
 def test_get_github_webhook_tunnel_status() -> None:
     service = _FakeSystemService()
     service.tunnel_status = LocalhostRunTunnelStatus(

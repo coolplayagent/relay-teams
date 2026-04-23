@@ -847,7 +847,7 @@ async def probe_github_webhook_connectivity(
     ),
 ) -> GitHubWebhookConnectivityProbeResult:
     try:
-        return service.probe(req)
+        return await asyncio.to_thread(service.probe, req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

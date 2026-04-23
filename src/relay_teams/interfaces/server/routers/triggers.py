@@ -189,7 +189,7 @@ async def create_github_repo_subscription(
             callback_url = _github_delivery_callback_url(request, github_config_service)
             if callback_url is not None:
                 resolved_req = req.model_copy(update={"callback_url": callback_url})
-        return service.create_repo_subscription(resolved_req)
+        return await run_in_threadpool(service.create_repo_subscription, resolved_req)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except GitHubRepoSubscriptionConflictError as exc:

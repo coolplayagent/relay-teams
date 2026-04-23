@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -397,6 +398,38 @@ def test_create_github_repo_route_uses_public_request_url_when_base_url_missing(
     assert fake_service.created_repo_requests[0].callback_url == (
         "https://agent-teams.example.com/api/triggers/github/deliveries"
     )
+
+
+def test_create_github_repo_route_runs_service_call_in_threadpool(monkeypatch) -> None:
+    calls: list[GitHubRepoSubscriptionCreateInput] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[
+            [GitHubRepoSubscriptionCreateInput],
+            GitHubRepoSubscriptionRecord,
+        ],
+        req: GitHubRepoSubscriptionCreateInput,
+    ) -> GitHubRepoSubscriptionRecord:
+        calls.append(req)
+        return func(req)
+
+    monkeypatch.setattr(triggers, "run_in_threadpool", fake_run_in_threadpool)
+    client = _client(_FakeGitHubTriggerService())
+
+    response = client.post(
+        "/api/triggers/github/repos",
+        json={
+            "account_id": "ghta_1",
+            "owner": "coolplayagent",
+            "repo_name": "relay-teams",
+            "callback_url": "https://example.com/hook",
+        },
+    )
+
+    assert response.status_code == 200
+    assert [(call.owner, call.repo_name) for call in calls] == [
+        ("coolplayagent", "relay-teams")
+    ]
 
 
 def test_create_github_repo_route_maps_provider_not_found_to_404() -> None:
