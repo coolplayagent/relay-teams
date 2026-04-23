@@ -176,9 +176,9 @@ async def create_run(
         )
 
         def create_and_start_run() -> tuple[str, str]:
-            run_id, session_id = service.create_run(intent_input)
-            service.ensure_run_started(run_id)
-            return run_id, session_id
+            created_run_id, created_session_id = service.create_run(intent_input)
+            service.ensure_run_started(created_run_id)
+            return created_run_id, created_session_id
 
         run_id, session_id = await asyncio.to_thread(create_and_start_run)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -584,9 +584,9 @@ async def resume_run(
     try:
 
         def resume_and_start_run() -> str:
-            session_id = service.resume_run(run_id)
+            resumed_session_id = service.resume_run(run_id)
             service.ensure_run_started(run_id)
-            return session_id
+            return resumed_session_id
 
         session_id = await asyncio.to_thread(resume_and_start_run)
         with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
