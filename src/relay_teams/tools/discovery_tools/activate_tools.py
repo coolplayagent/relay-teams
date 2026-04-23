@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from typing import Union
 
 from pydantic import JsonValue
 from pydantic_ai import Agent
@@ -12,17 +13,18 @@ from relay_teams.tools.runtime_activation import apply_tool_activation
 from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool_call
 
 DESCRIPTION = load_tool_description(__file__)
+_ToolNamesArg = Union[list[str], str]
 
 
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
     async def activate_tools(
         ctx: ToolContext,
-        tool_names: list[str] | str,
+        tool_names: _ToolNamesArg,
     ) -> dict[str, JsonValue]:
         """Activate runtime-authorized local tools for future model turns."""
 
-        def _action(tool_names: list[str] | str) -> dict[str, JsonValue]:
+        def _action(tool_names: _ToolNamesArg) -> dict[str, JsonValue]:
             return _activate_runtime_tools(
                 ctx=ctx,
                 tool_names=tool_names,
@@ -46,7 +48,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
 def _activate_runtime_tools(
     *,
     ctx: ToolContext,
-    tool_names: list[str] | str,
+    tool_names: _ToolNamesArg,
 ) -> dict[str, JsonValue]:
     requested_tool_names = _normalize_requested_tool_names(tool_names)
     try:
@@ -109,7 +111,7 @@ def _activate_runtime_tools(
 
 
 def _normalize_requested_tool_names(
-    tool_names: list[str] | str,
+    tool_names: _ToolNamesArg,
 ) -> tuple[str, ...]:
     if isinstance(tool_names, str):
         normalized_name = tool_names.strip()

@@ -144,6 +144,8 @@ class _FakeDeps:
         self.session_id = "session-1"
         self.instance_id = "inst-1"
         self.role_id = "spec_coder"
+        self.workspace_id = "workspace-1"
+        self.conversation_id = "conversation-1"
         self.role_registry = RoleRegistry()
         self.role_registry.register(
             RoleDefinition(
@@ -163,7 +165,7 @@ class _FakeDeps:
         self.hook_service: object | None = None
         self.hook_runtime_env: dict[str, str] = {}
         self.injection_manager = _FakeInjectionManager()
-        self.agent_repo: AgentInstanceRepository | None = None
+        self.agent_repo = AgentInstanceRepository(Path(mkdtemp()) / "instances.db")
         self.approval_ticket_repo = ApprovalTicketRepository(db_path)
         self.run_runtime_repo = RunRuntimeRepository(db_path)
         self.shared_store = SharedStateRepository(Path(mkdtemp()) / "state.db")
@@ -173,6 +175,16 @@ class _FakeDeps:
             root_task_id=self.task_id,
             status=RunRuntimeStatus.RUNNING,
             phase=RunRuntimePhase.COORDINATOR_RUNNING,
+        )
+        self.agent_repo.upsert_instance(
+            run_id=self.run_id,
+            trace_id=self.trace_id,
+            session_id=self.session_id,
+            instance_id=self.instance_id,
+            role_id=self.role_id,
+            workspace_id=self.workspace_id,
+            conversation_id=self.conversation_id,
+            status=InstanceStatus.IDLE,
         )
 
 
@@ -675,6 +687,31 @@ def test_execute_tool_blocks_deferred_local_tools_until_activation() -> None:
     assert activated_result["ok"] is True
     assert activated_result["data"] == "hello"
     assert action_calls == ["read"]
+
+
+def test_execute_tool_fails_closed_when_agent_repo_contract_is_unavailable() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.agent_repo = cast(AgentInstanceRepository, cast(object, None))
+    ctx = _FakeCtx(deps)
+    action_calls: list[str] = []
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: action_calls.append("read") or "hello",
+        )
+    )
+
+    error = cast(dict[str, JsonValue], result["error"])
+    assert result["ok"] is False
+    assert error["type"] == "internal_error"
+    assert "agent instance repository contract" in str(error["message"])
+    assert action_calls == []
 
 
 def test_resolve_runtime_active_local_tools_restores_required_discovery_tools() -> None:

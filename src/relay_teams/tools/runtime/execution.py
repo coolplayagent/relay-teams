@@ -439,24 +439,26 @@ def _runtime_activation_error(
     ctx: ToolContext,
     tool_name: str,
 ) -> ToolError | None:
-    agent_repo = getattr(ctx.deps, "agent_repo", None)
-    if agent_repo is None or not hasattr(agent_repo, "get_instance"):
-        return None
     try:
-        runtime_record = agent_repo.get_instance(ctx.deps.instance_id)
+        runtime_record = ctx.deps.agent_repo.get_instance(ctx.deps.instance_id)
+    except AttributeError:
+        return ToolError(
+            type="internal_error",
+            message=(
+                "Runtime tool activation policy is unavailable because the "
+                "agent instance repository contract is misconfigured."
+            ),
+            retryable=False,
+        )
     except KeyError:
         return None
-    runtime_tools = _parse_runtime_tools_snapshot(
-        str(getattr(runtime_record, "runtime_tools_json", ""))
-    )
+    runtime_tools = _parse_runtime_tools_snapshot(runtime_record.runtime_tools_json)
     authorized_local_tools = tuple(entry.name for entry in runtime_tools.local_tools)
     if tool_name not in authorized_local_tools:
         return None
     active_local_tools = _resolve_runtime_active_local_tools(
         authorized_local_tools=authorized_local_tools,
-        runtime_active_tools_json=str(
-            getattr(runtime_record, "runtime_active_tools_json", "")
-        ),
+        runtime_active_tools_json=runtime_record.runtime_active_tools_json,
     )
     if tool_name in active_local_tools:
         return None

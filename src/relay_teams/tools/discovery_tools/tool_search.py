@@ -7,7 +7,6 @@ import json
 import math
 import re
 from collections.abc import Iterable, Mapping
-from typing import cast
 
 from pydantic import JsonValue
 from pydantic_ai import Agent
@@ -396,7 +395,7 @@ def _score_tool_match(
 
 def _schema_tokens(schema: Mapping[str, JsonValue]) -> tuple[str, ...]:
     collected_tokens: list[str] = []
-    _collect_schema_tokens(cast(JsonValue, dict(schema)), collected_tokens, depth=0)
+    _collect_schema_tokens(dict(schema), collected_tokens, depth=0)
     return tuple(collected_tokens)
 
 
@@ -409,8 +408,9 @@ def _collect_schema_tokens(
     if depth > 3:
         return
     if isinstance(value, dict):
-        mapping = cast(Mapping[str, JsonValue], value)
-        for key, item in mapping.items():
+        for key, item in value.items():
+            if not isinstance(key, str):
+                continue
             collected_tokens.extend(_tokenize(key))
             if key in {"title", "description"} and isinstance(item, str):
                 collected_tokens.extend(_tokenize(item))
