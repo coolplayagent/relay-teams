@@ -180,6 +180,7 @@ setPanel('inst-1', {
 await loadAgentHistory('inst-1', 'writer');
 
 console.log(JSON.stringify(globalThis.__renderHistoricalMessageListCalls));
+process.exit(0);
 
 function createPanelElement() {
     return {
