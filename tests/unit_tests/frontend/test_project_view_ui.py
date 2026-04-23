@@ -1136,7 +1136,7 @@ export async function updateAutomationProject(_automationProjectId, payload) {
     assert "Writer" in str(payload["contentHtml"])
 
 
-def test_project_view_opens_automation_editor_when_session_config_helpers_fail(
+def test_project_view_preserves_saved_normal_role_when_session_config_helpers_fail(
     tmp_path: Path,
 ) -> None:
     payload = _run_project_view_script(
@@ -1157,9 +1157,14 @@ document.querySelector("[data-automation-edit]")?.onclick?.();
 await flushTasks();
 await flushTasks();
 
+const modalHtmlBeforeSave = globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n");
+document.querySelector("[data-automation-editor-save]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
 console.log(JSON.stringify({
-    contentHtml: els.projectViewContent.innerHTML,
-    modalHtml: globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n"),
+    modalHtml: modalHtmlBeforeSave,
+    updatePayload: globalThis.__updatedAutomationPayload,
 }));
 """.strip(),
         mock_api_source="""
@@ -1302,17 +1307,217 @@ export async function deleteWeChatGatewayAccount() {
     return { status: "ok" };
 }
 
-export async function updateAutomationProject() {
+export async function updateAutomationProject(_automationProjectId, payload) {
+    globalThis.__updatedAutomationPayload = payload;
     return { status: "ok" };
 }
 """.strip(),
     )
 
-    assert "Daily Briefing" in str(payload["contentHtml"])
+    update_payload = cast(dict[str, object], payload["updatePayload"])
+    run_config = cast(dict[str, object], update_payload["run_config"])
     assert "automation-editor-modal-title" in str(payload["modalHtml"])
     assert 'id="automation-editor-normal-root-role-id-input"' in str(
         payload["modalHtml"]
     )
+    assert "Writer" in str(payload["modalHtml"])
+    assert run_config["session_mode"] == "normal"
+    assert run_config["normal_root_role_id"] == "Writer"
+    assert run_config["orchestration_preset_id"] is None
+
+
+def test_project_view_preserves_saved_orchestration_preset_when_options_omit_it(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationProjectView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openAutomationProjectView({ automation_project_id: "aut_1", workspace_id: "alpha-project" });
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-automation-edit]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const modalHtmlBeforeSave = globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n");
+document.querySelector("[data-automation-editor-save]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    modalHtml: modalHtmlBeforeSave,
+    updatePayload: globalThis.__updatedAutomationPayload,
+}));
+""".strip(),
+        mock_api_source="""
+export async function disableAutomationProject() {
+    return { status: "disabled" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "enabled" };
+}
+
+export async function createAutomationProject() {
+    return { automation_project_id: "aut_new" };
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        name: "daily-briefing",
+        display_name: "Daily Briefing",
+        status: "enabled",
+        workspace_id: "alpha-project",
+        prompt: "Summarize the latest project changes.",
+        schedule_mode: "cron",
+        cron_expression: "0 9 * * *",
+        timezone: "UTC",
+        run_config: {
+            session_mode: "orchestration",
+            normal_root_role_id: null,
+            orchestration_preset_id: "preset-missing-name",
+        },
+    };
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function fetchAutomationProjectSessions() {
+    return [];
+}
+
+export async function fetchAutomationProjects() {
+    return [{ automation_project_id: "aut_1", display_name: "Daily Briefing", name: "daily-briefing", status: "enabled", workspace_id: "alpha-project" }];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "alpha-project", root_path: "/work/alpha-project" }];
+}
+
+export async function fetchWorkspaceSnapshot() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceTree() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffs() {
+    throw new Error("not used");
+}
+
+export async function fetchWorkspaceDiffFile() {
+    throw new Error("not used");
+}
+
+export async function runAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function fetchConfigStatus() {
+    return { skills: { skills: [] } };
+}
+
+export async function fetchOrchestrationConfig() {
+    return {
+        presets: [{ preset_id: "preset-other", name: "Other Preset" }],
+    };
+}
+
+export async function fetchRoleConfigOptions() {
+    return {
+        normal_mode_roles: [{ role_id: "Writer", name: "Writer" }],
+    };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function reloadSkillsConfig() {
+    return { status: "ok" };
+}
+
+export async function createTrigger() {
+    return { status: "ok" };
+}
+
+export async function updateTrigger() {
+    return { status: "ok" };
+}
+
+export async function deleteTrigger() {
+    return { status: "ok" };
+}
+
+export async function enableTrigger() {
+    return { status: "ok" };
+}
+
+export async function disableTrigger() {
+    return { status: "ok" };
+}
+
+export async function startWeChatGatewayLogin() {
+    return { session_key: "wechat-login-1", qr_code_url: "https://example.test/qr.png" };
+}
+
+export async function waitWeChatGatewayLogin() {
+    return { connected: true };
+}
+
+export async function updateWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function enableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function disableWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function deleteWeChatGatewayAccount() {
+    return { status: "ok" };
+}
+
+export async function updateAutomationProject(_automationProjectId, payload) {
+    globalThis.__updatedAutomationPayload = payload;
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    update_payload = cast(dict[str, object], payload["updatePayload"])
+    run_config = cast(dict[str, object], update_payload["run_config"])
+    assert "automation-editor-modal-title" in str(payload["modalHtml"])
+    assert 'id="automation-editor-orchestration-preset-id-input"' in str(
+        payload["modalHtml"]
+    )
+    assert "preset-missing-name" in str(payload["modalHtml"])
+    assert run_config["session_mode"] == "orchestration"
+    assert run_config["normal_root_role_id"] is None
+    assert run_config["orchestration_preset_id"] == "preset-missing-name"
 
 
 def test_project_view_renders_github_automation_section_and_access_panel(

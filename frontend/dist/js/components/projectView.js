@@ -1215,6 +1215,28 @@ function renderAutomationEditorFieldOptions(options, selectedValue) {
     }).join('');
 }
 
+function ensureAutomationEditorSelectedOption(options, selectedValue) {
+    const normalizedSelectedValue = String(selectedValue || '').trim();
+    const normalizedOptions = Array.isArray(options) ? options : [];
+    if (!normalizedSelectedValue) {
+        return normalizedOptions;
+    }
+    const hasSelectedOption = normalizedOptions.some(
+        option => String(option?.value || '').trim() === normalizedSelectedValue,
+    );
+    if (hasSelectedOption) {
+        return normalizedOptions;
+    }
+    return [
+        ...normalizedOptions,
+        {
+            value: normalizedSelectedValue,
+            label: normalizedSelectedValue,
+            description: normalizedSelectedValue,
+        },
+    ];
+}
+
 function renderAutomationEditorWeekdayOptions(selectedValue) {
     return renderAutomationEditorFieldOptions([
         { value: '1', label: t('automation.cron.weekday.mon') },
@@ -1303,8 +1325,14 @@ function renderAutomationEditorModal() {
         label: formatWorkspaceOptionLabel(workspace),
     })).filter(option => option.value);
     const sessionMode = String(draft.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
-    const normalRoleOptions = resolveRoleOptionsForForms(currentAutomationEditorState.normalRoles);
-    const orchestrationPresetOptions = resolvePresetOptionsForForms(currentAutomationEditorState.orchestrationPresets);
+    const normalRoleOptions = ensureAutomationEditorSelectedOption(
+        resolveRoleOptionsForForms(currentAutomationEditorState.normalRoles),
+        draft.normal_root_role_id,
+    );
+    const orchestrationPresetOptions = ensureAutomationEditorSelectedOption(
+        resolvePresetOptionsForForms(currentAutomationEditorState.orchestrationPresets),
+        draft.orchestration_preset_id,
+    );
     const bindingSelected = String(draft.delivery_binding_key || '').trim().length > 0;
     const scheduleLocked = draft.requires_schedule_reset === true && draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.unsupported;
     root.innerHTML = `
