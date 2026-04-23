@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from threading import Event, Thread
+import threading
 
 from relay_teams.logger import get_logger, log_event
 from relay_teams.triggers.service import GitHubTriggerService
@@ -22,9 +22,9 @@ class GitHubTriggerActionWorker:
         self._trigger_service = trigger_service
         self._poll_interval_seconds = poll_interval_seconds
         self._stop_timeout_seconds = stop_timeout_seconds
-        self._stop_event = Event()
-        self._wake_event = Event()
-        self._thread: Thread | None = None
+        self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
+        self._thread: threading.Thread | None = None
 
     async def start(self) -> None:
         thread = self._thread
@@ -32,7 +32,7 @@ class GitHubTriggerActionWorker:
             return
         self._stop_event.clear()
         self._wake_event.clear()
-        self._thread = Thread(
+        self._thread = threading.Thread(
             target=self._run_loop,
             name="github-trigger-action-worker",
             daemon=True,
