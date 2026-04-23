@@ -193,8 +193,9 @@ def _raise_system_http_error(
 async def health_check(request: Request) -> ServerHealthPayload:
     container = getattr(request.app.state, "container", None)
     if container is None:
-        return build_server_health_payload()
-    return build_server_health_payload(
+        return await asyncio.to_thread(build_server_health_payload)
+    return await asyncio.to_thread(
+        build_server_health_payload,
         config_dir=container.config_dir,
         role_registry=container.role_registry,
         skill_registry=container.skill_registry,

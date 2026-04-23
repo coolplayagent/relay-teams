@@ -1226,6 +1226,7 @@ async def test_request_json_uses_async_http_client_and_normalizes_lists(
         )
     ]
     assert captured_kwargs["timeout_seconds"] == 7.5
+    assert captured_kwargs["connect_timeout_seconds"] == 7.5
 
 
 async def test_request_json_returns_empty_dict_for_empty_response(monkeypatch) -> None:
@@ -1284,6 +1285,7 @@ async def test_stream_run_events_filters_sse_lines(monkeypatch) -> None:
         )
     ]
     assert captured_kwargs["timeout_seconds"] == 12.0
+    assert captured_kwargs["connect_timeout_seconds"] == 12.0
 
 
 async def test_stream_run_events_reads_streamed_error_body(monkeypatch) -> None:

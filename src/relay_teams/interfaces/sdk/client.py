@@ -315,6 +315,7 @@ class AsyncAgentTeamsClient:
         async with create_async_http_client(
             proxy_config=load_proxy_env_config(),
             timeout_seconds=self._stream_timeout_seconds,
+            connect_timeout_seconds=self._stream_timeout_seconds,
         ) as client:
             try:
                 async with client.stream(
@@ -947,6 +948,7 @@ class AsyncAgentTeamsClient:
         async with create_async_http_client(
             proxy_config=load_proxy_env_config(),
             timeout_seconds=self._timeout_seconds,
+            connect_timeout_seconds=self._timeout_seconds,
         ) as client:
             try:
                 response = await client.request(

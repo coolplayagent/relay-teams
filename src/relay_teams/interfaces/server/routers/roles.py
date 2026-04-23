@@ -71,64 +71,86 @@ async def get_role_config_options(
     ),
 ) -> RoleConfigOptions:
     try:
-        ensure_required_system_roles(role_registry)
-        skill_options = _load_role_skill_options(
+        return await run_in_threadpool(
+            _build_role_config_options,
             role_registry=role_registry,
+            model_config_service=model_config_service,
+            tool_registry=tool_registry,
+            mcp_service=mcp_service,
             skill_registry=skill_registry,
             skills_reload_service=skills_reload_service,
-        )
-        normal_mode_roles = tuple(
-            _build_role_option(role=role, model_config_service=model_config_service)
-            for role in role_registry.list_normal_mode_roles()
-        )
-        subagent_roles = tuple(
-            _build_role_option(role=role, model_config_service=model_config_service)
-            for role in role_registry.list_subagent_roles()
-        )
-        coordinator_role = _build_role_option(
-            role=role_registry.get_coordinator(),
-            model_config_service=model_config_service,
-        )
-        main_agent_role = _build_role_option(
-            role=role_registry.get_main_agent(),
-            model_config_service=model_config_service,
-        )
-        coordinator_role_id = coordinator_role.role_id
-        main_agent_role_id = main_agent_role.role_id
-        return RoleConfigOptions(
-            coordinator_role_id=coordinator_role_id,
-            main_agent_role_id=main_agent_role_id,
-            coordinator_role=coordinator_role,
-            main_agent_role=main_agent_role,
-            normal_mode_roles=normal_mode_roles,
-            subagent_roles=subagent_roles,
-            tool_groups=tuple(
-                RoleToolGroupOption(
-                    id=group.group_id,
-                    name=group.name,
-                    description=group.description,
-                    tools=group.tools,
-                )
-                for group in list_default_tool_groups(tool_registry)
-            ),
-            tools=tool_registry.list_configurable_names(),
-            mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
-            skills=skill_options,
-            agents=tuple(
-                RoleAgentOption(
-                    agent_id=agent.agent_id,
-                    name=agent.name,
-                    transport=agent.transport.value,
-                )
-                for agent in external_agent_service.list_agent_options()
-            ),
-            execution_surfaces=tuple(surface for surface in ExecutionSurface),
+            external_agent_service=external_agent_service,
         )
     except (SystemRolesUnavailableError, ValueError) as exc:
         raise http_exception_for(
             exc,
             mappings=((SystemRolesUnavailableError, 503), (ValueError, 503)),
         ) from exc
+
+
+def _build_role_config_options(
+    *,
+    role_registry: RoleRegistry,
+    model_config_service: ModelConfigService,
+    tool_registry: ToolRegistry,
+    mcp_service: McpService,
+    skill_registry: SkillRegistry,
+    skills_reload_service: SkillsConfigReloadService,
+    external_agent_service: ExternalAgentConfigService,
+) -> RoleConfigOptions:
+    ensure_required_system_roles(role_registry)
+    skill_options = _load_role_skill_options(
+        role_registry=role_registry,
+        skill_registry=skill_registry,
+        skills_reload_service=skills_reload_service,
+    )
+    normal_mode_roles = tuple(
+        _build_role_option(role=role, model_config_service=model_config_service)
+        for role in role_registry.list_normal_mode_roles()
+    )
+    subagent_roles = tuple(
+        _build_role_option(role=role, model_config_service=model_config_service)
+        for role in role_registry.list_subagent_roles()
+    )
+    coordinator_role = _build_role_option(
+        role=role_registry.get_coordinator(),
+        model_config_service=model_config_service,
+    )
+    main_agent_role = _build_role_option(
+        role=role_registry.get_main_agent(),
+        model_config_service=model_config_service,
+    )
+    coordinator_role_id = coordinator_role.role_id
+    main_agent_role_id = main_agent_role.role_id
+    return RoleConfigOptions(
+        coordinator_role_id=coordinator_role_id,
+        main_agent_role_id=main_agent_role_id,
+        coordinator_role=coordinator_role,
+        main_agent_role=main_agent_role,
+        normal_mode_roles=normal_mode_roles,
+        subagent_roles=subagent_roles,
+        tool_groups=tuple(
+            RoleToolGroupOption(
+                id=group.group_id,
+                name=group.name,
+                description=group.description,
+                tools=group.tools,
+            )
+            for group in list_default_tool_groups(tool_registry)
+        ),
+        tools=tool_registry.list_configurable_names(),
+        mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
+        skills=skill_options,
+        agents=tuple(
+            RoleAgentOption(
+                agent_id=agent.agent_id,
+                name=agent.name,
+                transport=agent.transport.value,
+            )
+            for agent in external_agent_service.list_agent_options()
+        ),
+        execution_surfaces=tuple(surface for surface in ExecutionSurface),
+    )
 
 
 @router.get(

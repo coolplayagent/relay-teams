@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, cast
 
 from pydantic import JsonValue
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from relay_teams.env.proxy_env import ProxyEnvInput
 from relay_teams.external_agents import (
@@ -902,6 +905,42 @@ def test_health_check_returns_runtime_identity_and_skill_sanity() -> None:
     tool_registry_sanity = payload["tool_registry_sanity"]
     assert tool_registry_sanity["available_tool_count"] >= 1
     assert "write" in tool_registry_sanity["available_tool_names"]
+
+
+def test_health_check_builds_payload_in_worker_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+    app = cast(FastAPI, client.app)
+    app.state.container = SimpleNamespace(
+        config_dir=Path("/tmp/config"),
+        role_registry=None,
+        skill_registry=None,
+        tool_registry=None,
+    )
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    assert [call[0] for call in calls] == ["build_server_health_payload"]
+    assert calls[0][2] == {
+        "config_dir": Path("/tmp/config"),
+        "role_registry": None,
+        "skill_registry": None,
+        "tool_registry": None,
+    }
 
 
 def test_get_notification_config() -> None:

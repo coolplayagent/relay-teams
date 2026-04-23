@@ -372,6 +372,29 @@ def test_role_config_routes_run_service_calls_in_threadpool(monkeypatch) -> None
     ]
 
 
+def test_get_role_config_options_runs_in_threadpool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(roles, "run_in_threadpool", fake_run_in_threadpool)
+    client = _create_test_client()
+
+    response = client.get("/api/roles:options")
+
+    assert response.status_code == 200
+    assert [call[0] for call in calls] == ["_build_role_config_options"]
+
+
 def test_get_role_config_options_returns_503_when_system_roles_are_missing() -> None:
     registry = RoleRegistry()
     registry.register(
