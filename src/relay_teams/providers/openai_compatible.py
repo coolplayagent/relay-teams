@@ -196,7 +196,7 @@ class OpenAICompatibleProvider(LLMProvider):
 
     @override
     def capabilities(self) -> ProviderCapabilities:
-        if self._config.provider == ProviderType.MAAS:
+        if self._config.provider in {ProviderType.MAAS, ProviderType.CODEAGENT}:
             return ProviderCapabilities()
         return ProviderCapabilities(
             input_modalities=self._config.capabilities.supported_input_modalities(),

@@ -98,11 +98,24 @@ from relay_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
 )
 from relay_teams.providers.model_config import (
+    CodeAgentAuthConfig,
+    DEFAULT_CODEAGENT_BASE_URL,
+    DEFAULT_CODEAGENT_CLIENT_ID,
+    DEFAULT_CODEAGENT_SCOPE,
+    DEFAULT_CODEAGENT_SCOPE_RESOURCE,
     DEFAULT_MAAS_BASE_URL,
     ModelConfigPayload,
     ModelFallbackConfig,
     ModelProfileConfigPayload,
     ProviderType,
+)
+from relay_teams.providers.codeagent_auth import (
+    CodeAgentOAuthError,
+    build_codeagent_authorization_url,
+    create_codeagent_oauth_session,
+    get_codeagent_oauth_session,
+    get_codeagent_token_service,
+    save_codeagent_oauth_tokens_for_session,
 )
 from relay_teams.providers.model_config_service import ModelConfigService
 from relay_teams.providers.model_connectivity import (
@@ -347,6 +360,28 @@ class ModelProfileRequest(ModelProfileConfigPayload):
     source_name: str | None = None
 
 
+class CodeAgentOAuthStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class CodeAgentOAuthStartResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    auth_session_id: str
+    authorization_url: str
+    callback_url: str
+    codeagent_auth: CodeAgentAuthConfig
+
+
+class CodeAgentOAuthSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    auth_session_id: str
+    completed: bool
+    error_message: str | None = None
+    codeagent_auth: CodeAgentAuthConfig | None = None
+
+
 @router.put("/configs/model/profiles/{name}")
 async def save_model_profile(
     name: str,
@@ -360,6 +395,8 @@ async def save_model_profile(
             "base_url": (
                 DEFAULT_MAAS_BASE_URL
                 if req.provider == ProviderType.MAAS
+                else DEFAULT_CODEAGENT_BASE_URL
+                if req.provider == ProviderType.CODEAGENT
                 else req.base_url
             ),
             "temperature": req.temperature,
@@ -387,6 +424,8 @@ async def save_model_profile(
             ]
         if req.maas_auth is not None:
             profile["maas_auth"] = req.maas_auth.model_dump(mode="json")
+        if req.codeagent_auth is not None:
+            profile["codeagent_auth"] = req.codeagent_auth.model_dump(mode="json")
         await asyncio.to_thread(
             service.save_model_profile,
             name,
@@ -400,6 +439,80 @@ async def save_model_profile(
             key_error_status=404,
             value_error_status=400,
         )
+
+
+@router.post("/configs/model/codeagent/oauth:start")
+def start_codeagent_oauth(
+    _req: CodeAgentOAuthStartRequest,
+) -> CodeAgentOAuthStartResponse:
+    session = create_codeagent_oauth_session(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        client_id=DEFAULT_CODEAGENT_CLIENT_ID,
+        scope=DEFAULT_CODEAGENT_SCOPE,
+        scope_resource=DEFAULT_CODEAGENT_SCOPE_RESOURCE,
+    )
+    authorization_url = build_codeagent_authorization_url(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        client_id=session.client_id,
+        scope=session.scope,
+        scope_resource=session.scope_resource,
+        redirect_url=session.callback_url,
+    )
+    return CodeAgentOAuthStartResponse(
+        auth_session_id=session.auth_session_id,
+        authorization_url=authorization_url,
+        callback_url=session.callback_url,
+        codeagent_auth=CodeAgentAuthConfig(
+            client_id=session.client_id,
+            scope=session.scope,
+            scope_resource=session.scope_resource,
+            oauth_session_id=session.auth_session_id,
+        ),
+    )
+
+
+@router.get("/configs/model/codeagent/oauth/{auth_session_id}")
+def get_codeagent_oauth_session_status(
+    auth_session_id: str,
+) -> CodeAgentOAuthSessionResponse:
+    session = get_codeagent_oauth_session(auth_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="CodeAgent OAuth session not found")
+    if not session.completed:
+        try:
+            token_result = get_codeagent_token_service().poll_token_sync(
+                session=session,
+                ssl_verify=None,
+                connect_timeout_seconds=15.0,
+            )
+            if token_result is not None:
+                session = save_codeagent_oauth_tokens_for_session(
+                    auth_session_id=auth_session_id,
+                    token_result=token_result,
+                )
+        except CodeAgentOAuthError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=str(exc) or "CodeAgent OAuth token polling failed.",
+            ) from exc
+    codeagent_auth = (
+        CodeAgentAuthConfig(
+            client_id=session.client_id,
+            scope=session.scope,
+            scope_resource=session.scope_resource,
+            oauth_session_id=session.auth_session_id,
+            has_access_token=True,
+            has_refresh_token=True,
+        )
+        if session.completed
+        else None
+    )
+    return CodeAgentOAuthSessionResponse(
+        auth_session_id=session.auth_session_id,
+        completed=session.completed,
+        error_message=session.error_message,
+        codeagent_auth=codeagent_auth,
+    )
 
 
 @router.get("/configs/model/providers/models")

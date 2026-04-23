@@ -243,6 +243,7 @@ function createModal() {
                                                     <option value="bigmodel">bigmodel</option>
                                                     <option value="minimax">minimax</option>
                                                     <option value="maas">maas</option>
+                                                    <option value="codeagent">codeagent</option>
                                                 </select>
                                             </div>
                                             <div class="form-group form-group-span-2">
@@ -299,6 +300,16 @@ function createModal() {
                                                     </div>
                                                 </div>
                                                 <div class="form-group-span-2" id="profile-maas-model-slot"></div>
+                                            </div>
+                                            <div class="profile-credentials-row profile-codeagent-credentials-row form-group-span-2" id="profile-codeagent-auth-fields" style="display:none;">
+                                                <div class="form-group form-group-inline-action profile-codeagent-sso-group">
+                                                    <label for="profile-codeagent-login-status">CodeAgent SSO</label>
+                                                    <div class="codeagent-sso-control">
+                                                        <button class="secondary-btn codeagent-sso-login-btn" type="button" id="profile-codeagent-login-status" data-i18n="settings.model.codeagent_sign_in_sso" data-i18n-title="settings.model.codeagent_sign_in_sso" data-i18n-aria-label="settings.model.codeagent_sign_in_sso" aria-controls="profile-codeagent-login-status-message">Sign in with SSO</button>
+                                                    </div>
+                                                    <div class="codeagent-sso-status-message" id="profile-codeagent-login-status-message" role="status" aria-live="polite" style="display:none;"></div>
+                                                </div>
+                                                <div class="form-group-span-2" id="profile-codeagent-model-slot"></div>
                                             </div>
                                          </div>
                                          <div class="profile-model-discovery-status" id="profile-model-discovery-status" style="display:none;"></div>

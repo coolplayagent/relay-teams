@@ -3396,6 +3396,24 @@ Object.assign(TRANSLATIONS['zh-CN'], {
     'settings.hooks.save_result_title': '保存结果',
 });
 
+Object.assign(TRANSLATIONS['en-US'], {
+    'settings.model.codeagent_sign_in_sso': 'Sign in with SSO',
+    'settings.model.codeagent_sso_starting': 'Starting SSO login...',
+    'settings.model.codeagent_sso_waiting': 'Waiting for SSO callback',
+    'settings.model.codeagent_sso_signed_in': 'Signed in',
+    'settings.model.codeagent_sso_timed_out': 'SSO login timed out',
+    'settings.model.codeagent_sso_failed': 'SSO failed: {error}',
+});
+
+Object.assign(TRANSLATIONS['zh-CN'], {
+    'settings.model.codeagent_sign_in_sso': '使用 SSO 登录',
+    'settings.model.codeagent_sso_starting': '正在启动 SSO 登录...',
+    'settings.model.codeagent_sso_waiting': '等待 SSO 回调',
+    'settings.model.codeagent_sso_signed_in': '已登录',
+    'settings.model.codeagent_sso_timed_out': 'SSO 登录超时',
+    'settings.model.codeagent_sso_failed': 'SSO 登录失败：{error}',
+});
+
 export function getCurrentLanguage() {
     return currentLanguage;
 }

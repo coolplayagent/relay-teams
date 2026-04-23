@@ -308,6 +308,26 @@ export async function discoverModelCatalog(payload) {
     );
 }
 
+export async function startCodeAgentOAuth(payload) {
+    return requestJson(
+        '/api/system/configs/model/codeagent/oauth:start',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to start CodeAgent SSO',
+    );
+}
+
+export async function fetchCodeAgentOAuthSession(authSessionId) {
+    return requestJson(
+        `/api/system/configs/model/codeagent/oauth/${encodeURIComponent(authSessionId)}`,
+        undefined,
+        'Failed to fetch CodeAgent SSO status',
+    );
+}
+
 export async function saveModelProfile(name, profile) {
     return requestJson(
         `/api/system/configs/model/profiles/${name}`,
