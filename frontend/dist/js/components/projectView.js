@@ -1537,8 +1537,6 @@ function bindAutomationEditorModal() {
             draft: {
                 ...draft,
                 session_mode: nextSessionMode,
-                normal_root_role_id: nextSessionMode === 'normal' ? draft.normal_root_role_id : '',
-                orchestration_preset_id: nextSessionMode === 'orchestration' ? draft.orchestration_preset_id : '',
             },
         };
         renderAutomationEditorModal();
