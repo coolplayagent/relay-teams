@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import JsonValue

@@ -3,8 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sqlite3
-from typing import cast
-from collections.abc import Callable
+from typing import Callable, cast
 
 import pytest
 from pydantic import ValidationError
