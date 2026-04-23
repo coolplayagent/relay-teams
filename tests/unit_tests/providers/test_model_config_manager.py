@@ -4,10 +4,20 @@ from __future__ import annotations
 from pydantic import JsonValue
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from relay_teams.providers.codeagent_auth import (
+    CodeAgentOAuthTokenResult,
+    clear_codeagent_oauth_session_store,
+    codeagent_access_token_secret_field_name,
+    codeagent_refresh_token_secret_field_name,
+    create_codeagent_oauth_session,
+    save_codeagent_oauth_tokens,
+)
 from relay_teams.providers.model_config import (
+    DEFAULT_CODEAGENT_BASE_URL,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_BASE_URL,
 )
@@ -661,6 +671,75 @@ def test_save_model_profile_preserves_existing_maas_password_when_blank(
     assert saved_profile["base_url"] == DEFAULT_MAAS_BASE_URL
     assert saved_maas_auth["password"] == "relay-password"
     assert saved_maas_auth["username"] == "relay-user-2"
+
+
+def test_save_model_profile_stores_codeagent_tokens_from_oauth_session(
+    tmp_path: Path,
+) -> None:
+    clear_codeagent_oauth_session_store()
+    session = create_codeagent_oauth_session(
+        base_url="https://codeagent.example/codeAgentPro",
+        client_id="codeagent-client",
+        scope="SCOPE",
+        scope_resource="devuc",
+    )
+    save_codeagent_oauth_tokens(
+        state=session.state,
+        token_result=CodeAgentOAuthTokenResult(
+            access_token="codeagent-access-token",
+            refresh_token="codeagent-refresh-token",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    manager.save_model_profile(
+        "codeagent-profile",
+        {
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "base_url": "https://codeagent.example/codeAgentPro",
+            "codeagent_auth": {
+                "oauth_session_id": session.auth_session_id,
+            },
+        },
+    )
+
+    profiles = manager.get_model_profiles()
+    codeagent_auth = cast(
+        dict[str, JsonValue],
+        profiles["codeagent-profile"]["codeagent_auth"],
+    )
+    model_payload = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
+    secrets_payload = json.loads(
+        (tmp_path / "secrets.json").read_text(encoding="utf-8")
+    )
+
+    assert codeagent_auth["has_access_token"] is True
+    assert codeagent_auth["has_refresh_token"] is True
+    assert model_payload["codeagent-profile"]["base_url"] == DEFAULT_CODEAGENT_BASE_URL
+    assert model_payload["codeagent-profile"]["codeagent_auth"] == {
+        "has_access_token": True,
+        "has_refresh_token": True,
+    }
+    assert {
+        "namespace": "model_profile",
+        "owner_id": "codeagent-profile",
+        "field_name": codeagent_access_token_secret_field_name(),
+        "storage": "file",
+        "value": "codeagent-access-token",
+    } in secrets_payload["entries"]
+    assert {
+        "namespace": "model_profile",
+        "owner_id": "codeagent-profile",
+        "field_name": codeagent_refresh_token_secret_field_name(),
+        "storage": "file",
+        "value": "codeagent-refresh-token",
+    } in secrets_payload["entries"]
+    clear_codeagent_oauth_session_store()
 
 
 def test_switching_profile_to_maas_removes_stale_api_key_secret(tmp_path: Path) -> None:

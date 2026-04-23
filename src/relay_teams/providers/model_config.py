@@ -28,6 +28,7 @@ class ProviderType(StrEnum):
     BIGMODEL = "bigmodel"
     MINIMAX = "minimax"
     MAAS = "maas"
+    CODEAGENT = "codeagent"
     ECHO = "echo"
 
 
@@ -56,6 +57,56 @@ DEFAULT_MAAS_DISCOVERY_APPLICATION = "RelayAgent"
 DEFAULT_MAAS_DISCOVERY_IDE = "RelayAgent"
 DEFAULT_MAAS_DISCOVERY_PLUGIN_NAME = "maas_relay"
 DEFAULT_MAAS_APP_ID = "RelayTeams"
+DEFAULT_CODEAGENT_SSO_BASE_URL = (
+    "https://ssoproxysvr.cd-cloud-ssoproxysvr.szv.dragon.tools.huawei.com/ssoproxysvr"
+)
+DEFAULT_CODEAGENT_BASE_URL = "https://codeagentcli.rnd.huawei.com/codeAgentPro"
+DEFAULT_CODEAGENT_CLIENT_ID = "com.huawei.devmind.codebot.apibot"
+DEFAULT_CODEAGENT_SCOPE = "1000:1002"
+DEFAULT_CODEAGENT_SCOPE_RESOURCE = "devuc"
+
+
+class CodeAgentAuthConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str = Field(default=DEFAULT_CODEAGENT_CLIENT_ID, min_length=1)
+    scope: str = Field(default=DEFAULT_CODEAGENT_SCOPE, min_length=1)
+    scope_resource: str = Field(
+        default=DEFAULT_CODEAGENT_SCOPE_RESOURCE,
+        min_length=1,
+    )
+    access_token: str | None = Field(default=None, min_length=1)
+    refresh_token: str | None = Field(default=None, min_length=1)
+    has_access_token: bool = False
+    has_refresh_token: bool = False
+    oauth_session_id: str | None = Field(default=None, min_length=1)
+
+    @field_validator(
+        "client_id",
+        "scope",
+        "scope_resource",
+        "access_token",
+        "refresh_token",
+        "oauth_session_id",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_string_fields(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
+    @model_validator(mode="after")
+    def _sync_configured_flags(self) -> "CodeAgentAuthConfig":
+        self.client_id = DEFAULT_CODEAGENT_CLIENT_ID
+        self.scope = DEFAULT_CODEAGENT_SCOPE
+        self.scope_resource = DEFAULT_CODEAGENT_SCOPE_RESOURCE
+        if self.access_token is not None:
+            self.has_access_token = True
+        if self.refresh_token is not None:
+            self.has_refresh_token = True
+        return self
 
 
 class MaaSAuthConfig(BaseModel):
@@ -151,6 +202,7 @@ class ModelEndpointConfig(BaseModel):
     api_key: str | None = Field(default=None, min_length=1)
     headers: tuple[ModelRequestHeader, ...] = ()
     maas_auth: MaaSAuthConfig | None = None
+    codeagent_auth: CodeAgentAuthConfig | None = None
     ssl_verify: bool | None = None
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     context_window: int | None = Field(default=None, ge=1)
@@ -209,6 +261,20 @@ class ModelEndpointConfig(BaseModel):
                     "MAAS model endpoint config requires maas_auth.password."
                 )
             return self
+        if self.provider == ProviderType.CODEAGENT:
+            self.base_url = DEFAULT_CODEAGENT_BASE_URL
+            if self.codeagent_auth is None:
+                raise ValueError(
+                    "CodeAgent model endpoint config requires codeagent_auth configuration."
+                )
+            if (
+                self.codeagent_auth.refresh_token is None
+                and self.codeagent_auth.oauth_session_id is None
+            ):
+                raise ValueError(
+                    "CodeAgent model endpoint config requires codeagent_auth.refresh_token or oauth_session_id."
+                )
+            return self
         if self.api_key is not None:
             return self
         if any(
@@ -239,11 +305,12 @@ class ModelProfileConfigPayload(BaseModel):
     is_default: Optional[bool] = None
     model: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
-    api_key: Optional[str] = Field(default=None, min_length=1)
-    headers: Optional[tuple[ModelRequestHeader, ...]] = None
-    maas_auth: Optional[MaaSAuthConfig] = None
-    ssl_verify: Optional[bool] = None
-    capabilities: Optional[ModelCapabilities] = None
+    api_key: str | None = Field(default=None, min_length=1)
+    headers: tuple[ModelRequestHeader, ...] | None = None
+    maas_auth: MaaSAuthConfig | None = None
+    codeagent_auth: CodeAgentAuthConfig | None = None
+    ssl_verify: bool | None = None
+    capabilities: ModelCapabilities | None = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)

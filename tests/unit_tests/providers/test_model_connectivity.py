@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -8,8 +9,16 @@ import httpx
 import pytest
 
 from relay_teams.media import MediaModality
+from relay_teams.providers.codeagent_auth import (
+    CodeAgentOAuthTokenResult,
+    clear_codeagent_oauth_session_store,
+    create_codeagent_oauth_session,
+    save_codeagent_oauth_tokens,
+)
 from relay_teams.providers.maas_auth import MaaSAuthContext, MaaSLoginError
 from relay_teams.providers.model_config import (
+    CodeAgentAuthConfig,
+    DEFAULT_CODEAGENT_BASE_URL,
     MaaSAuthConfig,
     ModelEndpointConfig,
     ModelRequestHeader,
@@ -121,6 +130,39 @@ class _FakeMaaSTokenService:
         token = self._tokens.pop(0)
         department = self._departments.pop(0)
         return MaaSAuthContext(token=token, department=department)
+
+
+class _FakeCodeAgentTokenService:
+    def __init__(
+        self,
+        tokens: list[str],
+        captured: dict[str, object],
+    ) -> None:
+        self._tokens = tokens
+        self._captured = captured
+
+    def get_token_sync(
+        self,
+        *,
+        base_url: str,
+        auth_config: CodeAgentAuthConfig,
+        ssl_verify: bool | None,
+        connect_timeout_seconds: float,
+        force_refresh: bool = False,
+    ) -> str:
+        calls = self._captured.setdefault("codeagent_token_calls", [])
+        assert isinstance(calls, list)
+        calls.append(
+            {
+                "base_url": base_url,
+                "access_token": auth_config.access_token,
+                "refresh_token": auth_config.refresh_token,
+                "ssl_verify": ssl_verify,
+                "connect_timeout_seconds": connect_timeout_seconds,
+                "force_refresh": force_refresh,
+            }
+        )
+        return self._tokens.pop(0)
 
 
 def test_probe_uses_saved_profile_and_returns_usage(monkeypatch) -> None:
@@ -425,6 +467,77 @@ def test_probe_supports_maas_provider(monkeypatch) -> None:
     assert token_calls[0]["force_refresh"] is False
 
 
+def test_probe_supports_codeagent_provider_with_oauth_session(
+    monkeypatch,
+) -> None:
+    clear_codeagent_oauth_session_store()
+    session = create_codeagent_oauth_session(
+        base_url="https://codeagent.example/codeAgentPro",
+        client_id="codeagent-client",
+        scope="SCOPE",
+        scope_resource="devuc",
+    )
+    save_codeagent_oauth_tokens(
+        state=session.state,
+        token_result=CodeAgentOAuthTokenResult(
+            access_token="session-access-token",
+            refresh_token="session-refresh-token",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(["session-access-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(200, json={"usage": {"total_tokens": 4}}),
+            )
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.CODEAGENT,
+                model="codeagent-chat",
+                codeagent_auth=CodeAgentAuthConfig(
+                    client_id="codeagent-client",
+                    scope="SCOPE",
+                    scope_resource="devuc",
+                    oauth_session_id=session.auth_session_id,
+                ),
+            )
+        )
+    )
+
+    assert result.ok is True
+    assert captured["url"] == f"{DEFAULT_CODEAGENT_BASE_URL}/chat/completions"
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["X-Auth-Token"] == "session-access-token"
+    assert headers["app-id"] == "CodeAgent2.0"
+    assert headers["User-Agent"] == "AgentKernel/1.0"
+    assert headers["gray"] == "false"
+    assert headers["oc-heartbeat"] == "1"
+    assert headers["Accept"] == "text/event-stream"
+    assert headers["X-snap-traceid"]
+    assert headers["X-session-id"].startswith("ses_")
+    assert "Authorization" not in headers
+    payload = cast(dict[str, object], captured["json"])
+    assert payload["stream"] is True
+    token_calls = cast(list[dict[str, object]], captured["codeagent_token_calls"])
+    assert token_calls[0]["access_token"] == "session-access-token"
+    assert token_calls[0]["refresh_token"] == "session-refresh-token"
+    clear_codeagent_oauth_session_store()
+
+
 def test_probe_merges_saved_maas_password_when_override_omits_it(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(
@@ -679,6 +792,80 @@ def test_discover_models_supports_maas_provider(monkeypatch) -> None:
         "gpt-4.1",
         "gpt-4.5",
     )
+
+
+def test_discover_models_supports_codeagent_provider_with_oauth_session(
+    monkeypatch,
+) -> None:
+    clear_codeagent_oauth_session_store()
+    session = create_codeagent_oauth_session(
+        base_url="https://codeagent.example/codeAgentPro",
+        client_id="codeagent-client",
+        scope="SCOPE",
+        scope_resource="devuc",
+    )
+    save_codeagent_oauth_tokens(
+        state=session.state,
+        token_result=CodeAgentOAuthTokenResult(
+            access_token="session-access-token",
+            refresh_token="session-refresh-token",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(["session-access-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(
+                    200,
+                    json=[{"name": "codeagent-chat"}, {"name": "codeagent-coder"}],
+                ),
+            )
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.CODEAGENT,
+                model="codeagent-chat",
+                codeagent_auth=CodeAgentAuthConfig(
+                    client_id="codeagent-client",
+                    scope="SCOPE",
+                    scope_resource="devuc",
+                    oauth_session_id=session.auth_session_id,
+                ),
+            )
+        )
+    )
+
+    assert result.ok is True
+    assert result.models == ("codeagent-chat", "codeagent-coder")
+    assert (
+        captured["url"]
+        == f"{DEFAULT_CODEAGENT_BASE_URL}/chat/modles?checkUserPermission=TRUE"
+    )
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["X-Auth-Token"] == "session-access-token"
+    assert headers["app-id"] == "CodeAgent2.0"
+    assert headers["User-Agent"] == "AgentKernel/1.0"
+    assert headers["gray"] == "false"
+    assert headers["oc-heartbeat"] == "1"
+    assert headers["X-snap-traceid"]
+    assert headers["X-session-id"].startswith("ses_")
+    token_calls = cast(list[dict[str, object]], captured["codeagent_token_calls"])
+    assert token_calls[0]["access_token"] == "session-access-token"
+    assert token_calls[0]["refresh_token"] == "session-refresh-token"
+    clear_codeagent_oauth_session_store()
 
 
 def test_discover_models_merges_saved_maas_password_when_override_omits_it(
@@ -1220,6 +1407,7 @@ def _runtime_config(
     base_url: str = "https://example.test/v1",
     api_key: str | None = "saved-api-key",
     maas_auth: MaaSAuthConfig | None = None,
+    codeagent_auth: CodeAgentAuthConfig | None = None,
 ) -> RuntimeConfig:
     config = ModelEndpointConfig(
         provider=provider,
@@ -1227,6 +1415,7 @@ def _runtime_config(
         base_url=base_url,
         api_key=api_key,
         maas_auth=maas_auth,
+        codeagent_auth=codeagent_auth,
         ssl_verify=True,
         sampling=SamplingConfig(
             temperature=1.0,

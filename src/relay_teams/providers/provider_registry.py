@@ -58,5 +58,6 @@ def create_default_provider_registry(
     registry.register(ProviderType.BIGMODEL, openai_compatible_builder)
     registry.register(ProviderType.MINIMAX, openai_compatible_builder)
     registry.register(ProviderType.MAAS, openai_compatible_builder)
+    registry.register(ProviderType.CODEAGENT, openai_compatible_builder)
     registry.register(ProviderType.ECHO, lambda _config: EchoProvider())
     return registry

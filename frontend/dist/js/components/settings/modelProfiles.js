@@ -6,12 +6,14 @@ import {
     deleteModelProfile,
     discoverModelCatalog,
     fetchModelCatalog,
+    fetchCodeAgentOAuthSession,
     fetchModelFallbackConfig,
     fetchModelProfiles,
     probeModelConnection,
     refreshModelCatalog,
     reloadModelConfig,
     saveModelProfile,
+    startCodeAgentOAuth,
 } from '../../core/api.js';
 import { showConfirmDialog, showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
@@ -37,6 +39,7 @@ let catalogProviderSearchDirty = false;
 let catalogModelSearchDirty = false;
 let catalogProviderKeyboardIndex = -1;
 let catalogModelKeyboardIndex = -1;
+let draftCodeAgentAuthState = createDraftCodeAgentAuthState();
 let isModelMenuOpen = false;
 let languageBound = false;
 let draftBaseUrlExpanded = false;
@@ -44,9 +47,11 @@ let draftModelInputExpanded = false;
 let draftProviderMode = 'external';
 
 const DEFAULT_MAAS_BASE_URL = 'http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/';
+const DEFAULT_CODEAGENT_BASE_URL = 'https://codeagentcli.rnd.huawei.com/codeAgentPro';
 
 const PROVIDER_DEFAULT_BASE_URLS = {
     maas: DEFAULT_MAAS_BASE_URL,
+    codeagent: DEFAULT_CODEAGENT_BASE_URL,
 };
 const IMAGE_CAPABILITY_MODES = {
     FOLLOW_DETECTION: 'follow_detection',
@@ -163,6 +168,11 @@ export function bindModelProfileHandlers() {
         maasPasswordInput.onblur = disarmDraftMaasPasswordInput;
     }
 
+    const codeagentLoginBtn = document.getElementById('profile-codeagent-login-status');
+    if (codeagentLoginBtn) {
+        codeagentLoginBtn.onclick = handleCodeAgentLogin;
+    }
+
     const toggleApiKeyBtn = document.getElementById('toggle-profile-api-key-btn');
     if (toggleApiKeyBtn) {
         toggleApiKeyBtn.onclick = toggleDraftApiKeyVisibility;
@@ -238,6 +248,7 @@ function handleModelProfileLanguageChanged() {
         renderDraftImageCapability();
         renderDraftProbeState();
         renderDraftModelDiscoveryState();
+        renderDraftCodeAgentAuthState();
         renderDiscoveredModels();
         renderProfileEditorState();
         setModelCatalogPanelVisible(draftProviderMode === PROVIDER_MODES.EXTERNAL);
@@ -904,6 +915,7 @@ function handleAddProfile() {
     delete document.getElementById('profile-base-url').dataset.defaultSourceProvider;
     draftApiKeyState = createDraftSecretState();
     draftMaasPasswordState = createDraftSecretState();
+    draftCodeAgentAuthState = createDraftCodeAgentAuthState();
     document.getElementById('profile-maas-username').value = '';
     document.getElementById('profile-maas-password').value = '';
     document.getElementById('profile-is-default').checked = Object.keys(profiles).length === 0;
@@ -964,6 +976,14 @@ function handleEditProfile(name) {
     };
     document.getElementById('profile-maas-username').value = profile.maas_auth?.username || '';
     document.getElementById('profile-maas-password').value = '';
+    const codeagentAuth = profile.codeagent_auth || {};
+    draftCodeAgentAuthState = {
+        authSessionId: '',
+        completed: Boolean(codeagentAuth.has_refresh_token),
+        hasPersistedAccessToken: Boolean(codeagentAuth.has_access_token),
+        hasPersistedRefreshToken: Boolean(codeagentAuth.has_refresh_token),
+        statusMessage: Boolean(codeagentAuth.has_refresh_token) ? 'Signed in' : 'Not signed in',
+    };
     document.getElementById('profile-is-default').checked = profile.is_default === true;
     document.getElementById('profile-temperature').value = profile.temperature || 0.7;
     document.getElementById('profile-top-p').value = profile.top_p || 1.0;
@@ -1022,6 +1042,7 @@ async function handleSaveProfile() {
     const baseUrl = document.getElementById('profile-base-url').value.trim();
     const apiKey = readDraftApiKeyValue();
     const maasAuth = readDraftMaasAuth();
+    const codeagentAuth = readDraftCodeAgentAuth();
     const isDefault = document.getElementById('profile-is-default').checked;
     const temperature = parseFloat(document.getElementById('profile-temperature').value) || 0.7;
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
@@ -1052,7 +1073,7 @@ async function handleSaveProfile() {
         return;
     }
 
-    if (!baseUrl) {
+    if (!baseUrl && !isCodeAgentProvider(provider)) {
         showToast({ title: t('settings.model.base_url_required_title'), message: t('settings.model.base_url_required_message'), tone: 'warning' });
         return;
     }
@@ -1066,6 +1087,15 @@ async function handleSaveProfile() {
             });
             return;
         }
+    } else if (isCodeAgentProvider(provider)) {
+        if (!hasDraftCodeAgentAuth()) {
+            showToast({
+                title: t('settings.model.save_failed_title'),
+                message: 'CodeAgent profiles require SSO login before saving.',
+                tone: 'warning',
+            });
+            return;
+        }
     } else if (!editingProfile && !apiKey) {
         showToast({ title: t('settings.model.api_key_required_title'), message: t('settings.model.api_key_required_message'), tone: 'warning' });
         return;
@@ -1074,7 +1104,7 @@ async function handleSaveProfile() {
     const profile = {
         provider: provider,
         model: model,
-        base_url: baseUrl,
+        base_url: isCodeAgentProvider(provider) ? DEFAULT_CODEAGENT_BASE_URL : baseUrl,
         is_default: isDefault,
         temperature: temperature,
         top_p: topP,
@@ -1106,6 +1136,14 @@ async function handleSaveProfile() {
         };
         if (maasAuth.password) {
             profile.maas_auth.password = maasAuth.password;
+        }
+    } else if (isCodeAgentProvider(provider)) {
+        profile.codeagent_auth = {
+            has_access_token: codeagentAuth.has_access_token,
+            has_refresh_token: codeagentAuth.has_refresh_token,
+        };
+        if (codeagentAuth.oauth_session_id) {
+            profile.codeagent_auth.oauth_session_id = codeagentAuth.oauth_session_id;
         }
     } else if (apiKey) {
         profile.api_key = apiKey;
@@ -1308,12 +1346,57 @@ async function handleDiscoverDraftModels() {
     renderDraftModelDiscoveryState();
 }
 
+async function handleCodeAgentLogin() {
+    const provider = getDraftProvider();
+    if (
+        !isCodeAgentProvider(provider)
+        || draftCodeAgentAuthState.statusMessage === 'Starting SSO login'
+    ) {
+        return;
+    }
+    draftCodeAgentAuthState.statusMessage = 'Starting SSO login';
+    renderDraftCodeAgentAuthState();
+    try {
+        const result = await startCodeAgentOAuth({});
+        draftCodeAgentAuthState.authSessionId = result.auth_session_id;
+        draftCodeAgentAuthState.completed = false;
+        draftCodeAgentAuthState.statusMessage = 'Waiting for SSO callback';
+        renderDraftCodeAgentAuthState();
+        if (result.authorization_url) {
+            window.open(result.authorization_url, '_blank', 'noopener,noreferrer');
+        }
+        await pollCodeAgentOAuthSession(result.auth_session_id);
+    } catch (e) {
+        draftCodeAgentAuthState.statusMessage = `SSO failed: ${e.message}`;
+        renderDraftCodeAgentAuthState();
+    }
+}
+
+async function pollCodeAgentOAuthSession(authSessionId) {
+    for (let attempt = 0; attempt < 900; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        const result = await fetchCodeAgentOAuthSession(authSessionId);
+        if (!result.completed) {
+            continue;
+        }
+        draftCodeAgentAuthState.completed = true;
+        draftCodeAgentAuthState.hasPersistedAccessToken = true;
+        draftCodeAgentAuthState.hasPersistedRefreshToken = true;
+        draftCodeAgentAuthState.statusMessage = 'Signed in';
+        renderDraftCodeAgentAuthState();
+        return;
+    }
+    draftCodeAgentAuthState.statusMessage = 'SSO login timed out';
+    renderDraftCodeAgentAuthState();
+}
+
 function buildDraftProbePayload() {
     const provider = getDraftProvider();
     const model = document.getElementById('profile-model').value.trim();
     const baseUrl = document.getElementById('profile-base-url').value.trim();
     const apiKey = readDraftApiKeyValue();
     const maasAuth = readDraftMaasAuth();
+    const codeagentAuth = readDraftCodeAgentAuth();
     const temperature = parseFloat(document.getElementById('profile-temperature').value) || 0.7;
     const topP = parseFloat(document.getElementById('profile-top-p').value) || 1.0;
     const maxTokensValue = String(document.getElementById('profile-max-tokens').value || '').trim();
@@ -1321,7 +1404,7 @@ function buildDraftProbePayload() {
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
 
-    if (!model || !baseUrl) {
+    if (!model || (!baseUrl && !isCodeAgentProvider(provider))) {
         draftProbeState = {
             status: 'failed',
             message: t('settings.model.validation_test_new'),
@@ -1339,6 +1422,15 @@ function buildDraftProbePayload() {
             renderDraftProbeState();
             return null;
         }
+    } else if (isCodeAgentProvider(provider)) {
+        if (!hasDraftCodeAgentAuth()) {
+            draftProbeState = {
+                status: 'failed',
+                message: 'Model and SSO login are required before testing a CodeAgent profile.',
+            };
+            renderDraftProbeState();
+            return null;
+        }
     } else if (!apiKey && !editingProfile) {
         draftProbeState = {
             status: 'failed',
@@ -1351,7 +1443,7 @@ function buildDraftProbePayload() {
     const override = {
         provider: provider,
         model: model,
-        base_url: baseUrl,
+        base_url: isCodeAgentProvider(provider) ? DEFAULT_CODEAGENT_BASE_URL : baseUrl,
         temperature: temperature,
         top_p: topP,
     };
@@ -1369,6 +1461,12 @@ function buildDraftProbePayload() {
         if (maasAuth.password) {
             override.maas_auth.password = maasAuth.password;
         }
+    } else if (isCodeAgentProvider(provider)) {
+        override.codeagent_auth = {
+            oauth_session_id: codeagentAuth.oauth_session_id,
+            has_access_token: codeagentAuth.has_access_token,
+            has_refresh_token: codeagentAuth.has_refresh_token,
+        };
     } else if (apiKey) {
         override.api_key = apiKey;
     }
@@ -1388,6 +1486,7 @@ function buildDraftModelDiscoveryPayload() {
     const baseUrl = document.getElementById('profile-base-url').value.trim();
     const apiKey = readDraftApiKeyValue();
     const maasAuth = readDraftMaasAuth();
+    const codeagentAuth = readDraftCodeAgentAuth();
     const connectTimeoutSeconds = parseFloat(document.getElementById('profile-connect-timeout').value) || 15;
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
 
@@ -1397,6 +1496,17 @@ function buildDraftModelDiscoveryPayload() {
             draftModelDiscoveryState = {
                 status: 'failed',
                 message: 'Base URL, username, and password are required before fetching models for a MAAS profile.',
+            };
+            renderDiscoveredModels();
+            renderDraftModelDiscoveryState();
+            return null;
+        }
+    } else if (isCodeAgentProvider(provider)) {
+        if (!hasDraftCodeAgentAuth()) {
+            draftDiscoveredModels = [];
+            draftModelDiscoveryState = {
+                status: 'failed',
+                message: 'SSO login is required before fetching CodeAgent models.',
             };
             renderDiscoveredModels();
             renderDraftModelDiscoveryState();
@@ -1415,7 +1525,7 @@ function buildDraftModelDiscoveryPayload() {
 
     const override = {
         provider: provider,
-        base_url: baseUrl,
+        base_url: isCodeAgentProvider(provider) ? DEFAULT_CODEAGENT_BASE_URL : baseUrl,
     };
     if (sslVerify !== null) {
         override.ssl_verify = sslVerify;
@@ -1427,6 +1537,12 @@ function buildDraftModelDiscoveryPayload() {
         if (maasAuth.password) {
             override.maas_auth.password = maasAuth.password;
         }
+    } else if (isCodeAgentProvider(provider)) {
+        override.codeagent_auth = {
+            oauth_session_id: codeagentAuth.oauth_session_id,
+            has_access_token: codeagentAuth.has_access_token,
+            has_refresh_token: codeagentAuth.has_refresh_token,
+        };
     } else if (apiKey) {
         override.api_key = apiKey;
     }
@@ -1627,13 +1743,16 @@ function applyProviderDefaultBaseUrl() {
     ).trim();
     const previousDefaultBaseUrl = getProviderDefaultBaseUrl(previousDefaultSourceProvider);
     const providerChanged = provider !== previousProvider;
-    if (isMaaSProvider(provider)) {
-        baseUrlInput.value = DEFAULT_MAAS_BASE_URL;
+    if (isMaaSProvider(provider) || isCodeAgentProvider(provider)) {
+        baseUrlInput.value = getProviderDefaultBaseUrl(provider);
         baseUrlInput.dataset.previousProvider = provider;
         baseUrlInput.dataset.defaultSourceProvider = provider;
         return;
     }
-    if (providerChanged && isMaaSProvider(previousProvider)) {
+    if (
+        providerChanged
+        && (isMaaSProvider(previousProvider) || isCodeAgentProvider(previousProvider))
+    ) {
         baseUrlInput.value = '';
         delete baseUrlInput.dataset.defaultSourceProvider;
     }
@@ -1880,6 +1999,7 @@ function resetDraftEditorState() {
     draftModelDiscoveryState = null;
     draftApiKeyState = createDraftSecretState();
     draftMaasPasswordState = createDraftSecretState();
+    draftCodeAgentAuthState = createDraftCodeAgentAuthState();
     draftCatalogSelection = null;
     draftImageCapabilityMode = IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
     isModelMenuOpen = false;
@@ -2264,6 +2384,10 @@ function isMaaSProvider(provider) {
     return String(provider || '').trim() === 'maas';
 }
 
+function isCodeAgentProvider(provider) {
+    return String(provider || '').trim() === 'codeagent';
+}
+
 function getDraftProvider() {
     const providerInput = document.getElementById('profile-provider');
     return providerInput ? String(providerInput.value || '').trim() || 'openai_compatible' : 'openai_compatible';
@@ -2300,43 +2424,149 @@ function readDraftMaasAuth() {
     };
 }
 
+function readDraftCodeAgentAuth() {
+    return {
+        oauth_session_id: draftCodeAgentAuthState.authSessionId || null,
+        has_access_token: draftCodeAgentAuthState.completed || draftCodeAgentAuthState.hasPersistedAccessToken,
+        has_refresh_token: draftCodeAgentAuthState.completed || draftCodeAgentAuthState.hasPersistedRefreshToken,
+    };
+}
+
+function hasDraftCodeAgentAuth() {
+    return draftCodeAgentAuthState.completed || draftCodeAgentAuthState.hasPersistedRefreshToken;
+}
+
+function renderDraftCodeAgentAuthState() {
+    const loginBtn = document.getElementById('profile-codeagent-login-status');
+    const statusMessageEl = document.getElementById('profile-codeagent-login-status-message');
+    const provider = getDraftProvider();
+    const isCodeAgent = isCodeAgentProvider(provider);
+    const hasAuth = hasDraftCodeAgentAuth();
+    const statusMessage = draftCodeAgentAuthState.statusMessage
+        || (hasAuth ? 'Signed in' : 'Not signed in');
+    const loginLabel = t('settings.model.codeagent_sign_in_sso');
+    const showStatus = isCodeAgent && statusMessage && statusMessage !== 'Not signed in';
+    const statusTone = getCodeAgentAuthStatusTone(statusMessage, hasAuth);
+
+    if (loginBtn) {
+        loginBtn.textContent = loginLabel;
+        loginBtn.title = loginLabel;
+        loginBtn.setAttribute('aria-label', loginLabel);
+        loginBtn.disabled = !isCodeAgent || statusMessage === 'Starting SSO login';
+    }
+    if (statusMessageEl) {
+        statusMessageEl.textContent = showStatus ? localizeCodeAgentAuthStatusMessage(statusMessage) : '';
+        statusMessageEl.style.display = showStatus ? 'block' : 'none';
+        statusMessageEl.className = showStatus
+            ? `codeagent-sso-status-message probe-status probe-status-${statusTone}`
+            : 'codeagent-sso-status-message';
+    }
+}
+
+function localizeCodeAgentAuthStatusMessage(statusMessage) {
+    const message = String(statusMessage || '').trim();
+    if (message === 'Starting SSO login') {
+        return t('settings.model.codeagent_sso_starting');
+    }
+    if (message === 'Waiting for SSO callback') {
+        return t('settings.model.codeagent_sso_waiting');
+    }
+    if (message === 'Signed in') {
+        return t('settings.model.codeagent_sso_signed_in');
+    }
+    if (message === 'SSO login timed out') {
+        return t('settings.model.codeagent_sso_timed_out');
+    }
+    if (message.startsWith('SSO failed: ')) {
+        return formatMessage('settings.model.codeagent_sso_failed', {
+            error: message.slice('SSO failed: '.length),
+        });
+    }
+    return message;
+}
+
+function getCodeAgentAuthStatusTone(statusMessage, hasAuth) {
+    const normalizedMessage = String(statusMessage || '').toLowerCase();
+    if (normalizedMessage.includes('failed') || normalizedMessage.includes('timed out')) {
+        return 'failed';
+    }
+    if (hasAuth || normalizedMessage.includes('signed in')) {
+        return 'success';
+    }
+    return 'probing';
+}
+
 function hasDraftMaasPassword(maasAuth) {
     return Boolean(maasAuth.password) || draftMaasPasswordState.hasPersistedValue;
 }
 
-function syncDraftModelFieldPlacement(maasProvider) {
+function syncDraftModelFieldPlacement(maasProvider, codeagentProvider = false) {
     const primaryCredentialsRow = document.getElementById('profile-primary-credentials-row');
-    if (!primaryCredentialsRow) {
+    const apiKeyGroup = document.getElementById('profile-api-key-group');
+    const modelGroup = document.getElementById('profile-model-group');
+    const maasModelSlot = document.getElementById('profile-maas-model-slot');
+    const codeagentModelSlot = document.getElementById('profile-codeagent-model-slot');
+    if (!primaryCredentialsRow || !apiKeyGroup || !modelGroup || !maasModelSlot || !codeagentModelSlot) {
         return;
     }
-    primaryCredentialsRow.style.display = maasProvider ? 'none' : 'grid';
+
+    if (maasProvider) {
+        if (modelGroup.parentElement !== maasModelSlot && typeof maasModelSlot.appendChild === 'function') {
+            maasModelSlot.appendChild(modelGroup);
+        }
+        primaryCredentialsRow.style.display = 'none';
+        return;
+    }
+    if (codeagentProvider) {
+        if (modelGroup.parentElement !== codeagentModelSlot && typeof codeagentModelSlot.appendChild === 'function') {
+            codeagentModelSlot.appendChild(modelGroup);
+        }
+        primaryCredentialsRow.style.display = 'none';
+        return;
+    }
+
+    if (modelGroup.parentElement !== primaryCredentialsRow && typeof primaryCredentialsRow.appendChild === 'function') {
+        primaryCredentialsRow.appendChild(modelGroup);
+    }
+    primaryCredentialsRow.style.display = 'grid';
 }
 
 function renderDraftProviderFields() {
-    const maasProvider = isMaaSProvider(getDraftProvider());
+    const provider = getDraftProvider();
+    const maasProvider = isMaaSProvider(provider);
+    const codeagentProvider = isCodeAgentProvider(provider);
     const apiKeyGroup = document.getElementById('profile-api-key-group');
     const maasFields = document.getElementById('profile-maas-auth-fields');
+    const codeagentFields = document.getElementById('profile-codeagent-auth-fields');
     const passwordInput = document.getElementById('profile-maas-password');
     const baseUrlInput = document.getElementById('profile-base-url');
-    syncDraftModelFieldPlacement(maasProvider);
+    const baseUrlGroup = baseUrlInput ? baseUrlInput.closest('.form-group') : null;
+    syncDraftModelFieldPlacement(maasProvider, codeagentProvider);
     if (apiKeyGroup) {
-        apiKeyGroup.style.display = maasProvider ? 'none' : 'block';
+        apiKeyGroup.style.display = (maasProvider || codeagentProvider) ? 'none' : 'block';
     }
     if (maasFields) {
         maasFields.style.display = maasProvider ? 'grid' : 'none';
+    }
+    if (codeagentFields) {
+        codeagentFields.style.display = codeagentProvider ? 'grid' : 'none';
     }
     if (passwordInput) {
         renderDraftMaaSPasswordField();
     }
     if (baseUrlInput) {
-        baseUrlInput.disabled = maasProvider;
-        if (maasProvider) {
-            baseUrlInput.value = DEFAULT_MAAS_BASE_URL;
-            baseUrlInput.title = DEFAULT_MAAS_BASE_URL;
+        baseUrlInput.disabled = maasProvider || codeagentProvider;
+        if (maasProvider || codeagentProvider) {
+            baseUrlInput.value = getProviderDefaultBaseUrl(provider);
+            baseUrlInput.title = getProviderDefaultBaseUrl(provider);
         } else {
             baseUrlInput.title = '';
         }
     }
+    if (baseUrlGroup) {
+        baseUrlGroup.style.display = codeagentProvider ? 'none' : 'block';
+    }
+    renderDraftCodeAgentAuthState();
 }
 
 function readDraftMaasPasswordValue() {
@@ -2405,6 +2635,16 @@ function createDraftSecretState() {
         isDirty: false,
         armedForInput: false,
         revealed: false,
+    };
+}
+
+function createDraftCodeAgentAuthState() {
+    return {
+        authSessionId: '',
+        completed: false,
+        hasPersistedAccessToken: false,
+        hasPersistedRefreshToken: false,
+        statusMessage: 'Not signed in',
     };
 }
 
