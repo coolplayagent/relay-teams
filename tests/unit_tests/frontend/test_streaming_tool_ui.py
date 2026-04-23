@@ -187,6 +187,15 @@ def test_tool_blocks_parse_tagged_read_payloads_and_cap_large_diffs() -> None:
         "function buildBoundedPreview(text, { maxLines, maxChars }) {"
         in tool_blocks_script
     )
+    read_branch = "if (toolName === 'read' && data != null) {"
+    assert read_branch in tool_blocks_script
+    assert "if (renderStructuredPayload(targetEl, data, envelope.meta)) {" in (
+        tool_blocks_script
+    )
+    assert tool_blocks_script.index(
+        "if (renderStructuredPayload(targetEl, data, envelope.meta)) {"
+    ) < tool_blocks_script.index("renderReadOutput(targetEl, data);")
+    assert "enableWorkspaceImagePreview: !hasStructuredContent" in tool_blocks_script
     assert "Preview truncated. Showing first" in tool_blocks_script
     assert "return pairLinesByIndex(oldLines, newLines);" in tool_blocks_script
     assert 'class="tool-diff-no"' not in tool_blocks_script

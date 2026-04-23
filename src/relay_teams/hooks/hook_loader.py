@@ -22,6 +22,7 @@ from relay_teams.logger import get_logger
 from relay_teams.paths import get_project_root_or_none
 
 LOGGER = get_logger(__name__)
+_CAPABILITY_WILDCARD = "*"
 
 
 class _HookRoleEntry(Protocol):
@@ -260,6 +261,7 @@ class HookLoader:
         if self._get_role_registry is None:
             return {}
         role_registry = cast(_HookRoleRegistry, self._get_role_registry())
+        wildcard_skill_refs = self._list_wildcard_skill_refs()
         skill_role_ids: dict[str, list[str]] = {}
         for role in role_registry.list_roles():
             role_id = str(role.role_id or "").strip()
@@ -269,10 +271,44 @@ class HookLoader:
                 normalized_ref = str(skill_ref or "").strip()
                 if not normalized_ref:
                     continue
-                skill_role_ids.setdefault(normalized_ref, []).append(role_id)
+                if normalized_ref == _CAPABILITY_WILDCARD:
+                    for wildcard_skill_ref in wildcard_skill_refs:
+                        _append_skill_role_id(
+                            skill_role_ids,
+                            skill_ref=wildcard_skill_ref,
+                            role_id=role_id,
+                        )
+                    continue
+                _append_skill_role_id(
+                    skill_role_ids,
+                    skill_ref=normalized_ref,
+                    role_id=role_id,
+                )
         return {
             skill_ref: tuple(role_ids) for skill_ref, role_ids in skill_role_ids.items()
         }
+
+    def _list_wildcard_skill_refs(self) -> tuple[str, ...]:
+        if self._get_skill_registry is None:
+            return ()
+        skill_registry = cast(_HookSkillRegistry, self._get_skill_registry())
+        skill_refs: list[str] = []
+        for skill in skill_registry.list_skill_definitions():
+            skill_ref = str(skill.ref or "").strip()
+            if skill_ref:
+                skill_refs.append(skill_ref)
+        return tuple(skill_refs)
+
+
+def _append_skill_role_id(
+    skill_role_ids: dict[str, list[str]],
+    *,
+    skill_ref: str,
+    role_id: str,
+) -> None:
+    role_ids = skill_role_ids.setdefault(skill_ref, [])
+    if role_id not in role_ids:
+        role_ids.append(role_id)
 
 
 def _merge_role_ids(

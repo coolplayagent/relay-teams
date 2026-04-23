@@ -6,6 +6,7 @@ import mimetypes
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import ParseResult, urlparse
 from uuid import uuid4
 
 from pydantic_ai.messages import (
@@ -32,6 +33,8 @@ from relay_teams.workspace import WorkspaceManager
 _LOCAL_ASSET_URL_PATTERN = re.compile(
     r"^/api/sessions/(?P<session_id>[^/]+)/media/(?P<asset_id>[^/]+)/file$"
 )
+_LOCAL_PROVIDER_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_DEFAULT_LOCAL_SERVER_BASE_URL = "http://127.0.0.1:8000"
 
 
 class MediaAssetService:
@@ -40,9 +43,16 @@ class MediaAssetService:
         *,
         repository: MediaAssetRepository,
         workspace_manager: WorkspaceManager,
+        local_server_base_url: str = _DEFAULT_LOCAL_SERVER_BASE_URL,
     ) -> None:
         self._repository = repository
         self._workspace_manager = workspace_manager
+        self._local_server_base_url = local_server_base_url.rstrip("/")
+        parsed_base_url = urlparse(self._local_server_base_url)
+        self._local_provider_netloc = parsed_base_url.netloc.strip().lower()
+        self._local_provider_host = (parsed_base_url.hostname or "").strip().lower()
+        self._local_provider_port = parsed_base_url.port
+        self._local_provider_base_path = parsed_base_url.path.rstrip("/")
 
     def normalize_content_parts(
         self,
@@ -239,22 +249,38 @@ class MediaAssetService:
         part: MediaRefContentPart,
     ) -> ImageUrl | AudioUrl | VideoUrl | BinaryContent:
         record = self._repository.get(part.asset_id)
-        if record.storage_kind == MediaAssetStorageKind.REMOTE:
-            url = self.asset_url(
-                record.session_id, record.asset_id, record.external_url
-            )
-            if record.modality == MediaModality.IMAGE:
-                return ImageUrl(url=url, media_type=record.mime_type)
-            if record.modality == MediaModality.AUDIO:
-                return AudioUrl(url=url, media_type=record.mime_type)
-            return VideoUrl(url=url, media_type=record.mime_type)
-        file_path, _ = self.get_asset_file(
-            session_id=record.session_id,
-            asset_id=record.asset_id,
+        url = (
+            self.asset_url(record.session_id, record.asset_id, record.external_url)
+            if record.storage_kind == MediaAssetStorageKind.REMOTE
+            else self.provider_asset_url(record.session_id, record.asset_id)
         )
-        return BinaryContent(
-            data=file_path.read_bytes(),
+        force_download = (
+            False
+            if record.storage_kind == MediaAssetStorageKind.REMOTE
+            else "allow-local"
+        )
+        if record.modality == MediaModality.IMAGE:
+            return ImageUrl(
+                url=url,
+                media_type=record.mime_type,
+                force_download=force_download,
+            )
+        if record.modality == MediaModality.AUDIO:
+            return AudioUrl(
+                url=url,
+                media_type=record.mime_type,
+                force_download=force_download,
+            )
+        return VideoUrl(
+            url=url,
             media_type=record.mime_type,
+            force_download=force_download,
+        )
+
+    def provider_asset_url(self, session_id: str, asset_id: str) -> str:
+        return (
+            f"{self._local_server_base_url}"
+            f"/api/sessions/{session_id}/media/{asset_id}/file"
         )
 
     def to_persisted_user_prompt_content(
@@ -353,10 +379,38 @@ class MediaAssetService:
             url = str(item.url).strip()
         if not url:
             return None
-        match = _LOCAL_ASSET_URL_PATTERN.match(url)
+        parsed = urlparse(url)
+        candidate_path = url
+        if parsed.scheme or parsed.netloc:
+            is_configured_local = self._matches_local_provider_url(parsed)
+            if not is_configured_local:
+                return None
+            candidate_path = parsed.path or ""
+            if (
+                is_configured_local
+                and self._local_provider_base_path
+                and candidate_path.startswith(f"{self._local_provider_base_path}/")
+            ):
+                candidate_path = candidate_path[len(self._local_provider_base_path) :]
+        match = _LOCAL_ASSET_URL_PATTERN.match(candidate_path)
         if match is None:
             return None
         return match.group("session_id"), match.group("asset_id")
+
+    def _matches_local_provider_url(self, parsed_url: ParseResult) -> bool:
+        netloc = parsed_url.netloc.strip().lower()
+        if netloc == self._local_provider_netloc:
+            return True
+        host = (parsed_url.hostname or "").strip().lower()
+        if host not in _LOCAL_PROVIDER_HOSTS:
+            return False
+        if self._local_provider_host not in _LOCAL_PROVIDER_HOSTS:
+            return False
+        try:
+            port = parsed_url.port
+        except ValueError:
+            return False
+        return port == self._local_provider_port
 
 
 def infer_media_modality(content_type: str, filename: str = "") -> MediaModality:

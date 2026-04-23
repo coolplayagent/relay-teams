@@ -772,7 +772,12 @@ def build_runtime_tools_prompt(
         lines.append(
             "- Skill Tools: " + _format_names(_tool_names(runtime_tools.skill_tools))
         )
-    lines.extend(_build_todo_guidance(runtime_tools))
+    lines.extend(
+        _build_todo_guidance(
+            runtime_tools,
+            active_local_tool_names=active_local_tool_names,
+        )
+    )
     lines.append(f"- Total Authorized Tools: {total_tools}")
     lines.append(f"- Local Tools: {len(runtime_tools.local_tools)} authorized")
     lines.append(f"- Skill Tools: {len(runtime_tools.skill_tools)} authorized")
@@ -780,9 +785,15 @@ def build_runtime_tools_prompt(
     return "\n".join(lines)
 
 
-def _build_todo_guidance(runtime_tools: RuntimeToolsSnapshot) -> list[str]:
+def _build_todo_guidance(
+    runtime_tools: RuntimeToolsSnapshot,
+    *,
+    active_local_tool_names: tuple[str, ...],
+) -> list[str]:
     local_tool_names = set(_tool_names(runtime_tools.local_tools))
     if "todo_write" not in local_tool_names:
+        return []
+    if "todo_write" not in set(active_local_tool_names):
         return []
     lines = [
         "- Use `todo_write` to maintain a concise run-scoped plan when the task has multiple concrete steps.",

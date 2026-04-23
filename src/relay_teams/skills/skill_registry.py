@@ -47,6 +47,7 @@ _SKILL_LOAD_EXCLUDED_DIR_NAMES = frozenset(
 )
 _SKILL_LOAD_EXCLUDED_FILE_SUFFIXES = frozenset({".pyc", ".pyo"})
 _LEGACY_SCOPED_SKILL_PREFIXES = frozenset({"app", "builtin"})
+_CAPABILITY_WILDCARD = "*"
 
 
 class _SkillFileSelection(BaseModel):
@@ -153,10 +154,12 @@ class SkillRegistry(BaseModel):
         *,
         strict: bool = True,
         consumer: str | None = None,
+        expand_wildcards: bool = True,
     ) -> tuple[str, ...]:
         attributes: dict[str, JsonValue] = {
             "skill_names": list(skill_names),
             "strict": strict,
+            "expand_wildcards": expand_wildcards,
         }
         if consumer is not None:
             attributes["consumer"] = consumer
@@ -169,6 +172,7 @@ class SkillRegistry(BaseModel):
             resolved, missing = self._resolve_skill_names(
                 skill_names,
                 strict=strict,
+                expand_wildcards=expand_wildcards,
             )
             if strict and missing:
                 raise ValueError(f"Unknown skills: {list(missing)}")
@@ -188,7 +192,11 @@ class SkillRegistry(BaseModel):
             operation="validate_known",
             attributes={"skill_names": list(skill_names)},
         ):
-            _, missing = self._resolve_skill_names(skill_names, strict=True)
+            _, missing = self._resolve_skill_names(
+                skill_names,
+                strict=True,
+                expand_wildcards=False,
+            )
             if missing:
                 raise ValueError(f"Unknown skills: {list(missing)}")
 
@@ -338,9 +346,11 @@ class SkillRegistry(BaseModel):
         skill_names: tuple[str, ...],
         *,
         strict: bool = False,
+        expand_wildcards: bool = True,
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         skill_map = self._get_effective_skill_map()
         resolved_names: list[str] = []
+        wildcard_names: set[str] = set()
         missing_names: list[str] = []
         for raw_name in skill_names:
             name = raw_name.strip()
@@ -348,12 +358,23 @@ class SkillRegistry(BaseModel):
                 if strict:
                     missing_names.append("")
                 continue
+            if name == _CAPABILITY_WILDCARD:
+                if not expand_wildcards:
+                    if _CAPABILITY_WILDCARD not in resolved_names:
+                        resolved_names.append(_CAPABILITY_WILDCARD)
+                    continue
+                for skill_name in sorted(skill_map.keys()):
+                    if skill_name not in resolved_names:
+                        resolved_names.append(skill_name)
+                    wildcard_names.add(skill_name)
+                continue
             normalized_name = _normalize_legacy_scoped_skill_name(
                 name=name,
                 skill_map=skill_map,
             )
             if normalized_name in skill_map:
-                resolved_names.append(normalized_name)
+                if normalized_name not in wildcard_names:
+                    resolved_names.append(normalized_name)
             else:
                 missing_names.append(name)
         return (tuple(resolved_names), tuple(missing_names))
@@ -580,6 +601,17 @@ def _resolve_skill_name_for_role(
         if str(item).strip()
     }
     normalized_requested = _normalize_legacy_scoped_skill_ref(requested)
+    if normalized_requested == _CAPABILITY_WILDCARD:
+        return None
+    if _CAPABILITY_WILDCARD in authorized_set:
+        resolved_names = skill_registry.resolve_known(
+            (requested,),
+            strict=False,
+            consumer=f"skills.registry.load_skill.role:{getattr(role, 'role_id', '')}",
+        )
+        if resolved_names:
+            return resolved_names[0]
+        return None
     if normalized_requested not in authorized_set:
         return None
     return normalized_requested

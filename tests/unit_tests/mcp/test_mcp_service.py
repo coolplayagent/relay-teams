@@ -247,3 +247,143 @@ def test_registry_resolve_server_names_ignores_unknown_servers_when_not_strict()
     )
 
     assert resolved == ("filesystem",)
+
+
+def test_registry_resolve_server_names_expands_wildcard() -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+            McpServerSpec(
+                name="docs",
+                config={"mcpServers": {"docs": {"url": "https://example.com/mcp"}}},
+                server_config={"url": "https://example.com/mcp"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    resolved = registry.resolve_server_names(("*", "docs"), strict=True)
+
+    assert resolved == ("docs", "filesystem")
+
+
+def test_registry_resolve_server_names_can_preserve_wildcard() -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    resolved = registry.resolve_server_names(
+        ("*", "filesystem"),
+        strict=True,
+        expand_wildcards=False,
+    )
+
+    assert resolved == ("*", "filesystem")
+
+
+def test_registry_resolve_server_names_rejects_partial_wildcard_patterns() -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="Unknown MCP servers: \\['file\\*'\\]"):
+        registry.resolve_server_names(("file*",), strict=True)
+
+
+def test_registry_resolve_server_names_filters_unknowns_after_wildcard() -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+            McpServerSpec(
+                name="docs",
+                config={"mcpServers": {"docs": {"url": "https://example.com/mcp"}}},
+                server_config={"url": "https://example.com/mcp"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    resolved = registry.resolve_server_names(
+        ("*", "missing", "filesystem"),
+        strict=False,
+    )
+
+    assert resolved == ("docs", "filesystem")
+
+
+def test_registry_resolve_server_names_reports_unknown_even_with_wildcard() -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="Unknown MCP servers: \\['missing'\\]"):
+        registry.resolve_server_names(("*", "missing"), strict=True)
+
+
+def test_registry_resolve_server_names_wildcard_on_empty_registry_is_empty() -> None:
+    registry = McpRegistry(())
+
+    assert registry.resolve_server_names(("*",), strict=True) == ()
+    assert registry.resolve_server_names(("*", "missing"), strict=False) == ()
+
+
+def test_registry_resolve_server_names_preserves_wildcard_once_when_not_expanding() -> (
+    None
+):
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    resolved = registry.resolve_server_names(
+        (" * ", "missing", "*", "filesystem"),
+        strict=False,
+        expand_wildcards=False,
+    )
+
+    assert resolved == ("*", "filesystem")
+
+
+def test_registry_validate_known_accepts_exact_wildcard_and_rejects_partial() -> None:
+    registry = McpRegistry(())
+
+    registry.validate_known(("*",))
+    with pytest.raises(ValueError, match="Unknown MCP servers: \\['mcp-\\*'\\]"):
+        registry.validate_known(("mcp-*",))

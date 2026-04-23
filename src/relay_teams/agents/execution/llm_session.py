@@ -220,6 +220,17 @@ class _PromptContentHydrationService(Protocol):
     ) -> UserPromptContent: ...
 
 
+@runtime_checkable
+class _PromptContentProviderService(Protocol):
+    def to_provider_user_prompt_content(
+        self,
+        *,
+        parts: tuple[
+            TextContentPart | MediaRefContentPart | InlineMediaContentPart, ...
+        ],
+    ) -> UserPromptContent: ...
+
+
 class _PreparedPromptContext(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -714,6 +725,7 @@ class AgentLlmSession:
                 notification_service=self._notification_service,
                 im_tool_service=self._im_tool_service,
                 hook_service=hook_service,
+                model_capabilities=self._config.capabilities,
                 hook_runtime_env=hook_runtime_env,
             )
             control_ctx = self._run_control_manager.context(
@@ -779,7 +791,6 @@ class AgentLlmSession:
                     )
                 else:
                     history = persisted_history
-            history = self._hydrate_history_media_content(history)
             seen_count = 0
             buffered_messages: list[ModelRequest | ModelResponse] = []
             restarted = False
@@ -801,10 +812,14 @@ class AgentLlmSession:
                 while True:
                     control_ctx.raise_if_cancelled()
                     restarted = False
+                    provider_history = self._provider_history_for_model_turn(
+                        request=request,
+                        history=history,
+                    )
                     async with agent.iter(
                         None,
                         deps=deps,
-                        message_history=history,
+                        message_history=provider_history,
                         usage_limits=UsageLimits(request_limit=LLM_REQUEST_LIMIT),
                     ) as agent_run:
                         async for node in agent_run:
@@ -902,7 +917,7 @@ class AgentLlmSession:
                             all_new = agent_run.new_messages()
                             new_batch = list(all_new)[seen_count:]
                             new_to_process = self._drop_duplicate_leading_request(
-                                history=history,
+                                history=provider_history,
                                 new_messages=new_batch,
                             )
                             new_to_process = self._apply_streamed_text_fallback(
@@ -1035,7 +1050,7 @@ class AgentLlmSession:
                         # Flush any remaining messages (e.g. final tool results)
                         all_new = maybe_result.new_messages()
                         to_save = self._drop_duplicate_leading_request(
-                            history=history,
+                            history=provider_history,
                             new_messages=list(all_new)[seen_count:],
                         )
                         to_save = self._apply_streamed_text_fallback(
@@ -1579,6 +1594,7 @@ class AgentLlmSession:
             cache_scope=request.run_id,
         )
 
+    # noinspection PyUnusedLocal
     def _log_generate_failure_diagnostics(
         self,
         *,
@@ -2057,6 +2073,7 @@ class AgentLlmSession:
             )
         )
 
+    # noinspection PyTypeHints
     def _raise_assistant_run_error(
         self,
         *,
@@ -4075,7 +4092,11 @@ class AgentLlmSession:
         if not isinstance(first_new, ModelRequest):
             return new_messages
         if not self._model_requests_match_user_prompt(last_history, first_new):
-            return new_messages
+            if not self._model_request_matches_tool_result_replay(
+                history=history,
+                replayed_request=first_new,
+            ):
+                return new_messages
         return new_messages[1:]
 
     def _model_requests_match_user_prompt(
@@ -4083,13 +4104,13 @@ class AgentLlmSession:
         left: ModelRequest,
         right: ModelRequest,
     ) -> bool:
-        left_prompt = self._extract_user_prompt_text(left)
-        if left_prompt is None:
+        left_prompt_key = self._user_prompt_parts_key(parts=left.parts)
+        if left_prompt_key is None:
             return False
-        right_prompt = self._extract_user_prompt_text(right)
-        if right_prompt is None:
+        right_prompt_key = self._user_prompt_parts_key(parts=right.parts)
+        if right_prompt_key is None:
             return False
-        return left_prompt == right_prompt
+        return left_prompt_key == right_prompt_key
 
     def _extract_user_prompt_text(self, message: ModelRequest) -> str | None:
         prompt_parts = [
@@ -4101,6 +4122,140 @@ class AgentLlmSession:
             user_prompt_content_to_text(part.content) for part in prompt_parts
         ).strip()
         return combined or None
+
+    def _model_request_matches_tool_result_replay(
+        self,
+        *,
+        history: Sequence[ModelRequest | ModelResponse],
+        replayed_request: ModelRequest,
+    ) -> bool:
+        expected_parts = self._tool_result_replay_parts(history=history)
+        if expected_parts is None:
+            return False
+        expected_tool_returns, expected_user_prompts = expected_parts
+        actual_tool_returns = [
+            part for part in replayed_request.parts if isinstance(part, ToolReturnPart)
+        ]
+        actual_user_prompts = [
+            part for part in replayed_request.parts if isinstance(part, UserPromptPart)
+        ]
+        if len(actual_tool_returns) + len(actual_user_prompts) != len(
+            replayed_request.parts
+        ):
+            return False
+        if len(expected_tool_returns) != len(actual_tool_returns):
+            return False
+        if any(
+            not self._tool_return_parts_match(
+                expected_part=expected_part,
+                actual_part=actual_part,
+            )
+            for expected_part, actual_part in zip(
+                expected_tool_returns, actual_tool_returns
+            )
+        ):
+            return False
+        expected_prompt_key = self._user_prompt_parts_key(parts=expected_user_prompts)
+        actual_prompt_key = self._user_prompt_parts_key(parts=actual_user_prompts)
+        if expected_prompt_key is None or actual_prompt_key is None:
+            return False
+        return expected_prompt_key == actual_prompt_key
+
+    # noinspection PyTypeHints
+    def _tool_result_replay_parts(
+        self,
+        *,
+        history: Sequence[ModelRequest | ModelResponse],
+    ) -> tuple[list[ToolReturnPart], list[UserPromptPart]] | None:
+        if not history:
+            return None
+        mixed_replay = self._mixed_tool_result_replay_parts(history[-1])
+        if mixed_replay is not None:
+            return mixed_replay
+        if len(history) < 2:
+            return None
+        previous_message = history[-2]
+        synthetic_prompt = history[-1]
+        if not isinstance(previous_message, ModelRequest):
+            return None
+        if not isinstance(synthetic_prompt, ModelRequest):
+            return None
+        if not self._model_request_contains_only_tool_returns(previous_message):
+            return None
+        if not self._model_request_contains_only_user_prompts(synthetic_prompt):
+            return None
+        expected_tool_returns = [
+            part for part in previous_message.parts if isinstance(part, ToolReturnPart)
+        ]
+        expected_user_prompts = [
+            part for part in synthetic_prompt.parts if isinstance(part, UserPromptPart)
+        ]
+        return expected_tool_returns, expected_user_prompts
+
+    # noinspection PyMethodMayBeStatic,PyTypeHints
+    def _mixed_tool_result_replay_parts(
+        self,
+        message: ModelRequest | ModelResponse,
+    ) -> tuple[list[ToolReturnPart], list[UserPromptPart]] | None:
+        if not isinstance(message, ModelRequest):
+            return None
+        tool_returns = [
+            part for part in message.parts if isinstance(part, ToolReturnPart)
+        ]
+        user_prompts = [
+            part for part in message.parts if isinstance(part, UserPromptPart)
+        ]
+        if not tool_returns or not user_prompts:
+            return None
+        if len(tool_returns) + len(user_prompts) != len(message.parts):
+            return None
+        return tool_returns, user_prompts
+
+    # noinspection PyMethodMayBeStatic
+    def _model_request_contains_only_tool_returns(
+        self,
+        message: ModelRequest,
+    ) -> bool:
+        return bool(message.parts) and all(
+            isinstance(part, ToolReturnPart) for part in message.parts
+        )
+
+    # noinspection PyMethodMayBeStatic
+    def _model_request_contains_only_user_prompts(
+        self,
+        message: ModelRequest,
+    ) -> bool:
+        return bool(message.parts) and all(
+            isinstance(part, UserPromptPart) for part in message.parts
+        )
+
+    # noinspection PyMethodMayBeStatic
+    def _user_prompt_parts_key(
+        self,
+        *,
+        parts: Sequence[ModelRequestPart],
+    ) -> str | None:
+        if not parts or not all(isinstance(part, UserPromptPart) for part in parts):
+            return None
+        prompt_contents = [
+            part.content for part in parts if isinstance(part, UserPromptPart)
+        ]
+        return user_prompt_content_key(
+            prompt_contents[0] if len(prompt_contents) == 1 else prompt_contents
+        )
+
+    # noinspection PyMethodMayBeStatic
+    def _tool_return_parts_match(
+        self,
+        *,
+        expected_part: ToolReturnPart,
+        actual_part: ToolReturnPart,
+    ) -> bool:
+        return (
+            expected_part.tool_name == actual_part.tool_name
+            and expected_part.tool_call_id == actual_part.tool_call_id
+            and expected_part.content == actual_part.content
+        )
 
     def _current_request_prompt_content(
         self,
@@ -4261,6 +4416,29 @@ class AgentLlmSession:
             hydrated_messages.append(message)
         return hydrated_messages
 
+    def _provider_history_for_model_turn(
+        self,
+        *,
+        request: LLMRequest,
+        history: Sequence[ModelRequest | ModelResponse],
+    ) -> list[ModelRequest | ModelResponse]:
+        provider_history, _ = self._provider_history_for_model_turn_details(
+            request=request,
+            history=history,
+        )
+        return provider_history
+
+    # noinspection PyUnusedLocal,PyTypeHints
+    def _provider_history_for_model_turn_details(
+        self,
+        *,
+        request: LLMRequest,
+        history: Sequence[ModelRequest | ModelResponse],
+        consumed_tool_call_ids: set[str] | None = None,
+    ) -> tuple[list[ModelRequest | ModelResponse], tuple[str, ...]]:
+        del request, consumed_tool_call_ids
+        return self._hydrate_history_media_content(history), ()
+
     def _prompt_content_persistence_service(
         self,
     ) -> _PromptContentPersistenceService | None:
@@ -4274,6 +4452,14 @@ class AgentLlmSession:
     ) -> _PromptContentHydrationService | None:
         media_asset_service = getattr(self, "_media_asset_service", None)
         if not isinstance(media_asset_service, _PromptContentHydrationService):
+            return None
+        return media_asset_service
+
+    def _prompt_content_provider_service(
+        self,
+    ) -> _PromptContentProviderService | None:
+        media_asset_service = getattr(self, "_media_asset_service", None)
+        if not isinstance(media_asset_service, _PromptContentProviderService):
             return None
         return media_asset_service
 
@@ -4297,7 +4483,8 @@ class AgentLlmSession:
             raw_ready
         )
         ready = self._normalize_committable_messages(
-            raw_ready,
+            request=request,
+            messages=raw_ready,
             instance_id=request.instance_id,
         )
         self._message_repo.append(
@@ -4389,8 +4576,10 @@ class AgentLlmSession:
         self,
         messages: Sequence[ModelRequest | ModelResponse],
         *,
+        request: LLMRequest | None = None,
         instance_id: str = "",
     ) -> list[ModelRequest | ModelResponse]:
+        del request
         normalized: list[ModelRequest | ModelResponse] = []
         for message in messages:
             if isinstance(message, ModelResponse):

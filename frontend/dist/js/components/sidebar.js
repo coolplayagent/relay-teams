@@ -65,6 +65,7 @@ const expandedProjectSessionIds = new Set();
 const initializedProjectIds = new Set();
 const sessionWorkspaceMap = new Map();
 const automationBoundSessionIds = new Set();
+const renderedSubagentListExpandedState = new Map();
 let projectSortMode = 'recent';
 let openProjectMenuId = null;
 let projectMenuDismissBound = false;
@@ -267,24 +268,37 @@ function renderSubagentChildren(session) {
         return '';
     }
     const expanded = isSubagentSessionListExpanded(sessionId);
-    if (!expanded) {
-        return '';
-    }
+    const listWasExpanded = renderedSubagentListExpandedState.has(sessionId)
+        ? renderedSubagentListExpandedState.get(sessionId)
+        : expanded;
+    const hasChildren = hasLoadedSessionSubagents(sessionId)
+        && getSessionSubagentSessions(sessionId).length > 0;
     const loading = isSubagentSessionListLoading(sessionId);
     const children = getSessionSubagentSessions(sessionId);
+    const listClass = listWasExpanded ? 'is-expanded' : 'is-collapsed';
+    const listExpanded = listClass === 'is-expanded';
+    const listItemTabIndex = listExpanded ? '0' : '-1';
     if (loading && children.length === 0) {
         return `
-            <div class="session-subagent-list">
+            <div
+                class="session-subagent-list ${listClass}"
+                data-session-id="${escapeHtml(sessionId)}"
+                aria-hidden="${expanded ? 'false' : 'true'}"
+            >
                 <div class="session-subagent-empty">${escapeHtml(t('sidebar.subagent_sessions_loading'))}</div>
             </div>
         `;
     }
-    if (children.length === 0) {
+    if (!hasChildren) {
         return '';
     }
     const activeSubagent = getActiveSubagentSession();
     return `
-        <div class="session-subagent-list">
+        <div
+            class="session-subagent-list ${listClass}"
+            data-session-id="${escapeHtml(sessionId)}"
+            aria-hidden="${expanded ? 'false' : 'true'}"
+        >
             ${children.map(child => {
                 const active = !!(
                     activeSubagent
@@ -294,7 +308,7 @@ function renderSubagentChildren(session) {
                 return `
                     <div
                         class="session-item session-subagent-item${active ? ' active' : ''}"
-                        tabindex="0"
+                        tabindex="${listItemTabIndex}"
                         role="button"
                         data-session-id="${escapeHtml(sessionId)}"
                         data-subagent-instance-id="${escapeHtml(child.instanceId)}"
@@ -313,6 +327,7 @@ function renderSubagentChildren(session) {
                                 <button
                                     class="session-delete-btn session-subagent-delete-btn"
                                     type="button"
+                                    tabindex="${listItemTabIndex}"
                                     data-session-id="${escapeHtml(sessionId)}"
                                     data-subagent-instance-id="${escapeHtml(child.instanceId)}"
                                     data-subagent-run-id="${escapeHtml(child.runId)}"
@@ -331,6 +346,58 @@ function renderSubagentChildren(session) {
             }).join('')}
         </div>
     `;
+}
+
+function syncSubagentSessionListVisualState() {
+    if (!els.projectsList || typeof els.projectsList.querySelectorAll !== 'function') {
+        return;
+    }
+    const nextRenderedSessionIds = new Set();
+    const lists = Array.from(els.projectsList.querySelectorAll('.session-subagent-list[data-session-id]'));
+    if (!lists.length) {
+        return;
+    }
+
+    const applyState = () => {
+        for (const list of lists) {
+            const sessionId = String(list?.getAttribute?.('data-session-id') || '').trim();
+            if (!sessionId) {
+                continue;
+            }
+            nextRenderedSessionIds.add(sessionId);
+            const expanded = isSubagentSessionListExpanded(sessionId);
+            list.classList?.remove?.('is-expanded', 'is-collapsed');
+            list.classList?.add?.(expanded ? 'is-expanded' : 'is-collapsed');
+            list.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+            const shouldExpand = !!expanded;
+            list.style.setProperty(
+                '--session-subagent-list-height',
+                shouldExpand ? `${list.scrollHeight}px` : '0px',
+            );
+            list.style.pointerEvents = expanded ? '' : 'none';
+            const listItemTabIndex = shouldExpand ? '0' : '-1';
+            for (const item of Array.from(list.querySelectorAll('.session-subagent-item'))) {
+                item.setAttribute('tabindex', listItemTabIndex);
+            }
+            for (const deleteButton of Array.from(
+                list.querySelectorAll('.session-subagent-delete-btn'),
+            )) {
+                deleteButton.setAttribute('tabindex', listItemTabIndex);
+            }
+            renderedSubagentListExpandedState.set(sessionId, expanded);
+        }
+        for (const sessionId of renderedSubagentListExpandedState.keys()) {
+            if (!nextRenderedSessionIds.has(sessionId)) {
+                renderedSubagentListExpandedState.delete(sessionId);
+            }
+        }
+    };
+
+    if (typeof globalThis.requestAnimationFrame === 'function') {
+        globalThis.requestAnimationFrame(applyState);
+        return;
+    }
+    applyState();
 }
 
 function timestampValue(value) {
@@ -1080,7 +1147,15 @@ export async function loadProjects() {
     if (!languageRefreshBound && typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => void loadProjects());
         document.addEventListener('agent-teams-projects-changed', () => void loadProjects());
-        document.addEventListener('agent-teams-subagent-sessions-changed', () => scheduleSessionsRefresh(90));
+        document.addEventListener('agent-teams-subagent-sessions-changed', event => {
+            const detail = event?.detail;
+            const forceRefresh = detail && typeof detail === 'object' && 'forceRefresh' in detail
+                ? detail.forceRefresh === true
+                : true;
+            scheduleSessionsRefresh(90, {
+                forceRefresh,
+            });
+        });
         document.addEventListener('agent-teams-session-selected', () => void loadProjects());
         document.addEventListener('agent-teams-subagent-session-selected', () => void loadProjects());
         languageRefreshBound = true;
@@ -1136,6 +1211,7 @@ export async function loadProjects() {
         els.projectsList.innerHTML = '';
         nextNodes.forEach(node => els.projectsList.appendChild(node));
         syncProjectSortButton();
+        syncSubagentSessionListVisualState();
         playPendingSessionAnimation();
     } catch (error) {
         if (requestId !== loadProjectsRequestId) {
@@ -1145,12 +1221,13 @@ export async function loadProjects() {
     }
 }
 
-export function scheduleSessionsRefresh(delayMs = 120) {
+export function scheduleSessionsRefresh(delayMs = 120, { forceRefresh = false } = {}) {
     if (refreshTimer) clearTimeout(refreshTimer);
     const safeDelayMs = Math.max(0, Number(delayMs) || 0);
+    const forceNow = forceRefresh === true;
     refreshTimer = setTimeout(() => {
         refreshTimer = null;
-        if (isProjectsListInteracting()) {
+        if (!forceNow && isProjectsListInteracting()) {
             scheduleSessionsRefresh(Math.max(safeDelayMs, SIDEBAR_INTERACTION_REFRESH_DELAY_MS));
             return;
         }

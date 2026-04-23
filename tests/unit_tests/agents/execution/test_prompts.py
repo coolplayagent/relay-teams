@@ -907,6 +907,60 @@ def test_build_runtime_tools_prompt_omits_tool_search_guidance_when_unavailable(
     assert "Use `tool_search` to discover authorized tools" not in prompt
 
 
+def test_build_runtime_tools_prompt_gates_todo_guidance_on_active_tool_status() -> None:
+    runtime_tools = RuntimeToolsSnapshot(
+        local_tools=(
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="activate_tools",
+                description="Activate tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="tool_search",
+                description="Discover tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="todo_read",
+                description="Read todos.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="todo_write",
+                description="Write todos.",
+            ),
+        ),
+    )
+
+    deferred_prompt = build_runtime_tools_prompt(
+        runtime_tools,
+        runtime_active_local_tools=("tool_search", "activate_tools"),
+    )
+    active_prompt = build_runtime_tools_prompt(
+        runtime_tools,
+        runtime_active_local_tools=(
+            "tool_search",
+            "activate_tools",
+            "todo_read",
+            "todo_write",
+        ),
+    )
+
+    assert (
+        "Use `todo_write` to maintain a concise run-scoped plan" not in deferred_prompt
+    )
+    assert (
+        "Use `todo_read` before updating if you need to inspect the latest persisted todo snapshot."
+        not in deferred_prompt
+    )
+    assert "Use `todo_write` to maintain a concise run-scoped plan" in active_prompt
+    assert (
+        "Use `todo_read` before updating if you need to inspect the latest persisted todo snapshot."
+        in active_prompt
+    )
+
+
 def test_user_prompt_builder_returns_raw_objective() -> None:
     prompt = build_user_prompt(
         UserPromptBuildInput(objective="Draft the release notes.")

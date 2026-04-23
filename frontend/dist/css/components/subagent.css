@@ -107,12 +107,34 @@
 }
 
 .projects-list .session-subagent-list {
+    --session-subagent-list-height: 0px;
     position: relative;
     display: flex;
     flex-direction: column;
     gap: 0.06rem;
     margin-left: 0.78rem;
     padding-left: 0.78rem;
+    overflow: hidden;
+    max-height: var(--session-subagent-list-height);
+    opacity: 1;
+    transform: translateY(0);
+    transform-origin: top;
+    transition: max-height 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
+    pointer-events: auto;
+}
+
+.projects-list .session-subagent-list.is-expanded {
+    max-height: 100rem;
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.projects-list .session-subagent-list.is-collapsed {
+    max-height: 0;
+    opacity: 0;
+    transform: translateY(-1px);
+    pointer-events: none;
 }
 
 .projects-list .session-subagent-list::before {
@@ -124,6 +146,14 @@
     width: 1px;
     background: color-mix(in srgb, var(--border-color) 82%, transparent);
     opacity: 0.95;
+    transform-origin: top;
+    transform: scaleY(1);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.projects-list .session-subagent-list.is-collapsed::before {
+    opacity: 0;
+    transform: scaleY(0);
 }
 
 .projects-list .session-subagent-item {

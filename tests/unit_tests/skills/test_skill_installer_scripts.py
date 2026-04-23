@@ -444,10 +444,8 @@ def test_bind_skill_script_updates_main_agent_role(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     role_path = tmp_path / ".relay-teams" / "roles" / "MainAgent.md"
-    assert role_path.exists()
-    role_text = role_path.read_text(encoding="utf-8")
-    assert "- demo-skill" in role_text
-    assert "Updated roles: MainAgent" in result.stdout
+    assert not role_path.exists()
+    assert "Updated roles: <none>" in result.stdout
     assert result.stderr == ""
 
 
@@ -474,10 +472,8 @@ def test_bind_skill_script_defaults_to_current_role_env(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     role_path = tmp_path / ".relay-teams" / "roles" / "Crafter.md"
-    assert role_path.exists()
-    role_text = role_path.read_text(encoding="utf-8")
-    assert "- demo-skill" in role_text
-    assert "Updated roles: Crafter" in result.stdout
+    assert not role_path.exists()
+    assert "Updated roles: <none>" in result.stdout
 
 
 def test_mount_skills_to_roles_creates_main_agent_override(tmp_path: Path) -> None:
@@ -507,12 +503,45 @@ def test_mount_skills_to_roles_creates_main_agent_override(tmp_path: Path) -> No
         else:
             os.environ["USERPROFILE"] = old_userprofile
 
-    assert mounted_roles == ("MainAgent",)
+    assert mounted_roles == ()
     role_path = tmp_path / ".relay-teams" / "roles" / "MainAgent.md"
+    assert not role_path.exists()
+
+
+def test_mount_skills_to_roles_creates_non_wildcard_role_override(
+    tmp_path: Path,
+) -> None:
+    skill_dir = tmp_path / ".relay-teams" / "skills" / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: demo-skill\ndescription: demo installer\n---\nUse demo.\n",
+        encoding="utf-8",
+    )
+    old_home = os.environ.get("HOME")
+    old_userprofile = os.environ.get("USERPROFILE")
+    home_value = tmp_path.resolve().as_posix()
+    os.environ["HOME"] = home_value
+    os.environ["USERPROFILE"] = home_value
+    try:
+        mounted_roles = installer_support.mount_skills_to_roles(
+            role_ids=("daily-ai-report",),
+            skill_names=("demo-skill",),
+        )
+    finally:
+        if old_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = old_home
+        if old_userprofile is None:
+            os.environ.pop("USERPROFILE", None)
+        else:
+            os.environ["USERPROFILE"] = old_userprofile
+
+    assert mounted_roles == ("daily-ai-report",)
+    role_path = tmp_path / ".relay-teams" / "roles" / "daily-ai-report.md"
     assert role_path.exists()
     role_text = role_path.read_text(encoding="utf-8")
-    assert "role_id: MainAgent" in role_text
-    assert "- skill-installer" in role_text
+    assert "role_id: daily-ai-report" in role_text
     assert "- demo-skill" in role_text
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from threading import Lock
 
+from relay_teams.media import UserPromptContent
 from relay_teams.sessions.runs.enums import InjectionSource
 from relay_teams.sessions.runs.run_models import InjectionMessage
 
@@ -26,12 +27,13 @@ class RunInjectionManager:
         with self._lock:
             return run_id in self._active_runs
 
+    # noinspection PyTypeHints
     def enqueue(
         self,
         run_id: str,
         recipient_instance_id: str,
         source: InjectionSource,
-        content: str,
+        content: UserPromptContent,
         sender_instance_id: str | None = None,
         sender_role_id: str | None = None,
     ) -> InjectionMessage:
