@@ -77,9 +77,20 @@ pip install relay-teams
 
 Direct install:
 
+Windows:
+
+```powershell
+py -3 -m pip install uv
+py -3 -m uv sync --extra dev
+py -3 -m uv pip install -e .
+```
+
+Linux/macOS:
+
 ```bash
-uv sync --extra dev
-uv pip install -e .
+python3 -m pip install uv
+python3 -m uv sync --extra dev
+python3 -m uv pip install -e .
 ```
 
 For local development, prefer `uv run --extra dev ...` over raw `python`, `pytest`, or `ruff` so commands execute inside the repository environment instead of a system interpreter.
@@ -93,7 +104,7 @@ relay-teams --help
 relay-teams-evals --help
 ```
 
-If the `relay-teams` command is still missing in a fresh local checkout, the project package was not installed into the active virtual environment. Run `uv pip install -e .` or use `uv run python -m relay_teams --help` as a fallback.
+If the `relay-teams` command is still missing in a fresh local checkout, the project package was not installed into the active virtual environment. Re-run the matching `-m uv pip install -e .` command above for your platform, or use `py -3 -m uv run python -m relay_teams --help` on Windows or `python3 -m uv run python -m relay_teams --help` on Linux/macOS as a fallback.
 
 Examples:
 
@@ -102,4 +113,3 @@ uv run --extra dev pytest -q
 uv run --extra dev ruff check --fix
 uv run --extra dev basedpyright
 ```
-
