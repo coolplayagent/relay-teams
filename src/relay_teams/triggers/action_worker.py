@@ -3,12 +3,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+import threading
+from typing import Protocol
 
 from relay_teams.logger import get_logger, log_event
 from relay_teams.triggers.service import GitHubTriggerService
 
 LOGGER = get_logger(__name__)
+
+
+class _WorkerThreadLike(Protocol):
+    def is_alive(self) -> bool: ...
+
+    def start(self) -> None: ...
+
+    def join(self, timeout: float = 0.0) -> None: ...
 
 
 class GitHubTriggerActionWorker:
@@ -22,29 +31,36 @@ class GitHubTriggerActionWorker:
         self._trigger_service = trigger_service
         self._poll_interval_seconds = poll_interval_seconds
         self._stop_timeout_seconds = stop_timeout_seconds
-        self._stop_event = asyncio.Event()
-        self._wake_event = asyncio.Event()
-        self._task: Optional[asyncio.Task[None]] = None
+        self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
+        self._thread: _WorkerThreadLike | None = None
 
     async def start(self) -> None:
-        if self._task is not None and not self._task.done():
+        thread = self._thread
+        if thread is not None and thread.is_alive():
             return
         self._stop_event.clear()
         self._wake_event.clear()
-        self._task = asyncio.create_task(
-            self._run_loop(),
+        self._thread = threading.Thread(
+            target=self._run_loop,
             name="github-trigger-action-worker",
+            daemon=True,
         )
+        self._thread.start()
 
     async def stop(self) -> None:
         self._stop_event.set()
         self._wake_event.set()
-        task = self._task
-        if task is None:
+        thread = self._thread
+        if thread is None:
             return
         try:
-            await asyncio.wait_for(task, timeout=self._stop_timeout_seconds)
-        except asyncio.TimeoutError:
+            await asyncio.to_thread(thread.join, self._stop_timeout_seconds)
+        except asyncio.CancelledError:
+            if not thread.is_alive():
+                self._thread = None
+            return
+        if thread.is_alive():
             log_event(
                 LOGGER,
                 logging.WARNING,
@@ -52,24 +68,16 @@ class GitHubTriggerActionWorker:
                 message="Timed out waiting for GitHub trigger action worker to stop",
                 payload={"timeout_seconds": self._stop_timeout_seconds},
             )
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        except asyncio.CancelledError:
-            pass
-        self._task = None
+            return
+        self._thread = None
 
     def wake(self) -> None:
         self._wake_event.set()
 
-    async def _run_loop(self) -> None:
+    def _run_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
-                progress = await asyncio.to_thread(
-                    self._trigger_service.process_pending_actions
-                )
+                progress = self._trigger_service.process_pending_actions()
                 if progress:
                     continue
             except Exception as exc:
@@ -81,13 +89,7 @@ class GitHubTriggerActionWorker:
                     payload={"error": str(exc)},
                     exc_info=exc,
                 )
-            try:
-                await asyncio.wait_for(
-                    self._wake_event.wait(),
-                    timeout=self._poll_interval_seconds,
-                )
-            except asyncio.TimeoutError:
-                pass
+            self._wake_event.wait(timeout=self._poll_interval_seconds)
             self._wake_event.clear()
 
 
