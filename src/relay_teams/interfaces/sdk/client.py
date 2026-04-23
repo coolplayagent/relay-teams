@@ -334,7 +334,7 @@ class AsyncAgentTeamsClient:
                         if isinstance(parsed, dict):
                             yield parsed
             except httpx.HTTPStatusError as exc:
-                body = exc.response.text
+                body = (await exc.response.aread()).decode("utf-8", errors="replace")
                 raise RuntimeError(
                     f"HTTP {exc.response.status_code} while streaming run events: {body}"
                 ) from exc

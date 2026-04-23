@@ -13,8 +13,14 @@ pytestmark = pytest.mark.asyncio
 
 
 class _FakeSdkStreamResponse:
-    def __init__(self, lines: list[str]) -> None:
+    def __init__(
+        self,
+        lines: list[str],
+        *,
+        error_response: httpx.Response | None = None,
+    ) -> None:
         self._lines = lines
+        self._error_response = error_response
 
     async def __aenter__(self) -> _FakeSdkStreamResponse:
         return self
@@ -28,6 +34,12 @@ class _FakeSdkStreamResponse:
         _ = (exc_type, exc, traceback)
 
     def raise_for_status(self) -> None:
+        if self._error_response is not None:
+            raise httpx.HTTPStatusError(
+                "stream failed",
+                request=self._error_response.request,
+                response=self._error_response,
+            )
         return None
 
     async def aiter_lines(self) -> AsyncIterator[str]:
@@ -41,6 +53,7 @@ class _FakeSdkHttpClient:
         *,
         response: httpx.Response | None = None,
         stream_lines: list[str] | None = None,
+        stream_error_response: httpx.Response | None = None,
     ) -> None:
         self._response = response or httpx.Response(
             200,
@@ -48,6 +61,7 @@ class _FakeSdkHttpClient:
             request=httpx.Request("GET", "http://server.test/"),
         )
         self._stream_lines = [] if stream_lines is None else stream_lines
+        self._stream_error_response = stream_error_response
         self.requests: list[tuple[str, str, bytes | None, dict[str, str]]] = []
         self.streams: list[tuple[str, str, dict[str, str]]] = []
 
@@ -81,7 +95,21 @@ class _FakeSdkHttpClient:
         headers: dict[str, str],
     ) -> _FakeSdkStreamResponse:
         self.streams.append((method, url, headers))
-        return _FakeSdkStreamResponse(self._stream_lines)
+        return _FakeSdkStreamResponse(
+            self._stream_lines,
+            error_response=self._stream_error_response,
+        )
+
+
+class _FakeAsyncByteStream(httpx.AsyncByteStream):
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._body
+
+    async def aclose(self) -> None:
+        return None
 
 
 async def test_reload_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
@@ -1256,3 +1284,29 @@ async def test_stream_run_events_filters_sse_lines(monkeypatch) -> None:
         )
     ]
     assert captured_kwargs["timeout_seconds"] == 12.0
+
+
+async def test_stream_run_events_reads_streamed_error_body(monkeypatch) -> None:
+    error_response = httpx.Response(
+        503,
+        request=httpx.Request("GET", "http://server.test/api/runs/run-1/events"),
+        stream=_FakeAsyncByteStream(b"bad gateway"),
+    )
+    fake_client = _FakeSdkHttpClient(stream_error_response=error_response)
+
+    def fake_create_async_http_client(**kwargs: object) -> _FakeSdkHttpClient:
+        _ = kwargs
+        return fake_client
+
+    monkeypatch.setattr(
+        "relay_teams.interfaces.sdk.client.create_async_http_client",
+        fake_create_async_http_client,
+    )
+
+    client = AsyncAgentTeamsClient(base_url="http://server.test")
+
+    with pytest.raises(
+        RuntimeError,
+        match="HTTP 503 while streaming run events: bad gateway",
+    ):
+        _ = [event async for event in client.stream_run_events("run-1")]
