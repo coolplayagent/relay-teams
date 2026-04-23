@@ -76,6 +76,7 @@ from relay_teams.skills.skill_models import SkillInstructionEntry
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.tools.registry.registry import ToolRegistry, ToolResolutionContext
+from relay_teams.tools.runtime_activation import merge_active_tools
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
@@ -245,6 +246,9 @@ class TaskExecutionService(BaseModel):
                     task=task,
                     user_prompt_override=user_prompt_override,
                 ),
+                existing_runtime_active_tools_json=(
+                    instance_record.runtime_active_tools_json
+                ),
             )
             self._ensure_committed_task_prompt(
                 role_id=role_id,
@@ -266,6 +270,9 @@ class TaskExecutionService(BaseModel):
                 instance_id,
                 runtime_system_prompt=runtime_system_prompt,
                 runtime_tools_json=runtime_tools_json,
+                runtime_active_tools_json=(
+                    prepared_runtime_snapshot.runtime_active_tools_json
+                ),
             )
             provider_system_prompt = self._compose_provider_system_prompt(
                 role=role_for_run,
@@ -642,6 +649,7 @@ class TaskExecutionService(BaseModel):
         workspace: WorkspaceHandle | None,
         shared_state_snapshot: tuple[tuple[str, str], ...],
         objective: str,
+        existing_runtime_active_tools_json: str = "",
     ) -> PreparedRuntimeSnapshot:
         topology = self._topology_for_run(task.trace_id)
         conversation_context = self._conversation_context_for_run(task.trace_id)
@@ -671,6 +679,12 @@ class TaskExecutionService(BaseModel):
                 ),
                 conversation_context=conversation_context,
                 runtime_tools=runtime_tools,
+                runtime_active_local_tools=self._resolve_active_local_tools(
+                    authorized_local_tools=tuple(
+                        tool.name for tool in runtime_tools.local_tools
+                    ),
+                    runtime_active_tools_json=existing_runtime_active_tools_json,
+                ),
             )
         )
         record_prompt_instruction_paths_loaded(
@@ -687,6 +701,10 @@ class TaskExecutionService(BaseModel):
                 "" if topology is None else topology.orchestration_prompt
             ),
         )
+        runtime_active_tools_json = self._build_runtime_active_tools_json(
+            runtime_tools=runtime_tools,
+            existing_runtime_active_tools_json=existing_runtime_active_tools_json,
+        )
         return PreparedRuntimeSnapshot(
             prompt_sections=prompt_sections,
             runtime_tools_json=json.dumps(
@@ -694,6 +712,7 @@ class TaskExecutionService(BaseModel):
                 ensure_ascii=False,
                 indent=2,
             ),
+            runtime_active_tools_json=runtime_active_tools_json,
             user_prompt=user_prompt,
             skill_instructions=skill_instructions,
         )
@@ -847,6 +866,54 @@ class TaskExecutionService(BaseModel):
                 kind,
             )
         return "function"
+
+    def _build_runtime_active_tools_json(
+        self,
+        *,
+        runtime_tools: RuntimeToolsSnapshot,
+        existing_runtime_active_tools_json: str,
+    ) -> str:
+        authorized_local_tools = tuple(tool.name for tool in runtime_tools.local_tools)
+        existing_active_tools = self._parse_runtime_active_tools_json(
+            existing_runtime_active_tools_json
+        )
+        active_tools = merge_active_tools(
+            authorized_tools=authorized_local_tools,
+            active_tools=existing_active_tools,
+        )
+        return json.dumps(list(active_tools), ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _parse_runtime_active_tools_json(
+        runtime_active_tools_json: str,
+    ) -> tuple[str, ...]:
+        raw_payload = runtime_active_tools_json.strip()
+        if not raw_payload:
+            return ()
+        try:
+            parsed = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            return ()
+        if not isinstance(parsed, list):
+            return ()
+        parsed_names: list[str] = []
+        for item in parsed:
+            if isinstance(item, str):
+                parsed_names.append(item)
+        return tuple(parsed_names)
+
+    def _resolve_active_local_tools(
+        self,
+        *,
+        authorized_local_tools: tuple[str, ...],
+        runtime_active_tools_json: str,
+    ) -> tuple[str, ...]:
+        return merge_active_tools(
+            authorized_tools=authorized_local_tools,
+            active_tools=self._parse_runtime_active_tools_json(
+                runtime_active_tools_json
+            ),
+        )
 
     def _record_memory_if_needed(
         self,
@@ -1044,5 +1111,6 @@ class PreparedRuntimeSnapshot(BaseModel):
 
     prompt_sections: RuntimePromptSections
     runtime_tools_json: str
+    runtime_active_tools_json: str
     user_prompt: str
     skill_instructions: tuple[PromptSkillInstruction, ...] = ()

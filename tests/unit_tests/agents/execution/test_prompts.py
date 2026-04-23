@@ -11,12 +11,17 @@ import relay_teams.agents.execution.system_prompts as system_prompts
 from relay_teams.agents.execution.system_prompts import (
     PromptSkillInstruction,
     RuntimePromptBuildInput,
+    build_runtime_tools_prompt,
     SystemPromptSectionsInput,
     WorkspaceSshProfilePromptMetadata,
     build_workspace_ssh_profile_prompt_metadata,
     build_runtime_system_prompt,
     build_runtime_system_prompt_result,
     compose_system_prompt,
+)
+from relay_teams.agents.instances.models import (
+    RuntimeToolSnapshotEntry,
+    RuntimeToolsSnapshot,
 )
 from relay_teams.agents.execution.user_prompts import (
     UserPromptBuildInput,
@@ -48,6 +53,8 @@ from relay_teams.workspace import (
     WorkspaceSshMountConfig,
     build_local_workspace_mount,
 )
+
+pytestmark = pytest.mark.timeout(5)
 
 
 @pytest.fixture(autouse=True)
@@ -804,6 +811,153 @@ def test_compose_system_prompt_places_skill_catalog_before_capability_summary() 
     assert prompt.index("## Available Skills") < prompt.index("## Available Roles")
     assert prompt.index("## Available Roles") < prompt.index(
         "## Runtime Environment Information"
+    )
+
+
+def test_build_runtime_tools_prompt_summarizes_authorized_tools() -> None:
+    prompt = build_runtime_tools_prompt(
+        RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="activate_tools",
+                    description="Activate tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="tool_search",
+                    description="Discover tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read files.",
+                ),
+            ),
+            skill_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="skill",
+                    name="load_skill",
+                    description="Load skills.",
+                ),
+            ),
+            mcp_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="mcp",
+                    name="docs_search",
+                    description="Search docs.",
+                    server_name="docs",
+                ),
+            ),
+        ),
+        runtime_active_local_tools=("tool_search", "activate_tools"),
+    )
+
+    assert "## Authorized Runtime Tools" in prompt
+    assert "Active Local Tools: tool_search, activate_tools" in prompt
+    assert "Use `tool_search` to discover authorized tools" in prompt
+    assert "call `activate_tools` before trying to use it" in prompt
+    assert "Total Authorized Tools: 5" in prompt
+    assert "Local Tools: 3 authorized" in prompt
+    assert "Skill Tools: 1 authorized" in prompt
+    assert "MCP Tools: 1 authorized across 1 server(s)" in prompt
+    assert "MCP Tool Server: docs (1)" in prompt
+    assert "activate_tools, read, tool_search" not in prompt
+
+
+def test_build_runtime_tools_prompt_omits_tool_search_guidance_when_unavailable() -> (
+    None
+):
+    prompt = build_runtime_tools_prompt(
+        RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read files.",
+                ),
+            ),
+            skill_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="skill",
+                    name="load_skill",
+                    description="Load skills.",
+                ),
+            ),
+            mcp_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="mcp",
+                    name="docs_search",
+                    description="Search docs.",
+                    server_name="docs",
+                ),
+            ),
+        )
+    )
+
+    assert "## Authorized Runtime Tools" in prompt
+    assert "Active Local Tools: none" in prompt
+    assert "Total Authorized Tools: 3" in prompt
+    assert "Local Tools: read" in prompt
+    assert "Skill Tools: load_skill" in prompt
+    assert "MCP Tools docs: docs_search" in prompt
+    assert "Local Tools: 1 authorized" in prompt
+    assert "Skill Tools: 1 authorized" in prompt
+    assert "MCP Tools: 1 authorized across 1 server(s)" in prompt
+    assert "Use `tool_search` to discover authorized tools" not in prompt
+
+
+def test_build_runtime_tools_prompt_gates_todo_guidance_on_active_tool_status() -> None:
+    runtime_tools = RuntimeToolsSnapshot(
+        local_tools=(
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="activate_tools",
+                description="Activate tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="tool_search",
+                description="Discover tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="todo_read",
+                description="Read todos.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="todo_write",
+                description="Write todos.",
+            ),
+        ),
+    )
+
+    deferred_prompt = build_runtime_tools_prompt(
+        runtime_tools,
+        runtime_active_local_tools=("tool_search", "activate_tools"),
+    )
+    active_prompt = build_runtime_tools_prompt(
+        runtime_tools,
+        runtime_active_local_tools=(
+            "tool_search",
+            "activate_tools",
+            "todo_read",
+            "todo_write",
+        ),
+    )
+
+    assert (
+        "Use `todo_write` to maintain a concise run-scoped plan" not in deferred_prompt
+    )
+    assert (
+        "Use `todo_read` before updating if you need to inspect the latest persisted todo snapshot."
+        not in deferred_prompt
+    )
+    assert "Use `todo_write` to maintain a concise run-scoped plan" in active_prompt
+    assert (
+        "Use `todo_read` before updating if you need to inspect the latest persisted todo snapshot."
+        in active_prompt
     )
 
 

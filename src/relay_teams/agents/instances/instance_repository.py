@@ -37,6 +37,7 @@ class AgentInstanceRepository:
                     status TEXT NOT NULL,
                     runtime_system_prompt TEXT NOT NULL DEFAULT '',
                     runtime_tools_json TEXT NOT NULL DEFAULT '',
+                    runtime_active_tools_json TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -63,6 +64,10 @@ class AgentInstanceRepository:
             if "runtime_tools_json" not in columns:
                 self._conn.execute(
                     "ALTER TABLE agent_instances ADD COLUMN runtime_tools_json TEXT NOT NULL DEFAULT ''"
+                )
+            if "runtime_active_tools_json" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE agent_instances ADD COLUMN runtime_active_tools_json TEXT NOT NULL DEFAULT ''"
                 )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_agent_instances_run_status ON agent_instances(run_id, status)"
@@ -102,8 +107,8 @@ class AgentInstanceRepository:
             db_path=self._db_path,
             operation=lambda: self._conn.execute(
                 """
-                INSERT INTO agent_instances(run_id, trace_id, session_id, instance_id, role_id, workspace_id, conversation_id, status, runtime_system_prompt, runtime_tools_json, created_at, updated_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?)
+                INSERT INTO agent_instances(run_id, trace_id, session_id, instance_id, role_id, workspace_id, conversation_id, status, runtime_system_prompt, runtime_tools_json, runtime_active_tools_json, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', '', '', ?, ?)
                 ON CONFLICT(instance_id)
                 DO UPDATE SET
                     run_id=excluded.run_id,
@@ -139,6 +144,7 @@ class AgentInstanceRepository:
         *,
         runtime_system_prompt: str,
         runtime_tools_json: str,
+        runtime_active_tools_json: str = "",
     ) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         run_sqlite_write_with_retry(
@@ -147,10 +153,16 @@ class AgentInstanceRepository:
             operation=lambda: self._conn.execute(
                 """
                 UPDATE agent_instances
-                SET runtime_system_prompt=?, runtime_tools_json=?, updated_at=?
+                SET runtime_system_prompt=?, runtime_tools_json=?, runtime_active_tools_json=?, updated_at=?
                 WHERE instance_id=?
                 """,
-                (runtime_system_prompt, runtime_tools_json, now, instance_id),
+                (
+                    runtime_system_prompt,
+                    runtime_tools_json,
+                    runtime_active_tools_json,
+                    now,
+                    instance_id,
+                ),
             ),
             lock=self._lock,
             repository_name="AgentInstanceRepository",
@@ -366,6 +378,7 @@ class AgentInstanceRepository:
             status=InstanceStatus(str(row["status"])),
             runtime_system_prompt=str(row["runtime_system_prompt"] or ""),
             runtime_tools_json=str(row["runtime_tools_json"] or ""),
+            runtime_active_tools_json=str(row["runtime_active_tools_json"] or ""),
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )

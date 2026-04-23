@@ -1,0 +1,13 @@
+Discover tools authorized for the current runtime without relying on a long prompt listing.
+
+Use this tool when you need to find which local, skill, or MCP tools are available right now, or when you need to inspect a tool's parameter schema before calling it.
+
+Query forms:
+- Keyword search: `files read markdown`
+- Exact lookup by tool name: `read`
+- Direct schema retrieval: `select:read,websearch`
+
+Behavior:
+- Keyword search returns compact matches with source, description, and server context.
+- Exact lookup and `select:` include the tool's full `parameters_json_schema`.
+- Results are limited to tools already authorized for the current runtime instance.

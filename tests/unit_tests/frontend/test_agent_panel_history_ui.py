@@ -6,6 +6,10 @@ from pathlib import Path
 import subprocess
 from typing import cast
 
+import pytest
+
+pytestmark = pytest.mark.timeout(5)
+
 
 def test_agent_panel_summary_orders_completed_tasks_by_updated_at_desc(
     tmp_path: Path,

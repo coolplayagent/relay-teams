@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 from collections.abc import Sequence
 
@@ -165,6 +165,102 @@ def test_normalize_committable_messages_keeps_request_fields() -> None:
     assert normalized_request.timestamp == datetime(2026, 4, 2, 22, 44, 3, tzinfo=UTC)
     assert normalized_request.run_id == "run-123"
     assert normalized_request.metadata == {"source": "test"}
+
+
+def test_normalize_committable_messages_adds_deferred_tool_guidance() -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_agent_repo"] = type(
+        "_AgentRepo",
+        (),
+        {
+            "get_instance": lambda self, instance_id: SimpleNamespace(
+                runtime_tools_json=json.dumps(
+                    {
+                        "local_tools": [
+                            {"name": "tool_search"},
+                            {"name": "activate_tools"},
+                            {"name": "read"},
+                        ],
+                        "skill_tools": [],
+                        "mcp_tools": [],
+                    }
+                )
+            )
+        },
+    )()
+    request = ModelRequest(
+        parts=[
+            RetryPromptPart(
+                content="Unknown tool: read",
+                tool_name="read",
+                tool_call_id="call-1",
+            )
+        ]
+    )
+
+    normalized = AgentLlmSession._normalize_committable_messages(
+        session,
+        [request],
+        instance_id="instance-1",
+    )
+
+    assert len(normalized) == 1
+    normalized_request = normalized[0]
+    assert isinstance(normalized_request, ModelRequest)
+    normalized_part = normalized_request.parts[0]
+    assert isinstance(normalized_part, ToolReturnPart)
+    assert isinstance(normalized_part.content, dict)
+    error_payload = cast(dict[str, object], normalized_part.content["error"])
+    assert error_payload["code"] == "tool_input_validation_failed"
+    message = cast(str, error_payload["message"])
+    assert "Unknown tool: read" in message
+    assert "`tool_search`" in message
+    assert "`activate_tools`" in message
+
+
+def test_normalize_committable_messages_omits_deferred_tool_guidance_without_discovery() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_agent_repo"] = type(
+        "_AgentRepo",
+        (),
+        {
+            "get_instance": lambda self, instance_id: SimpleNamespace(
+                runtime_tools_json=json.dumps(
+                    {
+                        "local_tools": [{"name": "read"}],
+                        "skill_tools": [],
+                        "mcp_tools": [],
+                    }
+                )
+            )
+        },
+    )()
+    request = ModelRequest(
+        parts=[
+            RetryPromptPart(
+                content="Unknown tool: read",
+                tool_name="read",
+                tool_call_id="call-1",
+            )
+        ]
+    )
+
+    normalized = AgentLlmSession._normalize_committable_messages(
+        session,
+        [request],
+        instance_id="instance-1",
+    )
+
+    normalized_request = normalized[0]
+    assert isinstance(normalized_request, ModelRequest)
+    normalized_part = normalized_request.parts[0]
+    assert isinstance(normalized_part, ToolReturnPart)
+    assert isinstance(normalized_part.content, dict)
+    error_payload = cast(dict[str, object], normalized_part.content["error"])
+    message = cast(str, error_payload["message"])
+    assert message == "Unknown tool: read"
 
 
 class _FakeMessageRepo:

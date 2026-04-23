@@ -1,0 +1,9 @@
+Activate runtime-authorized local tools so they become directly callable in subsequent model turns.
+
+Use this tool after `tool_search` when you discover a local tool that is authorized for the current runtime but not yet active.
+
+Behavior:
+- Activates only local runtime tools for the current instance.
+- Keeps already-active tools active.
+- Ignores unauthorized or unknown tool names and reports them in the response.
+- Updates the runtime active-tool set persisted for the current agent instance.

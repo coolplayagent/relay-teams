@@ -29,6 +29,7 @@ from relay_teams.media import ContentPart, TextContentPart, UserPromptContent
 from relay_teams.metrics.adapters import record_tool_execution
 from relay_teams.notifications import NotificationContext, NotificationType
 from relay_teams.persistence import is_retryable_sqlite_error
+from relay_teams.agents.instances.models import RuntimeToolsSnapshot
 from relay_teams.agents.tasks.task_status_sanitizer import (
     sanitize_task_status_payload,
 )
@@ -60,6 +61,7 @@ from relay_teams.tools.runtime.persisted_state import (
     load_tool_call_state,
     merge_tool_call_state,
 )
+from relay_teams.tools.runtime_activation import merge_active_tools
 from relay_teams.env.hook_runtime_env import (
     reset_tool_hook_runtime_env,
     set_tool_hook_runtime_env,
@@ -184,6 +186,39 @@ async def execute_tool(
         meta: dict[str, JsonValue] = {}
         effective_tool_input = dict(args_summary if tool_input is None else tool_input)
         _raise_if_stopped(ctx)
+        activation_error = _runtime_activation_error(ctx=ctx, tool_name=tool_name)
+        if activation_error is not None:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            meta["duration_ms"] = elapsed_ms
+            meta["tool_result_event_published"] = True
+            envelope = _visible_envelope(
+                ok=False,
+                error=activation_error,
+                meta=meta,
+            )
+            _persist_tool_record(
+                ctx=ctx,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                args_summary=args_summary,
+                visible_envelope=envelope,
+                internal_data=None,
+                runtime_meta=meta,
+                execution_status=ToolExecutionStatus.FAILED,
+            )
+            _record_tool_metrics(
+                ctx=ctx,
+                tool_name=tool_name,
+                duration_ms=elapsed_ms,
+                success=False,
+            )
+            _publish_tool_result_event(
+                ctx=ctx,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                visible_envelope=envelope,
+            )
+            return envelope
         force_approval = False
         (
             effective_tool_input,
@@ -534,6 +569,86 @@ async def execute_tool_call(
         approval_args_summary_factory=approval_args_summary_factory,
         keep_approval_ticket_reusable=keep_approval_ticket_reusable,
         allow_tool_return=allow_tool_return,
+    )
+
+
+def _runtime_activation_error(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+) -> ToolError | None:
+    try:
+        runtime_record = ctx.deps.agent_repo.get_instance(ctx.deps.instance_id)
+    except AttributeError:
+        return ToolError(
+            type="internal_error",
+            message=(
+                "Runtime tool activation policy is unavailable because the "
+                "agent instance repository contract is misconfigured."
+            ),
+            retryable=False,
+        )
+    except KeyError:
+        return None
+    runtime_tools = _parse_runtime_tools_snapshot(runtime_record.runtime_tools_json)
+    authorized_local_tools = tuple(entry.name for entry in runtime_tools.local_tools)
+    if tool_name not in authorized_local_tools:
+        return None
+    active_local_tools = _resolve_runtime_active_local_tools(
+        authorized_local_tools=authorized_local_tools,
+        runtime_active_tools_json=runtime_record.runtime_active_tools_json,
+    )
+    if tool_name in active_local_tools:
+        return None
+    discovery_authorized = {
+        "tool_search",
+        "activate_tools",
+    }.issubset(set(authorized_local_tools))
+    message = (
+        f"Tool `{tool_name}` is authorized for this runtime but is currently "
+        "deferred. Use `tool_search` to inspect it and `activate_tools` before "
+        "retrying."
+        if discovery_authorized
+        else f"Tool `{tool_name}` is authorized for this runtime but is not active."
+    )
+    return ToolError(
+        type="validation_error",
+        message=message,
+        retryable=False,
+    )
+
+
+def _parse_runtime_tools_snapshot(raw_snapshot: str) -> RuntimeToolsSnapshot:
+    normalized_snapshot = raw_snapshot.strip()
+    if not normalized_snapshot:
+        return RuntimeToolsSnapshot()
+    try:
+        return RuntimeToolsSnapshot.model_validate_json(normalized_snapshot)
+    except (ValueError, TypeError):
+        return RuntimeToolsSnapshot()
+
+
+def _parse_runtime_active_tools_json(raw_active_tools: str) -> tuple[str, ...]:
+    normalized_active_tools = raw_active_tools.strip()
+    if not normalized_active_tools:
+        return ()
+    try:
+        parsed = json.loads(normalized_active_tools)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    return tuple(item for item in parsed if isinstance(item, str))
+
+
+def _resolve_runtime_active_local_tools(
+    *,
+    authorized_local_tools: tuple[str, ...],
+    runtime_active_tools_json: str,
+) -> tuple[str, ...]:
+    return merge_active_tools(
+        authorized_tools=authorized_local_tools,
+        active_tools=_parse_runtime_active_tools_json(runtime_active_tools_json),
     )
 
 

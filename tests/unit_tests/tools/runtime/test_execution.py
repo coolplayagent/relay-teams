@@ -19,6 +19,12 @@ import relay_teams.tools.runtime.execution as execution_module
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.notifications import NotificationService, default_notification_config
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agents.instances.models import (
+    RuntimeToolSnapshotEntry,
+    RuntimeToolsSnapshot,
+)
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
@@ -43,6 +49,7 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 from relay_teams.tools.runtime.context import ToolContext
 from relay_teams.tools.runtime.execution import (
+    _resolve_runtime_active_local_tools,
     execute_tool,
     execute_tool_call,
 )
@@ -99,6 +106,74 @@ class _FakeInjectionManager:
         return record
 
 
+class _FakeAgentInstanceRecord:
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        trace_id: str,
+        session_id: str,
+        instance_id: str,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        status: InstanceStatus,
+    ) -> None:
+        _ = (run_id, trace_id, session_id, role_id, workspace_id, conversation_id)
+        self.instance_id = instance_id
+        self.status = status
+        self.runtime_system_prompt = ""
+        self.runtime_tools_json = ""
+        self.runtime_active_tools_json = ""
+
+
+class _FakeAgentRepo:
+    def __init__(self) -> None:
+        self._instances: dict[str, _FakeAgentInstanceRecord] = {}
+
+    def upsert_instance(
+        self,
+        *,
+        run_id: str,
+        trace_id: str,
+        session_id: str,
+        instance_id: str,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        status: InstanceStatus,
+    ) -> None:
+        self._instances[instance_id] = _FakeAgentInstanceRecord(
+            run_id=run_id,
+            trace_id=trace_id,
+            session_id=session_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            status=status,
+        )
+
+    def get_instance(self, instance_id: str) -> _FakeAgentInstanceRecord:
+        try:
+            return self._instances[instance_id]
+        except KeyError as exc:
+            raise KeyError(instance_id) from exc
+
+    def update_runtime_snapshot(
+        self,
+        instance_id: str,
+        *,
+        runtime_system_prompt: str,
+        runtime_tools_json: str,
+        runtime_active_tools_json: str,
+    ) -> None:
+        record = self.get_instance(instance_id)
+        record.runtime_system_prompt = runtime_system_prompt
+        record.runtime_tools_json = runtime_tools_json
+        record.runtime_active_tools_json = runtime_active_tools_json
+
+
 class _FakeApprovalManager:
     def __init__(
         self,
@@ -150,6 +225,8 @@ class _FakeDeps:
         self.workspace_id = "workspace-1"
         self.instance_id = "inst-1"
         self.role_id = "spec_coder"
+        self.workspace_id = "workspace-1"
+        self.conversation_id = "conversation-1"
         self.role_registry = RoleRegistry()
         self.role_registry.register(
             RoleDefinition(
@@ -169,6 +246,9 @@ class _FakeDeps:
         self.hook_service: object | None = None
         self.hook_runtime_env: dict[str, str] = {}
         self.injection_manager = _FakeInjectionManager()
+        self.agent_repo: AgentInstanceRepository | _FakeAgentRepo | None = (
+            _FakeAgentRepo()
+        )
         self.media_asset_service: object | None = None
         self.approval_ticket_repo = ApprovalTicketRepository(db_path)
         self.run_runtime_repo = RunRuntimeRepository(db_path)
@@ -179,6 +259,16 @@ class _FakeDeps:
             root_task_id=self.task_id,
             status=RunRuntimeStatus.RUNNING,
             phase=RunRuntimePhase.COORDINATOR_RUNNING,
+        )
+        self.agent_repo.upsert_instance(
+            run_id=self.run_id,
+            trace_id=self.trace_id,
+            session_id=self.session_id,
+            instance_id=self.instance_id,
+            role_id=self.role_id,
+            workspace_id=self.workspace_id,
+            conversation_id=self.conversation_id,
+            status=InstanceStatus.IDLE,
         )
 
 
@@ -584,6 +674,139 @@ def test_execute_tool_marks_value_error_as_non_retryable() -> None:
     assert result["ok"] is False
     assert error["type"] == "validation_error"
     assert error["retryable"] is False
+
+
+def test_execute_tool_blocks_deferred_local_tools_until_activation() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.agent_repo = AgentInstanceRepository(Path(mkdtemp()) / "instances.db")
+    deps.agent_repo.upsert_instance(
+        run_id=deps.run_id,
+        trace_id=deps.trace_id,
+        session_id=deps.session_id,
+        instance_id=deps.instance_id,
+        role_id=deps.role_id,
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        status=InstanceStatus.IDLE,
+    )
+    deps.agent_repo.update_runtime_snapshot(
+        deps.instance_id,
+        runtime_system_prompt="runtime prompt",
+        runtime_tools_json=RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="tool_search",
+                    description="Discover tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="activate_tools",
+                    description="Activate tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read files.",
+                ),
+            ),
+        ).model_dump_json(),
+        runtime_active_tools_json='["tool_search","activate_tools"]',
+    )
+    ctx = _FakeCtx(deps)
+    action_calls: list[str] = []
+
+    deferred_result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: action_calls.append("read") or "hello",
+        )
+    )
+
+    deferred_error = cast(dict[str, JsonValue], deferred_result["error"])
+    assert deferred_result["ok"] is False
+    assert deferred_error["type"] == "validation_error"
+    assert "currently deferred" in str(deferred_error["message"])
+    assert action_calls == []
+
+    deps.agent_repo.update_runtime_snapshot(
+        deps.instance_id,
+        runtime_system_prompt="runtime prompt",
+        runtime_tools_json=RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="tool_search",
+                    description="Discover tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="activate_tools",
+                    description="Activate tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read files.",
+                ),
+            ),
+        ).model_dump_json(),
+        runtime_active_tools_json='["tool_search","activate_tools","read"]',
+    )
+
+    activated_result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: action_calls.append("read") or "hello",
+        )
+    )
+
+    assert activated_result["ok"] is True
+    assert activated_result["data"] == "hello"
+    assert action_calls == ["read"]
+
+
+def test_execute_tool_fails_closed_when_agent_repo_contract_is_unavailable() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.agent_repo = cast(AgentInstanceRepository, cast(object, None))
+    ctx = _FakeCtx(deps)
+    action_calls: list[str] = []
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: action_calls.append("read") or "hello",
+        )
+    )
+
+    error = cast(dict[str, JsonValue], result["error"])
+    assert result["ok"] is False
+    assert error["type"] == "internal_error"
+    assert "agent instance repository contract" in str(error["message"])
+    assert action_calls == []
+
+
+def test_resolve_runtime_active_local_tools_restores_required_discovery_tools() -> None:
+    assert _resolve_runtime_active_local_tools(
+        authorized_local_tools=("tool_search", "activate_tools", "read"),
+        runtime_active_tools_json='["read"]',
+    ) == (
+        "tool_search",
+        "activate_tools",
+        "read",
+    )
 
 
 def test_execute_tool_call_rehydrates_pydantic_model_lists_from_future_annotations() -> (

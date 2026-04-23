@@ -3,21 +3,36 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from pydantic_ai.messages import ModelRequest, UserPromptPart
-from typing import cast
 
+import relay_teams.agents.execution.coordination_agent_builder as coordination_agent_builder
+import relay_teams.agents.execution.system_prompts as system_prompts
+import relay_teams.net.llm_client as llm_client
 from relay_teams.media import (
     MediaAssetRepository,
     MediaAssetService,
     content_parts_from_text,
 )
 from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.agents.instances.models import create_subagent_instance
-from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
-from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
+from relay_teams.agents.instances.models import (
+    RuntimeToolSnapshotEntry,
+    RuntimeToolsSnapshot,
+    create_subagent_instance,
+)
+from relay_teams.agents.orchestration.task_execution_service import (
+    PreparedRuntimeSnapshot,
+    TaskExecutionService,
+)
+from relay_teams.agents.execution.system_prompts import (
+    RuntimePromptBuilder,
+    RuntimePromptSections,
+)
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
 from relay_teams.roles.memory_repository import RoleMemoryRepository
@@ -48,6 +63,12 @@ from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.tools.registry.defaults import build_default_registry
+from relay_teams.tools.registry.registry import ToolRegistry
+from relay_teams.tools.discovery_tools.activate_tools import (
+    _activate_runtime_tools as _activate_runtime_tools_for_test,
+)
+from relay_teams.tools.runtime import ToolContext
+from relay_teams.tools.workspace_tools.read import register as register_read
 from relay_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
@@ -56,6 +77,8 @@ from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.hooks import HookService
+
+pytestmark = pytest.mark.timeout(5)
 
 
 class _CapturingProvider:
@@ -76,6 +99,17 @@ class _CapturingProvider:
         self.thinking_enabled.append(getattr(thinking, "enabled", False) is True)
         self.thinking_efforts.append(getattr(thinking, "effort", None))
         return "ok"
+
+
+class _RoleCapturingProviderFactory:
+    def __init__(self) -> None:
+        self.role_tools_seen: list[tuple[str, ...]] = []
+        self.provider = _CapturingProvider()
+
+    def __call__(self, role: RoleDefinition, session_id: str | None = None) -> object:
+        del session_id
+        self.role_tools_seen.append(role.tools)
+        return self.provider
 
 
 class _InterruptingProvider:
@@ -120,6 +154,52 @@ class _CapturingHookService:
     ) -> object:
         self.calls.append((event_input, run_event_hub))
         return object()
+
+
+@pytest.fixture(autouse=True)
+def _stub_runtime_environment_probes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    def _build_test_http_client(
+        *,
+        connect_timeout_seconds: float,
+        cache_scope: str | None = None,
+        ssl_verify: bool | None = None,
+        merged_env: dict[str, str] | None = None,
+    ) -> object:
+        return llm_client.build_llm_http_client(
+            merged_env={} if merged_env is None else merged_env,
+            ssl_verify=ssl_verify,
+            connect_timeout_seconds=connect_timeout_seconds,
+            cache_scope=cache_scope,
+        )
+
+    monkeypatch.setattr(
+        coordination_agent_builder,
+        "build_llm_http_client",
+        _build_test_http_client,
+    )
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_github_cli_environment_status",
+        lambda: (False, None),
+    )
+    monkeypatch.setattr(
+        system_prompts,
+        "_get_clawhub_environment_status",
+        lambda: (False, None),
+    )
+
+    async def _load_test_runtime_prompt_instructions(**_: object) -> object:
+        return system_prompts.LoadedPromptInstructions()
+
+    monkeypatch.setattr(
+        system_prompts,
+        "_load_runtime_prompt_instructions",
+        _load_test_runtime_prompt_instructions,
+    )
+    yield
+    llm_client.clear_llm_http_client_cache()
 
 
 def _build_service(
@@ -373,11 +453,15 @@ async def test_execute_persists_objective_before_first_turn(
     assert history[0].parts[0].content == "query time"
     runtime_record = agent_repo.get_instance(instance.instance_id)
     assert "You are the time role." in runtime_record.runtime_system_prompt
-    assert json.loads(runtime_record.runtime_tools_json) == {
-        "local_tools": [],
-        "skill_tools": [],
-        "mcp_tools": [],
-    }
+    runtime_tools = json.loads(runtime_record.runtime_tools_json)
+    runtime_active_tools = json.loads(runtime_record.runtime_active_tools_json)
+    assert [entry["name"] for entry in runtime_tools["local_tools"]] == [
+        "activate_tools",
+        "tool_search",
+    ]
+    assert runtime_tools["skill_tools"] == []
+    assert runtime_tools["mcp_tools"] == []
+    assert runtime_active_tools == ["tool_search", "activate_tools"]
 
 
 @pytest.mark.asyncio
@@ -509,10 +593,16 @@ async def test_execute_runtime_snapshot_includes_skill_list_for_ui(
     assert "- time:" in runtime_record.runtime_system_prompt
     assert "missing_skill" not in runtime_record.runtime_system_prompt
     tools_snapshot = json.loads(runtime_record.runtime_tools_json)
+    runtime_active_tools = json.loads(runtime_record.runtime_active_tools_json)
+    assert [entry["name"] for entry in tools_snapshot["local_tools"]] == [
+        "activate_tools",
+        "tool_search",
+    ]
     assert len(tools_snapshot["skill_tools"]) == 1
     assert tools_snapshot["skill_tools"][0]["name"] == "load_skill"
     assert tools_snapshot["skill_tools"][0]["source"] == "skill"
     assert "absolute file paths" in tools_snapshot["skill_tools"][0]["description"]
+    assert runtime_active_tools == ["tool_search", "activate_tools"]
 
 
 @pytest.mark.asyncio
@@ -590,8 +680,872 @@ async def test_execute_runtime_prompt_lists_authorized_runtime_tools(
     )
 
     runtime_record = agent_repo.get_instance(instance.instance_id)
+    assert (
+        "Active Local Tools: tool_search, activate_tools"
+        in runtime_record.runtime_system_prompt
+    )
     assert "## Authorized Runtime Tools" in runtime_record.runtime_system_prompt
+    assert (
+        "Use `tool_search` to discover authorized tools"
+        in runtime_record.runtime_system_prompt
+    )
+    assert "Local Tools: 3 authorized" in runtime_record.runtime_system_prompt
+    assert "Local Tools: read" not in runtime_record.runtime_system_prompt
+
+
+@pytest.mark.asyncio
+async def test_execute_preserves_existing_runtime_active_tools(
+    tmp_path: Path,
+) -> None:
+    provider_factory = _RoleCapturingProviderFactory()
+    role = RoleDefinition(
+        role_id="reader",
+        name="reader",
+        description="Reads workspace files.",
+        version="1",
+        tools=("read",),
+        system_prompt="You are the reader role.",
+    )
+    role_registry = RoleRegistry()
+    role_registry.register(role)
+
+    db_path = tmp_path / "task_execution_service_runtime_active_tools.db"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    shared_store = SharedStateRepository(db_path)
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        task_repo=task_repo,
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=Path("."), shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
+        provider_factory=provider_factory,
+        tool_registry=build_default_registry(),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
+        run_intent_repo=RunIntentRepository(db_path),
+    )
+    instance = create_subagent_instance(
+        "reader",
+        workspace_id="default",
+        conversation_id=build_conversation_id("session-1", "reader"),
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        objective="read a file",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="reader",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+    agent_repo.update_runtime_snapshot(
+        instance.instance_id,
+        runtime_system_prompt="older prompt",
+        runtime_tools_json='{"local_tools":[],"skill_tools":[],"mcp_tools":[]}',
+        runtime_active_tools_json='["tool_search","activate_tools","read"]',
+    )
+
+    _ = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="reader",
+        task=task,
+    )
+
+    runtime_record = agent_repo.get_instance(instance.instance_id)
+    assert provider_factory.role_tools_seen == [("read",)]
+    assert json.loads(runtime_record.runtime_active_tools_json) == [
+        "tool_search",
+        "activate_tools",
+        "read",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_provider_keeps_authorized_local_tools_registered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_factory = _RoleCapturingProviderFactory()
+    role = RoleDefinition(
+        role_id="reader",
+        name="reader",
+        description="Reads workspace files.",
+        version="1",
+        tools=("read",),
+        system_prompt="You are the reader role.",
+    )
+    role_registry = RoleRegistry()
+    role_registry.register(role)
+
+    db_path = tmp_path / "task_execution_service_active_local_tools_only.db"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    shared_store = SharedStateRepository(db_path)
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        task_repo=task_repo,
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=Path("."), shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
+        provider_factory=provider_factory,
+        tool_registry=build_default_registry(),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
+        run_intent_repo=RunIntentRepository(db_path),
+    )
+    instance = create_subagent_instance(
+        "reader",
+        workspace_id="default",
+        conversation_id=build_conversation_id("session-1", "reader"),
+    )
+    runtime_tools = RuntimeToolsSnapshot(
+        local_tools=(
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="activate_tools",
+                description="Activate tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="tool_search",
+                description="Discover tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="read",
+                description="Read files.",
+            ),
+        ),
+    )
+    fake_workspace = SimpleNamespace(
+        ref=SimpleNamespace(
+            workspace_id="default",
+            conversation_id=build_conversation_id("session-1", "reader"),
+        ),
+        scope_root=tmp_path,
+        resolve_workdir=lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        type(service.workspace_manager),
+        "resolve",
+        lambda self, **kwargs: fake_workspace,
+    )
+
+    async def _fake_prepare_runtime_snapshot(
+        *,
+        role: RoleDefinition,
+        task: TaskEnvelope,
+        working_directory: Path | None,
+        worktree_root: Path | None,
+        workspace: object | None,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        objective: str,
+        existing_runtime_active_tools_json: str = "",
+    ) -> PreparedRuntimeSnapshot:
+        del role, task, working_directory, worktree_root, workspace
+        del shared_state_snapshot, objective
+        return PreparedRuntimeSnapshot(
+            prompt_sections=RuntimePromptSections(
+                prompt="runtime prompt",
+                base_instructions=(
+                    "Active Local Tools: read\nLocal Tools: read\nbase instructions"
+                ),
+            ),
+            runtime_tools_json=json.dumps(runtime_tools.model_dump(mode="json")),
+            runtime_active_tools_json=service._build_runtime_active_tools_json(
+                runtime_tools=runtime_tools,
+                existing_runtime_active_tools_json=existing_runtime_active_tools_json,
+            ),
+            user_prompt="read a file",
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_prepare_runtime_snapshot",
+        _fake_prepare_runtime_snapshot,
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        objective="read a file",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="reader",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+
+    _ = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="reader",
+        task=task,
+    )
+
+    runtime_record = agent_repo.get_instance(instance.instance_id)
+    assert provider_factory.role_tools_seen == [("read",)]
+    assert json.loads(runtime_record.runtime_active_tools_json) == [
+        "tool_search",
+        "activate_tools",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_keeps_explicit_tools_callable_without_discovery_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_factory = _RoleCapturingProviderFactory()
+    role = RoleDefinition(
+        role_id="reader",
+        name="reader",
+        description="Reads workspace files.",
+        version="1",
+        tools=("read",),
+        system_prompt="You are the reader role.",
+    )
+    role_registry = RoleRegistry()
+    role_registry.register(role)
+
+    db_path = tmp_path / "task_execution_service_without_discovery_tools.db"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    shared_store = SharedStateRepository(db_path)
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        task_repo=task_repo,
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=Path("."), shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
+        provider_factory=provider_factory,
+        tool_registry=ToolRegistry({"read": register_read}),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
+        run_intent_repo=RunIntentRepository(db_path),
+    )
+    instance = create_subagent_instance(
+        "reader",
+        workspace_id="default",
+        conversation_id=build_conversation_id("session-1", "reader"),
+    )
+    runtime_tools = RuntimeToolsSnapshot(
+        local_tools=(
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="read",
+                description="Read files.",
+            ),
+        ),
+    )
+    fake_workspace = SimpleNamespace(
+        ref=SimpleNamespace(
+            workspace_id="default",
+            conversation_id=build_conversation_id("session-1", "reader"),
+        ),
+        scope_root=tmp_path,
+        resolve_workdir=lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        type(service.workspace_manager),
+        "resolve",
+        lambda self, **kwargs: fake_workspace,
+    )
+
+    async def _fake_prepare_runtime_snapshot(
+        *,
+        role: RoleDefinition,
+        task: TaskEnvelope,
+        working_directory: Path | None,
+        worktree_root: Path | None,
+        workspace: object | None,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        objective: str,
+        existing_runtime_active_tools_json: str = "",
+    ) -> PreparedRuntimeSnapshot:
+        del role, task, working_directory, worktree_root, workspace
+        del shared_state_snapshot, objective
+        return PreparedRuntimeSnapshot(
+            prompt_sections=RuntimePromptSections(
+                prompt="runtime prompt",
+                base_instructions=(
+                    "Active Local Tools: read\nLocal Tools: read\nbase instructions"
+                ),
+            ),
+            runtime_tools_json=json.dumps(runtime_tools.model_dump(mode="json")),
+            runtime_active_tools_json=service._build_runtime_active_tools_json(
+                runtime_tools=runtime_tools,
+                existing_runtime_active_tools_json=existing_runtime_active_tools_json,
+            ),
+            user_prompt="read a file",
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_prepare_runtime_snapshot",
+        _fake_prepare_runtime_snapshot,
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        objective="read a file",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="reader",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+
+    _ = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="reader",
+        task=task,
+    )
+
+    runtime_record = agent_repo.get_instance(instance.instance_id)
+    assert provider_factory.role_tools_seen == [("read",)]
+    assert json.loads(runtime_record.runtime_active_tools_json) == ["read"]
+    assert "Active Local Tools: read" in runtime_record.runtime_system_prompt
     assert "Local Tools: read" in runtime_record.runtime_system_prompt
+
+
+@pytest.mark.asyncio
+async def test_execute_keeps_authorized_tools_active_without_activate_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_factory = _RoleCapturingProviderFactory()
+    role = RoleDefinition(
+        role_id="reader",
+        name="reader",
+        description="Reads workspace files.",
+        version="1",
+        tools=("read",),
+        system_prompt="You are the reader role.",
+    )
+    role_registry = RoleRegistry()
+    role_registry.register(role)
+
+    db_path = tmp_path / "task_execution_service_without_activate_tools.db"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    shared_store = SharedStateRepository(db_path)
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        task_repo=task_repo,
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=Path("."), shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
+        provider_factory=provider_factory,
+        tool_registry=build_default_registry(),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
+        run_intent_repo=RunIntentRepository(db_path),
+    )
+    instance = create_subagent_instance(
+        "reader",
+        workspace_id="default",
+        conversation_id=build_conversation_id("session-1", "reader"),
+    )
+    runtime_tools = RuntimeToolsSnapshot(
+        local_tools=(
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="tool_search",
+                description="Discover tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="read",
+                description="Read files.",
+            ),
+        ),
+    )
+    fake_workspace = SimpleNamespace(
+        ref=SimpleNamespace(
+            workspace_id="default",
+            conversation_id=build_conversation_id("session-1", "reader"),
+        ),
+        scope_root=tmp_path,
+        resolve_workdir=lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        type(service.workspace_manager),
+        "resolve",
+        lambda self, **kwargs: fake_workspace,
+    )
+
+    async def _fake_prepare_runtime_snapshot(
+        *,
+        role: RoleDefinition,
+        task: TaskEnvelope,
+        working_directory: Path | None,
+        worktree_root: Path | None,
+        workspace: object | None,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        objective: str,
+        existing_runtime_active_tools_json: str = "",
+    ) -> PreparedRuntimeSnapshot:
+        del role, task, working_directory, worktree_root, workspace
+        del shared_state_snapshot, objective
+        return PreparedRuntimeSnapshot(
+            prompt_sections=RuntimePromptSections(
+                prompt="runtime prompt",
+                base_instructions=(
+                    "Active Local Tools: tool_search, read\n"
+                    "Local Tools: tool_search, read\nbase instructions"
+                ),
+            ),
+            runtime_tools_json=json.dumps(runtime_tools.model_dump(mode="json")),
+            runtime_active_tools_json=service._build_runtime_active_tools_json(
+                runtime_tools=runtime_tools,
+                existing_runtime_active_tools_json=existing_runtime_active_tools_json,
+            ),
+            user_prompt="read a file",
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_prepare_runtime_snapshot",
+        _fake_prepare_runtime_snapshot,
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        objective="read a file",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="reader",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+
+    _ = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="reader",
+        task=task,
+    )
+
+    runtime_record = agent_repo.get_instance(instance.instance_id)
+    assert provider_factory.role_tools_seen == [("read",)]
+    assert json.loads(runtime_record.runtime_active_tools_json) == [
+        "tool_search",
+        "read",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_rehydrates_required_discovery_tools_from_stale_runtime_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_factory = _RoleCapturingProviderFactory()
+    role = RoleDefinition(
+        role_id="reader",
+        name="reader",
+        description="Reads workspace files.",
+        version="1",
+        tools=("read",),
+        system_prompt="You are the reader role.",
+    )
+    role_registry = RoleRegistry()
+    role_registry.register(role)
+
+    db_path = tmp_path / "task_execution_service_rehydrates_discovery.db"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    shared_store = SharedStateRepository(db_path)
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        task_repo=task_repo,
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=Path("."), shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
+        provider_factory=provider_factory,
+        tool_registry=build_default_registry(),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
+        run_intent_repo=RunIntentRepository(db_path),
+    )
+    instance = create_subagent_instance(
+        "reader",
+        workspace_id="default",
+        conversation_id=build_conversation_id("session-1", "reader"),
+    )
+    runtime_tools = RuntimeToolsSnapshot(
+        local_tools=(
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="tool_search",
+                description="Discover tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="activate_tools",
+                description="Activate tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="read",
+                description="Read files.",
+            ),
+        ),
+    )
+    fake_workspace = SimpleNamespace(
+        ref=SimpleNamespace(
+            workspace_id="default",
+            conversation_id=build_conversation_id("session-1", "reader"),
+        ),
+        scope_root=tmp_path,
+        resolve_workdir=lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        type(service.workspace_manager),
+        "resolve",
+        lambda self, **kwargs: fake_workspace,
+    )
+
+    async def _fake_prepare_runtime_snapshot(
+        *,
+        role: RoleDefinition,
+        task: TaskEnvelope,
+        working_directory: Path | None,
+        worktree_root: Path | None,
+        workspace: object | None,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        objective: str,
+        existing_runtime_active_tools_json: str = "",
+    ) -> PreparedRuntimeSnapshot:
+        del role, task, working_directory, worktree_root, workspace
+        del shared_state_snapshot, objective
+        return PreparedRuntimeSnapshot(
+            prompt_sections=RuntimePromptSections(
+                prompt="runtime prompt",
+                base_instructions=(
+                    "Active Local Tools: tool_search, activate_tools, read\n"
+                    "Local Tools: tool_search, activate_tools, read\n"
+                    "base instructions"
+                ),
+            ),
+            runtime_tools_json=json.dumps(runtime_tools.model_dump(mode="json")),
+            runtime_active_tools_json=service._build_runtime_active_tools_json(
+                runtime_tools=runtime_tools,
+                existing_runtime_active_tools_json=existing_runtime_active_tools_json,
+            ),
+            user_prompt="read a file",
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_prepare_runtime_snapshot",
+        _fake_prepare_runtime_snapshot,
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        objective="read a file",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="reader",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+    agent_repo.update_runtime_snapshot(
+        instance.instance_id,
+        runtime_system_prompt="runtime prompt",
+        runtime_tools_json=json.dumps(runtime_tools.model_dump(mode="json")),
+        runtime_active_tools_json='["read"]',
+    )
+
+    _ = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="reader",
+        task=task,
+    )
+
+    runtime_record = agent_repo.get_instance(instance.instance_id)
+    assert provider_factory.role_tools_seen == [("read",)]
+    assert json.loads(runtime_record.runtime_active_tools_json) == [
+        "tool_search",
+        "activate_tools",
+        "read",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_next_turn_uses_tools_activated_by_activate_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_factory = _RoleCapturingProviderFactory()
+    role = RoleDefinition(
+        role_id="reader",
+        name="reader",
+        description="Reads workspace files.",
+        version="1",
+        tools=("read",),
+        system_prompt="You are the reader role.",
+    )
+    role_registry = RoleRegistry()
+    role_registry.register(role)
+
+    db_path = tmp_path / "task_execution_service_activate_next_turn.db"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    shared_store = SharedStateRepository(db_path)
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        task_repo=task_repo,
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=Path("."), shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=McpRegistry(),
+        ),
+        provider_factory=provider_factory,
+        tool_registry=build_default_registry(),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=McpRegistry(),
+        run_intent_repo=RunIntentRepository(db_path),
+    )
+    fake_workspace = SimpleNamespace(
+        ref=SimpleNamespace(
+            workspace_id="default",
+            conversation_id=build_conversation_id("session-1", "reader"),
+        ),
+        scope_root=tmp_path,
+        resolve_workdir=lambda: tmp_path,
+    )
+    runtime_tools = RuntimeToolsSnapshot(
+        local_tools=(
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="activate_tools",
+                description="Activate tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="tool_search",
+                description="Discover tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="read",
+                description="Read files.",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        type(service.workspace_manager),
+        "resolve",
+        lambda self, **kwargs: fake_workspace,
+    )
+
+    async def _fake_prepare_runtime_snapshot(
+        *,
+        role: RoleDefinition,
+        task: TaskEnvelope,
+        working_directory: Path | None,
+        worktree_root: Path | None,
+        workspace: object | None,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        objective: str,
+        existing_runtime_active_tools_json: str = "",
+    ) -> PreparedRuntimeSnapshot:
+        del role, task, working_directory, worktree_root, workspace
+        del shared_state_snapshot, objective
+        return PreparedRuntimeSnapshot(
+            prompt_sections=RuntimePromptSections(
+                prompt="runtime prompt",
+                base_instructions="base instructions",
+            ),
+            runtime_tools_json=json.dumps(runtime_tools.model_dump(mode="json")),
+            runtime_active_tools_json=service._build_runtime_active_tools_json(
+                runtime_tools=runtime_tools,
+                existing_runtime_active_tools_json=existing_runtime_active_tools_json,
+            ),
+            user_prompt="read a file",
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_prepare_runtime_snapshot",
+        _fake_prepare_runtime_snapshot,
+    )
+    instance = create_subagent_instance(
+        "reader",
+        workspace_id="default",
+        conversation_id=build_conversation_id("session-1", "reader"),
+    )
+    first_task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        objective="read a file",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    second_task = TaskEnvelope(
+        task_id="task-2",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        objective="read the second file",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(first_task)
+    _ = task_repo.create(second_task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="reader",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+
+    _ = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="reader",
+        task=first_task,
+    )
+
+    _activate_runtime_tools_for_test(
+        ctx=cast(
+            ToolContext,
+            SimpleNamespace(
+                deps=SimpleNamespace(
+                    agent_repo=agent_repo,
+                    instance_id=instance.instance_id,
+                )
+            ),
+        ),
+        tool_names=["read"],
+    )
+
+    _ = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="reader",
+        task=second_task,
+    )
+
+    runtime_record = agent_repo.get_instance(instance.instance_id)
+    assert provider_factory.role_tools_seen == [("read",), ("read",)]
+    assert json.loads(runtime_record.runtime_active_tools_json) == [
+        "tool_search",
+        "activate_tools",
+        "read",
+    ]
 
 
 @pytest.mark.asyncio

@@ -132,6 +132,7 @@ class RuntimePromptBuildInput(BaseModel):
     ssh_profile_metadata: tuple[WorkspaceSshProfilePromptMetadata, ...] = ()
     conversation_context: RuntimePromptConversationContext | None = None
     runtime_tools: RuntimeToolsSnapshot | None = None
+    runtime_active_local_tools: tuple[str, ...] = ()
 
 
 class PromptSkillInstruction(BaseModel):
@@ -584,7 +585,10 @@ async def build_runtime_system_prompt_result(
     workspace_context_sections.extend(loaded_instructions.sections)
     if _is_feishu_group_conversation(data.conversation_context):
         workspace_context_sections.append(FEISHU_GROUP_CONTEXT_PROMPT)
-    runtime_tools_prompt = build_runtime_tools_prompt(data.runtime_tools)
+    runtime_tools_prompt = build_runtime_tools_prompt(
+        data.runtime_tools,
+        runtime_active_local_tools=data.runtime_active_local_tools,
+    )
     if runtime_tools_prompt:
         workspace_context_sections.append(runtime_tools_prompt)
 
@@ -718,25 +722,78 @@ def build_skill_instructions_prompt(
     )
 
 
-def build_runtime_tools_prompt(runtime_tools: RuntimeToolsSnapshot | None) -> str:
+def build_runtime_tools_prompt(
+    runtime_tools: RuntimeToolsSnapshot | None,
+    *,
+    runtime_active_local_tools: tuple[str, ...] = (),
+) -> str:
     if runtime_tools is None:
         return ""
+    total_tools = (
+        len(runtime_tools.local_tools)
+        + len(runtime_tools.skill_tools)
+        + len(runtime_tools.mcp_tools)
+    )
+    local_tool_names = _tool_names(runtime_tools.local_tools)
+    local_tool_name_set = set(local_tool_names)
+    active_local_tool_names = tuple(
+        tool_name
+        for tool_name in runtime_active_local_tools
+        if tool_name in local_tool_name_set
+    )
+    discovery_authorized = "tool_search" in local_tool_name_set
     lines = [AUTHORIZED_RUNTIME_TOOLS_HEADING]
-    lines.append("- Only call tools that appear in this runtime-authorized list.")
+    lines.append("- Only call tools that are authorized for this runtime.")
     lines.append(
-        "- Local Tools: " + _format_names(_tool_names(runtime_tools.local_tools))
+        "- Active Local Tools: "
+        + (
+            _format_names(active_local_tool_names)
+            if active_local_tool_names
+            else NONE_LABEL
+        )
     )
-    lines.append(
-        "- Skill Tools: " + _format_names(_tool_names(runtime_tools.skill_tools))
+    if discovery_authorized:
+        activation_authorized = "activate_tools" in local_tool_name_set
+        lines.append(
+            "- Use `tool_search` to discover authorized tools, inspect parameter schemas, and check whether local tools are currently active or deferred."
+        )
+        if activation_authorized:
+            lines.append(
+                "- If `tool_search` marks a local tool as `deferred`, call `activate_tools` before trying to use it."
+            )
+        lines.append(
+            "- Tool names and descriptions are intentionally summarized here to keep the prompt compact."
+        )
+    else:
+        lines.append(
+            "- Discovery tooling is unavailable in this runtime, so explicit authorized tool names are listed below."
+        )
+        lines.append("- Local Tools: " + _format_names(local_tool_names))
+        lines.append(
+            "- Skill Tools: " + _format_names(_tool_names(runtime_tools.skill_tools))
+        )
+    lines.extend(
+        _build_todo_guidance(
+            runtime_tools,
+            active_local_tool_names=active_local_tool_names,
+        )
     )
-    lines.extend(_build_todo_guidance(runtime_tools))
+    lines.append(f"- Total Authorized Tools: {total_tools}")
+    lines.append(f"- Local Tools: {len(runtime_tools.local_tools)} authorized")
+    lines.append(f"- Skill Tools: {len(runtime_tools.skill_tools)} authorized")
     lines.extend(_format_mcp_tool_lines(runtime_tools))
     return "\n".join(lines)
 
 
-def _build_todo_guidance(runtime_tools: RuntimeToolsSnapshot) -> list[str]:
+def _build_todo_guidance(
+    runtime_tools: RuntimeToolsSnapshot,
+    *,
+    active_local_tool_names: tuple[str, ...],
+) -> list[str]:
     local_tool_names = set(_tool_names(runtime_tools.local_tools))
     if "todo_write" not in local_tool_names:
+        return []
+    if "todo_write" not in set(active_local_tool_names):
         return []
     lines = [
         "- Use `todo_write` to maintain a concise run-scoped plan when the task has multiple concrete steps.",
@@ -878,16 +935,24 @@ def _append_available_subagents_prompt(
 
 def _format_mcp_tool_lines(runtime_tools: RuntimeToolsSnapshot) -> list[str]:
     if not runtime_tools.mcp_tools:
-        return ["- MCP Tools: none"]
+        return ["- MCP Tools: 0 authorized"]
+    discovery_authorized = "tool_search" in set(_tool_names(runtime_tools.local_tools))
     grouped: dict[str, list[str]] = {}
     for entry in runtime_tools.mcp_tools:
         server_name = entry.server_name or "unknown"
         grouped.setdefault(server_name, []).append(entry.name)
-    lines: list[str] = []
-    for index, server_name in enumerate(sorted(grouped.keys())):
-        prefix = "- MCP Tools: " if index == 0 else "- MCP Tools "
+    lines: list[str] = [
+        f"- MCP Tools: {len(runtime_tools.mcp_tools)} authorized across {len(grouped)} server(s)"
+    ]
+    if discovery_authorized:
+        for server_name in sorted(grouped.keys()):
+            lines.append(
+                f"- MCP Tool Server: {server_name} ({len(grouped[server_name])})"
+            )
+        return lines
+    for server_name in sorted(grouped.keys()):
         lines.append(
-            f"{prefix}{server_name}: {', '.join(sorted(grouped[server_name]))}"
+            f"- MCP Tools {server_name}: {', '.join(sorted(grouped[server_name]))}"
         )
     return lines
 
