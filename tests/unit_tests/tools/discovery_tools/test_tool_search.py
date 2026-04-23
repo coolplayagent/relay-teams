@@ -17,7 +17,12 @@ from relay_teams.agents.instances.models import (
     RuntimeToolSnapshotEntry,
     RuntimeToolsSnapshot,
 )
-from relay_teams.tools.discovery_tools import register_tool_search
+from relay_teams.tools.discovery_tools import (
+    ALWAYS_AVAILABLE_DISCOVERY_TOOLS,
+    DiscoveryToolResolver,
+    register_tool_search,
+)
+from relay_teams.tools.registry.registry import ToolResolutionContext
 from relay_teams.tools.runtime import ToolDeps
 from relay_teams.tools.discovery_tools import tool_search as tool_search_module
 
@@ -36,6 +41,15 @@ class _FakeAgent:
             return func
 
         return decorator
+
+
+def test_discovery_tool_resolver_exports_always_available_tools() -> None:
+    resolver = DiscoveryToolResolver()
+
+    assert (
+        resolver.resolve_implicit_tools(ToolResolutionContext(session_id="session-1"))
+        == ALWAYS_AVAILABLE_DISCOVERY_TOOLS
+    )
 
 
 def _invoke_tool_action(

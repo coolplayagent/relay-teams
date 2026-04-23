@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from relay_teams.tools.registry import ToolResolutionContext, build_default_registry
+from relay_teams.tools.registry import ToolResolutionContext
+from relay_teams.tools.registry.defaults import build_default_registry
 
 
 def test_registry_rejects_unknown_tools() -> None:

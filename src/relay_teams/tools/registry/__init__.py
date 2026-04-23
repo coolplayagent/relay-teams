@@ -20,7 +20,6 @@ from relay_teams.tools.registry.tool_groups import (
     ToolGroupDefinition,
     list_default_tool_groups,
 )
-from relay_teams.tools.registry.defaults import build_default_registry
 
 __all__ = [
     "ToolAvailabilityRecord",
@@ -29,7 +28,6 @@ __all__ = [
     "ToolRegistry",
     "ToolResolutionContext",
     "ToolGroupDefinition",
-    "build_default_registry",
     "list_default_tool_groups",
     "ActivationApplyResult",
     "ActivationValidationResult",

@@ -58,7 +58,7 @@ from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
-from relay_teams.tools.registry import build_default_registry
+from relay_teams.tools.registry.defaults import build_default_registry
 from relay_teams.tools.registry.registry import ToolRegistry
 from relay_teams.tools.discovery_tools.activate_tools import (
     _activate_runtime_tools as _activate_runtime_tools_for_test,
