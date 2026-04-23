@@ -558,3 +558,30 @@ def test_answer_user_question_route_offloads_service_call(monkeypatch) -> None:
     assert answered[0][1] == "question-1"
     assert len(answered[0][2]) == 1
     assert answered[0][2][0].selections[0].label == "A"
+
+
+def test_list_monitors_route_offloads_service_call(monkeypatch) -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+    captured: dict[str, object] = {}
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        captured["func"] = func
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(runs.asyncio, "to_thread", fake_to_thread)
+
+    response = client.get("/api/runs/run-1/monitors")
+
+    assert response.status_code == 200
+    assert response.json() == {"items": [fake_service.monitors["mon-1"]]}
+    assert captured["func"] == fake_service.list_monitors
+    assert captured["args"] == ("run-1",)
+    assert captured["kwargs"] == {}

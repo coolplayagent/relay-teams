@@ -164,19 +164,23 @@ async def create_run(
             )
         if not normalized_input:
             raise HTTPException(status_code=400, detail="Run input cannot be empty")
-        run_id, session_id = service.create_run(
-            IntentInput(
-                session_id=req.session_id,
-                input=normalized_input,
-                run_kind=req.run_kind,
-                generation_config=req.generation_config,
-                execution_mode=req.execution_mode,
-                yolo=req.yolo,
-                thinking=req.thinking,
-                target_role_id=req.target_role_id,
-            )
+        intent_input = IntentInput(
+            session_id=req.session_id,
+            input=normalized_input,
+            run_kind=req.run_kind,
+            generation_config=req.generation_config,
+            execution_mode=req.execution_mode,
+            yolo=req.yolo,
+            thinking=req.thinking,
+            target_role_id=req.target_role_id,
         )
-        service.ensure_run_started(run_id)
+
+        def create_and_start_run() -> tuple[str, str]:
+            run_id, session_id = service.create_run(intent_input)
+            service.ensure_run_started(run_id)
+            return run_id, session_id
+
+        run_id, session_id = await asyncio.to_thread(create_and_start_run)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
             log_event(
@@ -272,7 +276,8 @@ async def list_monitors(
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
-        return {"items": list(service.list_monitors(run_id))}
+        monitors = await asyncio.to_thread(service.list_monitors, run_id)
+        return {"items": list(monitors)}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -287,7 +292,8 @@ async def create_monitor(
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> MonitorResponse:
     try:
-        monitor = service.create_monitor(
+        monitor = await asyncio.to_thread(
+            service.create_monitor,
             run_id=run_id,
             source_kind=req.source_kind,
             source_key=req.source_key,
@@ -318,9 +324,12 @@ async def stop_monitor(
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> MonitorResponse:
     try:
-        return MonitorResponse(
-            monitor=service.stop_monitor(run_id=run_id, monitor_id=monitor_id)
+        monitor = await asyncio.to_thread(
+            service.stop_monitor,
+            run_id=run_id,
+            monitor_id=monitor_id,
         )
+        return MonitorResponse(monitor=monitor)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -335,8 +344,11 @@ async def inject_message(
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
-        result = service.inject_message(
-            run_id=run_id, source=req.source, content=req.content
+        result = await asyncio.to_thread(
+            service.inject_message,
+            run_id=run_id,
+            source=req.source,
+            content=req.content,
         )
         with bind_trace_context(trace_id=run_id, run_id=run_id):
             log_event(
@@ -360,7 +372,7 @@ async def list_tool_approvals(
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> list[dict[str, str]]:
     with bind_trace_context(trace_id=run_id, run_id=run_id):
-        result = service.list_open_tool_approvals(run_id)
+        result = await asyncio.to_thread(service.list_open_tool_approvals, run_id)
         log_event(
             logger,
             logging.INFO,
@@ -377,7 +389,8 @@ async def list_user_questions(
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> list[dict[str, object]]:
     try:
-        return cast(list[dict[str, object]], service.list_user_questions(run_id))
+        questions = await asyncio.to_thread(service.list_user_questions, run_id)
+        return cast(list[dict[str, object]], questions)
     except KeyError as exc:
         raise http_exception_for(exc) from exc
 
@@ -427,7 +440,10 @@ async def list_background_tasks(
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
-        return {"items": list(service.list_background_tasks(run_id))}
+        background_tasks = await asyncio.to_thread(
+            service.list_background_tasks, run_id
+        )
+        return {"items": list(background_tasks)}
     except KeyError as exc:
         raise http_exception_for(exc) from exc
 
@@ -438,7 +454,8 @@ async def get_todo(
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
-        return {"todo": service.get_todo(run_id)}
+        todo = await asyncio.to_thread(service.get_todo, run_id)
+        return {"todo": todo}
     except KeyError as exc:
         raise http_exception_for(exc) from exc
 
@@ -450,12 +467,12 @@ async def get_background_task(
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
-        return {
-            "background_task": service.get_background_task(
-                run_id=run_id,
-                background_task_id=background_task_id,
-            )
-        }
+        background_task = await asyncio.to_thread(
+            service.get_background_task,
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
+        return {"background_task": background_task}
     except KeyError as exc:
         raise http_exception_for(exc) from exc
 
@@ -487,7 +504,8 @@ async def resolve_tool_approval(
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, str]:
     try:
-        service.resolve_tool_approval(
+        await asyncio.to_thread(
+            service.resolve_tool_approval,
             run_id=run_id,
             tool_call_id=tool_call_id,
             action=req.action,
@@ -518,7 +536,7 @@ async def stop_run(
 ) -> dict[str, str]:
     try:
         if req.scope == "main":
-            service.stop_run(run_id)
+            await asyncio.to_thread(service.stop_run, run_id)
             with bind_trace_context(trace_id=run_id, run_id=run_id):
                 log_event(
                     logger,
@@ -532,7 +550,11 @@ async def stop_run(
                 status_code=422,
                 detail="instance_id is required when scope is subagent",
             )
-        payload = service.stop_subagent(run_id, req.instance_id)
+        payload = await asyncio.to_thread(
+            service.stop_subagent,
+            run_id,
+            req.instance_id,
+        )
         with bind_trace_context(
             trace_id=run_id, run_id=run_id, instance_id=req.instance_id
         ):
@@ -560,8 +582,13 @@ async def resume_run(
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, str]:
     try:
-        session_id = service.resume_run(run_id)
-        service.ensure_run_started(run_id)
+
+        def resume_and_start_run() -> str:
+            session_id = service.resume_run(run_id)
+            service.ensure_run_started(run_id)
+            return session_id
+
+        session_id = await asyncio.to_thread(resume_and_start_run)
         with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
             log_event(
                 logger,
@@ -585,7 +612,8 @@ async def inject_subagent(
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, str]:
     try:
-        service.inject_subagent_message(
+        await asyncio.to_thread(
+            service.inject_subagent_message,
             run_id=run_id,
             instance_id=instance_id,
             content=req.content,
