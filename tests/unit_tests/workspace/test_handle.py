@@ -280,3 +280,67 @@ def test_resolve_ssh_mount_path_uses_materialized_local_root(tmp_path: Path) -> 
         workspace.resolve_path("/srv/app/src/app.py", write=True)
         == remote_file.resolve()
     )
+
+
+def test_resolve_absolute_local_path_wins_over_broad_ssh_remote_root(
+    tmp_path: Path,
+) -> None:
+    if not Path("/").is_absolute():
+        pytest.skip("Platform treats POSIX-rooted SSH paths as relative")
+    workspace_dir = tmp_path / ".agent-teams" / "workspaces" / "project"
+    local_root = tmp_path / "project"
+    remote_local_root = workspace_dir / "ssh_mounts" / "prod"
+    tmp_root = workspace_dir / "tmp"
+    local_file = local_root / "notes.txt"
+    local_file.parent.mkdir(parents=True)
+    local_file.write_text("local\n", encoding="utf-8")
+    remote_local_root.mkdir(parents=True)
+    tmp_root.mkdir(parents=True)
+    workspace = WorkspaceHandle(
+        ref=WorkspaceRef(
+            workspace_id="workspace",
+            session_id="session",
+            role_id="role",
+            conversation_id="conversation",
+            default_mount_name="default",
+            mount_names=("default", "prod"),
+        ),
+        mounts=(
+            build_local_workspace_mount(
+                mount_name="default",
+                root_path=local_root,
+                working_directory=".",
+            ),
+            WorkspaceMountRecord(
+                mount_name="prod",
+                provider=WorkspaceMountProvider.SSH,
+                provider_config=WorkspaceSshMountConfig(
+                    ssh_profile_id="prod",
+                    remote_root="/",
+                ),
+            ),
+        ),
+        locations=WorkspaceLocations(
+            workspace_dir=workspace_dir,
+            mount_name="default",
+            provider=WorkspaceMountProvider.LOCAL,
+            scope_root=local_root,
+            execution_root=local_root,
+            tmp_root=tmp_root,
+            readable_roots=(local_root, remote_local_root, tmp_root),
+            writable_roots=(local_root, remote_local_root, tmp_root),
+            remote_mount_roots=(
+                WorkspaceRemoteMountRoot(
+                    mount_name="prod",
+                    local_root=remote_local_root,
+                    remote_root="/",
+                ),
+            ),
+        ),
+    )
+
+    resolved = workspace.resolve_workspace_path(str(local_file), write=False)
+
+    assert resolved.provider == WorkspaceMountProvider.LOCAL
+    assert resolved.mount_name == "default"
+    assert resolved.local_path == local_file.resolve()

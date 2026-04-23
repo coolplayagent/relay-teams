@@ -811,6 +811,160 @@ async def test_background_task_service_run_subagent_returns_synchronous_result(
 
 
 @pytest.mark.asyncio
+async def test_background_task_service_wait_for_subagent_run_reattaches_existing_sync_run(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-sync-reattach.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-sync-reattach.db"
+    )
+    gate = asyncio.Event()
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        ),
+        gate=gate,
+    )
+    agent_repo = _FakeAgentRepo()
+    task_repo = _FakeTaskRepo()
+    intent_repo = _FakeRunIntentRepo(_parent_intent())
+    run_control_manager = _FakeRunControlManager()
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        run_intent_repo=intent_repo,
+        run_control_manager=run_control_manager,
+        run_runtime_repo=runtime_repo,
+    )
+
+    run_task = asyncio.create_task(
+        service.run_subagent(
+            run_id="run-1",
+            session_id="session-1",
+            workspace_id="workspace-1",
+            subagent_role_id="Crafter",
+            title="Investigate failures",
+            prompt="Inspect the failing tests and summarize the cause.",
+        )
+    )
+    while not run_control_manager.registered_run_ids:
+        await asyncio.sleep(0)
+    subagent_run_id = run_control_manager.registered_run_ids[0]
+    wait_task = asyncio.create_task(
+        service.wait_for_subagent_run(
+            parent_run_id="run-1",
+            subagent_run_id=subagent_run_id,
+        )
+    )
+
+    gate.set()
+    result = await run_task
+    reattached_result = await wait_task
+
+    assert reattached_result == result
+    assert result.run_id == subagent_run_id
+    assert len(executor.calls) == 1
+    assert run_control_manager.registered_run_ids == [subagent_run_id]
+    assert run_control_manager.unregistered_run_ids == [subagent_run_id]
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_wait_for_subagent_run_recovers_persisted_sync_result(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-sync-persisted.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-sync-persisted.db"
+    )
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+    )
+
+    result = await service.run_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        workspace_id="workspace-1",
+        subagent_role_id="Crafter",
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+    restarted_service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+    )
+
+    recovered = await restarted_service.wait_for_subagent_run(
+        parent_run_id="run-1", subagent_run_id=result.run_id
+    )
+    persisted_records = [
+        record for record in repo.list_all() if record.subagent_run_id == result.run_id
+    ]
+
+    assert recovered == result
+    assert len(persisted_records) == 1
+    assert persisted_records[0].execution_mode == "foreground"
+    assert persisted_records[0].status == BackgroundTaskStatus.COMPLETED
+    assert persisted_records[0].output_excerpt == "analysis complete"
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_wait_for_subagent_run_rejects_foreign_parent_run(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-sync-foreign-parent.db"
+    )
+    _ = repo.upsert(
+        _build_record(
+            background_task_id="sync-subagent-foreign",
+            execution_mode="foreground",
+            status=BackgroundTaskStatus.COMPLETED,
+            output_excerpt="foreign result",
+        ).model_copy(
+            update={
+                "run_id": "foreign-run",
+                "kind": BackgroundTaskKind.SUBAGENT,
+                "subagent_run_id": "subagent-run-foreign",
+                "subagent_instance_id": "foreign-inst",
+                "subagent_task_id": "foreign-task",
+                "subagent_role_id": "Explorer",
+            }
+        )
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+    )
+
+    with pytest.raises(KeyError):
+        await service.wait_for_subagent_run(
+            parent_run_id="run-1",
+            subagent_run_id="subagent-run-foreign",
+        )
+
+
+@pytest.mark.asyncio
 async def test_background_task_service_run_subagent_with_suppressed_hooks_skips_lifecycle_hooks(
     tmp_path: Path,
 ) -> None:

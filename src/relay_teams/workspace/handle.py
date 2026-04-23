@@ -336,6 +336,15 @@ class WorkspaceHandle(BaseModel):
     ) -> ResolvedWorkspacePath:
         normalized_path = self._normalize_raw_path(raw_path)
         path_obj = Path(normalized_path)
+        if normalized_path.startswith("/") and not path_obj.is_absolute():
+            resolved_ssh_absolute = self._resolve_absolute_ssh_workspace_path(
+                path_obj,
+                normalized_path=normalized_path,
+                raw_path=raw_path,
+                write=write,
+            )
+            if resolved_ssh_absolute is not None:
+                return resolved_ssh_absolute
         if path_obj.is_absolute():
             resolved_absolute = self._resolve_absolute_local_workspace_path(
                 path_obj,
