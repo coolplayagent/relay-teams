@@ -827,6 +827,35 @@ def test_pick_workspace_creates_workspace_for_selected_directory(
     assert payload["workspace"]["root_path"] == str(root_path.resolve())
 
 
+def test_pick_workspace_runs_picker_and_create_in_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = _create_test_client(tmp_path)
+    root_path = tmp_path / "picked-root"
+    root_path.mkdir()
+    calls: list[str] = []
+
+    async def fake_to_thread(
+        func: Callable[[], WorkspaceRecord | None],
+    ) -> WorkspaceRecord | None:
+        calls.append(func.__name__)
+        return func()
+
+    monkeypatch.setattr(workspaces.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(
+        workspaces,
+        "pick_workspace_directory",
+        lambda: root_path,
+    )
+
+    response = client.post("/api/workspaces/pick")
+
+    assert response.status_code == 200
+    assert response.json()["workspace"]["workspace_id"] == "picked-root"
+    assert calls == ["_pick_workspace_for_request"]
+
+
 def test_pick_workspace_returns_null_when_cancelled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

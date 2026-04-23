@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from typing import Callable
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
@@ -321,6 +323,53 @@ def test_validate_role_config() -> None:
     payload = response.json()
     assert payload["valid"] is True
     assert payload["role"]["role_id"] == "writer"
+
+
+def test_role_config_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_run_in_threadpool(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(roles, "run_in_threadpool", fake_run_in_threadpool)
+    client = _create_test_client()
+    role_payload = {
+        "role_id": "writer",
+        "name": "Writer",
+        "description": "Drafts user-facing content.",
+        "version": "1.0.0",
+        "tools": ["orch_dispatch_task"],
+        "mcp_servers": [],
+        "skills": [],
+        "model_profile": "default",
+        "memory_profile": default_memory_profile().model_dump(mode="json"),
+        "system_prompt": "Write clearly.",
+    }
+
+    responses = [
+        client.get("/api/roles/configs"),
+        client.get("/api/roles/configs/writer"),
+        client.put("/api/roles/configs/writer", json=role_payload),
+        client.delete("/api/roles/configs/writer"),
+        client.post("/api/roles:validate"),
+        client.post("/api/roles:validate-config", json=role_payload),
+    ]
+
+    assert [response.status_code for response in responses] == [200] * len(responses)
+    assert [call[0] for call in calls] == [
+        "list_role_documents",
+        "get_role_document",
+        "save_role_document",
+        "delete_role_document",
+        "validate_all_roles",
+        "validate_role_document",
+    ]
 
 
 def test_get_role_config_options_returns_503_when_system_roles_are_missing() -> None:

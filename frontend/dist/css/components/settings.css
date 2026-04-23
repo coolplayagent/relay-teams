@@ -1437,10 +1437,11 @@
     grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.45fr) minmax(120px, 0.75fr);
 }
 
-.workspace-profile-grid .form-group label {
+.workspace-profile-grid .form-group label,
+.workspace-auth-grid .form-group label {
     display: flex;
     align-items: flex-end;
-    min-height: 3em;
+    min-height: 3.5em;
     line-height: 1.2;
 }
 
@@ -2664,7 +2665,8 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
         grid-template-columns: 1fr;
     }
 
-    .workspace-profile-grid .form-group label {
+    .workspace-profile-grid .form-group label,
+    .workspace-auth-grid .form-group label {
         min-height: auto;
     }
 

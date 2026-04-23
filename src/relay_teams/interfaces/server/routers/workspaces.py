@@ -77,12 +77,16 @@ async def create_workspace(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceRecord:
     try:
-        return service.create_workspace(
-            workspace_id=req.workspace_id,
-            root_path=Path(req.root_path) if req.root_path is not None else None,
-            mounts=req.mounts,
-            default_mount_name=req.default_mount_name,
-        )
+
+        def _create_workspace() -> WorkspaceRecord:
+            return service.create_workspace(
+                workspace_id=req.workspace_id,
+                root_path=Path(req.root_path) if req.root_path is not None else None,
+                mounts=req.mounts,
+                default_mount_name=req.default_mount_name,
+            )
+
+        return await asyncio.to_thread(_create_workspace)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -92,21 +96,23 @@ async def pick_workspace(
     req: PickWorkspaceRequest | None = None,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> PickWorkspaceResponse:
-    if req is not None and req.root_path is not None:
-        selected_root = Path(req.root_path)
-    else:
-        try:
+    def _pick_workspace_for_request() -> WorkspaceRecord | None:
+        if req is not None and req.root_path is not None:
+            selected_root = Path(req.root_path)
+        else:
             selected_root = pick_workspace_directory()
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    if selected_root is None:
-        return PickWorkspaceResponse(workspace=None)
+        if selected_root is None:
+            return None
+        return service.create_workspace_for_root(root_path=selected_root)
 
     try:
-        workspace = service.create_workspace_for_root(root_path=selected_root)
+        workspace = await asyncio.to_thread(_pick_workspace_for_request)
+        if workspace is None:
+            return PickWorkspaceResponse(workspace=None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return PickWorkspaceResponse(workspace=workspace)
 
 
@@ -114,7 +120,8 @@ async def pick_workspace(
 async def list_workspaces(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> list[WorkspaceRecord]:
-    return list(service.list_workspaces())
+    records = await asyncio.to_thread(service.list_workspaces)
+    return list(records)
 
 
 @router.get("/{workspace_id}", response_model=WorkspaceRecord)
@@ -123,7 +130,7 @@ async def get_workspace(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceRecord:
     try:
-        return service.get_workspace(workspace_id)
+        return await asyncio.to_thread(service.get_workspace, workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
 
@@ -135,7 +142,8 @@ async def update_workspace(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceRecord:
     try:
-        return service.update_workspace(
+        return await asyncio.to_thread(
+            service.update_workspace,
             workspace_id,
             mounts=req.mounts,
             default_mount_name=req.default_mount_name,
