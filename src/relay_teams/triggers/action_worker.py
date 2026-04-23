@@ -4,11 +4,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from typing import Protocol
 
 from relay_teams.logger import get_logger, log_event
 from relay_teams.triggers.service import GitHubTriggerService
 
 LOGGER = get_logger(__name__)
+
+
+class _WorkerThreadLike(Protocol):
+    def is_alive(self) -> bool: ...
+
+    def start(self) -> None: ...
+
+    def join(self, timeout: float | None = None) -> None: ...
 
 
 class GitHubTriggerActionWorker:
@@ -24,7 +33,7 @@ class GitHubTriggerActionWorker:
         self._stop_timeout_seconds = stop_timeout_seconds
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._thread: _WorkerThreadLike | None = None
 
     async def start(self) -> None:
         thread = self._thread
