@@ -12,7 +12,6 @@ from relay_teams.tools.registry.runtime_activation import apply_tool_activation
 from relay_teams.tools.runtime import ToolContext, ToolDeps, execute_tool_call
 
 DESCRIPTION = load_tool_description(__file__)
-_MAX_ACTIVE_TOOLS = 20
 
 
 def register(agent: Agent[ToolDeps, str]) -> None:
@@ -72,7 +71,6 @@ def _activate_runtime_tools(
             runtime_record.runtime_active_tools_json
         ),
         requested_tool_names=requested_tool_names,
-        max_active_tools=_MAX_ACTIVE_TOOLS,
     )
     if not requested_tool_names:
         return {
@@ -147,15 +145,21 @@ def _build_warning_message(activation_result: object) -> str | None:
     warning_parts: list[str] = []
     unknown_or_unauthorized = getattr(result, "unknown_or_unauthorized", ())
     rejected_due_to_limit = getattr(result, "rejected_due_to_limit", ())
+    max_active_tools = getattr(result, "max_active_tools", None)
     if unknown_or_unauthorized:
         warning_parts.append(
             "Some requested tools were not authorized local tools for this runtime: "
             + ", ".join(str(name) for name in unknown_or_unauthorized)
         )
     if rejected_due_to_limit:
+        if isinstance(max_active_tools, int):
+            limit_text = f"the active-tool limit ({max_active_tools}) was reached"
+        else:
+            limit_text = "an activation limit was reached"
         warning_parts.append(
-            "Some requested tools could not be activated because the active-tool "
-            f"limit ({_MAX_ACTIVE_TOOLS}) was reached: "
+            "Some requested tools could not be activated because "
+            + limit_text
+            + ": "
             + ", ".join(str(name) for name in rejected_due_to_limit)
         )
     return " ".join(warning_parts) if warning_parts else None

@@ -39,13 +39,17 @@ def build_initial_active_tools(
     *,
     always_active_tools: tuple[str, ...] = DEFAULT_ALWAYS_ACTIVE_TOOLS,
 ) -> tuple[str, ...]:
-    authorized_set = set(authorized_tools)
-    initial_active_tools = _dedupe_names(
-        tuple(name for name in always_active_tools if name in authorized_set)
+    authorized = _dedupe_names(authorized_tools)
+    authorized_set = set(authorized)
+    required_always_active_tools = _dedupe_names(always_active_tools)
+    initial_active_tools = tuple(
+        name for name in required_always_active_tools if name in authorized_set
     )
-    if initial_active_tools:
+    if required_always_active_tools and len(initial_active_tools) == len(
+        required_always_active_tools
+    ):
         return initial_active_tools
-    return _dedupe_names(authorized_tools)
+    return authorized
 
 
 def validate_activation_request(

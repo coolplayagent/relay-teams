@@ -344,3 +344,83 @@ async def test_activate_tools_empty_input_preserves_current_runtime_state(
     assert result["active_tools_count"] == 2
     assert result["deferred_tools_count"] == 1
     assert "must contain at least one non-empty tool name" in str(result["warning"])
+
+
+@pytest.mark.asyncio
+async def test_activate_tools_can_activate_all_authorized_local_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_activate_tools(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["activate_tools"],
+    )
+    extra_tool_names = tuple(f"tool_{index}" for index in range(1, 22))
+    agent_repo = AgentInstanceRepository(tmp_path / "instances.db")
+    _seed_runtime_snapshot(
+        agent_repo=agent_repo,
+        instance_id="instance-1",
+        runtime_tools=RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="activate_tools",
+                    description="Activate tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="tool_search",
+                    description="Discover tools.",
+                ),
+                *(
+                    RuntimeToolSnapshotEntry(
+                        source="local",
+                        name=tool_name,
+                        description=f"{tool_name} description.",
+                    )
+                    for tool_name in extra_tool_names
+                ),
+            ),
+        ),
+        runtime_active_tools_json='["tool_search","activate_tools"]',
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            agent_repo=agent_repo,
+            instance_id="instance-1",
+        )
+    )
+
+    async def _fake_execute_tool_call(ctx, **kwargs: object) -> dict[str, object]:
+        del ctx
+        return cast(
+            dict[str, object],
+            _invoke_tool_action(
+                cast(Callable[..., object], kwargs["action"]),
+                cast(dict[str, object], kwargs.get("raw_args")),
+            ),
+        )
+
+    monkeypatch.setattr(
+        activate_tools_module,
+        "execute_tool_call",
+        _fake_execute_tool_call,
+    )
+
+    result = await tool(ctx, tool_names=list(extra_tool_names))
+
+    assert result["activated"] == list(extra_tool_names)
+    assert result["rejected_due_to_limit"] == []
+    assert result["active_tools"] == [
+        "tool_search",
+        "activate_tools",
+        *extra_tool_names,
+    ]
+    persisted = agent_repo.get_instance("instance-1")
+    assert json.loads(persisted.runtime_active_tools_json) == [
+        "tool_search",
+        "activate_tools",
+        *extra_tool_names,
+    ]

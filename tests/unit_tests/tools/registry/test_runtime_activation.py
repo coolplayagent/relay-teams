@@ -23,6 +23,15 @@ def test_build_initial_active_tools_falls_back_to_all_authorized_tools() -> None
     assert build_initial_active_tools(("read", "write")) == ("read", "write")
 
 
+def test_build_initial_active_tools_requires_activation_path_for_deferred_mode() -> (
+    None
+):
+    assert build_initial_active_tools(("tool_search", "read")) == (
+        "tool_search",
+        "read",
+    )
+
+
 def test_validate_activation_request_separates_active_deferred_and_unknown() -> None:
     result = validate_activation_request(
         authorized_tools=("tool_search", "activate_tools", "read", "write"),
