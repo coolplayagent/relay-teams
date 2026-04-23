@@ -178,6 +178,21 @@ class SynchronousSubagentResult(BaseModel):
     output: str = ""
 
 
+class _ManagedSynchronousSubagentRuntime:
+    def __init__(
+        self,
+        *,
+        worker_task: asyncio.Task[None],
+        parent_run_id: str,
+        subagent_run_id: str,
+        result_holder: dict[str, SynchronousSubagentResult],
+    ) -> None:
+        self.worker_task = worker_task
+        self.parent_run_id = parent_run_id
+        self.subagent_run_id = subagent_run_id
+        self.result_holder = result_holder
+
+
 class _PreparedSubagentLaunch(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -222,6 +237,9 @@ class BackgroundTaskService:
         self._completion_sink: BackgroundTaskCompletionSink | None = None
         self._completion_retry_tasks: dict[str, asyncio.Task[None]] = {}
         self._subagent_runtimes: dict[str, _ManagedSubagentTaskRuntime] = {}
+        self._synchronous_subagent_runtimes: dict[
+            str, _ManagedSynchronousSubagentRuntime
+        ] = {}
         if self._background_task_manager is not None:
             self._background_task_manager.set_completion_listener(
                 self._handle_background_task_completion
@@ -450,6 +468,29 @@ class BackgroundTaskService:
         )
         if suppress_hooks:
             self._prime_subagent_hook_snapshot(subagent_run_id=prepared.subagent_run_id)
+        background_task_id = f"sync_subagent_{uuid4().hex[:12]}"
+        _ = self._repository.upsert(
+            BackgroundTaskRecord(
+                background_task_id=background_task_id,
+                run_id=run_id,
+                session_id=session_id,
+                kind=BackgroundTaskKind.SUBAGENT,
+                instance_id=prepared.subagent_instance.instance_id,
+                role_id=prepared.subagent_role_id,
+                title=prepared.normalized_title,
+                command=f"{_SUBAGENT_COMMAND_PREFIX}{prepared.subagent_role_id}",
+                cwd=workspace_id,
+                execution_mode="foreground",
+                status=BackgroundTaskStatus.RUNNING,
+                tty=False,
+                timeout_ms=None,
+                log_path="",
+                subagent_role_id=prepared.subagent_role_id,
+                subagent_run_id=prepared.subagent_run_id,
+                subagent_task_id=prepared.subagent_task.task_id,
+                subagent_instance_id=prepared.subagent_instance.instance_id,
+            )
+        )
         await self._execute_subagent_start_hooks(
             run_id=run_id,
             session_id=session_id,
@@ -483,6 +524,11 @@ class BackgroundTaskService:
                     status=status,
                     output_text=output,
                 )
+                self._finalize_synchronous_subagent_record(
+                    background_task_id=background_task_id,
+                    status=status,
+                    output=output,
+                )
                 self._finalize_subagent_run_runtime(
                     subagent_run_id=prepared.subagent_run_id,
                     status=status,
@@ -497,6 +543,11 @@ class BackgroundTaskService:
                     prepared=prepared,
                     status=BackgroundTaskStatus.FAILED,
                     output_text=output,
+                )
+                self._finalize_synchronous_subagent_record(
+                    background_task_id=background_task_id,
+                    status=BackgroundTaskStatus.FAILED,
+                    output=output,
                 )
                 self._finalize_subagent_run_runtime(
                     subagent_run_id=prepared.subagent_run_id,
@@ -513,6 +564,11 @@ class BackgroundTaskService:
                 prepared=prepared,
                 status=status,
                 output_text=output,
+            )
+            self._finalize_synchronous_subagent_record(
+                background_task_id=background_task_id,
+                status=status,
+                output=output,
             )
             self._finalize_subagent_run_runtime(
                 subagent_run_id=prepared.subagent_run_id,
@@ -532,6 +588,13 @@ class BackgroundTaskService:
             )
 
         worker_task = asyncio.create_task(run_worker())
+        managed_runtime = _ManagedSynchronousSubagentRuntime(
+            worker_task=worker_task,
+            parent_run_id=run_id,
+            subagent_run_id=prepared.subagent_run_id,
+            result_holder=result_holder,
+        )
+        self._synchronous_subagent_runtimes[prepared.subagent_run_id] = managed_runtime
         run_control_manager.register_run_task(
             run_id=prepared.subagent_run_id,
             session_id=session_id,
@@ -545,10 +608,36 @@ class BackgroundTaskService:
             raise
         finally:
             run_control_manager.unregister_run_task(prepared.subagent_run_id)
+            current_runtime = self._synchronous_subagent_runtimes.get(
+                prepared.subagent_run_id
+            )
+            if current_runtime is managed_runtime:
+                self._synchronous_subagent_runtimes.pop(prepared.subagent_run_id, None)
         result = result_holder.get("result")
         if result is None:
             raise RuntimeError("Subagent completed without returning a result")
         return result
+
+    async def wait_for_subagent_run(
+        self,
+        *,
+        parent_run_id: str,
+        subagent_run_id: str,
+    ) -> SynchronousSubagentResult:
+        normalized_parent_run_id = parent_run_id.strip()
+        normalized_run_id = subagent_run_id.strip()
+        runtime = self._synchronous_subagent_runtimes.get(normalized_run_id)
+        if runtime is not None:
+            if runtime.parent_run_id != normalized_parent_run_id:
+                raise KeyError(f"Unknown synchronous subagent run: {normalized_run_id}")
+            await asyncio.shield(runtime.worker_task)
+            result = runtime.result_holder.get("result")
+            if result is None:
+                raise RuntimeError("Subagent completed without returning a result")
+            return result
+        return self._synchronous_subagent_result_from_record(
+            parent_run_id=normalized_parent_run_id, subagent_run_id=normalized_run_id
+        )
 
     def list_for_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
         return tuple(
@@ -694,6 +783,71 @@ class BackgroundTaskService:
         if status != BackgroundTaskStatus.STOPPED:
             await self._handle_background_task_completion(record)
         return record
+
+    def _finalize_synchronous_subagent_record(
+        self,
+        *,
+        background_task_id: str,
+        status: BackgroundTaskStatus,
+        output: str,
+    ) -> BackgroundTaskRecord:
+        current = self._repository.get(background_task_id)
+        if current is None:
+            raise KeyError(f"Unknown background task: {background_task_id}")
+        completed_at = datetime.now(tz=timezone.utc)
+        summarized_output = output.strip()
+        return self._repository.upsert(
+            current.model_copy(
+                update={
+                    "status": status,
+                    "exit_code": 0 if status == BackgroundTaskStatus.COMPLETED else 1,
+                    "recent_output": _recent_output_lines(summarized_output),
+                    "output_excerpt": summarized_output,
+                    "updated_at": completed_at,
+                    "completed_at": completed_at,
+                    "completion_notified_at": completed_at,
+                }
+            )
+        )
+
+    def _synchronous_subagent_result_from_record(
+        self,
+        *,
+        parent_run_id: str,
+        subagent_run_id: str,
+    ) -> SynchronousSubagentResult:
+        record = self._synchronous_subagent_record(
+            parent_run_id=parent_run_id,
+            subagent_run_id=subagent_run_id,
+        )
+        if record is None or record.is_active:
+            raise KeyError(f"Unknown synchronous subagent run: {subagent_run_id}")
+        if record.status != BackgroundTaskStatus.COMPLETED:
+            raise RuntimeError(record.output_excerpt or "Subagent failed")
+        return SynchronousSubagentResult(
+            run_id=record.subagent_run_id or subagent_run_id,
+            instance_id=record.subagent_instance_id or "",
+            role_id=record.subagent_role_id or "",
+            task_id=record.subagent_task_id or "",
+            title=record.title,
+            output=record.output_excerpt,
+        )
+
+    def _synchronous_subagent_record(
+        self,
+        *,
+        parent_run_id: str,
+        subagent_run_id: str,
+    ) -> BackgroundTaskRecord | None:
+        for record in self._repository.list_all():
+            if (
+                record.kind == BackgroundTaskKind.SUBAGENT
+                and record.execution_mode == "foreground"
+                and record.run_id == parent_run_id
+                and record.subagent_run_id == subagent_run_id
+            ):
+                return record
+        return None
 
     async def _handle_background_task_completion(
         self, record: BackgroundTaskRecord

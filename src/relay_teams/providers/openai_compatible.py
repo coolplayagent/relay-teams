@@ -17,7 +17,7 @@ from relay_teams.agents.execution.conversation_compaction import (
 from relay_teams.agents.execution.conversation_microcompact import (
     ConversationMicrocompactService,
 )
-from relay_teams.agents.execution.llm_session import AgentLlmSession
+from relay_teams.agents.execution.agent_llm_session import AgentLlmSession
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository

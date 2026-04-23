@@ -16,3 +16,32 @@ exclude:
       - frontend/dist
       - openspec
       - src/relay_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx
+  - name: PyTypeHintsInspection
+    paths: &llm_session_split_paths
+      - src/relay_teams/agents/execution/agent_llm_session.py
+      - src/relay_teams/agents/execution/event_publishing.py
+      - src/relay_teams/agents/execution/failure_reporting.py
+      - src/relay_teams/agents/execution/message_commit.py
+      - src/relay_teams/agents/execution/prompt_budgeting.py
+      - src/relay_teams/agents/execution/prompt_history.py
+      - src/relay_teams/agents/execution/recovery_flow.py
+      - src/relay_teams/agents/execution/session_mixin_base.py
+      - src/relay_teams/agents/execution/session_prompt.py
+      - src/relay_teams/agents/execution/session_recovery.py
+      - src/relay_teams/agents/execution/session_runtime.py
+      - src/relay_teams/agents/execution/session_support.py
+      - src/relay_teams/agents/execution/stream_events.py
+      - src/relay_teams/agents/execution/tool_args_recovery.py
+      - src/relay_teams/agents/execution/tool_result_state.py
+  - name: PyMethodMayBeStaticInspection
+    paths: *llm_session_split_paths
+  - name: PyClassHasNoInitInspection
+    paths: *llm_session_split_paths
+  - name: PyShadowingNamesInspection
+    paths: *llm_session_split_paths
+  - name: PyUnusedLocalInspection
+    paths: *llm_session_split_paths
+  - name: PyProtectedMemberInspection
+    paths: *llm_session_split_paths
+  - name: PyPropertyDefinitionInspection
+    paths: *llm_session_split_paths

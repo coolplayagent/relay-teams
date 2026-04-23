@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Callable, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import JsonValue
@@ -30,6 +32,7 @@ from relay_teams.automation.automation_models import (
     AutomationProjectRecord,
     AutomationProjectStatus,
     AutomationProjectUpdateInput,
+    AutomationRunConfig,
     AutomationScheduleMode,
 )
 from relay_teams.automation.automation_repository import AutomationProjectRepository
@@ -37,17 +40,25 @@ from relay_teams.automation.errors import AutomationProjectNameConflictError
 from relay_teams.automation.feishu_binding_service import (
     AutomationFeishuBindingService,
 )
+from relay_teams.agents.orchestration.settings_service import (
+    OrchestrationSettingsService,
+)
 from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressBusyPolicy,
     GatewaySessionIngressRequest,
     GatewaySessionIngressService,
 )
+from relay_teams.logger import get_logger, log_event
 from relay_teams.media import content_parts_from_text
-from relay_teams.sessions.session_models import ProjectKind
+from relay_teams.roles import RoleRegistry
+from relay_teams.sessions.session_models import ProjectKind, SessionMode
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.workspace import WorkspaceService
+
+
+LOGGER = get_logger(__name__)
 
 
 class AutomationService:
@@ -63,6 +74,9 @@ class AutomationService:
         bound_session_queue_service: AutomationBoundSessionQueueService | None = None,
         workspace_service: WorkspaceService | None = None,
         session_ingress_service: GatewaySessionIngressService | None = None,
+        role_registry: RoleRegistry | None = None,
+        get_role_registry: Optional[Callable[[], Optional[RoleRegistry]]] = None,
+        orchestration_settings_service: OrchestrationSettingsService | None = None,
     ) -> None:
         self._repository = repository
         self._event_repository = event_repository
@@ -73,6 +87,15 @@ class AutomationService:
         self._bound_session_queue_service = bound_session_queue_service
         self._workspace_service = workspace_service
         self._session_ingress_service = session_ingress_service
+        self._get_role_registry = (
+            get_role_registry
+            if get_role_registry is not None
+            else lambda: role_registry
+        )
+        self._orchestration_settings_service = orchestration_settings_service
+
+    def _get_active_role_registry(self) -> RoleRegistry | None:
+        return self._get_role_registry()
 
     def create_project(
         self,
@@ -80,6 +103,7 @@ class AutomationService:
     ) -> AutomationProjectRecord:
         timezone_name = _validate_timezone(payload.timezone)
         self._validate_workspace(payload.workspace_id)
+        run_config = self._validate_run_config_for_write(payload.run_config)
         delivery_binding = self._resolve_delivery_binding(
             payload.delivery_binding,
             existing_binding=None,
@@ -106,7 +130,7 @@ class AutomationService:
             cron_expression=_normalize_optional_text(payload.cron_expression),
             run_at=payload.run_at,
             timezone=timezone_name,
-            run_config=payload.run_config,
+            run_config=run_config,
             delivery_binding=delivery_binding,
             delivery_events=delivery_events,
             trigger_id=f"schedule-{automation_project_id}",
@@ -156,6 +180,11 @@ class AutomationService:
             run_at = None
         if payload.schedule_mode == AutomationScheduleMode.ONE_SHOT:
             cron_expression = None
+        run_config = (
+            self._validate_run_config_for_write(payload.run_config)
+            if payload.run_config is not None
+            else existing.run_config
+        )
         delivery_binding = self._resolve_delivery_binding(
             payload.delivery_binding,
             existing_binding=existing.delivery_binding,
@@ -174,7 +203,7 @@ class AutomationService:
             cron_expression=cron_expression,
             run_at=run_at,
             timezone=timezone_name,
-            run_config=payload.run_config or existing.run_config,
+            run_config=run_config,
             delivery_binding=delivery_binding,
             delivery_events=delivery_events,
             enabled=(
@@ -380,6 +409,7 @@ class AutomationService:
                 f"{project.display_name} run "
                 f"{effective_now.astimezone(UTC).strftime('%Y-%m-%d %H:%M')}"
             )
+            runtime_run_config = self._coerce_run_config_for_execution(project)
             session = self._session_service.create_session(
                 workspace_id=project.workspace_id,
                 metadata={
@@ -390,8 +420,9 @@ class AutomationService:
                 },
                 project_kind=ProjectKind.AUTOMATION,
                 project_id=project.automation_project_id,
-                session_mode=project.run_config.session_mode,
-                orchestration_preset_id=project.run_config.orchestration_preset_id,
+                session_mode=runtime_run_config.session_mode,
+                normal_root_role_id=runtime_run_config.normal_root_role_id,
+                orchestration_preset_id=runtime_run_config.orchestration_preset_id,
             )
             intent = IntentInput(
                 session_id=session.session_id,
@@ -401,10 +432,10 @@ class AutomationService:
                         prompt=project.prompt,
                     )
                 ),
-                execution_mode=project.run_config.execution_mode,
-                yolo=project.run_config.yolo,
-                thinking=project.run_config.thinking,
-                session_mode=project.run_config.session_mode,
+                execution_mode=runtime_run_config.execution_mode,
+                yolo=runtime_run_config.yolo,
+                thinking=runtime_run_config.thinking,
+                session_mode=runtime_run_config.session_mode,
             )
             run_id = self._start_unbound_run(intent)
             if self._delivery_service is not None:
@@ -500,6 +531,123 @@ class AutomationService:
             AutomationDeliveryEvent.STARTED,
             AutomationDeliveryEvent.COMPLETED,
             AutomationDeliveryEvent.FAILED,
+        )
+
+    def _validate_run_config_for_write(
+        self,
+        run_config: AutomationRunConfig,
+    ) -> AutomationRunConfig:
+        role_registry = self._get_active_role_registry()
+        if run_config.session_mode == SessionMode.NORMAL:
+            normalized_role_id = str(run_config.normal_root_role_id or "").strip()
+            if not normalized_role_id:
+                return run_config.model_copy(
+                    update={
+                        "normal_root_role_id": None,
+                        "orchestration_preset_id": None,
+                    }
+                )
+            if role_registry is None:
+                raise ValueError("Role registry is unavailable")
+            resolved_role_id = role_registry.resolve_normal_mode_role_id(
+                normalized_role_id
+            )
+            return run_config.model_copy(
+                update={
+                    "normal_root_role_id": resolved_role_id,
+                    "orchestration_preset_id": None,
+                }
+            )
+
+        normalized_preset_id = str(run_config.orchestration_preset_id or "").strip()
+        if not normalized_preset_id:
+            raise ValueError(
+                "orchestration_preset_id is required in orchestration mode"
+            )
+        if self._orchestration_settings_service is None:
+            raise ValueError("Orchestration settings service is unavailable")
+        settings = self._orchestration_settings_service.get_orchestration_config()
+        if not any(
+            preset.preset_id == normalized_preset_id for preset in settings.presets
+        ):
+            raise ValueError(f"Unknown orchestration preset: {normalized_preset_id}")
+        return run_config.model_copy(
+            update={
+                "normal_root_role_id": None,
+                "orchestration_preset_id": normalized_preset_id,
+            }
+        )
+
+    def _coerce_run_config_for_execution(
+        self,
+        project: AutomationProjectRecord,
+    ) -> AutomationRunConfig:
+        run_config = project.run_config
+        role_registry = self._get_active_role_registry()
+        if run_config.session_mode == SessionMode.NORMAL:
+            normalized_role_id = str(run_config.normal_root_role_id or "").strip()
+            if not normalized_role_id or role_registry is None:
+                return run_config.model_copy(
+                    update={
+                        "normal_root_role_id": None,
+                        "orchestration_preset_id": None,
+                    }
+                )
+            try:
+                resolved_role_id = role_registry.resolve_normal_mode_role_id(
+                    normalized_role_id
+                )
+            except ValueError as exc:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="automation.run_config.invalid_normal_root_role_id",
+                    message="Ignoring invalid persisted automation normal-mode role",
+                    payload={
+                        "automation_project_id": project.automation_project_id,
+                        "normal_root_role_id": normalized_role_id,
+                        "error": str(exc),
+                    },
+                )
+                resolved_role_id = None
+            return run_config.model_copy(
+                update={
+                    "normal_root_role_id": resolved_role_id,
+                    "orchestration_preset_id": None,
+                }
+            )
+
+        normalized_preset_id = str(run_config.orchestration_preset_id or "").strip()
+        if not normalized_preset_id or self._orchestration_settings_service is None:
+            return run_config.model_copy(
+                update={
+                    "normal_root_role_id": None,
+                    "orchestration_preset_id": normalized_preset_id or None,
+                }
+            )
+        settings = self._orchestration_settings_service.get_orchestration_config()
+        if any(preset.preset_id == normalized_preset_id for preset in settings.presets):
+            return run_config.model_copy(
+                update={
+                    "normal_root_role_id": None,
+                    "orchestration_preset_id": normalized_preset_id,
+                }
+            )
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="automation.run_config.invalid_orchestration_preset_id",
+            message="Ignoring invalid persisted automation orchestration preset",
+            payload={
+                "automation_project_id": project.automation_project_id,
+                "orchestration_preset_id": normalized_preset_id,
+            },
+        )
+        return run_config.model_copy(
+            update={
+                "normal_root_role_id": None,
+                "orchestration_preset_id": None,
+            }
         )
 
     def _materialize_bound_session_execution(

@@ -219,6 +219,40 @@ def test_create_project_route_returns_created_record() -> None:
     assert fake_service.created_payloads[0].name == "daily-briefing"
 
 
+def test_create_project_route_accepts_full_run_config() -> None:
+    fake_service = _FakeAutomationService()
+    client = _client(fake_service)
+
+    response = client.post(
+        "/api/automation/projects",
+        json={
+            "name": "daily-briefing",
+            "display_name": "Daily Briefing",
+            "workspace_id": "default",
+            "prompt": "Summarize the day.",
+            "schedule_mode": "cron",
+            "cron_expression": "0 9 * * *",
+            "timezone": "UTC",
+            "run_config": {
+                "session_mode": "normal",
+                "normal_root_role_id": "Writer",
+                "orchestration_preset_id": None,
+                "execution_mode": "ai",
+                "yolo": True,
+                "thinking": {"enabled": False, "effort": None},
+            },
+            "enabled": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run_config"]["session_mode"] == "normal"
+    assert payload["run_config"]["normal_root_role_id"] == "Writer"
+    assert payload["run_config"]["orchestration_preset_id"] is None
+    assert fake_service.created_payloads[0].run_config.normal_root_role_id == "Writer"
+
+
 def test_create_project_route_maps_name_conflict_to_409() -> None:
     client = _client(_FakeAutomationService())
 

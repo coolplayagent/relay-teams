@@ -58,6 +58,7 @@ class AutomationRunConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_mode: SessionMode = SessionMode.NORMAL
+    normal_root_role_id: OptionalIdentifierStr = None
     orchestration_preset_id: OptionalIdentifierStr = None
     execution_mode: ExecutionMode = ExecutionMode.AI
     yolo: bool = True
