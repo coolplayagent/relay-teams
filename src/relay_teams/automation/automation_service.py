@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -74,6 +75,7 @@ class AutomationService:
         workspace_service: WorkspaceService | None = None,
         session_ingress_service: GatewaySessionIngressService | None = None,
         role_registry: RoleRegistry | None = None,
+        get_role_registry: Callable[[], RoleRegistry | None] | None = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
     ) -> None:
         self._repository = repository
@@ -85,8 +87,15 @@ class AutomationService:
         self._bound_session_queue_service = bound_session_queue_service
         self._workspace_service = workspace_service
         self._session_ingress_service = session_ingress_service
-        self._role_registry = role_registry
+        self._get_role_registry = (
+            get_role_registry
+            if get_role_registry is not None
+            else lambda: role_registry
+        )
         self._orchestration_settings_service = orchestration_settings_service
+
+    def _get_active_role_registry(self) -> RoleRegistry | None:
+        return self._get_role_registry()
 
     def create_project(
         self,
@@ -528,6 +537,7 @@ class AutomationService:
         self,
         run_config: AutomationRunConfig,
     ) -> AutomationRunConfig:
+        role_registry = self._get_active_role_registry()
         if run_config.session_mode == SessionMode.NORMAL:
             normalized_role_id = str(run_config.normal_root_role_id or "").strip()
             if not normalized_role_id:
@@ -537,9 +547,9 @@ class AutomationService:
                         "orchestration_preset_id": None,
                     }
                 )
-            if self._role_registry is None:
+            if role_registry is None:
                 raise ValueError("Role registry is unavailable")
-            resolved_role_id = self._role_registry.resolve_normal_mode_role_id(
+            resolved_role_id = role_registry.resolve_normal_mode_role_id(
                 normalized_role_id
             )
             return run_config.model_copy(
@@ -573,9 +583,10 @@ class AutomationService:
         project: AutomationProjectRecord,
     ) -> AutomationRunConfig:
         run_config = project.run_config
+        role_registry = self._get_active_role_registry()
         if run_config.session_mode == SessionMode.NORMAL:
             normalized_role_id = str(run_config.normal_root_role_id or "").strip()
-            if not normalized_role_id or self._role_registry is None:
+            if not normalized_role_id or role_registry is None:
                 return run_config.model_copy(
                     update={
                         "normal_root_role_id": None,
@@ -583,7 +594,7 @@ class AutomationService:
                     }
                 )
             try:
-                resolved_role_id = self._role_registry.resolve_normal_mode_role_id(
+                resolved_role_id = role_registry.resolve_normal_mode_role_id(
                     normalized_role_id
                 )
             except ValueError as exc:

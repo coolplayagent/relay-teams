@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sqlite3
 from typing import cast
+from collections.abc import Callable
 
 import pytest
 from pydantic import ValidationError
@@ -168,6 +169,7 @@ def _build_service(
     delivery_service: _FakeDeliveryService | None = None,
     feishu_binding_service: object | None = None,
     role_registry: _FakeRoleRegistry | None = None,
+    get_role_registry: Callable[[], _FakeRoleRegistry | None] | None = None,
     orchestration_settings_service: _FakeOrchestrationSettingsService | None = None,
 ) -> tuple[AutomationService, _FakeRunManager, SessionService]:
     db_path = tmp_path / "automation.db"
@@ -194,6 +196,9 @@ def _build_service(
         ),
         workspace_service=workspace_service,
         role_registry=cast(RoleRegistry | None, role_registry),
+        get_role_registry=cast(
+            Callable[[], RoleRegistry | None] | None, get_role_registry
+        ),
         orchestration_settings_service=cast(
             OrchestrationSettingsService | None,
             orchestration_settings_service,
@@ -468,6 +473,38 @@ def test_run_config_execution_coercion_drops_invalid_persisted_normal_role(
 
     assert coerced.normal_root_role_id is None
     assert coerced.orchestration_preset_id is None
+
+
+def test_create_project_uses_latest_role_registry_after_reload(
+    tmp_path: Path,
+) -> None:
+    role_registry_holder: dict[str, _FakeRoleRegistry | None] = {
+        "registry": _FakeRoleRegistry(valid_role_ids=("MainAgent", "Writer"))
+    }
+    service, _, _ = _build_service(
+        tmp_path,
+        get_role_registry=lambda: role_registry_holder["registry"],
+    )
+
+    role_registry_holder["registry"] = _FakeRoleRegistry(
+        valid_role_ids=("MainAgent", "Writer", "Analyst")
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="analyst-report",
+            workspace_id="default",
+            prompt="Draft the analyst report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+            run_config=AutomationRunConfig(
+                session_mode=SessionMode.NORMAL,
+                normal_root_role_id="Analyst",
+            ),
+        )
+    )
+
+    assert created.run_config.normal_root_role_id == "Analyst"
 
 
 def test_run_config_execution_coercion_keeps_valid_orchestration_preset(
