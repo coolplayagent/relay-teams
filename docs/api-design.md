@@ -2590,6 +2590,12 @@ Each record includes:
 - `run_at`
 - `timezone`
 - `run_config`
+  - `session_mode`
+  - `normal_root_role_id`
+  - `orchestration_preset_id`
+  - `execution_mode`
+  - `yolo`
+  - `thinking`
 - `delivery_binding`
 - `delivery_events[]`: `started`, `completed`, `failed`
 - `trigger_id`
@@ -2610,6 +2616,12 @@ Request fields:
 - `run_at` for `one_shot`
 - `timezone`
 - `run_config`
+  - `session_mode`
+  - `normal_root_role_id` optional for `normal`
+  - `orchestration_preset_id` required for `orchestration`
+  - `execution_mode`
+  - `yolo`
+  - `thinking`
 - `delivery_binding` optional
   - `provider = "feishu"`
   - `trigger_id`
@@ -2625,6 +2637,10 @@ Notes:
 - `delivery_binding` must reference an existing Feishu IM chat binding returned by `GET /automation/feishu-bindings`.
 - `delivery_binding.session_id` is required for explicit create/update requests and binds the automation project to that exact saved session.
 - When `delivery_binding` is present and `delivery_events` is omitted, the backend defaults to `started`, `completed`, and `failed`.
+- Explicit create/update requests validate `run_config.normal_root_role_id` against the current normal-mode role registry.
+- Explicit create/update requests validate `run_config.orchestration_preset_id` against the current orchestration presets and reject missing presets in orchestration mode.
+- `run_config.normal_root_role_id` is ignored when `session_mode = "orchestration"`.
+- `run_config.orchestration_preset_id` is ignored when `session_mode = "normal"`.
 - When a bound session cannot be resolved at run time, the run fails instead of falling back to a fresh automation session.
 - `workspace_id`, `automation_project_id`, and delivery-binding identifiers follow the common identifier validation rules above.
 
@@ -2635,6 +2651,7 @@ Returns one automation project.
 ### `PATCH /automation/projects/{automation_project_id}`
 
 Updates automation project definition, schedule, stored run config, and optional Feishu delivery binding.
+Explicit `run_config` updates follow the same validation rules as create requests.
 
 ### `DELETE /automation/projects/{automation_project_id}`
 

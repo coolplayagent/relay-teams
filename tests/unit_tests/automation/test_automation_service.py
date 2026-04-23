@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sqlite3
-from typing import cast
+from typing import Callable, cast
 
 import pytest
 from pydantic import ValidationError
@@ -11,6 +11,9 @@ from pydantic import ValidationError
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.agents.orchestration.settings_service import (
+    OrchestrationSettingsService,
+)
 from relay_teams.automation.automation_bound_session_queue_service import (
     AutomationBoundSessionQueueService,
 )
@@ -24,7 +27,12 @@ from relay_teams.automation.automation_models import (
     AutomationProjectCreateInput,
     AutomationProjectStatus,
     AutomationProjectUpdateInput,
+    AutomationRunConfig,
     AutomationScheduleMode,
+)
+from relay_teams.agents.orchestration.settings_models import (
+    OrchestrationPreset,
+    OrchestrationSettings,
 )
 from relay_teams.automation.automation_repository import AutomationProjectRepository
 from relay_teams.automation.automation_service import AutomationService
@@ -32,9 +40,11 @@ from relay_teams.automation.feishu_binding_service import (
     AutomationFeishuBindingService,
 )
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.roles import RoleRegistry
 from relay_teams.sessions.runs.run_manager import RunManager
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.sessions.session_models import SessionMode
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.workspace import WorkspaceRepository, WorkspaceService
@@ -100,6 +110,45 @@ class _FakeDeliveryService:
         self.deleted_project_ids.append(automation_project_id)
 
 
+class _FakeRoleRegistry:
+    def __init__(
+        self, *, valid_role_ids: tuple[str, ...] = ("MainAgent", "Writer")
+    ) -> None:
+        self._valid_role_ids = valid_role_ids
+
+    def resolve_normal_mode_role_id(self, role_id: str | None) -> str:
+        normalized = str(role_id or "").strip()
+        if not normalized:
+            return "MainAgent"
+        if normalized == "Coordinator":
+            raise ValueError(
+                f"Coordinator role cannot be used in normal mode: {normalized}"
+            )
+        if normalized not in self._valid_role_ids:
+            raise ValueError(f"Unknown normal mode role: {normalized}")
+        return normalized
+
+
+class _FakeOrchestrationSettingsService:
+    def __init__(self, *, preset_ids: tuple[str, ...] = ("preset-main",)) -> None:
+        presets = tuple(
+            OrchestrationPreset(
+                preset_id=preset_id,
+                name=preset_id,
+                role_ids=("Writer",),
+                orchestration_prompt="Coordinate the run.",
+            )
+            for preset_id in preset_ids
+        )
+        self._settings = OrchestrationSettings(
+            default_orchestration_preset_id=preset_ids[0] if preset_ids else "",
+            presets=presets,
+        )
+
+    def get_orchestration_config(self) -> OrchestrationSettings:
+        return self._settings
+
+
 def _build_session_service(db_path: Path) -> SessionService:
     return SessionService(
         session_repo=SessionRepository(db_path),
@@ -118,6 +167,9 @@ def _build_service(
     bound_session_queue_service: _FakeBoundSessionQueueService | None = None,
     delivery_service: _FakeDeliveryService | None = None,
     feishu_binding_service: object | None = None,
+    role_registry: _FakeRoleRegistry | None = None,
+    get_role_registry: Callable[[], _FakeRoleRegistry | None] | None = None,
+    orchestration_settings_service: _FakeOrchestrationSettingsService | None = None,
 ) -> tuple[AutomationService, _FakeRunManager, SessionService]:
     db_path = tmp_path / "automation.db"
     run_manager = _FakeRunManager()
@@ -142,6 +194,14 @@ def _build_service(
             bound_session_queue_service,
         ),
         workspace_service=workspace_service,
+        role_registry=cast(RoleRegistry | None, role_registry),
+        get_role_registry=cast(
+            Callable[[], RoleRegistry | None] | None, get_role_registry
+        ),
+        orchestration_settings_service=cast(
+            OrchestrationSettingsService | None,
+            orchestration_settings_service,
+        ),
     )
     return service, run_manager, session_service
 
@@ -199,6 +259,315 @@ def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> No
         getattr(run_manager.create_calls[0], "intent")
         == "触发定时任务 “nightly-report”：\nDraft a nightly report."
     )
+
+
+def test_create_project_persists_normal_root_role_id(tmp_path: Path) -> None:
+    service, _, _ = _build_service(
+        tmp_path,
+        role_registry=_FakeRoleRegistry(),
+    )
+
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="writer-report",
+            workspace_id="default",
+            prompt="Draft the report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+            run_config=AutomationRunConfig(
+                session_mode=SessionMode.NORMAL,
+                normal_root_role_id="Writer",
+            ),
+        )
+    )
+
+    assert created.run_config.normal_root_role_id == "Writer"
+    assert created.run_config.orchestration_preset_id is None
+
+
+def test_create_project_rejects_unknown_normal_root_role_id(tmp_path: Path) -> None:
+    service, _, _ = _build_service(
+        tmp_path,
+        role_registry=_FakeRoleRegistry(),
+    )
+
+    with pytest.raises(ValueError, match="Unknown normal mode role: UnknownRole"):
+        service.create_project(
+            AutomationProjectCreateInput(
+                name="writer-report",
+                workspace_id="default",
+                prompt="Draft the report.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 1 * * *",
+                timezone="UTC",
+                run_config=AutomationRunConfig(
+                    session_mode=SessionMode.NORMAL,
+                    normal_root_role_id="UnknownRole",
+                ),
+            )
+        )
+
+
+def test_create_project_rejects_orchestration_mode_without_preset(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _build_service(
+        tmp_path,
+        orchestration_settings_service=_FakeOrchestrationSettingsService(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="orchestration_preset_id is required in orchestration mode",
+    ):
+        service.create_project(
+            AutomationProjectCreateInput(
+                name="coordinated-report",
+                workspace_id="default",
+                prompt="Coordinate the report.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 1 * * *",
+                timezone="UTC",
+                run_config=AutomationRunConfig(
+                    session_mode=SessionMode.ORCHESTRATION,
+                ),
+            )
+        )
+
+
+def test_run_now_stores_session_topology_from_run_config(tmp_path: Path) -> None:
+    service, _, _ = _build_service(
+        tmp_path,
+        role_registry=_FakeRoleRegistry(),
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="writer-report",
+            workspace_id="default",
+            prompt="Draft the report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+            run_config=AutomationRunConfig(
+                session_mode=SessionMode.NORMAL,
+                normal_root_role_id="Writer",
+            ),
+        )
+    )
+
+    _ = service.run_now(created.automation_project_id)
+    sessions = service.list_project_sessions(created.automation_project_id)
+    session_payload = cast(dict[str, object], sessions[0])
+
+    assert session_payload["session_mode"] == "normal"
+    assert session_payload["normal_root_role_id"] == "Writer"
+    assert session_payload["orchestration_preset_id"] is None
+
+
+def test_create_project_rejects_normal_root_role_without_role_registry(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _build_service(tmp_path)
+
+    with pytest.raises(ValueError, match="Role registry is unavailable"):
+        service.create_project(
+            AutomationProjectCreateInput(
+                name="writer-report",
+                workspace_id="default",
+                prompt="Draft the report.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 1 * * *",
+                timezone="UTC",
+                run_config=AutomationRunConfig(
+                    session_mode=SessionMode.NORMAL,
+                    normal_root_role_id="Writer",
+                ),
+            )
+        )
+
+
+def test_create_project_rejects_orchestration_mode_without_settings_service(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _build_service(tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match="Orchestration settings service is unavailable",
+    ):
+        service.create_project(
+            AutomationProjectCreateInput(
+                name="coordinated-report",
+                workspace_id="default",
+                prompt="Coordinate the report.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 1 * * *",
+                timezone="UTC",
+                run_config=AutomationRunConfig(
+                    session_mode=SessionMode.ORCHESTRATION,
+                    orchestration_preset_id="preset-main",
+                ),
+            )
+        )
+
+
+def test_create_project_rejects_unknown_orchestration_preset(tmp_path: Path) -> None:
+    service, _, _ = _build_service(
+        tmp_path,
+        orchestration_settings_service=_FakeOrchestrationSettingsService(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Unknown orchestration preset: preset-missing",
+    ):
+        service.create_project(
+            AutomationProjectCreateInput(
+                name="coordinated-report",
+                workspace_id="default",
+                prompt="Coordinate the report.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 1 * * *",
+                timezone="UTC",
+                run_config=AutomationRunConfig(
+                    session_mode=SessionMode.ORCHESTRATION,
+                    orchestration_preset_id="preset-missing",
+                ),
+            )
+        )
+
+
+def test_run_config_execution_coercion_drops_invalid_persisted_normal_role(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _build_service(
+        tmp_path,
+        role_registry=_FakeRoleRegistry(),
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="writer-report",
+            workspace_id="default",
+            prompt="Draft the report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+            run_config=AutomationRunConfig(
+                session_mode=SessionMode.NORMAL,
+                normal_root_role_id="Writer",
+            ),
+        )
+    )
+
+    coerced = service._coerce_run_config_for_execution(
+        created.model_copy(
+            update={
+                "run_config": created.run_config.model_copy(
+                    update={"normal_root_role_id": "UnknownRole"}
+                )
+            }
+        )
+    )
+
+    assert coerced.normal_root_role_id is None
+    assert coerced.orchestration_preset_id is None
+
+
+def test_create_project_uses_latest_role_registry_after_reload(
+    tmp_path: Path,
+) -> None:
+    role_registry_holder: dict[str, _FakeRoleRegistry | None] = {
+        "registry": _FakeRoleRegistry(valid_role_ids=("MainAgent", "Writer"))
+    }
+    service, _, _ = _build_service(
+        tmp_path,
+        get_role_registry=lambda: role_registry_holder["registry"],
+    )
+
+    role_registry_holder["registry"] = _FakeRoleRegistry(
+        valid_role_ids=("MainAgent", "Writer", "Analyst")
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="analyst-report",
+            workspace_id="default",
+            prompt="Draft the analyst report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+            run_config=AutomationRunConfig(
+                session_mode=SessionMode.NORMAL,
+                normal_root_role_id="Analyst",
+            ),
+        )
+    )
+
+    assert created.run_config.normal_root_role_id == "Analyst"
+
+
+def test_run_config_execution_coercion_keeps_valid_orchestration_preset(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _build_service(
+        tmp_path,
+        orchestration_settings_service=_FakeOrchestrationSettingsService(),
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="coordinated-report",
+            workspace_id="default",
+            prompt="Coordinate the report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+            run_config=AutomationRunConfig(
+                session_mode=SessionMode.ORCHESTRATION,
+                orchestration_preset_id="preset-main",
+            ),
+        )
+    )
+
+    coerced = service._coerce_run_config_for_execution(created)
+
+    assert coerced.normal_root_role_id is None
+    assert coerced.orchestration_preset_id == "preset-main"
+
+
+def test_run_config_execution_coercion_drops_invalid_persisted_orchestration_preset(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _build_service(
+        tmp_path,
+        orchestration_settings_service=_FakeOrchestrationSettingsService(),
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="coordinated-report",
+            workspace_id="default",
+            prompt="Coordinate the report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+            run_config=AutomationRunConfig(
+                session_mode=SessionMode.ORCHESTRATION,
+                orchestration_preset_id="preset-main",
+            ),
+        )
+    )
+
+    coerced = service._coerce_run_config_for_execution(
+        created.model_copy(
+            update={
+                "run_config": created.run_config.model_copy(
+                    update={"orchestration_preset_id": "preset-missing"}
+                )
+            }
+        )
+    )
+
+    assert coerced.normal_root_role_id is None
+    assert coerced.orchestration_preset_id is None
 
 
 def test_process_due_projects_runs_one_shot_once_and_disables_it(
