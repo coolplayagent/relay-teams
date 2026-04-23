@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from threading import RLock
-from typing import Optional, Self, TypeVar
+from typing import Awaitable, Callable, Optional, Self, TypeVar
 
 import aiosqlite
 

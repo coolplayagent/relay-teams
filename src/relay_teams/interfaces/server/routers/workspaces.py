@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Annotated
 
@@ -187,11 +188,13 @@ async def get_workspace_tree_listing(
 ) -> WorkspaceTreeListing:
     try:
         if mount is None:
-            return service.get_workspace_tree_listing(
+            return await asyncio.to_thread(
+                service.get_workspace_tree_listing,
                 workspace_id,
                 directory_path=path,
             )
-        return service.get_workspace_tree_listing(
+        return await asyncio.to_thread(
+            service.get_workspace_tree_listing,
             workspace_id,
             directory_path=path,
             mount_name=mount,

@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import (
+from typing import (
     AsyncIterable,
     AsyncIterator,
     Awaitable,
     Iterable,
     Iterator,
     Mapping,
+    TypeVar,
+    Union,
+    cast,
 )
 from inspect import isawaitable
-from typing import TypeVar, Union, cast
 
 import typer
 
@@ -368,8 +370,8 @@ def _get_agent_teams_client() -> type[AsyncAgentTeamsClient]:
 
 async def _maybe_await(value: Union[_T, Awaitable[_T]]) -> _T:
     if isawaitable(value):
-        return await cast(Awaitable[_T], value)
-    return cast(_T, value)
+        return await value
+    return value
 
 
 async def _iter_raw_events(

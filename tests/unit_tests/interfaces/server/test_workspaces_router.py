@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Callable
 import shutil
 from pathlib import Path
 
@@ -626,6 +627,61 @@ def test_get_workspace_snapshot_tree_and_diffs(tmp_path: Path) -> None:
     diff_file_payload = diff_file_response.json()
     assert diff_file_payload["path"] == "src/app.py"
     assert diff_file_payload["diff"] == "patched content"
+
+
+def test_get_workspace_tree_listing_runs_service_call_in_threadpool(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class TreeWorkspaceService(WorkspaceService):
+        def get_workspace_tree_listing(
+            self,
+            workspace_id: str,
+            *,
+            directory_path: str,
+            mount_name: str | None = None,
+        ) -> WorkspaceTreeListing:
+            _ = (workspace_id, mount_name)
+            return WorkspaceTreeListing(
+                workspace_id="project-alpha",
+                directory_path=directory_path,
+                children=(),
+            )
+
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    client, service = _create_test_client(
+        tmp_path,
+        service=TreeWorkspaceService(
+            repository=WorkspaceRepository(tmp_path / "workspaces_router.db")
+        ),
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=tmp_path,
+    )
+    monkeypatch.setattr(workspaces.asyncio, "to_thread", fake_to_thread)
+
+    response = client.get("/api/workspaces/project-alpha/tree?path=src&mount=ops")
+
+    assert response.status_code == 200
+    assert response.json()["directory_path"] == "src"
+    assert calls == [
+        (
+            "get_workspace_tree_listing",
+            ("project-alpha",),
+            {"directory_path": "src", "mount_name": "ops"},
+        )
+    ]
 
 
 def test_get_workspace_preview_file_streams_workspace_image(tmp_path: Path) -> None:

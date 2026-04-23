@@ -4,10 +4,9 @@ import asyncio
 import logging
 import sqlite3
 import time
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from threading import RLock
-from typing import Optional, TypeVar
+from typing import Awaitable, Callable, Optional, TypeVar
 
 import aiosqlite
 

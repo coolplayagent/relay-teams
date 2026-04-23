@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+import threading
 from typing import cast
 
 from relay_teams.automation.automation_delivery_repository import (
@@ -92,6 +93,19 @@ class _FakeAutomationDeliveryWorkerService:
     def process_pending(self) -> bool:
         self.calls += 1
         return self.calls == 1
+
+
+class _BlockingAutomationDeliveryWorkerService:
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.finished = threading.Event()
+
+    def process_pending(self) -> bool:
+        self.entered.set()
+        _ = self.release.wait(timeout=2.0)
+        self.finished.set()
+        return False
 
 
 class _FakeNotificationService:
@@ -587,5 +601,27 @@ def test_automation_delivery_worker_start_wake_stop() -> None:
         await worker.stop()
 
         assert service.calls >= 2
+
+    asyncio.run(run_worker())
+
+
+def test_automation_delivery_worker_stop_waits_for_inflight_processing() -> None:
+    async def run_worker() -> None:
+        service = _BlockingAutomationDeliveryWorkerService()
+        worker = AutomationDeliveryWorker(
+            delivery_service=cast(AutomationDeliveryService, service),
+            poll_interval_seconds=0.01,
+        )
+
+        await worker.start()
+        assert await asyncio.to_thread(service.entered.wait, 1.0)
+        stop_task = asyncio.create_task(worker.stop())
+        await asyncio.sleep(0.03)
+        assert stop_task.done() is False
+
+        service.release.set()
+        await asyncio.wait_for(stop_task, timeout=1.0)
+
+        assert service.finished.is_set()
 
     asyncio.run(run_worker())

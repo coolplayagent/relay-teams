@@ -505,7 +505,6 @@ class AutomationDeliveryWorker:
         task = self._task
         if task is None:
             return
-        task.cancel()
         try:
             await task
         except asyncio.CancelledError:
