@@ -75,7 +75,7 @@ import { state } from '../core/state.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
 import { showConfirmDialog, showFormDialog, showToast } from '../utils/feedback.js';
-import { sysLog } from '../utils/logger.js';
+import { logWarn, sysLog } from '../utils/logger.js';
 
 let currentWorkspace = null;
 let currentAutomationProject = null;
@@ -709,19 +709,53 @@ function formatAutomationRunLogMessage(result) {
     return formatMessage('sidebar.log.started_automation_run', { session_id: sessionId });
 }
 
+async function fetchAutomationSessionConfigDependencies(context) {
+    const [roleOptions, orchestrationConfig] = await Promise.all([
+        fetchRoleConfigOptions().catch(error => {
+            logWarn(
+                'frontend.automation.role_options_failed',
+                'Failed to fetch automation role options',
+                {
+                    context,
+                    error_message: String(error?.message || error || ''),
+                },
+            );
+            return { normal_mode_roles: [] };
+        }),
+        fetchOrchestrationConfig().catch(error => {
+            logWarn(
+                'frontend.automation.orchestration_config_failed',
+                'Failed to fetch automation orchestration config',
+                {
+                    context,
+                    error_message: String(error?.message || error || ''),
+                },
+            );
+            return { presets: [] };
+        }),
+    ]);
+    return {
+        normalRoles: normalizeRoleOptions(roleOptions),
+        orchestrationPresets: normalizeOrchestrationPresets(orchestrationConfig),
+    };
+}
+
 export async function requestAutomationProjectInput(project = {}, dialogOptions = {}) {
-    const [workspaces, feishuBindings, roleOptions, orchestrationConfig] = await Promise.all([
+    const [workspaces, feishuBindings, sessionConfigDependencies] = await Promise.all([
         fetchWorkspaces(),
         fetchAutomationFeishuBindings(),
-        fetchRoleConfigOptions(),
-        fetchOrchestrationConfig(),
+        fetchAutomationSessionConfigDependencies('editor'),
     ]);
     const workspaceList = Array.isArray(workspaces) ? workspaces : [];
     if (workspaceList.length === 0) {
         return null;
     }
-    const normalRoles = normalizeRoleOptions(roleOptions);
-    const orchestrationPresets = normalizeOrchestrationPresets(orchestrationConfig);
+    const normalRoles = Array.isArray(sessionConfigDependencies?.normalRoles)
+        ? sessionConfigDependencies.normalRoles
+        : [];
+    const orchestrationPresets = Array.isArray(sessionConfigDependencies?.orchestrationPresets)
+        ? sessionConfigDependencies.orchestrationPresets
+        : [];
     const isEditing = String(project?.automation_project_id || '').trim().length > 0;
     const draft = createAutomationEditorDraft(
         project,
@@ -1717,21 +1751,24 @@ async function loadAutomationHomeDetail(projectId) {
         currentAutomationProject = null;
         return;
     }
-    const [project, sessions, workspaces, feishuBindings, roleOptions, orchestrationConfig] = await Promise.all([
+    const [project, sessions, workspaces, feishuBindings, sessionConfigDependencies] = await Promise.all([
         fetchAutomationProject(normalizedProjectId),
         fetchAutomationProjectSessions(normalizedProjectId),
         fetchWorkspaces(),
         fetchAutomationFeishuBindings(),
-        fetchRoleConfigOptions(),
-        fetchOrchestrationConfig(),
+        fetchAutomationSessionConfigDependencies('detail'),
     ]);
     currentAutomationHomeDetail = {
         project,
         sessions: Array.isArray(sessions) ? sessions : [],
         workspace: findWorkspaceById(workspaces, project?.workspace_id),
         feishuBindings: Array.isArray(feishuBindings) ? feishuBindings : [],
-        normalRoles: normalizeRoleOptions(roleOptions),
-        orchestrationPresets: normalizeOrchestrationPresets(orchestrationConfig),
+        normalRoles: Array.isArray(sessionConfigDependencies?.normalRoles)
+            ? sessionConfigDependencies.normalRoles
+            : [],
+        orchestrationPresets: Array.isArray(sessionConfigDependencies?.orchestrationPresets)
+            ? sessionConfigDependencies.orchestrationPresets
+            : [],
     };
     currentAutomationProject = project;
 }
