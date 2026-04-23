@@ -21,7 +21,7 @@ import {
     renderPromptContentParts,
     summarizePromptContentParts,
 } from '../messageRenderer/helpers/prompt.js';
-import { renderRoundNavigator, setActiveRoundNav } from './navigator.js';
+import { clearRoundNavigator, renderRoundNavigator, setActiveRoundNav } from './navigator.js';
 import { applyRoundPage, fetchInitialRoundsPage, fetchOlderRoundsPage } from './paging.js';
 import { roundsState } from './state.js';
 import { areRoundTodoSnapshotsEqual, normalizeRoundTodoSnapshot } from './todo.js';
@@ -33,6 +33,25 @@ export let currentRounds = [];
 export let currentRound = null;
 let retryTimelineTimerId = 0;
 const expandedHistorySegments = new Set();
+
+export function clearSessionTimeline() {
+    roundsState.currentRounds = [];
+    roundsState.currentRound = null;
+    roundsState.activeRunId = null;
+    roundsState.activeVisibility = 0;
+    roundsState.pendingScrollTargetRunId = null;
+    roundsState.pendingScrollUnlockAt = 0;
+    roundsState.paging = {
+        hasMore: false,
+        nextCursor: null,
+        loading: false,
+    };
+    expandedHistorySegments.clear();
+    setRoundPendingApprovals('', [], {});
+    clearRetryTimelineTimer();
+    syncExportedState();
+    clearRoundNavigator();
+}
 
 export async function loadSessionRounds(sessionId, options = {}) {
     try {
