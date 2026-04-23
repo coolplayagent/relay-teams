@@ -11,7 +11,7 @@ router = APIRouter(prefix="/mcp", tags=["MCP"])
 
 
 @router.get("/servers")
-def list_mcp_servers(
+async def list_mcp_servers(
     service: McpService = Depends(get_mcp_service),
 ) -> list[McpServerSummary]:
     return list(service.list_servers())

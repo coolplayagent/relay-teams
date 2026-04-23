@@ -22,14 +22,14 @@ router = APIRouter(prefix="/gateway", tags=["Gateway"])
 
 
 @router.get("/wechat/accounts", response_model=list[WeChatAccountRecord])
-def list_wechat_accounts(
+async def list_wechat_accounts(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> list[WeChatAccountRecord]:
     return list(service.list_accounts())
 
 
 @router.post("/wechat/login/start", response_model=WeChatLoginStartResponse)
-def start_wechat_login(
+async def start_wechat_login(
     req: WeChatLoginStartRequest,
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatLoginStartResponse:
@@ -40,7 +40,7 @@ def start_wechat_login(
 
 
 @router.post("/wechat/login/wait", response_model=WeChatLoginWaitResponse)
-def wait_wechat_login(
+async def wait_wechat_login(
     req: WeChatLoginWaitRequest,
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatLoginWaitResponse:
@@ -54,7 +54,7 @@ def wait_wechat_login(
 
 
 @router.patch("/wechat/accounts/{account_id}", response_model=WeChatAccountRecord)
-def update_wechat_account(
+async def update_wechat_account(
     account_id: RequiredIdentifierStr,
     req: WeChatAccountUpdateInput,
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
@@ -69,7 +69,7 @@ def update_wechat_account(
 
 
 @router.post("/wechat/accounts/{account_id}:enable", response_model=WeChatAccountRecord)
-def enable_wechat_account(
+async def enable_wechat_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
@@ -85,7 +85,7 @@ def enable_wechat_account(
 @router.post(
     "/wechat/accounts/{account_id}:disable", response_model=WeChatAccountRecord
 )
-def disable_wechat_account(
+async def disable_wechat_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
@@ -99,7 +99,7 @@ def disable_wechat_account(
 
 
 @router.delete("/wechat/accounts/{account_id}")
-def delete_wechat_account(
+async def delete_wechat_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
     req: DeleteRequest | None = Body(default=None),
@@ -116,7 +116,7 @@ def delete_wechat_account(
 
 
 @router.post("/wechat/reload")
-def reload_wechat_gateway(
+async def reload_wechat_gateway(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> dict[str, str]:
     service.reload()

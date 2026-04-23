@@ -48,14 +48,14 @@ router = APIRouter(prefix="/roles", tags=["Roles"])
 
 
 @router.get("")
-def list_roles(
+async def list_roles(
     role_registry: RoleRegistry = Depends(get_role_registry),
 ) -> list[dict[str, object]]:
     return [role.model_dump() for role in role_registry.list_roles()]
 
 
 @router.get(":options", response_model=RoleConfigOptions)
-def get_role_config_options(
+async def get_role_config_options(
     role_registry: RoleRegistry = Depends(get_role_registry),
     model_config_service: ModelConfigService = Depends(get_model_config_service),
     tool_registry: ToolRegistry = Depends(get_tool_registry),
@@ -134,7 +134,7 @@ def get_role_config_options(
     response_model=list[RoleDocumentSummary],
     response_model_exclude_none=True,
 )
-def list_role_configs(
+async def list_role_configs(
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> tuple[RoleDocumentSummary, ...]:
     return service.list_role_documents()
@@ -145,7 +145,7 @@ def list_role_configs(
     response_model=RoleDocumentRecord,
     response_model_exclude_none=True,
 )
-def get_role_config(
+async def get_role_config(
     role_id: RequiredIdentifierStr,
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> RoleDocumentRecord:
@@ -160,7 +160,7 @@ def get_role_config(
     response_model=RoleDocumentRecord,
     response_model_exclude_none=True,
 )
-def save_role_config(
+async def save_role_config(
     role_id: RequiredIdentifierStr,
     draft: RoleDocumentDraft,
     service: RoleSettingsService = Depends(get_role_settings_service),
@@ -172,7 +172,7 @@ def save_role_config(
 
 
 @router.delete("/configs/{role_id}")
-def delete_role_config(
+async def delete_role_config(
     role_id: RequiredIdentifierStr,
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> dict[str, str]:
@@ -186,7 +186,7 @@ def delete_role_config(
 
 
 @router.post(":validate", response_model=dict[str, int | bool])
-def validate_roles(
+async def validate_roles(
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> dict[str, int | bool]:
     try:
@@ -203,7 +203,7 @@ def validate_roles(
     response_model=RoleValidationResult,
     response_model_exclude_none=True,
 )
-def validate_role_config(
+async def validate_role_config(
     draft: RoleDocumentDraft,
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> RoleValidationResult:

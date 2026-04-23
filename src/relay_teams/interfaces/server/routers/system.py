@@ -189,7 +189,7 @@ def _raise_system_http_error(
 
 
 @router.get("/health")
-def health_check(request: Request) -> ServerHealthPayload:
+async def health_check(request: Request) -> ServerHealthPayload:
     container = getattr(request.app.state, "container", None)
     if container is None:
         return build_server_health_payload()
@@ -202,21 +202,21 @@ def health_check(request: Request) -> ServerHealthPayload:
 
 
 @router.get("/configs")
-def get_config_status(
+async def get_config_status(
     service: ConfigStatusService = Depends(get_config_status_service),
 ) -> dict[str, JsonValue]:
     return service.get_config_status()
 
 
 @router.get("/configs/workspace/ssh-profiles")
-def list_ssh_profiles(
+async def list_ssh_profiles(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> list[SshProfileRecord]:
     return list(service.list_profiles())
 
 
 @router.get("/configs/workspace/ssh-profiles/{ssh_profile_id}")
-def get_ssh_profile(
+async def get_ssh_profile(
     ssh_profile_id: RequiredIdentifierStr,
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfileRecord:
@@ -232,7 +232,7 @@ def get_ssh_profile(
 
 
 @router.post("/configs/workspace/ssh-profiles/{ssh_profile_id}:reveal-password")
-def reveal_ssh_profile_password(
+async def reveal_ssh_profile_password(
     ssh_profile_id: RequiredIdentifierStr,
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfilePasswordRevealView:
@@ -248,7 +248,7 @@ def reveal_ssh_profile_password(
 
 
 @router.post("/configs/workspace/ssh-profiles:probe")
-def probe_ssh_profile_connectivity(
+async def probe_ssh_profile_connectivity(
     req: SshProfileConnectivityProbeRequest,
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfileConnectivityProbeResult:
@@ -264,7 +264,7 @@ def probe_ssh_profile_connectivity(
 
 
 @router.put("/configs/workspace/ssh-profiles/{ssh_profile_id}")
-def save_ssh_profile(
+async def save_ssh_profile(
     ssh_profile_id: RequiredIdentifierStr,
     req: SshProfileRequest,
     service: SshProfileService = Depends(get_ssh_profile_service),
@@ -282,7 +282,7 @@ def save_ssh_profile(
 
 
 @router.delete("/configs/workspace/ssh-profiles/{ssh_profile_id}")
-def delete_ssh_profile(
+async def delete_ssh_profile(
     ssh_profile_id: RequiredIdentifierStr,
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> dict[str, str]:
@@ -299,14 +299,14 @@ def delete_ssh_profile(
 
 
 @router.get("/configs/ui-language")
-def get_ui_language_settings(
+async def get_ui_language_settings(
     service: UiLanguageSettingsService = Depends(get_ui_language_settings_service),
 ) -> UiLanguageSettings:
     return service.get_ui_language_settings()
 
 
 @router.put("/configs/ui-language")
-def save_ui_language_settings(
+async def save_ui_language_settings(
     req: UiLanguageSettings,
     service: UiLanguageSettingsService = Depends(get_ui_language_settings_service),
 ) -> dict[str, str]:
@@ -318,21 +318,21 @@ def save_ui_language_settings(
 
 
 @router.get("/configs/model")
-def get_model_config(
+async def get_model_config(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, JsonValue]:
     return service.get_model_config()
 
 
 @router.get("/configs/model/profiles")
-def get_model_profiles(
+async def get_model_profiles(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, dict[str, JsonValue]]:
     return service.get_model_profiles()
 
 
 @router.get("/configs/model-fallback")
-def get_model_fallback_config(
+async def get_model_fallback_config(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelFallbackConfig:
     return service.get_model_fallback_config()
@@ -345,7 +345,7 @@ class ModelProfileRequest(ModelProfileConfigPayload):
 
 
 @router.put("/configs/model/profiles/{name}")
-def save_model_profile(
+async def save_model_profile(
     name: str,
     req: ModelProfileRequest,
     service: ModelConfigService = Depends(get_model_config_service),
@@ -395,7 +395,7 @@ def save_model_profile(
 
 
 @router.get("/configs/model/providers/models")
-def get_provider_models(
+async def get_provider_models(
     provider: ProviderType | None = Query(default=None),
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> list[dict[str, JsonValue]]:
@@ -406,7 +406,7 @@ def get_provider_models(
 
 
 @router.delete("/configs/model/profiles/{name}")
-def delete_model_profile(
+async def delete_model_profile(
     name: str,
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, str]:
@@ -422,7 +422,7 @@ def delete_model_profile(
 
 
 @router.put("/configs/model")
-def save_model_config(
+async def save_model_config(
     req: ModelConfigPayload | ModelConfigRequest,
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, str]:
@@ -435,7 +435,7 @@ def save_model_config(
 
 
 @router.put("/configs/model-fallback")
-def save_model_fallback_config(
+async def save_model_fallback_config(
     req: ModelFallbackConfig | ModelFallbackConfigRequest,
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, str]:
@@ -448,7 +448,7 @@ def save_model_fallback_config(
 
 
 @router.post("/configs/model:probe")
-def probe_model_connectivity(
+async def probe_model_connectivity(
     req: ModelConnectivityProbeRequest,
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelConnectivityProbeResult:
@@ -459,7 +459,7 @@ def probe_model_connectivity(
 
 
 @router.post("/configs/model:discover")
-def discover_model_catalog(
+async def discover_model_catalog(
     req: ModelDiscoveryRequest,
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelDiscoveryResult:
@@ -470,14 +470,14 @@ def discover_model_catalog(
 
 
 @router.get("/configs/notifications")
-def get_notification_config(
+async def get_notification_config(
     service: NotificationSettingsService = Depends(get_notification_settings_service),
 ) -> NotificationConfig:
     return service.get_notification_config()
 
 
 @router.get("/configs/environment-variables")
-def get_environment_variables(
+async def get_environment_variables(
     service: EnvironmentVariableService = Depends(get_environment_variable_service),
 ) -> EnvironmentVariableCatalog:
     try:
@@ -487,7 +487,7 @@ def get_environment_variables(
 
 
 @router.put("/configs/environment-variables/{scope}/{key}")
-def save_environment_variable(
+async def save_environment_variable(
     scope: EnvironmentVariableScope,
     key: str,
     req: EnvironmentVariableSaveRequest,
@@ -505,7 +505,7 @@ def save_environment_variable(
 
 
 @router.delete("/configs/environment-variables/{scope}/{key}")
-def delete_environment_variable(
+async def delete_environment_variable(
     scope: EnvironmentVariableScope,
     key: str,
     service: EnvironmentVariableService = Depends(get_environment_variable_service),
@@ -523,14 +523,14 @@ def delete_environment_variable(
 
 
 @router.get("/configs/proxy")
-def get_proxy_config(
+async def get_proxy_config(
     service: ProxyConfigService = Depends(get_proxy_config_service),
 ) -> ProxyEnvInput:
     return service.get_saved_proxy_config()
 
 
 @router.put("/configs/proxy")
-def save_proxy_config(
+async def save_proxy_config(
     req: ProxyEnvInput,
     service: ProxyConfigService = Depends(get_proxy_config_service),
 ) -> dict[str, str]:
@@ -546,14 +546,14 @@ def save_proxy_config(
 
 
 @router.get("/configs/web")
-def get_web_config(
+async def get_web_config(
     service: WebConfigService = Depends(get_web_config_service),
 ) -> WebConfig:
     return service.get_web_config()
 
 
 @router.put("/configs/web")
-def save_web_config(
+async def save_web_config(
     req: WebConfig,
     service: WebConfigService = Depends(get_web_config_service),
 ) -> dict[str, str]:
@@ -569,14 +569,14 @@ def save_web_config(
 
 
 @router.get("/configs/agents", response_model=list[ExternalAgentSummary])
-def list_external_agents(
+async def list_external_agents(
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> tuple[ExternalAgentSummary, ...]:
     return service.list_agents()
 
 
 @router.get("/configs/agents/{agent_id}", response_model=ExternalAgentConfig)
-def get_external_agent(
+async def get_external_agent(
     agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> ExternalAgentConfig:
@@ -587,7 +587,7 @@ def get_external_agent(
 
 
 @router.put("/configs/agents/{agent_id}", response_model=ExternalAgentConfig)
-def save_external_agent(
+async def save_external_agent(
     agent_id: RequiredIdentifierStr,
     req: ExternalAgentConfig,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
@@ -599,7 +599,7 @@ def save_external_agent(
 
 
 @router.delete("/configs/agents/{agent_id}")
-def delete_external_agent(
+async def delete_external_agent(
     agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> dict[str, str]:
@@ -626,21 +626,21 @@ async def test_external_agent(
 
 
 @router.get("/configs/github")
-def get_github_config(
+async def get_github_config(
     service: GitHubConfigService = Depends(get_github_config_service),
 ) -> GitHubConfigView:
     return service.get_github_config_view()
 
 
 @router.post("/configs/github:reveal")
-def reveal_github_token(
+async def reveal_github_token(
     service: GitHubConfigService = Depends(get_github_config_service),
 ) -> GitHubTokenRevealView:
     return service.reveal_github_token()
 
 
 @router.put("/configs/github")
-def save_github_config(
+async def save_github_config(
     req: GitHubConfigUpdate,
     service: GitHubConfigService = Depends(get_github_config_service),
     trigger_service: GitHubTriggerService = Depends(get_github_trigger_service),
@@ -661,14 +661,14 @@ def save_github_config(
 
 
 @router.get("/configs/clawhub")
-def get_clawhub_config(
+async def get_clawhub_config(
     service: ClawHubConfigService = Depends(get_clawhub_config_service),
 ) -> ClawHubConfig:
     return service.get_clawhub_config()
 
 
 @router.put("/configs/clawhub")
-def save_clawhub_config(
+async def save_clawhub_config(
     req: ClawHubConfig,
     service: ClawHubConfigService = Depends(get_clawhub_config_service),
 ) -> dict[str, str]:
@@ -684,7 +684,7 @@ def save_clawhub_config(
 
 
 @router.post("/configs/clawhub:probe")
-def probe_clawhub_connectivity(
+async def probe_clawhub_connectivity(
     req: ClawHubConnectivityProbeRequest,
     service: ClawHubConnectivityProbeService = Depends(
         get_clawhub_connectivity_probe_service
@@ -700,7 +700,7 @@ def probe_clawhub_connectivity(
     "/configs/clawhub/skills",
     response_model=list[ClawHubSkillSummary],
 )
-def list_clawhub_skills(
+async def list_clawhub_skills(
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> tuple[ClawHubSkillSummary, ...]:
     return service.list_skills()
@@ -710,7 +710,7 @@ def list_clawhub_skills(
     "/configs/clawhub/skills/{skill_id}",
     response_model=ClawHubSkillDetail,
 )
-def get_clawhub_skill(
+async def get_clawhub_skill(
     skill_id: RequiredIdentifierStr,
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> ClawHubSkillDetail:
@@ -726,7 +726,7 @@ def get_clawhub_skill(
     "/configs/clawhub/skills/{skill_id}",
     response_model=ClawHubSkillDetail,
 )
-def save_clawhub_skill(
+async def save_clawhub_skill(
     skill_id: RequiredIdentifierStr,
     req: ClawHubSkillWriteRequest,
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
@@ -738,7 +738,7 @@ def save_clawhub_skill(
 
 
 @router.delete("/configs/clawhub/skills/{skill_id}")
-def delete_clawhub_skill(
+async def delete_clawhub_skill(
     skill_id: RequiredIdentifierStr,
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> dict[str, str]:
@@ -752,7 +752,7 @@ def delete_clawhub_skill(
 
 
 @router.put("/configs/notifications")
-def save_notification_config(
+async def save_notification_config(
     req: NotificationConfig | NotificationConfigRequest,
     service: NotificationSettingsService = Depends(get_notification_settings_service),
 ) -> dict[str, str]:
@@ -765,14 +765,14 @@ def save_notification_config(
 
 
 @router.get("/configs/orchestration")
-def get_orchestration_config(
+async def get_orchestration_config(
     service: OrchestrationSettingsService = Depends(get_orchestration_settings_service),
 ) -> OrchestrationSettings:
     return service.get_orchestration_config()
 
 
 @router.put("/configs/orchestration")
-def save_orchestration_config(
+async def save_orchestration_config(
     req: OrchestrationSettings | OrchestrationConfigRequest,
     service: OrchestrationSettingsService = Depends(get_orchestration_settings_service),
 ) -> dict[str, str]:
@@ -785,7 +785,7 @@ def save_orchestration_config(
 
 
 @router.post("/configs/model:reload")
-def reload_model_config(
+async def reload_model_config(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, str]:
     try:
@@ -800,7 +800,7 @@ def reload_model_config(
 
 
 @router.post("/configs/proxy:reload")
-def reload_proxy_config(
+async def reload_proxy_config(
     service: ProxyConfigService = Depends(get_proxy_config_service),
 ) -> dict[str, str]:
     try:
@@ -815,18 +815,18 @@ def reload_proxy_config(
 
 
 @router.post("/configs/web:probe")
-def probe_web_connectivity(
+async def probe_web_connectivity(
     req: WebConnectivityProbeRequest,
     service: WebConnectivityProbeService = Depends(get_web_connectivity_probe_service),
 ) -> WebConnectivityProbeResult:
     try:
-        return service.probe(req)
+        return await service.probe(req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/configs/github:probe")
-def probe_github_connectivity(
+async def probe_github_connectivity(
     req: GitHubConnectivityProbeRequest,
     service: GitHubConnectivityProbeService = Depends(
         get_github_connectivity_probe_service
@@ -839,7 +839,7 @@ def probe_github_connectivity(
 
 
 @router.post("/configs/github/webhook:probe")
-def probe_github_webhook_connectivity(
+async def probe_github_webhook_connectivity(
     req: GitHubWebhookConnectivityProbeRequest,
     service: GitHubWebhookConnectivityProbeService = Depends(
         get_github_webhook_connectivity_probe_service
@@ -852,14 +852,14 @@ def probe_github_webhook_connectivity(
 
 
 @router.get("/configs/github/webhook/tunnel")
-def get_github_webhook_tunnel_status(
+async def get_github_webhook_tunnel_status(
     service: LocalhostRunTunnelService = Depends(get_localhost_run_tunnel_service),
 ) -> LocalhostRunTunnelStatus:
     return service.get_status()
 
 
 @router.post("/configs/github/webhook/tunnel:start")
-def start_github_webhook_tunnel(
+async def start_github_webhook_tunnel(
     req: LocalhostRunTunnelStartRequest,
     request: Request,
     tunnel_service: LocalhostRunTunnelService = Depends(
@@ -894,7 +894,7 @@ def start_github_webhook_tunnel(
 
 
 @router.post("/configs/github/webhook/tunnel:stop")
-def stop_github_webhook_tunnel(
+async def stop_github_webhook_tunnel(
     req: LocalhostRunTunnelStopRequest,
     tunnel_service: LocalhostRunTunnelService = Depends(
         get_localhost_run_tunnel_service
@@ -923,7 +923,7 @@ def stop_github_webhook_tunnel(
 
 
 @router.post("/configs/mcp:reload")
-def reload_mcp_config(
+async def reload_mcp_config(
     service: McpConfigReloadService = Depends(get_mcp_config_reload_service),
 ) -> dict[str, str]:
     try:
@@ -936,7 +936,7 @@ def reload_mcp_config(
 
 
 @router.post("/configs/skills:reload")
-def reload_skills_config(
+async def reload_skills_config(
     service: SkillsConfigReloadService = Depends(get_skills_config_reload_service),
 ) -> dict[str, str]:
     try:
@@ -949,21 +949,21 @@ def reload_skills_config(
 
 
 @router.get("/configs/hooks")
-def get_hooks_config(
+async def get_hooks_config(
     service: HookService = Depends(get_hook_service),
 ) -> HooksConfig:
     return service.get_user_config()
 
 
 @router.get("/configs/hooks/runtime")
-def get_hooks_runtime_view(
+async def get_hooks_runtime_view(
     service: HookService = Depends(get_hook_service),
 ) -> HookRuntimeView:
     return service.get_runtime_view()
 
 
 @router.put("/configs/hooks")
-def save_hooks_config(
+async def save_hooks_config(
     req: HooksConfig,
     service: HookService = Depends(get_hook_service),
 ) -> HooksConfig:
@@ -974,7 +974,7 @@ def save_hooks_config(
 
 
 @router.post("/configs/hooks:validate")
-def validate_hooks_config(
+async def validate_hooks_config(
     req: HooksConfig,
     service: HookService = Depends(get_hook_service),
 ) -> dict[str, str]:

@@ -348,15 +348,22 @@ async def test_container_binds_background_completion_sink_during_start(
         "start",
         lambda: start_calls.append("feishu-message-pool"),
     )
+
+    async def _fake_automation_delivery_start() -> None:
+        start_calls.append("automation-delivery")
+
+    async def _fake_automation_bound_session_start() -> None:
+        start_calls.append("automation-bound-session")
+
     monkeypatch.setattr(
         container.automation_delivery_worker,
         "start",
-        lambda: start_calls.append("automation-delivery"),
+        _fake_automation_delivery_start,
     )
     monkeypatch.setattr(
         container.automation_bound_session_queue_worker,
         "start",
-        lambda: start_calls.append("automation-bound-session"),
+        _fake_automation_bound_session_start,
     )
 
     async def _fake_scheduler_start() -> None:

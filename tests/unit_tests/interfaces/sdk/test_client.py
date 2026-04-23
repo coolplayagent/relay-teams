@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from relay_teams.interfaces.sdk.client import AgentTeamsClient
+import pytest
+
+from relay_teams.interfaces.sdk.client import AsyncAgentTeamsClient
+
+pytestmark = pytest.mark.asyncio
 
 
-def test_reload_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_reload_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -20,7 +24,7 @@ def test_reload_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.reload_proxy_config()
+    response = await client.reload_proxy_config()
 
     assert response == {"status": "ok"}
     assert captured == {
@@ -30,11 +34,11 @@ def test_reload_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
-def test_probe_web_connectivity_passes_timeout_payload(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_probe_web_connectivity_passes_timeout_payload(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -46,7 +50,7 @@ def test_probe_web_connectivity_passes_timeout_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.probe_web_connectivity(
+    response = await client.probe_web_connectivity(
         url="https://example.com",
         timeout_ms=2500,
     )
@@ -59,11 +63,11 @@ def test_probe_web_connectivity_passes_timeout_payload(monkeypatch) -> None:
     }
 
 
-def test_get_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_get_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -75,7 +79,7 @@ def test_get_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.get_proxy_config()
+    response = await client.get_proxy_config()
 
     assert response == {"http_proxy": "http://proxy.example:8080"}
     assert captured == {
@@ -85,11 +89,11 @@ def test_get_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
-def test_delete_workspace_calls_expected_endpoint(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_delete_workspace_calls_expected_endpoint(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -101,7 +105,7 @@ def test_delete_workspace_calls_expected_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.delete_workspace("project-alpha")
+    response = await client.delete_workspace("project-alpha")
 
     assert response == {"status": "ok"}
     assert captured == {
@@ -111,11 +115,11 @@ def test_delete_workspace_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
-def test_open_workspace_root_calls_expected_endpoint(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_open_workspace_root_calls_expected_endpoint(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -127,7 +131,7 @@ def test_open_workspace_root_calls_expected_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.open_workspace_root("project-alpha")
+    response = await client.open_workspace_root("project-alpha")
 
     assert response == {"status": "ok"}
     assert captured == {
@@ -137,11 +141,11 @@ def test_open_workspace_root_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
-def test_open_workspace_root_supports_mount_query_parameter(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_open_workspace_root_supports_mount_query_parameter(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -153,7 +157,7 @@ def test_open_workspace_root_supports_mount_query_parameter(monkeypatch) -> None
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.open_workspace_root("project-alpha", mount="ops")
+    response = await client.open_workspace_root("project-alpha", mount="ops")
 
     assert response == {"status": "ok"}
     assert captured == {
@@ -163,11 +167,11 @@ def test_open_workspace_root_supports_mount_query_parameter(monkeypatch) -> None
     }
 
 
-def test_create_workspace_supports_mount_payload(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_create_workspace_supports_mount_payload(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -179,7 +183,7 @@ def test_create_workspace_supports_mount_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.create_workspace(
+    response = await client.create_workspace(
         workspace_id="project-alpha",
         default_mount_name="app",
         mounts=[
@@ -209,11 +213,11 @@ def test_create_workspace_supports_mount_payload(monkeypatch) -> None:
     }
 
 
-def test_update_workspace_supports_mount_payload(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_update_workspace_supports_mount_payload(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -225,7 +229,7 @@ def test_update_workspace_supports_mount_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.update_workspace(
+    response = await client.update_workspace(
         "project-alpha",
         default_mount_name="ops",
         mounts=[
@@ -254,11 +258,11 @@ def test_update_workspace_supports_mount_payload(monkeypatch) -> None:
     }
 
 
-def test_workspace_sdk_supports_mount_query_parameters(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_workspace_sdk_supports_mount_query_parameters(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     calls: list[tuple[str, str, object | None]] = []
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -268,9 +272,9 @@ def test_workspace_sdk_supports_mount_query_parameters(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    _ = client.get_workspace_tree("project-alpha", path=".", mount="ops")
-    _ = client.get_workspace_diffs("project-alpha", mount="ops")
-    _ = client.get_workspace_diff_file(
+    _ = await client.get_workspace_tree("project-alpha", path=".", mount="ops")
+    _ = await client.get_workspace_diffs("project-alpha", mount="ops")
+    _ = await client.get_workspace_diff_file(
         "project-alpha",
         path="deploy.sh",
         mount="ops",
@@ -287,11 +291,11 @@ def test_workspace_sdk_supports_mount_query_parameters(monkeypatch) -> None:
     ]
 
 
-def test_ssh_profile_sdk_calls_expected_endpoints(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_ssh_profile_sdk_calls_expected_endpoints(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     calls: list[tuple[str, str, object | None]] = []
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -303,12 +307,16 @@ def test_ssh_profile_sdk_calls_expected_endpoints(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.list_ssh_profiles() == [{"ssh_profile_id": "prod"}]
-    assert client.get_ssh_profile("prod") == {"status": "ok"}
-    assert client.save_ssh_profile("prod", {"host": "prod-alias"}) == {"status": "ok"}
-    assert client.reveal_ssh_profile_password("prod") == {"status": "ok"}
-    assert client.probe_ssh_profile({"ssh_profile_id": "prod"}) == {"status": "ok"}
-    assert client.delete_ssh_profile("prod") == {"status": "ok"}
+    assert await client.list_ssh_profiles() == [{"ssh_profile_id": "prod"}]
+    assert await client.get_ssh_profile("prod") == {"status": "ok"}
+    assert await client.save_ssh_profile("prod", {"host": "prod-alias"}) == {
+        "status": "ok"
+    }
+    assert await client.reveal_ssh_profile_password("prod") == {"status": "ok"}
+    assert await client.probe_ssh_profile({"ssh_profile_id": "prod"}) == {
+        "status": "ok"
+    }
+    assert await client.delete_ssh_profile("prod") == {"status": "ok"}
     assert calls == [
         ("GET", "/api/system/configs/workspace/ssh-profiles", None),
         ("GET", "/api/system/configs/workspace/ssh-profiles/prod", None),
@@ -331,11 +339,11 @@ def test_ssh_profile_sdk_calls_expected_endpoints(monkeypatch) -> None:
     ]
 
 
-def test_delete_workspace_supports_remove_directory(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_delete_workspace_supports_remove_directory(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -347,7 +355,7 @@ def test_delete_workspace_supports_remove_directory(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.delete_workspace("project-alpha", remove_directory=True)
+    response = await client.delete_workspace("project-alpha", remove_directory=True)
 
     assert response == {"status": "ok"}
     assert captured == {
@@ -357,11 +365,11 @@ def test_delete_workspace_supports_remove_directory(monkeypatch) -> None:
     }
 
 
-def test_get_web_config_calls_expected_endpoint(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_get_web_config_calls_expected_endpoint(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -383,7 +391,7 @@ def test_get_web_config_calls_expected_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.get_web_config()
+    response = await client.get_web_config()
 
     assert response == {
         "provider": "exa",
@@ -403,11 +411,11 @@ def test_get_web_config_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
-def test_get_github_config_calls_expected_endpoint(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_get_github_config_calls_expected_endpoint(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -419,7 +427,7 @@ def test_get_github_config_calls_expected_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.get_github_config()
+    response = await client.get_github_config()
 
     assert response == {"token": None}
     assert captured == {
@@ -429,11 +437,11 @@ def test_get_github_config_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
-def test_get_run_todo_calls_expected_endpoint(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_get_run_todo_calls_expected_endpoint(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -445,7 +453,7 @@ def test_get_run_todo_calls_expected_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.get_run_todo("run-1")
+    response = await client.get_run_todo("run-1")
 
     assert response == {"todo": {"run_id": "run-1", "items": []}}
     assert captured == {
@@ -455,11 +463,11 @@ def test_get_run_todo_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
-def test_clawhub_sdk_calls_expected_endpoints(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_clawhub_sdk_calls_expected_endpoints(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     calls: list[tuple[str, str, object | None]] = []
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -471,18 +479,18 @@ def test_clawhub_sdk_calls_expected_endpoints(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.get_clawhub_config() == {"status": "ok"}
-    assert client.save_clawhub_config(token="ch_secret") == {"status": "ok"}
-    assert client.probe_clawhub_connectivity(token="ch_secret", timeout_ms=2500) == {
-        "status": "ok"
-    }
-    assert client.list_clawhub_skills() == [{"skill_id": "skill-creator-2"}]
-    assert client.get_clawhub_skill("skill-creator-2") == {"status": "ok"}
-    assert client.save_clawhub_skill(
+    assert await client.get_clawhub_config() == {"status": "ok"}
+    assert await client.save_clawhub_config(token="ch_secret") == {"status": "ok"}
+    assert await client.probe_clawhub_connectivity(
+        token="ch_secret", timeout_ms=2500
+    ) == {"status": "ok"}
+    assert await client.list_clawhub_skills() == [{"skill_id": "skill-creator-2"}]
+    assert await client.get_clawhub_skill("skill-creator-2") == {"status": "ok"}
+    assert await client.save_clawhub_skill(
         "skill-creator-2",
         {"runtime_name": "skill-creator"},
     ) == {"status": "ok"}
-    assert client.delete_clawhub_skill("skill-creator-2") == {"status": "ok"}
+    assert await client.delete_clawhub_skill("skill-creator-2") == {"status": "ok"}
     assert calls == [
         ("GET", "/api/system/configs/clawhub", None),
         ("PUT", "/api/system/configs/clawhub", {"token": "ch_secret"}),
@@ -502,10 +510,12 @@ def test_clawhub_sdk_calls_expected_endpoints(monkeypatch) -> None:
     ]
 
 
-def test_clawhub_sdk_returns_empty_list_for_non_list_skill_payload(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_clawhub_sdk_returns_empty_list_for_non_list_skill_payload(
+    monkeypatch,
+) -> None:
+    client = AsyncAgentTeamsClient()
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -515,14 +525,14 @@ def test_clawhub_sdk_returns_empty_list_for_non_list_skill_payload(monkeypatch) 
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.list_clawhub_skills() == []
+    assert await client.list_clawhub_skills() == []
 
 
-def test_save_proxy_config_passes_proxy_payload(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_save_proxy_config_passes_proxy_payload(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -534,7 +544,7 @@ def test_save_proxy_config_passes_proxy_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.save_proxy_config(
+    response = await client.save_proxy_config(
         http_proxy="http://proxy.example:8080",
         https_proxy="http://proxy.example:8443",
         no_proxy="localhost,127.0.0.1",
@@ -558,11 +568,11 @@ def test_save_proxy_config_passes_proxy_payload(monkeypatch) -> None:
     }
 
 
-def test_save_web_config_passes_web_payload(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_save_web_config_passes_web_payload(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -574,7 +584,7 @@ def test_save_web_config_passes_web_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.save_web_config(
+    response = await client.save_web_config(
         provider="exa",
         exa_api_key="secret",
         fallback_provider="searxng",
@@ -594,11 +604,13 @@ def test_save_web_config_passes_web_payload(monkeypatch) -> None:
     }
 
 
-def test_save_web_config_defaults_to_searxng_fallback_provider(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_save_web_config_defaults_to_searxng_fallback_provider(
+    monkeypatch,
+) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -610,7 +622,7 @@ def test_save_web_config_defaults_to_searxng_fallback_provider(monkeypatch) -> N
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.save_web_config(
+    response = await client.save_web_config(
         provider="exa",
         exa_api_key="secret",
         searxng_instance_url="https://search.example.test/",
@@ -629,11 +641,11 @@ def test_save_web_config_defaults_to_searxng_fallback_provider(monkeypatch) -> N
     }
 
 
-def test_save_github_config_passes_payload(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_save_github_config_passes_payload(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -645,7 +657,7 @@ def test_save_github_config_passes_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.save_github_config(token="ghp_secret")
+    response = await client.save_github_config(token="ghp_secret")
 
     assert response == {"status": "ok"}
     assert captured == {
@@ -657,11 +669,11 @@ def test_save_github_config_passes_payload(monkeypatch) -> None:
     }
 
 
-def test_probe_web_connectivity_includes_proxy_override(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_probe_web_connectivity_includes_proxy_override(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -673,7 +685,7 @@ def test_probe_web_connectivity_includes_proxy_override(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.probe_web_connectivity(
+    response = await client.probe_web_connectivity(
         url="https://example.com",
         timeout_ms=2500,
         https_proxy="http://proxy.example:8443",
@@ -702,11 +714,11 @@ def test_probe_web_connectivity_includes_proxy_override(monkeypatch) -> None:
     }
 
 
-def test_probe_github_connectivity_passes_payload(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_probe_github_connectivity_passes_payload(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -718,7 +730,7 @@ def test_probe_github_connectivity_passes_payload(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.probe_github_connectivity(
+    response = await client.probe_github_connectivity(
         token="ghp_secret",
         timeout_ms=2500,
     )
@@ -734,11 +746,13 @@ def test_probe_github_connectivity_passes_payload(monkeypatch) -> None:
     }
 
 
-def test_create_session_preserves_legacy_flat_metadata_payload(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_create_session_preserves_legacy_flat_metadata_payload(
+    monkeypatch,
+) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -750,7 +764,7 @@ def test_create_session_preserves_legacy_flat_metadata_payload(monkeypatch) -> N
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.create_session(
+    response = await client.create_session(
         workspace_id="default",
         session_id="session-1",
         metadata={"project": "demo"},
@@ -768,11 +782,13 @@ def test_create_session_preserves_legacy_flat_metadata_payload(monkeypatch) -> N
     }
 
 
-def test_delete_feishu_gateway_account_forces_delete_by_default(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_delete_feishu_gateway_account_forces_delete_by_default(
+    monkeypatch,
+) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -784,7 +800,7 @@ def test_delete_feishu_gateway_account_forces_delete_by_default(monkeypatch) -> 
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.delete_feishu_gateway_account("fsg_main")
+    response = await client.delete_feishu_gateway_account("fsg_main")
 
     assert response == {"status": "ok"}
     assert captured == {
@@ -794,11 +810,13 @@ def test_delete_feishu_gateway_account_forces_delete_by_default(monkeypatch) -> 
     }
 
 
-def test_delete_wechat_gateway_account_forces_delete_by_default(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_delete_wechat_gateway_account_forces_delete_by_default(
+    monkeypatch,
+) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -810,7 +828,7 @@ def test_delete_wechat_gateway_account_forces_delete_by_default(monkeypatch) -> 
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    response = client.delete_wechat_gateway_account("wx-account-1")
+    response = await client.delete_wechat_gateway_account("wx-account-1")
 
     assert response == {"status": "ok"}
     assert captured == {
@@ -820,11 +838,11 @@ def test_delete_wechat_gateway_account_forces_delete_by_default(monkeypatch) -> 
     }
 
 
-def test_create_run_includes_target_role_id(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_create_run_includes_target_role_id(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -836,7 +854,7 @@ def test_create_run_includes_target_role_id(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    handle = client.create_run(
+    handle = await client.create_run(
         input="hello",
         session_id="session-1",
         target_role_id="writer",
@@ -857,11 +875,11 @@ def test_create_run_includes_target_role_id(monkeypatch) -> None:
     }
 
 
-def test_external_agent_sdk_calls_expected_endpoints(monkeypatch) -> None:
-    client = AgentTeamsClient()
+async def test_external_agent_sdk_calls_expected_endpoints(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
     calls: list[tuple[str, str, object | None]] = []
 
-    def fake_request_json(
+    async def fake_request_json(
         method: str,
         path: str,
         payload: object | None = None,
@@ -873,13 +891,13 @@ def test_external_agent_sdk_calls_expected_endpoints(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert client.list_external_agents() == [{"agent_id": "codex_local"}]
-    assert client.get_external_agent("codex_local") == {"status": "ok"}
-    assert client.save_external_agent("codex_local", {"agent_id": "codex_local"}) == {
-        "status": "ok"
-    }
-    assert client.test_external_agent("codex_local") == {"status": "ok"}
-    assert client.delete_external_agent("codex_local") == {"status": "ok"}
+    assert await client.list_external_agents() == [{"agent_id": "codex_local"}]
+    assert await client.get_external_agent("codex_local") == {"status": "ok"}
+    assert await client.save_external_agent(
+        "codex_local", {"agent_id": "codex_local"}
+    ) == {"status": "ok"}
+    assert await client.test_external_agent("codex_local") == {"status": "ok"}
+    assert await client.delete_external_agent("codex_local") == {"status": "ok"}
     assert calls == [
         ("GET", "/api/system/configs/agents", None),
         ("GET", "/api/system/configs/agents/codex_local", None),

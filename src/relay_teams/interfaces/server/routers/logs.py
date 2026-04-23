@@ -43,7 +43,7 @@ class FrontendLogBatchRequest(BaseModel):
 
 
 @router.post("/frontend")
-def ingest_frontend_logs(req: FrontendLogBatchRequest) -> dict[str, int]:
+async def ingest_frontend_logs(req: FrontendLogBatchRequest) -> dict[str, int]:
     accepted = 0
     for item in req.events:
         with bind_trace_context(

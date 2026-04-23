@@ -803,6 +803,18 @@ class _FakeSystemService:
         self.ssh_profile_passwords.pop(ssh_profile_id, None)
 
 
+class _AsyncWebProbeAdapter:
+    def __init__(self, delegate: _FakeSystemService) -> None:
+        self._delegate = delegate
+
+    async def probe(
+        self, request: WebConnectivityProbeRequest
+    ) -> WebConnectivityProbeResult:
+        result = self._delegate.probe(request)
+        assert isinstance(result, WebConnectivityProbeResult)
+        return result
+
+
 def _create_test_client(fake_service: object) -> TestClient:
     app = FastAPI()
     app.include_router(system.router, prefix="/api")
@@ -813,7 +825,11 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_mcp_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_skills_config_reload_service] = lambda: fake_service
     app.dependency_overrides[get_proxy_config_service] = lambda: fake_service
-    app.dependency_overrides[get_web_connectivity_probe_service] = lambda: fake_service
+    app.dependency_overrides[get_web_connectivity_probe_service] = lambda: (
+        _AsyncWebProbeAdapter(fake_service)
+        if isinstance(fake_service, _FakeSystemService)
+        else fake_service
+    )
     app.dependency_overrides[get_github_connectivity_probe_service] = lambda: (
         fake_service
     )

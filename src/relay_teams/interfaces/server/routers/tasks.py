@@ -31,7 +31,7 @@ class UpdateTaskRequest(BaseModel):
 
 
 @router.get("", response_model=list[TaskRecord])
-def list_tasks(
+async def list_tasks(
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> list[TaskRecord]:
     return list(service.list_tasks())
@@ -56,7 +56,7 @@ async def create_tasks_for_run(
 
 
 @router.get("/runs/{run_id}")
-def list_tasks_for_run(
+async def list_tasks_for_run(
     run_id: RequiredIdentifierStr,
     include_root: bool = False,
     service: TaskOrchestrationService = Depends(get_task_service),
@@ -68,7 +68,7 @@ def list_tasks_for_run(
 
 
 @router.get("/{task_id}", response_model=TaskRecord)
-def get_task(
+async def get_task(
     task_id: RequiredIdentifierStr,
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> TaskRecord:
@@ -79,7 +79,7 @@ def get_task(
 
 
 @router.patch("/{task_id}")
-def update_task_by_id(
+async def update_task_by_id(
     task_id: RequiredIdentifierStr,
     req: UpdateTaskRequest,
     service: TaskOrchestrationService = Depends(get_task_service),

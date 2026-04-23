@@ -1082,17 +1082,17 @@ class ServerContainer:
         self.wechat_gateway_service.start()
         self.feishu_subscription_service.start()
         self.feishu_message_pool_service.start()
-        self.automation_delivery_worker.start()
-        self.automation_bound_session_queue_worker.start()
-        self.github_trigger_action_worker.start()
+        await self.automation_delivery_worker.start()
+        await self.automation_bound_session_queue_worker.start()
+        await self.github_trigger_action_worker.start()
         await self.automation_scheduler_service.start()
         return None
 
     async def stop(self) -> None:
         await self.automation_scheduler_service.stop()
-        self.github_trigger_action_worker.stop()
-        self.automation_bound_session_queue_worker.stop()
-        self.automation_delivery_worker.stop()
+        await self.github_trigger_action_worker.stop()
+        await self.automation_bound_session_queue_worker.stop()
+        await self.automation_delivery_worker.stop()
         self.feishu_message_pool_service.stop()
         self.feishu_subscription_service.stop()
         self.wechat_gateway_service.stop()

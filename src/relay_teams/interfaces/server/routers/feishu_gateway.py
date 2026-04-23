@@ -25,14 +25,14 @@ router = APIRouter(prefix="/gateway/feishu", tags=["Gateway"])
 
 
 @router.get("/accounts", response_model=list[FeishuGatewayAccountRecord])
-def list_feishu_accounts(
+async def list_feishu_accounts(
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
 ) -> list[FeishuGatewayAccountRecord]:
     return list(service.list_accounts())
 
 
 @router.post("/accounts", response_model=FeishuGatewayAccountRecord)
-def create_feishu_account(
+async def create_feishu_account(
     req: FeishuGatewayAccountCreateInput,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
     subscription_service: Annotated[
@@ -52,7 +52,7 @@ def create_feishu_account(
 
 
 @router.patch("/accounts/{account_id}", response_model=FeishuGatewayAccountRecord)
-def update_feishu_account(
+async def update_feishu_account(
     account_id: RequiredIdentifierStr,
     req: FeishuGatewayAccountUpdateInput,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
@@ -80,7 +80,7 @@ def update_feishu_account(
 
 
 @router.post("/accounts/{account_id}:enable", response_model=FeishuGatewayAccountRecord)
-def enable_feishu_account(
+async def enable_feishu_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
     subscription_service: Annotated[
@@ -102,7 +102,7 @@ def enable_feishu_account(
 @router.post(
     "/accounts/{account_id}:disable", response_model=FeishuGatewayAccountRecord
 )
-def disable_feishu_account(
+async def disable_feishu_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
     subscription_service: Annotated[
@@ -119,7 +119,7 @@ def disable_feishu_account(
 
 
 @router.delete("/accounts/{account_id}")
-def delete_feishu_account(
+async def delete_feishu_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
     subscription_service: Annotated[
@@ -142,7 +142,7 @@ def delete_feishu_account(
 
 
 @router.post("/reload")
-def reload_feishu_gateway(
+async def reload_feishu_gateway(
     subscription_service: Annotated[
         FeishuSubscriptionService,
         Depends(get_feishu_subscription_service),

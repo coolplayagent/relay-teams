@@ -71,7 +71,7 @@ class ForkWorkspaceRequest(BaseModel):
 
 
 @router.post("", response_model=WorkspaceRecord)
-def create_workspace(
+async def create_workspace(
     req: CreateWorkspaceRequest,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceRecord:
@@ -87,7 +87,7 @@ def create_workspace(
 
 
 @router.post("/pick", response_model=PickWorkspaceResponse)
-def pick_workspace(
+async def pick_workspace(
     req: PickWorkspaceRequest | None = None,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> PickWorkspaceResponse:
@@ -110,14 +110,14 @@ def pick_workspace(
 
 
 @router.get("", response_model=list[WorkspaceRecord])
-def list_workspaces(
+async def list_workspaces(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> list[WorkspaceRecord]:
     return list(service.list_workspaces())
 
 
 @router.get("/{workspace_id}", response_model=WorkspaceRecord)
-def get_workspace(
+async def get_workspace(
     workspace_id: RequiredIdentifierStr,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceRecord:
@@ -128,7 +128,7 @@ def get_workspace(
 
 
 @router.put("/{workspace_id}", response_model=WorkspaceRecord)
-def update_workspace(
+async def update_workspace(
     workspace_id: RequiredIdentifierStr,
     req: UpdateWorkspaceRequest,
     service: WorkspaceService = Depends(get_workspace_service),
@@ -146,7 +146,7 @@ def update_workspace(
 
 
 @router.post("/{workspace_id}:open-root")
-def open_workspace_root(
+async def open_workspace_root(
     workspace_id: RequiredIdentifierStr,
     mount: Annotated[str | None, Query()] = None,
     service: WorkspaceService = Depends(get_workspace_service),
@@ -166,7 +166,7 @@ def open_workspace_root(
 
 
 @router.get("/{workspace_id}/snapshot", response_model=WorkspaceSnapshot)
-def get_workspace_snapshot(
+async def get_workspace_snapshot(
     workspace_id: RequiredIdentifierStr,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceSnapshot:
@@ -179,7 +179,7 @@ def get_workspace_snapshot(
 
 
 @router.get("/{workspace_id}/tree", response_model=WorkspaceTreeListing)
-def get_workspace_tree_listing(
+async def get_workspace_tree_listing(
     workspace_id: RequiredIdentifierStr,
     path: Annotated[str, Query()] = ".",
     mount: Annotated[str | None, Query()] = None,
@@ -203,7 +203,7 @@ def get_workspace_tree_listing(
 
 
 @router.get("/{workspace_id}/diffs", response_model=WorkspaceDiffListing)
-def get_workspace_diffs(
+async def get_workspace_diffs(
     workspace_id: RequiredIdentifierStr,
     mount: Annotated[str | None, Query()] = None,
     service: WorkspaceService = Depends(get_workspace_service),
@@ -219,7 +219,7 @@ def get_workspace_diffs(
 
 
 @router.get("/{workspace_id}/diff", response_model=WorkspaceDiffFile)
-def get_workspace_diff_file(
+async def get_workspace_diff_file(
     workspace_id: RequiredIdentifierStr,
     path: Annotated[str, Query(min_length=1)],
     mount: Annotated[str | None, Query()] = None,
@@ -243,7 +243,7 @@ def get_workspace_diff_file(
 
 
 @router.get("/{workspace_id}/preview-file")
-def get_workspace_preview_file(
+async def get_workspace_preview_file(
     workspace_id: RequiredIdentifierStr,
     path: Annotated[str, Query(min_length=1)],
     mount: Annotated[str | None, Query()] = None,
@@ -276,7 +276,7 @@ def get_workspace_preview_file(
 
 
 @router.delete("/{workspace_id}")
-def delete_workspace(
+async def delete_workspace(
     workspace_id: RequiredIdentifierStr,
     remove_directory: Annotated[bool, Query()] = False,
     remove_worktree: Annotated[bool, Query()] = False,
@@ -304,7 +304,7 @@ def delete_workspace(
 
 
 @router.post("/{workspace_id}:fork", response_model=WorkspaceRecord)
-def fork_workspace(
+async def fork_workspace(
     workspace_id: RequiredIdentifierStr,
     req: ForkWorkspaceRequest,
     service: WorkspaceService = Depends(get_workspace_service),

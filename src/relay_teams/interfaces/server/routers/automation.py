@@ -23,14 +23,14 @@ router = APIRouter(prefix="/automation", tags=["Automation"])
 
 
 @router.get("/feishu-bindings", response_model=list[AutomationFeishuBindingCandidate])
-def list_feishu_bindings(
+async def list_feishu_bindings(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> list[AutomationFeishuBindingCandidate]:
     return list(service.list_feishu_bindings())
 
 
 @router.post("/projects", response_model=AutomationProjectRecord)
-def create_project(
+async def create_project(
     req: AutomationProjectCreateInput,
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
@@ -44,14 +44,14 @@ def create_project(
 
 
 @router.get("/projects", response_model=list[AutomationProjectRecord])
-def list_projects(
+async def list_projects(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> list[AutomationProjectRecord]:
     return list(service.list_projects())
 
 
 @router.get("/projects/{automation_project_id}", response_model=AutomationProjectRecord)
-def get_project(
+async def get_project(
     automation_project_id: RequiredIdentifierStr,
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
@@ -64,7 +64,7 @@ def get_project(
 @router.patch(
     "/projects/{automation_project_id}", response_model=AutomationProjectRecord
 )
-def update_project(
+async def update_project(
     automation_project_id: RequiredIdentifierStr,
     req: AutomationProjectUpdateInput,
     service: Annotated[AutomationService, Depends(get_automation_service)],
@@ -79,7 +79,7 @@ def update_project(
 
 
 @router.delete("/projects/{automation_project_id}")
-def delete_project(
+async def delete_project(
     automation_project_id: RequiredIdentifierStr,
     service: Annotated[AutomationService, Depends(get_automation_service)],
     req: DeleteRequest | None = Body(default=None),
@@ -115,7 +115,7 @@ async def run_project(
 @router.post(
     "/projects/{automation_project_id}:enable", response_model=AutomationProjectRecord
 )
-def enable_project(
+async def enable_project(
     automation_project_id: RequiredIdentifierStr,
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
@@ -135,7 +135,7 @@ def enable_project(
     "/projects/{automation_project_id}:disable",
     response_model=AutomationProjectRecord,
 )
-def disable_project(
+async def disable_project(
     automation_project_id: RequiredIdentifierStr,
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
@@ -149,7 +149,7 @@ def disable_project(
 
 
 @router.get("/projects/{automation_project_id}/sessions")
-def list_project_sessions(
+async def list_project_sessions(
     automation_project_id: RequiredIdentifierStr,
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> list[dict[str, object]]:

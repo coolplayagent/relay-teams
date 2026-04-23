@@ -252,7 +252,7 @@ async def stream_run_events(
 
 
 @router.get("/{run_id}/monitors")
-def list_monitors(
+async def list_monitors(
     run_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, object]:
@@ -266,7 +266,7 @@ def list_monitors(
 
 
 @router.post("/{run_id}/monitors", response_model=MonitorResponse)
-def create_monitor(
+async def create_monitor(
     run_id: RequiredIdentifierStr,
     req: CreateMonitorRequest,
     service: Annotated[RunManager, Depends(get_run_service)],
@@ -297,7 +297,7 @@ def create_monitor(
 
 
 @router.post("/{run_id}/monitors/{monitor_id}:stop", response_model=MonitorResponse)
-def stop_monitor(
+async def stop_monitor(
     run_id: RequiredIdentifierStr,
     monitor_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
@@ -314,7 +314,7 @@ def stop_monitor(
 
 
 @router.post("/{run_id}/inject")
-def inject_message(
+async def inject_message(
     run_id: RequiredIdentifierStr,
     req: InjectMessageRequest,
     service: Annotated[RunManager, Depends(get_run_service)],
@@ -337,7 +337,7 @@ def inject_message(
 
 
 @router.get("/{run_id}/tool-approvals")
-def list_tool_approvals(
+async def list_tool_approvals(
     run_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> list[dict[str, str]]:
@@ -354,7 +354,7 @@ def list_tool_approvals(
 
 
 @router.get("/{run_id}/questions")
-def list_user_questions(
+async def list_user_questions(
     run_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> list[dict[str, object]]:
@@ -365,7 +365,7 @@ def list_user_questions(
 
 
 @router.post("/{run_id}/questions/{question_id}:answer")
-def answer_user_question(
+async def answer_user_question(
     run_id: RequiredIdentifierStr,
     question_id: RequiredIdentifierStr,
     req: AnswerUserQuestionRequest,
@@ -403,7 +403,7 @@ def answer_user_question(
 
 
 @router.get("/{run_id}/background-tasks")
-def list_background_tasks(
+async def list_background_tasks(
     run_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, object]:
@@ -414,7 +414,7 @@ def list_background_tasks(
 
 
 @router.get("/{run_id}/todo")
-def get_todo(
+async def get_todo(
     run_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
 ) -> dict[str, object]:
@@ -425,7 +425,7 @@ def get_todo(
 
 
 @router.get("/{run_id}/background-tasks/{background_task_id}")
-def get_background_task(
+async def get_background_task(
     run_id: RequiredIdentifierStr,
     background_task_id: RequiredIdentifierStr,
     service: Annotated[RunManager, Depends(get_run_service)],
@@ -461,7 +461,7 @@ async def stop_background_task(
 
 
 @router.post("/{run_id}/tool-approvals/{tool_call_id}/resolve")
-def resolve_tool_approval(
+async def resolve_tool_approval(
     run_id: RequiredIdentifierStr,
     tool_call_id: RequiredIdentifierStr,
     req: ResolveToolApprovalRequest,
@@ -492,7 +492,7 @@ def resolve_tool_approval(
 
 
 @router.post("/{run_id}/stop")
-def stop_run(
+async def stop_run(
     run_id: RequiredIdentifierStr,
     req: StopRunRequest,
     service: Annotated[RunManager, Depends(get_run_service)],
@@ -559,7 +559,7 @@ async def resume_run(
 
 
 @router.post("/{run_id}/subagents/{instance_id}/inject")
-def inject_subagent(
+async def inject_subagent(
     run_id: RequiredIdentifierStr,
     instance_id: RequiredIdentifierStr,
     req: InjectSubagentRequest,

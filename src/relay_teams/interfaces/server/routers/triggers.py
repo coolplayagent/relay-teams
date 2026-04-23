@@ -61,14 +61,14 @@ def _github_delivery_callback_url(
 
 
 @router.get("/github/accounts", response_model=list[GitHubTriggerAccountRecord])
-def list_github_accounts(
+async def list_github_accounts(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> list[GitHubTriggerAccountRecord]:
     return list(service.list_accounts())
 
 
 @router.post("/github/accounts", response_model=GitHubTriggerAccountRecord)
-def create_github_account(
+async def create_github_account(
     req: GitHubTriggerAccountCreateInput,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubTriggerAccountRecord:
@@ -85,7 +85,7 @@ def create_github_account(
 @router.patch(
     "/github/accounts/{account_id}", response_model=GitHubTriggerAccountRecord
 )
-def update_github_account(
+async def update_github_account(
     account_id: RequiredIdentifierStr,
     req: GitHubTriggerAccountUpdateInput,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
@@ -103,7 +103,7 @@ def update_github_account(
 
 
 @router.delete("/github/accounts/{account_id}")
-def delete_github_account(
+async def delete_github_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> dict[str, JsonValue]:
@@ -117,7 +117,7 @@ def delete_github_account(
 @router.post(
     "/github/accounts/{account_id}:enable", response_model=GitHubTriggerAccountRecord
 )
-def enable_github_account(
+async def enable_github_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubTriggerAccountRecord:
@@ -134,7 +134,7 @@ def enable_github_account(
 @router.post(
     "/github/accounts/{account_id}:disable", response_model=GitHubTriggerAccountRecord
 )
-def disable_github_account(
+async def disable_github_account(
     account_id: RequiredIdentifierStr,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubTriggerAccountRecord:
@@ -149,7 +149,7 @@ def disable_github_account(
 
 
 @router.get("/github/repos", response_model=list[GitHubRepoSubscriptionRecord])
-def list_github_repo_subscriptions(
+async def list_github_repo_subscriptions(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> list[GitHubRepoSubscriptionRecord]:
     return list(service.list_repo_subscriptions())
@@ -159,7 +159,7 @@ def list_github_repo_subscriptions(
     "/github/accounts/{account_id}/repositories",
     response_model=list[GitHubAvailableRepositoryRecord],
 )
-def list_github_available_repositories(
+async def list_github_available_repositories(
     account_id: RequiredIdentifierStr,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
     query: str | None = None,
@@ -175,7 +175,7 @@ def list_github_available_repositories(
 
 
 @router.post("/github/repos", response_model=GitHubRepoSubscriptionRecord)
-def create_github_repo_subscription(
+async def create_github_repo_subscription(
     request: Request,
     req: GitHubRepoSubscriptionCreateInput,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
@@ -204,7 +204,7 @@ def create_github_repo_subscription(
     "/github/repos/{repo_subscription_id}",
     response_model=GitHubRepoSubscriptionRecord,
 )
-def update_github_repo_subscription(
+async def update_github_repo_subscription(
     repo_subscription_id: RequiredIdentifierStr,
     req: GitHubRepoSubscriptionUpdateInput,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
@@ -222,7 +222,7 @@ def update_github_repo_subscription(
 
 
 @router.delete("/github/repos/{repo_subscription_id}")
-def delete_github_repo_subscription(
+async def delete_github_repo_subscription(
     repo_subscription_id: RequiredIdentifierStr,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> dict[str, JsonValue]:
@@ -237,7 +237,7 @@ def delete_github_repo_subscription(
     "/github/repos/{repo_subscription_id}:enable",
     response_model=GitHubRepoSubscriptionRecord,
 )
-def enable_github_repo_subscription(
+async def enable_github_repo_subscription(
     repo_subscription_id: RequiredIdentifierStr,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubRepoSubscriptionRecord:
@@ -255,7 +255,7 @@ def enable_github_repo_subscription(
     "/github/repos/{repo_subscription_id}:disable",
     response_model=GitHubRepoSubscriptionRecord,
 )
-def disable_github_repo_subscription(
+async def disable_github_repo_subscription(
     repo_subscription_id: RequiredIdentifierStr,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubRepoSubscriptionRecord:
@@ -270,14 +270,14 @@ def disable_github_repo_subscription(
 
 
 @router.get("/github/rules", response_model=list[TriggerRuleRecord])
-def list_github_rules(
+async def list_github_rules(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> list[TriggerRuleRecord]:
     return list(service.list_rules())
 
 
 @router.post("/github/rules", response_model=TriggerRuleRecord)
-def create_github_rule(
+async def create_github_rule(
     req: TriggerRuleCreateInput,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> TriggerRuleRecord:
@@ -294,7 +294,7 @@ def create_github_rule(
 
 
 @router.patch("/github/rules/{trigger_rule_id}", response_model=TriggerRuleRecord)
-def update_github_rule(
+async def update_github_rule(
     trigger_rule_id: RequiredIdentifierStr,
     req: TriggerRuleUpdateInput,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
@@ -312,7 +312,7 @@ def update_github_rule(
 
 
 @router.delete("/github/rules/{trigger_rule_id}")
-def delete_github_rule(
+async def delete_github_rule(
     trigger_rule_id: RequiredIdentifierStr,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> dict[str, JsonValue]:
@@ -324,7 +324,7 @@ def delete_github_rule(
 
 
 @router.post("/github/rules/{trigger_rule_id}:enable", response_model=TriggerRuleRecord)
-def enable_github_rule(
+async def enable_github_rule(
     trigger_rule_id: RequiredIdentifierStr,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> TriggerRuleRecord:
@@ -341,7 +341,7 @@ def enable_github_rule(
 @router.post(
     "/github/rules/{trigger_rule_id}:disable", response_model=TriggerRuleRecord
 )
-def disable_github_rule(
+async def disable_github_rule(
     trigger_rule_id: RequiredIdentifierStr,
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> TriggerRuleRecord:

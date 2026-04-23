@@ -9,7 +9,7 @@ router = APIRouter(prefix="/observability", tags=["Observability"])
 
 
 @router.get("/overview")
-def get_observability_overview(
+async def get_observability_overview(
     scope: MetricScope = MetricScope.GLOBAL,
     scope_id: str = "",
     time_window_minutes: int = 1440,
@@ -26,7 +26,7 @@ def get_observability_overview(
 
 
 @router.get("/breakdowns")
-def get_observability_breakdowns(
+async def get_observability_breakdowns(
     scope: MetricScope = MetricScope.GLOBAL,
     scope_id: str = "",
     time_window_minutes: int = 1440,

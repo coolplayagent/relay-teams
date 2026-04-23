@@ -23,7 +23,7 @@ router = APIRouter(prefix="/sessions", tags=["Sessions"])
 
 
 @router.get("/{session_id}/media", response_model=list[MediaRefContentPart])
-def list_session_media(
+async def list_session_media(
     session_id: RequiredIdentifierStr,
     session_service: Annotated[SessionService, Depends(get_session_service)],
     media_asset_service: Annotated[MediaAssetService, Depends(get_media_asset_service)],
@@ -85,7 +85,7 @@ async def upload_session_media(
 
 
 @router.get("/{session_id}/media/{asset_id}", response_model=MediaRefContentPart)
-def get_session_media(
+async def get_session_media(
     session_id: RequiredIdentifierStr,
     asset_id: RequiredIdentifierStr,
     session_service: Annotated[SessionService, Depends(get_session_service)],
@@ -102,7 +102,7 @@ def get_session_media(
 
 
 @router.get("/{session_id}/media/{asset_id}/file", response_model=None)
-def get_session_media_file(
+async def get_session_media_file(
     session_id: RequiredIdentifierStr,
     asset_id: RequiredIdentifierStr,
     session_service: Annotated[SessionService, Depends(get_session_service)],
