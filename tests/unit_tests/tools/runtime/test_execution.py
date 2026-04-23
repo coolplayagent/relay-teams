@@ -94,6 +94,74 @@ class _FakeInjectionManager:
         return record
 
 
+class _FakeAgentInstanceRecord:
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        trace_id: str,
+        session_id: str,
+        instance_id: str,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        status: InstanceStatus,
+    ) -> None:
+        _ = (run_id, trace_id, session_id, role_id, workspace_id, conversation_id)
+        self.instance_id = instance_id
+        self.status = status
+        self.runtime_system_prompt = ""
+        self.runtime_tools_json = ""
+        self.runtime_active_tools_json = ""
+
+
+class _FakeAgentRepo:
+    def __init__(self) -> None:
+        self._instances: dict[str, _FakeAgentInstanceRecord] = {}
+
+    def upsert_instance(
+        self,
+        *,
+        run_id: str,
+        trace_id: str,
+        session_id: str,
+        instance_id: str,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        status: InstanceStatus,
+    ) -> None:
+        self._instances[instance_id] = _FakeAgentInstanceRecord(
+            run_id=run_id,
+            trace_id=trace_id,
+            session_id=session_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            status=status,
+        )
+
+    def get_instance(self, instance_id: str) -> _FakeAgentInstanceRecord:
+        try:
+            return self._instances[instance_id]
+        except KeyError as exc:
+            raise KeyError(instance_id) from exc
+
+    def update_runtime_snapshot(
+        self,
+        instance_id: str,
+        *,
+        runtime_system_prompt: str,
+        runtime_tools_json: str,
+        runtime_active_tools_json: str,
+    ) -> None:
+        record = self.get_instance(instance_id)
+        record.runtime_system_prompt = runtime_system_prompt
+        record.runtime_tools_json = runtime_tools_json
+        record.runtime_active_tools_json = runtime_active_tools_json
+
+
 class _FakeApprovalManager:
     def __init__(
         self,
@@ -165,7 +233,9 @@ class _FakeDeps:
         self.hook_service: object | None = None
         self.hook_runtime_env: dict[str, str] = {}
         self.injection_manager = _FakeInjectionManager()
-        self.agent_repo = AgentInstanceRepository(Path(mkdtemp()) / "instances.db")
+        self.agent_repo: AgentInstanceRepository | _FakeAgentRepo | None = (
+            _FakeAgentRepo()
+        )
         self.approval_ticket_repo = ApprovalTicketRepository(db_path)
         self.run_runtime_repo = RunRuntimeRepository(db_path)
         self.shared_store = SharedStateRepository(Path(mkdtemp()) / "state.db")
