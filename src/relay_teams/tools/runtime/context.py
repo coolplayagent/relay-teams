@@ -21,6 +21,7 @@ from relay_teams.media import MediaAssetService
 from relay_teams.monitors import MonitorService
 from relay_teams.notifications import NotificationService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.providers.model_config import ModelCapabilities
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
@@ -107,6 +108,9 @@ class ToolDeps(BaseModel):
     notification_service: SkipValidation[NotificationService | None] = None
     im_tool_service: SkipValidation[ImToolServiceLike | None] = None
     hook_service: SkipValidation[HookService | None] = None
+    model_capabilities: SkipValidation[ModelCapabilities] = Field(
+        default_factory=ModelCapabilities
+    )
     hook_runtime_env: dict[str, str] = Field(default_factory=dict)
 
 

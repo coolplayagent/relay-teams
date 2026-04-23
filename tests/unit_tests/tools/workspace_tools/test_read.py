@@ -2,16 +2,25 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 import inspect
+from io import BytesIO
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
-import pytest
-from pydantic_ai import Agent
 
+import pytest
+from PIL import Image
+from pydantic_ai import Agent
+from pydantic_ai.messages import ImageUrl
+
+from relay_teams.media import (
+    MediaModality,
+    TextContentPart,
+)
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.providers.model_config import ModelCapabilities, ModelModalityMatrix
+from relay_teams.tools.runtime.context import ToolContext, ToolDeps
 from relay_teams.tools.runtime.models import ToolResultProjection
-from relay_teams.tools.runtime.context import ToolDeps
 from relay_teams.tools.workspace_tools import register_read
 from relay_teams.tools.workspace_tools.edit_state import load_file_read_state
 
@@ -40,6 +49,215 @@ class _FakeWorkspace:
 
     def resolve_read_path(self, relative_path: str) -> Path:
         return (self.scope_root / relative_path).resolve()
+
+
+class _FakeMediaAssetService:
+    def __init__(self) -> None:
+        self.store_calls: list[dict[str, object]] = []
+
+    def store_bytes(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        modality: MediaModality,
+        mime_type: str,
+        data: bytes,
+        name: str = "",
+        source: str = "generated",
+        **kwargs: object,
+    ) -> SimpleNamespace:
+        _ = kwargs
+        self.store_calls.append(
+            {
+                "session_id": session_id,
+                "workspace_id": workspace_id,
+                "modality": modality,
+                "mime_type": mime_type,
+                "data": data,
+                "name": name,
+                "source": source,
+            }
+        )
+        return SimpleNamespace(
+            asset_id="asset-1",
+            session_id=session_id,
+            modality=modality,
+            mime_type=mime_type,
+            name=name,
+            size_bytes=len(data),
+            width=None,
+            height=None,
+            duration_ms=None,
+            thumbnail_asset_id=None,
+        )
+
+    def to_content_part(self, record: SimpleNamespace) -> SimpleNamespace:
+        return SimpleNamespace(
+            model_dump=lambda mode="json": {
+                "kind": "media_ref",
+                "asset_id": record.asset_id,
+                "session_id": record.session_id,
+                "modality": record.modality.value,
+                "mime_type": record.mime_type,
+                "name": record.name,
+                "url": f"/api/sessions/{record.session_id}/media/{record.asset_id}/file",
+                "size_bytes": record.size_bytes,
+                "width": record.width,
+                "height": record.height,
+                "duration_ms": record.duration_ms,
+                "thumbnail_asset_id": record.thumbnail_asset_id,
+            },
+            url=f"/api/sessions/{record.session_id}/media/{record.asset_id}/file",
+            mime_type=record.mime_type,
+            modality=record.modality,
+            asset_id=record.asset_id,
+            session_id=record.session_id,
+            name=record.name,
+            size_bytes=record.size_bytes,
+            width=record.width,
+            height=record.height,
+            duration_ms=record.duration_ms,
+            thumbnail_asset_id=record.thumbnail_asset_id,
+        )
+
+    def to_persisted_user_prompt_content(
+        self,
+        *,
+        parts: tuple[TextContentPart | SimpleNamespace, ...],
+    ) -> tuple[str | ImageUrl, ...]:
+        content: list[str | ImageUrl] = []
+        for part in parts:
+            if isinstance(part, TextContentPart):
+                content.append(part.text)
+                continue
+            content.append(ImageUrl(url=part.url, media_type=part.mime_type))
+        return tuple(content)
+
+
+class _FakeInjectionManager:
+    def __init__(self, *, active: bool = True) -> None:
+        self.active = active
+        self.records: list[dict[str, object]] = []
+
+    def is_active(self, run_id: str) -> bool:
+        _ = run_id
+        return self.active
+
+    def enqueue(
+        self,
+        run_id: str,
+        recipient_instance_id: str,
+        *,
+        source: object,
+        content: object,
+    ) -> SimpleNamespace:
+        record = {
+            "run_id": run_id,
+            "recipient_instance_id": recipient_instance_id,
+            "source": source,
+            "content": content,
+        }
+        self.records.append(record)
+        return SimpleNamespace(**record)
+
+
+def _make_png_bytes() -> bytes:
+    with BytesIO() as buffer:
+        Image.new("RGB", (1, 1), color=(0, 128, 255)).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+
+def test_detect_image_mime_type_returns_none_for_unsupported_or_invalid_modalities(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    file_path = tmp_path / "diagram.png"
+    file_path.write_bytes(_make_png_bytes())
+
+    monkeypatch.setattr(
+        read_module.mimetypes,
+        "guess_type",
+        lambda *_args, **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(read_module.Image, "MIME", {})
+    assert read_module._detect_image_mime_type(file_path) is None
+
+    monkeypatch.setattr(
+        read_module.mimetypes,
+        "guess_type",
+        lambda *_args, **_kwargs: ("image/png", None),
+    )
+
+    def _raise_value_error(*_args: object, **_kwargs: object) -> MediaModality:
+        raise ValueError("bad mime")
+
+    monkeypatch.setattr(read_module, "infer_media_modality", _raise_value_error)
+    assert read_module._detect_image_mime_type(file_path) is None
+
+    monkeypatch.setattr(
+        read_module,
+        "infer_media_modality",
+        lambda *_args, **_kwargs: MediaModality.AUDIO,
+    )
+    assert read_module._detect_image_mime_type(file_path) is None
+
+
+def test_read_image_capability_error_allows_explicit_support() -> None:
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    assert read_module._read_image_capability_error("src/diagram.png", True) == ""
+
+
+def test_project_image_read_result_rejects_missing_media_service_and_invalid_image(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    file_path = tmp_path / "diagram.png"
+    file_path.write_bytes(_make_png_bytes())
+    ctx_without_media = SimpleNamespace(
+        deps=SimpleNamespace(
+            media_asset_service=None,
+            model_capabilities=ModelCapabilities(
+                input=ModelModalityMatrix(text=True, image=True)
+            ),
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Cannot read image file without media asset support",
+    ):
+        read_module._project_image_read_result(
+            ctx=cast(ToolContext, cast(object, ctx_without_media)),
+            file_path=file_path,
+            path="src/diagram.png",
+        )
+
+    ctx_with_media = SimpleNamespace(
+        deps=SimpleNamespace(
+            media_asset_service=_FakeMediaAssetService(),
+            model_capabilities=ModelCapabilities(
+                input=ModelModalityMatrix(text=True, image=True)
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        read_module,
+        "_detect_image_mime_type",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(ValueError, match="Cannot read binary file: src/diagram.png"):
+        read_module._project_image_read_result(
+            ctx=cast(ToolContext, cast(object, ctx_with_media)),
+            file_path=file_path,
+            path="src/diagram.png",
+        )
 
 
 class TestIsBinaryFile:
@@ -292,7 +510,10 @@ async def test_read_tool_reads_notebook_cell_without_outputs(
         action_args = {
             key: value for key, value in args_summary.items() if key in parameter_names
         }
-        return cast(dict[str, object], (await action(**action_args)).internal_data)
+        projected = await action(**action_args)
+        payload = cast(dict[str, object], projected.internal_data)
+        payload["tool_content_parts"] = projected.tool_content_parts
+        return payload
 
     monkeypatch.setattr(read_module, "execute_tool_call", _fake_execute_tool)
 
@@ -449,9 +670,298 @@ async def test_read_tool_rejects_office_documents(
         action_args = {
             key: value for key, value in args_summary.items() if key in parameter_names
         }
-        return cast(dict[str, object], (await action(**action_args)).internal_data)
+        projected = await action(**action_args)
+        payload = cast(dict[str, object], projected.internal_data)
+        payload["tool_content_parts"] = projected.tool_content_parts
+        return payload
 
     monkeypatch.setattr(read_module, "execute_tool_call", _fake_execute_tool)
 
     with pytest.raises(ValueError, match="Cannot read binary file: src/report.pdf"):
         await tool(ctx, path="src/report.pdf")
+
+
+@pytest.mark.asyncio
+async def test_read_tool_projects_images_for_model_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    file_path = source_dir / "diagram.png"
+    file_path.write_bytes(_make_png_bytes())
+    media_asset_service = _FakeMediaAssetService()
+    injection_manager = _FakeInjectionManager()
+    fake_agent = _FakeAgent()
+    register_read(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["read"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=SharedStateRepository(tmp_path / "state.db"),
+            task_id="task-1",
+            session_id="session-1",
+            workspace_id="workspace-1",
+            run_id="run-1",
+            instance_id="inst-1",
+            media_asset_service=media_asset_service,
+            injection_manager=injection_manager,
+            model_capabilities=ModelCapabilities(
+                input=ModelModalityMatrix(text=True, image=True)
+            ),
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        approval_request=None,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        del ctx, tool_name, approval_request, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value for key, value in args_summary.items() if key in parameter_names
+        }
+        projected = await action(**action_args)
+        payload = cast(dict[str, object], projected.internal_data)
+        payload["tool_content_parts"] = projected.tool_content_parts
+        return payload
+
+    monkeypatch.setattr(read_module, "execute_tool_call", _fake_execute_tool)
+
+    result = await tool(ctx, path="src/diagram.png")
+
+    assert result["type"] == "image"
+    assert cast(str, result["mime_type"]) == "image/png"
+    assert "text" not in result
+    content = cast(list[dict[str, object]], result["content"])
+    assert len(content) == 1
+    assert content[0]["kind"] == "media_ref"
+    assert content[0]["asset_id"] == "asset-1"
+    assert len(media_asset_service.store_calls) == 1
+    assert media_asset_service.store_calls[0]["source"] == "read_tool"
+    assert injection_manager.records == []
+    tool_content_parts = cast(tuple[object, ...], result["tool_content_parts"])
+    assert len(tool_content_parts) == 1
+    assert (
+        load_file_read_state(
+            shared_store=ctx.deps.shared_store,
+            task_id="task-1",
+            path=file_path.resolve(),
+        )
+        is not None
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_tool_rejects_images_larger_than_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    file_path = source_dir / "diagram.png"
+    file_path.write_bytes(_make_png_bytes())
+    media_asset_service = _FakeMediaAssetService()
+    fake_agent = _FakeAgent()
+    register_read(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["read"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=SharedStateRepository(tmp_path / "state.db"),
+            task_id="task-1",
+            session_id="session-1",
+            workspace_id="workspace-1",
+            run_id="run-1",
+            instance_id="inst-1",
+            media_asset_service=media_asset_service,
+            injection_manager=_FakeInjectionManager(),
+            model_capabilities=ModelCapabilities(
+                input=ModelModalityMatrix(text=True, image=True)
+            ),
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        approval_request=None,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        del ctx, tool_name, approval_request, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value for key, value in args_summary.items() if key in parameter_names
+        }
+        projected = await action(**action_args)
+        payload = cast(dict[str, object], projected.internal_data)
+        payload["tool_content_parts"] = projected.tool_content_parts
+        return payload
+
+    monkeypatch.setattr(read_module, "execute_tool_call", _fake_execute_tool)
+    monkeypatch.setattr(
+        read_module,
+        "path_stat",
+        lambda _: SimpleNamespace(st_size=read_module._READ_TOOL_MAX_IMAGE_BYTES + 1),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Image file is too large for read\\(\\).*10 MB.*src/diagram.png",
+    ):
+        await tool(ctx, path="src/diagram.png")
+
+    assert media_asset_service.store_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("image_support", "message_fragment"),
+    [
+        (False, "does not have image input enabled"),
+        (None, "Image input support for the current model is unknown"),
+    ],
+)
+async def test_read_tool_rejects_images_without_model_image_input(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    image_support: bool | None,
+    message_fragment: str,
+) -> None:
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    file_path = source_dir / "diagram.png"
+    file_path.write_bytes(_make_png_bytes())
+    fake_agent = _FakeAgent()
+    register_read(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["read"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=SharedStateRepository(tmp_path / "state.db"),
+            task_id="task-1",
+            session_id="session-1",
+            workspace_id="workspace-1",
+            run_id="run-1",
+            instance_id="inst-1",
+            media_asset_service=_FakeMediaAssetService(),
+            injection_manager=_FakeInjectionManager(),
+            model_capabilities=ModelCapabilities(
+                input=ModelModalityMatrix(text=True, image=image_support)
+            ),
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        approval_request=None,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        del ctx, tool_name, approval_request, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value for key, value in args_summary.items() if key in parameter_names
+        }
+        projected = await action(**action_args)
+        payload = cast(dict[str, object], projected.internal_data)
+        payload["tool_content_parts"] = projected.tool_content_parts
+        return payload
+
+    monkeypatch.setattr(read_module, "execute_tool_call", _fake_execute_tool)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"{message_fragment}.*Enable image input in provider settings.*src/diagram.png"
+        ),
+    ):
+        await tool(ctx, path="src/diagram.png")
+
+
+@pytest.mark.asyncio
+async def test_read_tool_rejects_invalid_image_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    file_path = source_dir / "report.png"
+    file_path.write_bytes(b"not-a-real-image")
+    media_asset_service = _FakeMediaAssetService()
+    fake_agent = _FakeAgent()
+    register_read(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["read"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=SharedStateRepository(tmp_path / "state.db"),
+            task_id="task-1",
+            session_id="session-1",
+            workspace_id="workspace-1",
+            run_id="run-1",
+            instance_id="inst-1",
+            media_asset_service=media_asset_service,
+            injection_manager=_FakeInjectionManager(),
+            model_capabilities=ModelCapabilities(
+                input=ModelModalityMatrix(text=True, image=True)
+            ),
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        approval_request=None,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        del ctx, tool_name, approval_request, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value for key, value in args_summary.items() if key in parameter_names
+        }
+        projected = await action(**action_args)
+        payload = cast(dict[str, object], projected.internal_data)
+        payload["tool_content_parts"] = projected.tool_content_parts
+        return payload
+
+    monkeypatch.setattr(read_module, "execute_tool_call", _fake_execute_tool)
+
+    with pytest.raises(ValueError, match="Cannot read binary file: src/report.png"):
+        await tool(ctx, path="src/report.png")
+
+    assert media_asset_service.store_calls == []

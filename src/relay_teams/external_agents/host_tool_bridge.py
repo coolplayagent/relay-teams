@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import importlib
 import inspect
 import json
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 from uuid import uuid4
@@ -19,6 +20,14 @@ from mcp.shared.memory import create_client_server_memory_streams
 from mcp.shared.message import SessionMessage
 from pydantic import JsonValue, PrivateAttr
 from pydantic_ai import RunContext
+from pydantic_ai.messages import (
+    AudioUrl,
+    BinaryContent,
+    ImageUrl,
+    ToolReturn,
+    UserContent,
+    VideoUrl,
+)
 from pydantic_ai.models import Model
 from pydantic_ai.tools import Tool as PydanticTool
 from pydantic_ai.usage import RunUsage
@@ -30,6 +39,7 @@ from relay_teams.computer import ComputerRuntime
 from relay_teams.media import MediaAssetService
 from relay_teams.monitors import MonitorService
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.providers.model_config import ModelCapabilities, ModelEndpointConfig
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
@@ -118,6 +128,7 @@ HOST_TOOL_ROLE_ID_ENV = "AGENT_TEAMS_HOST_TOOL_ROLE_ID"
 
 
 class HostedToolDefinition:
+    # noinspection PyTypeHints
     def __init__(
         self,
         *,
@@ -137,6 +148,7 @@ class HostedToolDefinition:
 
 
 class ExternalAcpHostToolBridge:
+    # noinspection PyTypeHints
     def __init__(
         self,
         *,
@@ -167,6 +179,9 @@ class ExternalAcpHostToolBridge:
         user_question_manager: UserQuestionManager | None,
         tool_approval_policy: ToolApprovalPolicy,
         get_notification_service: Callable[[], NotificationService | None],
+        resolve_model_config: (
+            Callable[[RoleDefinition, LLMRequest], ModelEndpointConfig | None] | None
+        ) = None,
         media_asset_service: MediaAssetService | None = None,
         metric_recorder: MetricRecorder | None = None,
         im_tool_service: ImToolService | None = None,
@@ -201,6 +216,7 @@ class ExternalAcpHostToolBridge:
         self._user_question_manager = user_question_manager
         self._tool_approval_policy = tool_approval_policy
         self._get_notification_service = get_notification_service
+        self._resolve_model_config = resolve_model_config
         self._metric_recorder = metric_recorder
         self._im_tool_service = im_tool_service
         self._computer_runtime = computer_runtime
@@ -536,7 +552,22 @@ class ExternalAcpHostToolBridge:
             metric_recorder=self._metric_recorder,
             notification_service=self._get_notification_service(),
             im_tool_service=self._im_tool_service,
+            model_capabilities=self._resolve_request_model_capabilities(
+                request=request
+            ),
         )
+
+    def _resolve_request_model_capabilities(
+        self,
+        *,
+        request: LLMRequest,
+    ) -> ModelCapabilities:
+        if self._role is None or self._resolve_model_config is None:
+            return ModelCapabilities()
+        model_config = self._resolve_model_config(self._role, request)
+        if model_config is None:
+            return ModelCapabilities()
+        return model_config.capabilities
 
 
 class _HostedFastMcpTool(FastMcpTool):
@@ -563,9 +594,84 @@ class _HostedFastMcpTool(FastMcpTool):
             definition=self._definition,
             arguments=arguments,
         )
+        if isinstance(result, ToolReturn):
+            return _tool_return_to_fastmcp_result(result)
         if isinstance(result, dict):
             return ToolResult(structured_content=result)
         return ToolResult(content=result)
+
+
+def _tool_return_to_fastmcp_result(result: ToolReturn) -> ToolResult:
+    content_blocks = _tool_return_content_blocks(result.content)
+    if isinstance(result.return_value, dict):
+        if content_blocks:
+            return ToolResult(
+                content=content_blocks,
+                structured_content=result.return_value,
+            )
+        return ToolResult(structured_content=result.return_value)
+    if content_blocks:
+        return_value_block = _tool_return_value_content_block(result.return_value)
+        if return_value_block is not None:
+            return ToolResult(content=[return_value_block, *content_blocks])
+        return ToolResult(content=content_blocks)
+    return ToolResult(content=result.return_value)
+
+
+# noinspection PyTypeHints
+def _tool_return_value_content_block(value: object) -> mcp_types.ContentBlock | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value
+    else:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    return mcp_types.TextContent(type="text", text=text)
+
+
+# noinspection PyTypeHints
+def _tool_return_content_blocks(
+    content: str | Sequence[UserContent] | None,
+) -> list[mcp_types.ContentBlock]:
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [mcp_types.TextContent(type="text", text=content)] if content else []
+
+    blocks: list[mcp_types.ContentBlock] = []
+    for item in content:
+        block = _tool_return_content_block(item)
+        if block is not None:
+            blocks.append(block)
+    return blocks
+
+
+# noinspection PyTypeHints
+def _tool_return_content_block(item: UserContent) -> mcp_types.ContentBlock | None:
+    if isinstance(item, str):
+        return mcp_types.TextContent(type="text", text=item)
+    if isinstance(item, BinaryContent):
+        encoded = base64.b64encode(item.data).decode("ascii")
+        media_type = str(item.media_type)
+        if media_type.startswith("image/"):
+            return mcp_types.ImageContent(
+                type="image",
+                data=encoded,
+                mimeType=media_type,
+            )
+        if media_type.startswith("audio/"):
+            return mcp_types.AudioContent(
+                type="audio",
+                data=encoded,
+                mimeType=media_type,
+            )
+        return mcp_types.TextContent(
+            type="text",
+            text=f"[binary: {media_type}, {len(item.data)} bytes]",
+        )
+    if isinstance(item, (ImageUrl, AudioUrl, VideoUrl)):
+        return mcp_types.TextContent(type="text", text=str(item.url))
+    return None
 
 
 class _HostedMcpConnection:

@@ -6,6 +6,7 @@ from relay_teams.computer import (
     ComputerPermissionScope,
     ExecutionSurface,
 )
+from relay_teams.media import ContentPart
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_serializer
 
 
@@ -63,6 +64,7 @@ class ToolResultProjection(BaseModel):
 
     visible_data: JsonValue | None = None
     internal_data: JsonValue | None = None
+    tool_content_parts: tuple[ContentPart, ...] = ()
 
 
 class ToolApprovalRequest(BaseModel):

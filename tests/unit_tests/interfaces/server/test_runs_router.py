@@ -15,6 +15,10 @@ class _FakeRunService:
         self.started_run_ids: list[str] = []
         self.resolved_tool_approvals: list[tuple[str, str, str, str]] = []
         self.raise_on_tool_approval = False
+        self.inject_calls: list[tuple[str, str, str]] = []
+        self.subagent_inject_calls: list[tuple[str, str, str]] = []
+        self.raise_on_inject = False
+        self.raise_on_subagent_inject = False
         self.created_run_inputs: list[IntentInput] = []
         self.background_tasks: dict[str, dict[str, object]] = {
             "exec-1": {
@@ -70,6 +74,27 @@ class _FakeRunService:
 
     def ensure_run_started(self, run_id: str) -> None:
         self.started_run_ids.append(run_id)
+
+    def inject_message(self, *, run_id: str, source, content: str):
+        if self.raise_on_inject:
+            raise ValueError("Injection content must not be empty")
+        self.inject_calls.append((run_id, source.value, content))
+        return type(
+            "_InjectedRecord",
+            (),
+            {"model_dump": lambda self: {"run_id": run_id, "content": content}},
+        )()
+
+    def inject_subagent_message(
+        self,
+        *,
+        run_id: str,
+        instance_id: str,
+        content: str,
+    ) -> None:
+        if self.raise_on_subagent_inject:
+            raise ValueError("Injection content must not be empty")
+        self.subagent_inject_calls.append((run_id, instance_id, content))
 
     def list_background_tasks(self, run_id: str) -> tuple[dict[str, object], ...]:
         _ = run_id
@@ -255,6 +280,60 @@ def test_create_run_route_accepts_target_role_id() -> None:
     assert created.intent == "hello"
     assert created.target_role_id == "writer"
     assert fake_service.started_run_ids == ["run-1"]
+
+
+def test_inject_message_route_rejects_whitespace_only_content() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs/run-1/inject",
+        json={"source": "user", "content": "   "},
+    )
+
+    assert response.status_code == 422
+    assert fake_service.inject_calls == []
+
+
+def test_inject_message_route_maps_service_validation_errors_to_bad_request() -> None:
+    fake_service = _FakeRunService()
+    fake_service.raise_on_inject = True
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs/run-1/inject",
+        json={"source": "user", "content": "hello"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Injection content must not be empty"
+
+
+def test_inject_subagent_route_rejects_whitespace_only_content() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs/run-1/subagents/inst-1/inject",
+        json={"content": "\t"},
+    )
+
+    assert response.status_code == 422
+    assert fake_service.subagent_inject_calls == []
+
+
+def test_inject_subagent_route_maps_service_validation_errors_to_bad_request() -> None:
+    fake_service = _FakeRunService()
+    fake_service.raise_on_subagent_inject = True
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs/run-1/subagents/inst-1/inject",
+        json={"content": "continue"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Injection content must not be empty"
 
 
 def test_create_run_route_rejects_legacy_intent_field() -> None:

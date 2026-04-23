@@ -7,6 +7,7 @@ import pytest
 from typing import cast
 
 from pydantic_ai.messages import (
+    ImageUrl,
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
@@ -220,6 +221,131 @@ def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
     ]
     assert len(coordinator_messages) == 3
     assert part_kinds == ["tool-call", "tool-return", "retry-prompt"]
+
+
+def test_build_session_rounds_keeps_tool_return_from_mixed_media_replay_message(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_mixed_media_tool_return.db"
+    session_id = "session-1"
+    run_id = "run-1"
+    coordinator_instance_id = "inst-coordinator-1"
+
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="MainAgent",
+            objective="read image",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    agent_repo.upsert_instance(
+        run_id=run_id,
+        trace_id=run_id,
+        session_id=session_id,
+        instance_id=coordinator_instance_id,
+        role_id="MainAgent",
+        workspace_id="default",
+        status=InstanceStatus.COMPLETED,
+    )
+    run_runtime_repo.ensure(
+        run_id=run_id,
+        session_id=session_id,
+        root_task_id="task-root",
+    )
+    media_part = {
+        "kind": "media_ref",
+        "asset_id": "asset-1",
+        "session_id": session_id,
+        "modality": "image",
+        "mime_type": "image/png",
+        "name": "relay_teams.png",
+        "url": f"/api/sessions/{session_id}/media/asset-1/file",
+    }
+
+    message_repo.append(
+        session_id=session_id,
+        workspace_id="default",
+        instance_id=coordinator_instance_id,
+        task_id="task-root",
+        trace_id=run_id,
+        agent_role_id="MainAgent",
+        messages=[
+            ModelRequest(parts=[UserPromptPart(content="read docs/relay_teams.png")]),
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="read",
+                        args={"path": "docs/relay_teams.png"},
+                        tool_call_id="call-read-image",
+                    )
+                ]
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="read",
+                        tool_call_id="call-read-image",
+                        content={
+                            "ok": True,
+                            "data": {
+                                "type": "image",
+                                "path": "docs/relay_teams.png",
+                                "content": [media_part],
+                            },
+                            "error": None,
+                            "meta": {"tool_result_event_published": True},
+                        },
+                    ),
+                    UserPromptPart(
+                        content=[
+                            "The model can inspect this image.",
+                            ImageUrl(
+                                url=f"/api/sessions/{session_id}/media/asset-1/file",
+                                media_type="image/png",
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+        ],
+    )
+
+    def _session_messages(sid: str) -> list[dict[str, object]]:
+        return cast(list[dict[str, object]], message_repo.get_messages_by_session(sid))
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=_session_messages,
+    )
+    round_item = next(item for item in rounds if item["run_id"] == run_id)
+
+    coordinator_messages = cast(
+        list[dict[str, object]], round_item["coordinator_messages"]
+    )
+    assert len(coordinator_messages) == 2
+    tool_return_message = cast(dict[str, object], coordinator_messages[1]["message"])
+    tool_return_parts = cast(list[dict[str, object]], tool_return_message["parts"])
+    assert [part["part_kind"] for part in tool_return_parts] == ["tool-return"]
+    tool_return_content = cast(dict[str, object], tool_return_parts[0]["content"])
+    tool_return_data = cast(dict[str, object], tool_return_content["data"])
+    tool_return_media = cast(list[dict[str, object]], tool_return_data["content"])
+    assert tool_return_media[0]["kind"] == "media_ref"
+    assert (
+        tool_return_media[0]["url"] == f"/api/sessions/{session_id}/media/asset-1/file"
+    )
 
 
 def test_build_session_rounds_clears_stale_microcompact_badge_on_later_false_event(

@@ -6,7 +6,10 @@ import json
 
 import httpx
 from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
+from collections.abc import Sequence
 
 import pytest
 from openai import APIStatusError
@@ -43,12 +46,14 @@ from relay_teams.tools.runtime.persisted_state import (
     ToolExecutionStatus,
 )
 from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventName
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.assistant_errors import AssistantRunError
 from pydantic_ai.messages import (
     BinaryContent,
     ImageUrl,
     ModelRequest,
+    ModelRequestPart,
     ModelResponse,
     RetryPromptPart,
     TextPart,
@@ -147,7 +152,11 @@ def test_normalize_committable_messages_keeps_request_fields() -> None:
         metadata={"source": "test"},
     )
 
-    normalized = AgentLlmSession._normalize_committable_messages(session, [request])
+    normalized = AgentLlmSession._normalize_committable_messages(
+        session,
+        request=_build_request(),
+        messages=[request],
+    )
 
     assert len(normalized) == 1
     normalized_request = normalized[0]
@@ -162,6 +171,7 @@ class _FakeMessageRepo:
     def __init__(self, history: list[ModelRequest | ModelResponse]) -> None:
         self._history = history
         self.append_calls: list[list[ModelRequest | ModelResponse]] = []
+        self.appended_user_prompts: list[object] = []
         self.pruned_conversation_ids: list[str] = []
 
     def get_history_for_conversation(
@@ -195,6 +205,7 @@ class _FakeMessageRepo:
             trace_id,
         )
         self.append_calls.append(list(messages))
+        self._history.extend(messages)
 
     def replace_pending_user_prompt(
         self,
@@ -219,6 +230,30 @@ class _FakeMessageRepo:
             content,
         )
         return False
+
+    def append_user_prompt_if_missing(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: object,
+    ) -> bool:
+        _ = (
+            session_id,
+            workspace_id,
+            conversation_id,
+            agent_role_id,
+            instance_id,
+            task_id,
+            trace_id,
+        )
+        self.appended_user_prompts.append(content)
+        return True
 
 
 class _FakeMicrocompactService:
@@ -921,6 +956,1753 @@ def test_hydrate_history_media_content_replaces_local_urls_before_provider_send(
     assert hydrated_part.content[0] == "describe this image"
     assert isinstance(hydrated_part.content[1], BinaryContent)
     assert hydrated_part.content[1].data == b"image-bytes"
+
+
+def test_provider_history_for_model_turn_details_returns_hydrated_history_only() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    persisted_prompt = (
+        "describe this image",
+        ImageUrl(
+            url="http://127.0.0.1:8000/api/sessions/session-1/media/asset-1/file",
+            media_type="image/png",
+            force_download="allow-local",
+        ),
+    )
+
+    class _FakeMediaAssetService:
+        def hydrate_user_prompt_content(self, *, content: object) -> object:
+            if content == persisted_prompt:
+                return (
+                    "describe this image",
+                    BinaryContent(
+                        data=b"image-bytes",
+                        media_type="image/png",
+                    ),
+                )
+            return content
+
+    session.__dict__["_media_asset_service"] = _FakeMediaAssetService()
+
+    provider_history, injected_tool_call_ids = (
+        AgentLlmSession._provider_history_for_model_turn_details(
+            session,
+            request=_build_request(),
+            history=[ModelRequest(parts=[UserPromptPart(content=persisted_prompt)])],
+            consumed_tool_call_ids={"call-read-1"},
+        )
+    )
+
+    assert injected_tool_call_ids == ()
+    assert len(provider_history) == 1
+    hydrated_request = provider_history[0]
+    assert isinstance(hydrated_request, ModelRequest)
+    hydrated_part = hydrated_request.parts[0]
+    assert isinstance(hydrated_part, UserPromptPart)
+    assert hydrated_part.content[0] == "describe this image"
+    assert isinstance(hydrated_part.content[1], BinaryContent)
+    assert hydrated_part.content[1].data == b"image-bytes"
+
+
+def test_model_request_matches_tool_result_replay_helpers_accept_matching_replay() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    expected_tool_return = ToolReturnPart(
+        tool_name="read",
+        tool_call_id="call-read-1",
+        content={"ok": True},
+    )
+    previous_message = ModelRequest(parts=[expected_tool_return])
+    synthetic_prompt = ModelRequest(
+        parts=[UserPromptPart(content=("describe this image", "second line"))]
+    )
+    replayed_request = ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="read",
+                tool_call_id="call-read-1",
+                content={"ok": True},
+            ),
+            UserPromptPart(content=("describe this image", "second line")),
+        ]
+    )
+
+    assert AgentLlmSession._model_request_contains_only_tool_returns(
+        session, previous_message
+    )
+    assert AgentLlmSession._model_request_contains_only_user_prompts(
+        session, synthetic_prompt
+    )
+    assert AgentLlmSession._tool_return_parts_match(
+        session,
+        expected_part=expected_tool_return,
+        actual_part=cast(ToolReturnPart, replayed_request.parts[0]),
+    )
+    assert (
+        AgentLlmSession._user_prompt_parts_key(
+            session,
+            parts=cast(Sequence[ModelRequestPart], synthetic_prompt.parts),
+        )
+        is not None
+    )
+    assert AgentLlmSession._model_request_matches_tool_result_replay(
+        session,
+        history=[previous_message, synthetic_prompt],
+        replayed_request=replayed_request,
+    )
+    assert AgentLlmSession._model_request_matches_tool_result_replay(
+        session,
+        history=[
+            ModelRequest(
+                parts=[
+                    expected_tool_return,
+                    UserPromptPart(content=("describe this image", "second line")),
+                ]
+            )
+        ],
+        replayed_request=replayed_request,
+    )
+
+
+def test_model_request_matches_tool_result_replay_helpers_reject_invalid_shapes() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    expected_tool_return = ToolReturnPart(
+        tool_name="read",
+        tool_call_id="call-read-1",
+        content={"ok": True},
+    )
+    previous_message = ModelRequest(parts=[expected_tool_return])
+    synthetic_prompt = ModelRequest(
+        parts=[UserPromptPart(content="describe this image")]
+    )
+    matching_replayed_request = ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="read",
+                tool_call_id="call-read-1",
+                content={"ok": True},
+            ),
+            UserPromptPart(content="describe this image"),
+        ]
+    )
+
+    assert not AgentLlmSession._model_request_matches_tool_result_replay(
+        session,
+        history=[previous_message],
+        replayed_request=matching_replayed_request,
+    )
+    assert not AgentLlmSession._model_request_matches_tool_result_replay(
+        session,
+        history=[
+            ModelResponse(parts=[TextPart(content="done")], model_name="fake"),
+            synthetic_prompt,
+        ],
+        replayed_request=matching_replayed_request,
+    )
+    assert not AgentLlmSession._model_request_matches_tool_result_replay(
+        session,
+        history=[
+            previous_message,
+            ModelResponse(parts=[TextPart(content="done")], model_name="fake"),
+        ],
+        replayed_request=matching_replayed_request,
+    )
+    assert not AgentLlmSession._model_request_matches_tool_result_replay(
+        session,
+        history=[
+            ModelRequest(
+                parts=[expected_tool_return, UserPromptPart(content="unexpected")]
+            ),
+            synthetic_prompt,
+        ],
+        replayed_request=matching_replayed_request,
+    )
+    assert not AgentLlmSession._model_request_matches_tool_result_replay(
+        session,
+        history=[
+            previous_message,
+            ModelRequest(
+                parts=[
+                    UserPromptPart(content="describe"),
+                    cast(ModelRequestPart, TextPart(content="unexpected")),
+                ]
+            ),
+        ],
+        replayed_request=matching_replayed_request,
+    )
+    assert not AgentLlmSession._model_request_matches_tool_result_replay(
+        session,
+        history=[previous_message, synthetic_prompt],
+        replayed_request=ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read",
+                    tool_call_id="call-read-1",
+                    content={"ok": True},
+                ),
+                cast(ModelRequestPart, TextPart(content="unexpected")),
+            ]
+        ),
+    )
+    assert not AgentLlmSession._model_request_matches_tool_result_replay(
+        session,
+        history=[previous_message, synthetic_prompt],
+        replayed_request=ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read",
+                    tool_call_id="call-read-2",
+                    content={"ok": True},
+                ),
+                UserPromptPart(content="describe this image"),
+            ]
+        ),
+    )
+    assert not AgentLlmSession._model_request_matches_tool_result_replay(
+        session,
+        history=[previous_message, synthetic_prompt],
+        replayed_request=ModelRequest(parts=[expected_tool_return]),
+    )
+    assert not AgentLlmSession._model_request_contains_only_tool_returns(
+        session, ModelRequest(parts=[])
+    )
+    assert not AgentLlmSession._model_request_contains_only_user_prompts(
+        session, ModelRequest(parts=[])
+    )
+    assert (
+        AgentLlmSession._user_prompt_parts_key(
+            session,
+            parts=cast(
+                Sequence[ModelRequestPart],
+                [cast(ModelRequestPart, TextPart(content="not a prompt"))],
+            ),
+        )
+        is None
+    )
+    assert not AgentLlmSession._tool_return_parts_match(
+        session,
+        expected_part=expected_tool_return,
+        actual_part=ToolReturnPart(
+            tool_name="read",
+            tool_call_id="call-read-1",
+            content={"ok": False},
+        ),
+    )
+
+
+def test_prompt_content_provider_service_requires_provider_capability() -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_media_asset_service"] = object()
+
+    assert AgentLlmSession._prompt_content_provider_service(session) is None
+
+    class _FakeProviderService:
+        def to_provider_user_prompt_content(self, *, parts: object) -> object:
+            _ = parts
+            return "attached"
+
+    provider_service = _FakeProviderService()
+    session.__dict__["_media_asset_service"] = provider_service
+
+    assert AgentLlmSession._prompt_content_provider_service(session) is provider_service
+
+
+def test_model_requests_match_user_prompt_uses_normalized_prompt_text() -> None:
+    session = object.__new__(AgentLlmSession)
+    matching_left = ModelRequest(parts=[UserPromptPart(content="describe this image")])
+    matching_right = ModelRequest(
+        parts=[UserPromptPart(content="  describe this image  ")]
+    )
+
+    assert AgentLlmSession._model_requests_match_user_prompt(
+        session,
+        matching_left,
+        matching_right,
+    )
+    assert not AgentLlmSession._model_requests_match_user_prompt(
+        session,
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read",
+                    tool_call_id="call-read-1",
+                    content={"ok": True},
+                )
+            ]
+        ),
+        matching_right,
+    )
+    assert not AgentLlmSession._model_requests_match_user_prompt(
+        session,
+        matching_left,
+        ModelRequest(
+            parts=[
+                UserPromptPart(content="describe this image"),
+                cast(ModelRequestPart, RetryPromptPart(content="retry")),
+            ]
+        ),
+    )
+
+
+def test_model_requests_match_user_prompt_compares_binary_content_identity() -> None:
+    session = object.__new__(AgentLlmSession)
+    left = ModelRequest(
+        parts=[
+            UserPromptPart(
+                content=(
+                    "describe this image",
+                    BinaryContent(data=b"image-one", media_type="image/png"),
+                )
+            )
+        ]
+    )
+    right = ModelRequest(
+        parts=[
+            UserPromptPart(
+                content=(
+                    "describe this image",
+                    BinaryContent(data=b"image-two", media_type="image/png"),
+                )
+            )
+        ]
+    )
+
+    assert not AgentLlmSession._model_requests_match_user_prompt(
+        session,
+        left,
+        right,
+    )
+    assert AgentLlmSession._drop_duplicate_leading_request(
+        session,
+        history=[left],
+        new_messages=[right],
+    ) == [right]
+
+
+def test_drop_duplicate_leading_request_handles_prompt_and_tool_replay_matches() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    prompt_request = ModelRequest(parts=[UserPromptPart(content="describe this image")])
+    response = ModelResponse(parts=[TextPart(content="done")], model_name="fake")
+
+    assert AgentLlmSession._drop_duplicate_leading_request(
+        session,
+        history=[prompt_request],
+        new_messages=[prompt_request, response],
+    ) == [response]
+    unchanged_messages = AgentLlmSession._drop_duplicate_leading_request(
+        session,
+        history=[prompt_request],
+        new_messages=[
+            ModelResponse(parts=[TextPart(content="done")], model_name="fake")
+        ],
+    )
+    unchanged_response = unchanged_messages[0]
+    assert isinstance(unchanged_response, ModelResponse)
+    unchanged_part = unchanged_response.parts[0]
+    assert isinstance(unchanged_part, TextPart)
+    assert unchanged_part.content == "done"
+
+    expected_tool_return = ToolReturnPart(
+        tool_name="read",
+        tool_call_id="call-read-1",
+        content={"ok": True},
+    )
+    synthetic_prompt = ModelRequest(
+        parts=[UserPromptPart(content="describe this image")]
+    )
+    replayed_request = ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="read",
+                tool_call_id="call-read-1",
+                content={"ok": True},
+            ),
+            UserPromptPart(content="describe this image"),
+        ]
+    )
+
+    assert AgentLlmSession._drop_duplicate_leading_request(
+        session,
+        history=[ModelRequest(parts=[expected_tool_return]), synthetic_prompt],
+        new_messages=[replayed_request, response],
+    ) == [response]
+    assert AgentLlmSession._drop_duplicate_leading_request(
+        session,
+        history=[
+            ModelRequest(
+                parts=[
+                    expected_tool_return,
+                    UserPromptPart(content="describe this image"),
+                ]
+            )
+        ],
+        new_messages=[replayed_request, response],
+    ) == [response]
+    preserved_messages = AgentLlmSession._drop_duplicate_leading_request(
+        session,
+        history=[prompt_request],
+        new_messages=[
+            ModelRequest(parts=[UserPromptPart(content="different prompt")]),
+            response,
+        ],
+    )
+    preserved_request = preserved_messages[0]
+    assert isinstance(preserved_request, ModelRequest)
+    preserved_part = preserved_request.parts[0]
+    assert isinstance(preserved_part, UserPromptPart)
+    assert preserved_part.content == "different prompt"
+    assert preserved_messages[1] == response
+
+
+def test_model_request_matches_tool_result_replay_rejects_tool_return_count_mismatch() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+
+    assert not AgentLlmSession._model_request_matches_tool_result_replay(
+        session,
+        history=[
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="read",
+                        tool_call_id="call-read-1",
+                        content={"ok": True},
+                    ),
+                    ToolReturnPart(
+                        tool_name="read",
+                        tool_call_id="call-read-2",
+                        content={"ok": True},
+                    ),
+                ]
+            ),
+            ModelRequest(parts=[UserPromptPart(content="describe this image")]),
+        ],
+        replayed_request=ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read",
+                    tool_call_id="call-read-1",
+                    content={"ok": True},
+                ),
+                UserPromptPart(content="describe this image"),
+            ]
+        ),
+    )
+
+
+def test_normalize_committable_messages_keeps_tool_return_metadata_without_state_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+
+    def _unexpected_load_tool_call_state(**kwargs: object) -> object:
+        _ = kwargs
+        raise AssertionError("tool state lookup should not happen")
+
+    monkeypatch.setattr(
+        llm_module,
+        "load_tool_call_state",
+        _unexpected_load_tool_call_state,
+    )
+
+    normalized = AgentLlmSession._normalize_committable_messages(
+        session,
+        request=_build_request(),
+        messages=[
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="read",
+                        tool_call_id="call-read-1",
+                        content={"ok": True, "data": {"type": "image"}},
+                        metadata={"keep": "me"},
+                    )
+                ]
+            )
+        ],
+    )
+
+    request_message = normalized[0]
+    assert isinstance(request_message, ModelRequest)
+    tool_return = request_message.parts[0]
+    assert isinstance(tool_return, ToolReturnPart)
+    assert tool_return.metadata == {"keep": "me"}
+
+
+@pytest.mark.asyncio
+async def test_generate_async_commits_final_result_messages_when_iteration_emits_none() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+
+    class _FakeInjectionManager:
+        def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
+            _ = (run_id, instance_id)
+            return []
+
+    class _FakeControlContext:
+        def raise_if_cancelled(self) -> None:
+            return None
+
+    class _FakeRunControlManager:
+        def context(self, *, run_id: str, instance_id: str) -> _FakeControlContext:
+            _ = (run_id, instance_id)
+            return _FakeControlContext()
+
+    usage = SimpleNamespace(
+        input_tokens=0,
+        cache_read_tokens=0,
+        output_tokens=0,
+        requests=0,
+        tool_calls=0,
+        details={},
+    )
+    final_response = ModelResponse(
+        parts=[TextPart(content="done")],
+        model_name="fake-model",
+    )
+    message_repo = _FakeMessageRepo(history=[])
+
+    class _FakeResult:
+        response = final_response
+
+        def new_messages(self) -> list[ModelRequest | ModelResponse]:
+            return [final_response]
+
+        def usage(self) -> object:
+            return usage
+
+    class _FakeAgentRun:
+        def __init__(self) -> None:
+            self.result = _FakeResult()
+            self._yielded = False
+
+        async def __aenter__(self) -> "_FakeAgentRun":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            tb: object,
+        ) -> bool | None:
+            _ = (exc_type, exc, tb)
+            return None
+
+        def __aiter__(self) -> "_FakeAgentRun":
+            self._yielded = False
+            return self
+
+        async def __anext__(self) -> object:
+            if self._yielded:
+                raise StopAsyncIteration
+            self._yielded = True
+            return object()
+
+        def new_messages(self) -> list[ModelRequest | ModelResponse]:
+            return []
+
+        def usage(self) -> object:
+            return usage
+
+    class _FakeAgent:
+        def iter(
+            self,
+            prompt: str | None,
+            *,
+            deps: object,
+            message_history: Sequence[ModelRequest | ModelResponse],
+            usage_limits: object,
+        ) -> _FakeAgentRun:
+            _ = (prompt, deps, message_history, usage_limits)
+            return _FakeAgentRun()
+
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        capabilities=ModelCapabilities(
+            input=ModelModalityMatrix(text=True),
+            output=ModelModalityMatrix(text=True),
+        ),
+    )
+    session.__dict__["_profile_name"] = None
+    session.__dict__["_retry_config"] = LlmRetryConfig()
+    session.__dict__["_metric_recorder"] = None
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_allowed_tools"] = ()
+    session.__dict__["_allowed_mcp_servers"] = ()
+    session.__dict__["_allowed_skills"] = ()
+    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_shared_store"] = cast(object, None)
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_message_repo"] = cast(MessageRepository, message_repo)
+    session.__dict__["_approval_ticket_repo"] = cast(object, None)
+    session.__dict__["_user_question_repo"] = None
+    session.__dict__["_run_runtime_repo"] = cast(object, None)
+    session.__dict__["_run_intent_repo"] = cast(object, None)
+    session.__dict__["_background_task_service"] = None
+    session.__dict__["_todo_service"] = None
+    session.__dict__["_monitor_service"] = None
+    session.__dict__["_workspace_manager"] = type(
+        "_WorkspaceManager",
+        (),
+        {"resolve": lambda self, **kwargs: cast(object, None)},
+    )()
+    session.__dict__["_media_asset_service"] = cast(object, None)
+    session.__dict__["_role_memory_service"] = None
+    session.__dict__["_subagent_reflection_service"] = None
+    session.__dict__["_conversation_compaction_service"] = None
+    session.__dict__["_conversation_microcompact_service"] = None
+    session.__dict__["_mcp_registry"] = McpRegistry()
+    session.__dict__["_skill_registry"] = cast(object, None)
+    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_task_execution_service"] = cast(object, object())
+    session.__dict__["_task_service"] = cast(object, None)
+    session.__dict__["_run_control_manager"] = _FakeRunControlManager()
+    session.__dict__["_tool_approval_manager"] = cast(object, None)
+    session.__dict__["_user_question_manager"] = None
+    session.__dict__["_tool_approval_policy"] = cast(object, None)
+    session.__dict__["_notification_service"] = None
+    session.__dict__["_token_usage_repo"] = None
+    session.__dict__["_fallback_middleware"] = cast(object, None)
+    session.__dict__["_im_tool_service"] = None
+    session.__dict__["_computer_runtime"] = None
+    session.__dict__["_shell_approval_repo"] = None
+    session.__dict__["_hook_service"] = None
+    session.__dict__["_injection_manager"] = _FakeInjectionManager()
+    session.__dict__["_run_event_hub"] = type(
+        "_RunEventHub", (), {"publish": lambda self, event: None}
+    )()
+    session.__dict__["_agent_repo"] = cast(object, None)
+    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
+        object, None
+    )
+
+    async def _build_agent_iteration_context(
+        **kwargs: object,
+    ) -> tuple[object, Sequence[ModelRequest | ModelResponse], str, object]:
+        _ = kwargs
+        prepared_prompt = SimpleNamespace(
+            history=(),
+            system_prompt="System prompt",
+            budget=SimpleNamespace(),
+            estimated_history_tokens_before_microcompact=0,
+            estimated_history_tokens_after_microcompact=0,
+            microcompact_compacted_message_count=0,
+            microcompact_compacted_part_count=0,
+        )
+        return prepared_prompt, [], "System prompt", _FakeAgent()
+
+    async def _close_run_scoped_llm_http_client(*, request: LLMRequest) -> None:
+        _ = request
+        return None
+
+    session.__dict__["_build_agent_iteration_context"] = _build_agent_iteration_context
+    session.__dict__["_close_run_scoped_llm_http_client"] = (
+        _close_run_scoped_llm_http_client
+    )
+
+    result = await AgentLlmSession._generate_async(
+        session,
+        _build_request(user_prompt=None),
+        skip_initial_user_prompt_persist=True,
+    )
+
+    assert result == "done"
+    assert len(message_repo.append_calls) == 1
+    assert message_repo.append_calls[0] == [final_response]
+
+
+@pytest.mark.asyncio
+async def test_generate_async_marks_tool_call_events_from_streamed_messages() -> None:
+    session = object.__new__(AgentLlmSession)
+
+    class _FakeInjectionManager:
+        def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
+            _ = (run_id, instance_id)
+            return []
+
+    class _FakeControlContext:
+        def raise_if_cancelled(self) -> None:
+            return None
+
+    class _FakeRunControlManager:
+        def context(self, *, run_id: str, instance_id: str) -> _FakeControlContext:
+            _ = (run_id, instance_id)
+            return _FakeControlContext()
+
+    usage = SimpleNamespace(
+        input_tokens=0,
+        cache_read_tokens=0,
+        output_tokens=0,
+        requests=0,
+        tool_calls=0,
+        details={},
+    )
+    tool_call_message = ModelResponse(
+        parts=[
+            ToolCallPart(
+                tool_name="read",
+                args='{"path":"docs/relay_teams.png"}',
+                tool_call_id="call-read-1",
+            )
+        ],
+        model_name="fake-model",
+    )
+    final_response = ModelResponse(
+        parts=[TextPart(content="done")],
+        model_name="fake-model",
+    )
+    message_repo = _FakeMessageRepo(history=[])
+
+    class _FakeResult:
+        response = final_response
+
+        def new_messages(self) -> list[ModelRequest | ModelResponse]:
+            return [tool_call_message, final_response]
+
+        def usage(self) -> object:
+            return usage
+
+    class _FakeAgentRun:
+        def __init__(self) -> None:
+            self.result = _FakeResult()
+            self._yielded = False
+
+        async def __aenter__(self) -> "_FakeAgentRun":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            tb: object,
+        ) -> bool | None:
+            _ = (exc_type, exc, tb)
+            return None
+
+        def __aiter__(self) -> "_FakeAgentRun":
+            self._yielded = False
+            return self
+
+        async def __anext__(self) -> object:
+            if self._yielded:
+                raise StopAsyncIteration
+            self._yielded = True
+            return object()
+
+        def new_messages(self) -> list[ModelRequest | ModelResponse]:
+            return [tool_call_message]
+
+        def usage(self) -> object:
+            return usage
+
+    class _FakeAgent:
+        def iter(
+            self,
+            prompt: str | None,
+            *,
+            deps: object,
+            message_history: Sequence[ModelRequest | ModelResponse],
+            usage_limits: object,
+        ) -> _FakeAgentRun:
+            _ = (prompt, deps, message_history, usage_limits)
+            return _FakeAgentRun()
+
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        capabilities=ModelCapabilities(
+            input=ModelModalityMatrix(text=True),
+            output=ModelModalityMatrix(text=True),
+        ),
+    )
+    session.__dict__["_profile_name"] = None
+    session.__dict__["_retry_config"] = LlmRetryConfig()
+    session.__dict__["_metric_recorder"] = None
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_allowed_tools"] = ()
+    session.__dict__["_allowed_mcp_servers"] = ()
+    session.__dict__["_allowed_skills"] = ()
+    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_shared_store"] = cast(object, None)
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_message_repo"] = cast(MessageRepository, message_repo)
+    session.__dict__["_approval_ticket_repo"] = cast(object, None)
+    session.__dict__["_user_question_repo"] = None
+    session.__dict__["_run_runtime_repo"] = cast(object, None)
+    session.__dict__["_run_intent_repo"] = cast(object, None)
+    session.__dict__["_background_task_service"] = None
+    session.__dict__["_todo_service"] = None
+    session.__dict__["_monitor_service"] = None
+    session.__dict__["_workspace_manager"] = type(
+        "_WorkspaceManager",
+        (),
+        {"resolve": lambda self, **kwargs: cast(object, None)},
+    )()
+    session.__dict__["_media_asset_service"] = cast(object, None)
+    session.__dict__["_role_memory_service"] = None
+    session.__dict__["_subagent_reflection_service"] = None
+    session.__dict__["_conversation_compaction_service"] = None
+    session.__dict__["_conversation_microcompact_service"] = None
+    session.__dict__["_mcp_registry"] = McpRegistry()
+    session.__dict__["_skill_registry"] = cast(object, None)
+    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_task_execution_service"] = cast(object, object())
+    session.__dict__["_task_service"] = cast(object, None)
+    session.__dict__["_run_control_manager"] = _FakeRunControlManager()
+    session.__dict__["_tool_approval_manager"] = cast(object, None)
+    session.__dict__["_user_question_manager"] = None
+    session.__dict__["_tool_approval_policy"] = cast(object, None)
+    session.__dict__["_notification_service"] = None
+    session.__dict__["_token_usage_repo"] = None
+    session.__dict__["_fallback_middleware"] = cast(object, None)
+    session.__dict__["_im_tool_service"] = None
+    session.__dict__["_computer_runtime"] = None
+    session.__dict__["_shell_approval_repo"] = None
+    session.__dict__["_hook_service"] = None
+    session.__dict__["_injection_manager"] = _FakeInjectionManager()
+    session.__dict__["_run_event_hub"] = type(
+        "_RunEventHub", (), {"publish": lambda self, event: None}
+    )()
+    session.__dict__["_agent_repo"] = cast(object, None)
+    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
+        object, None
+    )
+
+    async def _build_agent_iteration_context(
+        **kwargs: object,
+    ) -> tuple[object, Sequence[ModelRequest | ModelResponse], str, object]:
+        _ = kwargs
+        prepared_prompt = SimpleNamespace(
+            history=(),
+            system_prompt="System prompt",
+            budget=SimpleNamespace(),
+            estimated_history_tokens_before_microcompact=0,
+            estimated_history_tokens_after_microcompact=0,
+            microcompact_compacted_message_count=0,
+            microcompact_compacted_part_count=0,
+        )
+        return prepared_prompt, [], "System prompt", _FakeAgent()
+
+    async def _close_run_scoped_llm_http_client(*, request: LLMRequest) -> None:
+        _ = request
+        return None
+
+    session.__dict__["_build_agent_iteration_context"] = _build_agent_iteration_context
+    session.__dict__["_close_run_scoped_llm_http_client"] = (
+        _close_run_scoped_llm_http_client
+    )
+
+    result = await AgentLlmSession._generate_async(
+        session,
+        _build_request(user_prompt=None),
+        skip_initial_user_prompt_persist=True,
+    )
+
+    assert result == "done"
+    assert message_repo.append_calls == []
+
+
+@pytest.mark.asyncio
+async def test_generate_async_hydrates_history_before_each_agent_iteration() -> None:
+    session = object.__new__(AgentLlmSession)
+    persisted_prompt = (
+        "describe this image",
+        ImageUrl(
+            url="/api/sessions/session-1/media/asset-1/file",
+            media_type="image/png",
+        ),
+    )
+
+    class _FakeMediaAssetService:
+        def hydrate_user_prompt_content(self, *, content: object) -> object:
+            if content == persisted_prompt:
+                return (
+                    "describe this image",
+                    BinaryContent(
+                        data=b"image-bytes",
+                        media_type="image/png",
+                    ),
+                )
+            return content
+
+    class _FakeInjectionManager:
+        def __init__(self) -> None:
+            self._calls = 0
+
+        def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
+            _ = (run_id, instance_id)
+            self._calls += 1
+            if self._calls == 1:
+                return [
+                    SimpleNamespace(
+                        content=persisted_prompt,
+                        parts=[UserPromptPart(content=persisted_prompt)],
+                        model_dump_json=lambda: "{}",
+                    )
+                ]
+            return []
+
+    class _FakeControlContext:
+        def raise_if_cancelled(self) -> None:
+            return None
+
+    class _FakeRunControlManager:
+        def context(self, *, run_id: str, instance_id: str) -> _FakeControlContext:
+            _ = (run_id, instance_id)
+            return _FakeControlContext()
+
+    usage = SimpleNamespace(
+        input_tokens=0,
+        cache_read_tokens=0,
+        output_tokens=0,
+        requests=0,
+        tool_calls=0,
+        details={},
+    )
+
+    class _FakeResult:
+        def __init__(self) -> None:
+            self.response = ModelResponse(
+                parts=[TextPart(content="done")],
+                model_name="fake-model",
+            )
+
+        def new_messages(self) -> list[ModelRequest | ModelResponse]:
+            return []
+
+        def usage(self) -> object:
+            return usage
+
+    class _FakeAgentRun:
+        def __init__(self) -> None:
+            self.result = _FakeResult()
+            self._yielded = False
+
+        async def __aenter__(self) -> "_FakeAgentRun":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            tb: object,
+        ) -> bool | None:
+            _ = (exc_type, exc, tb)
+            return None
+
+        def __aiter__(self) -> "_FakeAgentRun":
+            self._yielded = False
+            return self
+
+        async def __anext__(self) -> object:
+            if self._yielded:
+                raise StopAsyncIteration
+            self._yielded = True
+            return object()
+
+        def new_messages(self) -> list[ModelRequest | ModelResponse]:
+            return []
+
+        def usage(self) -> object:
+            return usage
+
+    iter_histories: list[list[ModelRequest | ModelResponse]] = []
+
+    class _FakeAgent:
+        def iter(
+            self,
+            prompt: str | None,
+            *,
+            deps: object,
+            message_history: Sequence[ModelRequest | ModelResponse],
+            usage_limits: object,
+        ) -> _FakeAgentRun:
+            _ = (prompt, deps, usage_limits)
+            iter_histories.append(list(message_history))
+            return _FakeAgentRun()
+
+    prepared_prompt = SimpleNamespace(
+        history=(ModelRequest(parts=[UserPromptPart(content=persisted_prompt)]),),
+        system_prompt="System prompt",
+        budget=SimpleNamespace(),
+        estimated_history_tokens_before_microcompact=0,
+        estimated_history_tokens_after_microcompact=0,
+        microcompact_compacted_message_count=0,
+        microcompact_compacted_part_count=0,
+    )
+
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        capabilities=ModelCapabilities(
+            input=ModelModalityMatrix(text=True, image=True),
+            output=ModelModalityMatrix(text=True),
+        ),
+    )
+    session.__dict__["_profile_name"] = None
+    session.__dict__["_retry_config"] = LlmRetryConfig()
+    session.__dict__["_metric_recorder"] = None
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_allowed_tools"] = ()
+    session.__dict__["_allowed_mcp_servers"] = ()
+    session.__dict__["_allowed_skills"] = ()
+    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_shared_store"] = cast(object, None)
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_message_repo"] = cast(
+        MessageRepository, _FakeMessageRepo(history=[])
+    )
+    session.__dict__["_approval_ticket_repo"] = cast(object, None)
+    session.__dict__["_user_question_repo"] = None
+    session.__dict__["_run_runtime_repo"] = cast(object, None)
+    session.__dict__["_run_intent_repo"] = cast(object, None)
+    session.__dict__["_background_task_service"] = None
+    session.__dict__["_todo_service"] = None
+    session.__dict__["_monitor_service"] = None
+    session.__dict__["_workspace_manager"] = type(
+        "_WorkspaceManager",
+        (),
+        {"resolve": lambda self, **kwargs: cast(object, None)},
+    )()
+    session.__dict__["_media_asset_service"] = _FakeMediaAssetService()
+    session.__dict__["_role_memory_service"] = None
+    session.__dict__["_subagent_reflection_service"] = None
+    session.__dict__["_conversation_compaction_service"] = None
+    session.__dict__["_conversation_microcompact_service"] = None
+    session.__dict__["_mcp_registry"] = McpRegistry()
+    session.__dict__["_skill_registry"] = cast(object, None)
+    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_task_execution_service"] = cast(object, object())
+    session.__dict__["_task_service"] = cast(object, None)
+    session.__dict__["_run_control_manager"] = _FakeRunControlManager()
+    session.__dict__["_tool_approval_manager"] = cast(object, None)
+    session.__dict__["_user_question_manager"] = None
+    session.__dict__["_tool_approval_policy"] = cast(object, None)
+    session.__dict__["_notification_service"] = None
+    session.__dict__["_token_usage_repo"] = None
+    session.__dict__["_fallback_middleware"] = cast(object, None)
+    session.__dict__["_im_tool_service"] = None
+    session.__dict__["_computer_runtime"] = None
+    session.__dict__["_shell_approval_repo"] = None
+    session.__dict__["_hook_service"] = None
+    session.__dict__["_injection_manager"] = _FakeInjectionManager()
+    session.__dict__["_run_event_hub"] = type(
+        "_RunEventHub", (), {"publish": lambda self, event: None}
+    )()
+    session.__dict__["_agent_repo"] = cast(object, None)
+    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
+        object, None
+    )
+
+    build_calls = 0
+
+    async def _build_agent_iteration_context(
+        **kwargs: object,
+    ) -> tuple[object, Sequence[ModelRequest | ModelResponse], str, object]:
+        nonlocal build_calls
+        _ = kwargs
+        build_calls += 1
+        history = [ModelRequest(parts=[UserPromptPart(content=persisted_prompt)])]
+        return prepared_prompt, history, "System prompt", _FakeAgent()
+
+    async def _close_run_scoped_llm_http_client(*, request: LLMRequest) -> None:
+        _ = request
+        return None
+
+    session.__dict__["_build_agent_iteration_context"] = _build_agent_iteration_context
+    session.__dict__["_close_run_scoped_llm_http_client"] = (
+        _close_run_scoped_llm_http_client
+    )
+
+    result = await AgentLlmSession._generate_async(
+        session,
+        _build_request(user_prompt=None),
+        skip_initial_user_prompt_persist=True,
+    )
+
+    assert result == "done"
+    assert build_calls == 2
+    assert len(iter_histories) == 2
+    for history in iter_histories:
+        assert len(history) == 1
+        message = history[0]
+        assert isinstance(message, ModelRequest)
+        prompt = message.parts[0]
+        assert isinstance(prompt, UserPromptPart)
+        assert prompt.content[0] == "describe this image"
+        assert isinstance(prompt.content[1], BinaryContent)
+        assert prompt.content[1].data == b"image-bytes"
+
+
+@pytest.mark.asyncio
+async def test_generate_async_commits_inline_image_tool_result_without_restart(
+    tmp_path: Path,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    shared_store = SharedStateRepository(tmp_path / "tool-state.db")
+
+    class _FakeInjectionManager:
+        def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
+            _ = (run_id, instance_id)
+            return []
+
+    class _FakeControlContext:
+        def raise_if_cancelled(self) -> None:
+            return None
+
+    class _FakeRunControlManager:
+        def context(self, *, run_id: str, instance_id: str) -> _FakeControlContext:
+            _ = (run_id, instance_id)
+            return _FakeControlContext()
+
+    usage = SimpleNamespace(
+        input_tokens=0,
+        cache_read_tokens=0,
+        output_tokens=0,
+        requests=0,
+        tool_calls=0,
+        details={},
+    )
+    inline_tool_request = ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="read",
+                tool_call_id="call-read-1",
+                content={"ok": True, "data": {"type": "image"}},
+            ),
+            UserPromptPart(
+                content=(
+                    ImageUrl(
+                        url="http://127.0.0.1:8000/api/sessions/session-1/media/asset-1/file",
+                        media_type="image/png",
+                        force_download="allow-local",
+                    ),
+                )
+            ),
+        ]
+    )
+    final_response = ModelResponse(
+        parts=[TextPart(content="done")],
+        model_name="fake-model",
+    )
+
+    class _FakeResult:
+        response = final_response
+
+        def new_messages(self) -> list[ModelRequest | ModelResponse]:
+            return []
+
+        def usage(self) -> object:
+            return usage
+
+    class _FakeAgentRun:
+        def __init__(self) -> None:
+            self.result = _FakeResult()
+            self._yielded = False
+
+        async def __aenter__(self) -> "_FakeAgentRun":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            tb: object,
+        ) -> bool | None:
+            _ = (exc_type, exc, tb)
+            return None
+
+        def __aiter__(self) -> "_FakeAgentRun":
+            self._yielded = False
+            return self
+
+        async def __anext__(self) -> object:
+            if self._yielded:
+                raise StopAsyncIteration
+            self._yielded = True
+            return object()
+
+        def new_messages(self) -> list[ModelRequest | ModelResponse]:
+            return [inline_tool_request, final_response]
+
+        def usage(self) -> object:
+            return usage
+
+    iter_histories: list[list[ModelRequest | ModelResponse]] = []
+
+    class _FakeAgent:
+        def iter(
+            self,
+            prompt: str | None,
+            *,
+            deps: object,
+            message_history: Sequence[ModelRequest | ModelResponse],
+            usage_limits: object,
+        ) -> _FakeAgentRun:
+            _ = (prompt, deps, usage_limits)
+            iter_histories.append(list(message_history))
+            return _FakeAgentRun()
+
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        capabilities=ModelCapabilities(
+            input=ModelModalityMatrix(text=True, image=True),
+            output=ModelModalityMatrix(text=True),
+        ),
+    )
+    session.__dict__["_profile_name"] = None
+    session.__dict__["_retry_config"] = LlmRetryConfig()
+    session.__dict__["_metric_recorder"] = None
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_allowed_tools"] = ()
+    session.__dict__["_allowed_mcp_servers"] = ()
+    session.__dict__["_allowed_skills"] = ()
+    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_shared_store"] = shared_store
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_message_repo"] = cast(
+        MessageRepository, _FakeMessageRepo(history=[])
+    )
+    session.__dict__["_approval_ticket_repo"] = cast(object, None)
+    session.__dict__["_user_question_repo"] = None
+    session.__dict__["_run_runtime_repo"] = cast(object, None)
+    session.__dict__["_run_intent_repo"] = cast(object, None)
+    session.__dict__["_background_task_service"] = None
+    session.__dict__["_todo_service"] = None
+    session.__dict__["_monitor_service"] = None
+    session.__dict__["_workspace_manager"] = type(
+        "_WorkspaceManager",
+        (),
+        {"resolve": lambda self, **kwargs: cast(object, None)},
+    )()
+    session.__dict__["_media_asset_service"] = cast(object, None)
+    session.__dict__["_role_memory_service"] = None
+    session.__dict__["_subagent_reflection_service"] = None
+    session.__dict__["_conversation_compaction_service"] = None
+    session.__dict__["_conversation_microcompact_service"] = None
+    session.__dict__["_mcp_registry"] = McpRegistry()
+    session.__dict__["_skill_registry"] = cast(object, None)
+    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_task_execution_service"] = cast(object, object())
+    session.__dict__["_task_service"] = cast(object, None)
+    session.__dict__["_run_control_manager"] = _FakeRunControlManager()
+    session.__dict__["_tool_approval_manager"] = cast(object, None)
+    session.__dict__["_user_question_manager"] = None
+    session.__dict__["_tool_approval_policy"] = cast(object, None)
+    session.__dict__["_notification_service"] = None
+    session.__dict__["_token_usage_repo"] = None
+    session.__dict__["_fallback_middleware"] = cast(object, None)
+    session.__dict__["_im_tool_service"] = None
+    session.__dict__["_computer_runtime"] = None
+    session.__dict__["_shell_approval_repo"] = None
+    session.__dict__["_hook_service"] = None
+    session.__dict__["_injection_manager"] = _FakeInjectionManager()
+    session.__dict__["_run_event_hub"] = type(
+        "_RunEventHub", (), {"publish": lambda self, event: None}
+    )()
+    session.__dict__["_agent_repo"] = cast(object, None)
+    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
+        object, None
+    )
+
+    build_calls = 0
+
+    async def _build_agent_iteration_context(
+        **kwargs: object,
+    ) -> tuple[object, Sequence[ModelRequest | ModelResponse], str, object]:
+        nonlocal build_calls
+        _ = kwargs
+        build_calls += 1
+        prepared_prompt = SimpleNamespace(
+            history=(),
+            system_prompt="System prompt",
+            budget=SimpleNamespace(),
+            estimated_history_tokens_before_microcompact=0,
+            estimated_history_tokens_after_microcompact=0,
+            microcompact_compacted_message_count=0,
+            microcompact_compacted_part_count=0,
+        )
+        return prepared_prompt, [], "System prompt", _FakeAgent()
+
+    async def _close_run_scoped_llm_http_client(*, request: LLMRequest) -> None:
+        _ = request
+        return None
+
+    session.__dict__["_build_agent_iteration_context"] = _build_agent_iteration_context
+    session.__dict__["_close_run_scoped_llm_http_client"] = (
+        _close_run_scoped_llm_http_client
+    )
+
+    result = await AgentLlmSession._generate_async(
+        session,
+        _build_request(user_prompt=None),
+        skip_initial_user_prompt_persist=True,
+    )
+
+    assert result == "done"
+    assert build_calls == 1
+    assert iter_histories == [[]]
+    message_repo = cast(_FakeMessageRepo, session._message_repo)
+    assert len(message_repo.append_calls) == 1
+    appended_messages = message_repo.append_calls[0]
+    assert appended_messages == [inline_tool_request, final_response]
+    appended_request = appended_messages[0]
+    assert isinstance(appended_request, ModelRequest)
+    appended_prompt = appended_request.parts[1]
+    assert isinstance(appended_prompt, UserPromptPart)
+    inline_image = appended_prompt.content[0]
+    assert isinstance(inline_image, ImageUrl)
+    assert inline_image.force_download == "allow-local"
+
+
+@pytest.mark.asyncio
+async def test_generate_async_reuses_inline_tool_result_history_without_restart(
+    tmp_path: Path,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    shared_store = SharedStateRepository(tmp_path / "tool-state-replayed.db")
+
+    class _FakeInjectionManager:
+        def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
+            _ = (run_id, instance_id)
+            return []
+
+    class _FakeControlContext:
+        def raise_if_cancelled(self) -> None:
+            return None
+
+    class _FakeRunControlManager:
+        def context(self, *, run_id: str, instance_id: str) -> _FakeControlContext:
+            _ = (run_id, instance_id)
+            return _FakeControlContext()
+
+    usage = SimpleNamespace(
+        input_tokens=0,
+        cache_read_tokens=0,
+        output_tokens=0,
+        requests=0,
+        tool_calls=0,
+        details={},
+    )
+    replayed_request = ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="read",
+                tool_call_id="call-read-1",
+                content={"ok": True, "data": {"type": "image"}},
+            ),
+            UserPromptPart(
+                content=(
+                    ImageUrl(
+                        url="http://127.0.0.1:8000/api/sessions/session-1/media/asset-1/file",
+                        media_type="image/png",
+                        force_download="allow-local",
+                    ),
+                )
+            ),
+        ]
+    )
+    final_response = ModelResponse(
+        parts=[TextPart(content="done")],
+        model_name="fake-model",
+    )
+    message_repo = _FakeMessageRepo(history=[replayed_request])
+
+    class _FakeResult:
+        response = final_response
+
+        def new_messages(self) -> list[ModelRequest | ModelResponse]:
+            return []
+
+        def usage(self) -> object:
+            return usage
+
+    class _FakeAgentRun:
+        def __init__(self) -> None:
+            self.result = _FakeResult()
+            self._yielded = False
+
+        async def __aenter__(self) -> "_FakeAgentRun":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            tb: object,
+        ) -> bool | None:
+            _ = (exc_type, exc, tb)
+            return None
+
+        def __aiter__(self) -> "_FakeAgentRun":
+            self._yielded = False
+            return self
+
+        async def __anext__(self) -> object:
+            if self._yielded:
+                raise StopAsyncIteration
+            self._yielded = True
+            return object()
+
+        def new_messages(self) -> list[ModelRequest | ModelResponse]:
+            return [final_response]
+
+        def usage(self) -> object:
+            return usage
+
+    class _FakeAgent:
+        def iter(
+            self,
+            prompt: str | None,
+            *,
+            deps: object,
+            message_history: Sequence[ModelRequest | ModelResponse],
+            usage_limits: object,
+        ) -> _FakeAgentRun:
+            _ = (prompt, deps, usage_limits)
+            assert list(message_history) == [replayed_request]
+            return _FakeAgentRun()
+
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        capabilities=ModelCapabilities(
+            input=ModelModalityMatrix(text=True, image=True),
+            output=ModelModalityMatrix(text=True),
+        ),
+    )
+    session.__dict__["_profile_name"] = None
+    session.__dict__["_retry_config"] = LlmRetryConfig()
+    session.__dict__["_metric_recorder"] = None
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_allowed_tools"] = ()
+    session.__dict__["_allowed_mcp_servers"] = ()
+    session.__dict__["_allowed_skills"] = ()
+    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_shared_store"] = shared_store
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_message_repo"] = cast(MessageRepository, message_repo)
+    session.__dict__["_approval_ticket_repo"] = cast(object, None)
+    session.__dict__["_user_question_repo"] = None
+    session.__dict__["_run_runtime_repo"] = cast(object, None)
+    session.__dict__["_run_intent_repo"] = cast(object, None)
+    session.__dict__["_background_task_service"] = None
+    session.__dict__["_todo_service"] = None
+    session.__dict__["_monitor_service"] = None
+    session.__dict__["_workspace_manager"] = type(
+        "_WorkspaceManager",
+        (),
+        {"resolve": lambda self, **kwargs: cast(object, None)},
+    )()
+    session.__dict__["_media_asset_service"] = cast(object, None)
+    session.__dict__["_role_memory_service"] = None
+    session.__dict__["_subagent_reflection_service"] = None
+    session.__dict__["_conversation_compaction_service"] = None
+    session.__dict__["_conversation_microcompact_service"] = None
+    session.__dict__["_mcp_registry"] = McpRegistry()
+    session.__dict__["_skill_registry"] = cast(object, None)
+    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_task_execution_service"] = cast(object, object())
+    session.__dict__["_task_service"] = cast(object, None)
+    session.__dict__["_run_control_manager"] = _FakeRunControlManager()
+    session.__dict__["_tool_approval_manager"] = cast(object, None)
+    session.__dict__["_user_question_manager"] = None
+    session.__dict__["_tool_approval_policy"] = cast(object, None)
+    session.__dict__["_notification_service"] = None
+    session.__dict__["_token_usage_repo"] = None
+    session.__dict__["_fallback_middleware"] = cast(object, None)
+    session.__dict__["_im_tool_service"] = None
+    session.__dict__["_computer_runtime"] = None
+    session.__dict__["_shell_approval_repo"] = None
+    session.__dict__["_hook_service"] = None
+    session.__dict__["_injection_manager"] = _FakeInjectionManager()
+    session.__dict__["_run_event_hub"] = type(
+        "_RunEventHub", (), {"publish": lambda self, event: None}
+    )()
+    session.__dict__["_agent_repo"] = cast(object, None)
+    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
+        object, None
+    )
+
+    build_calls = 0
+
+    async def _build_agent_iteration_context(
+        **kwargs: object,
+    ) -> tuple[object, Sequence[ModelRequest | ModelResponse], str, object]:
+        nonlocal build_calls
+        _ = kwargs
+        build_calls += 1
+        prepared_prompt = SimpleNamespace(
+            history=(),
+            system_prompt="System prompt",
+            budget=SimpleNamespace(),
+            estimated_history_tokens_before_microcompact=0,
+            estimated_history_tokens_after_microcompact=0,
+            microcompact_compacted_message_count=0,
+            microcompact_compacted_part_count=0,
+        )
+        history = message_repo.get_history_for_conversation("conv-1")
+        return prepared_prompt, history, "System prompt", _FakeAgent()
+
+    async def _close_run_scoped_llm_http_client(*, request: LLMRequest) -> None:
+        _ = request
+        return None
+
+    session.__dict__["_build_agent_iteration_context"] = _build_agent_iteration_context
+    session.__dict__["_close_run_scoped_llm_http_client"] = (
+        _close_run_scoped_llm_http_client
+    )
+
+    result = await AgentLlmSession._generate_async(
+        session,
+        _build_request(user_prompt=None),
+        skip_initial_user_prompt_persist=True,
+    )
+
+    assert result == "done"
+    assert build_calls == 1
+    assert len(message_repo.append_calls) == 1
+    assert message_repo.append_calls[0] == [final_response]
+
+
+@pytest.mark.asyncio
+async def test_generate_async_deduplicates_against_provider_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = object.__new__(AgentLlmSession)
+    monkeypatch.setattr(
+        llm_module,
+        "load_tool_call_state",
+        lambda **kwargs: None,
+    )
+
+    class _FakeInjectionManager:
+        def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
+            _ = (run_id, instance_id)
+            return []
+
+    class _FakeControlContext:
+        def raise_if_cancelled(self) -> None:
+            return None
+
+    class _FakeRunControlManager:
+        def context(self, *, run_id: str, instance_id: str) -> _FakeControlContext:
+            _ = (run_id, instance_id)
+            return _FakeControlContext()
+
+    usage = SimpleNamespace(
+        input_tokens=0,
+        cache_read_tokens=0,
+        output_tokens=0,
+        requests=0,
+        tool_calls=0,
+        details={},
+    )
+    echoed_request = ModelRequest(
+        parts=[
+            UserPromptPart(
+                content=(
+                    "describe this image",
+                    BinaryContent(data=b"image-bytes", media_type="image/png"),
+                )
+            )
+        ]
+    )
+    final_response = ModelResponse(
+        parts=[TextPart(content="done")],
+        model_name="fake-model",
+    )
+    provider_history = [echoed_request]
+    message_repo = _FakeMessageRepo(history=[])
+
+    class _FakeResult:
+        response = final_response
+
+        def new_messages(self) -> list[ModelRequest | ModelResponse]:
+            return [echoed_request, final_response]
+
+        def usage(self) -> object:
+            return usage
+
+    class _FakeAgentRun:
+        def __init__(self) -> None:
+            self.result = _FakeResult()
+            self._yielded = False
+
+        async def __aenter__(self) -> "_FakeAgentRun":
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            tb: object,
+        ) -> bool | None:
+            _ = (exc_type, exc, tb)
+            return None
+
+        def __aiter__(self) -> "_FakeAgentRun":
+            self._yielded = False
+            return self
+
+        async def __anext__(self) -> object:
+            if self._yielded:
+                raise StopAsyncIteration
+            self._yielded = True
+            return object()
+
+        def new_messages(self) -> list[ModelRequest | ModelResponse]:
+            return [echoed_request, final_response]
+
+        def usage(self) -> object:
+            return usage
+
+    class _FakeAgent:
+        def iter(
+            self,
+            prompt: str | None,
+            *,
+            deps: object,
+            message_history: Sequence[ModelRequest | ModelResponse],
+            usage_limits: object,
+        ) -> _FakeAgentRun:
+            _ = (prompt, deps, message_history, usage_limits)
+            return _FakeAgentRun()
+
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        capabilities=ModelCapabilities(
+            input=ModelModalityMatrix(text=True, image=True),
+            output=ModelModalityMatrix(text=True),
+        ),
+    )
+    session.__dict__["_profile_name"] = None
+    session.__dict__["_retry_config"] = LlmRetryConfig()
+    session.__dict__["_metric_recorder"] = None
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_allowed_tools"] = ()
+    session.__dict__["_allowed_mcp_servers"] = ()
+    session.__dict__["_allowed_skills"] = ()
+    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_shared_store"] = cast(object, None)
+    session.__dict__["_event_bus"] = cast(object, None)
+    session.__dict__["_message_repo"] = cast(MessageRepository, message_repo)
+    session.__dict__["_approval_ticket_repo"] = cast(object, None)
+    session.__dict__["_user_question_repo"] = None
+    session.__dict__["_run_runtime_repo"] = cast(object, None)
+    session.__dict__["_run_intent_repo"] = cast(object, None)
+    session.__dict__["_background_task_service"] = None
+    session.__dict__["_todo_service"] = None
+    session.__dict__["_monitor_service"] = None
+    session.__dict__["_workspace_manager"] = type(
+        "_WorkspaceManager",
+        (),
+        {"resolve": lambda self, **kwargs: cast(object, None)},
+    )()
+    session.__dict__["_media_asset_service"] = cast(object, None)
+    session.__dict__["_role_memory_service"] = None
+    session.__dict__["_subagent_reflection_service"] = None
+    session.__dict__["_conversation_compaction_service"] = None
+    session.__dict__["_conversation_microcompact_service"] = None
+    session.__dict__["_mcp_registry"] = McpRegistry()
+    session.__dict__["_skill_registry"] = cast(object, None)
+    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_task_execution_service"] = cast(object, object())
+    session.__dict__["_task_service"] = cast(object, None)
+    session.__dict__["_run_control_manager"] = _FakeRunControlManager()
+    session.__dict__["_tool_approval_manager"] = cast(object, None)
+    session.__dict__["_user_question_manager"] = None
+    session.__dict__["_tool_approval_policy"] = cast(object, None)
+    session.__dict__["_notification_service"] = None
+    session.__dict__["_token_usage_repo"] = None
+    session.__dict__["_fallback_middleware"] = cast(object, None)
+    session.__dict__["_im_tool_service"] = None
+    session.__dict__["_computer_runtime"] = None
+    session.__dict__["_shell_approval_repo"] = None
+    session.__dict__["_hook_service"] = None
+    session.__dict__["_injection_manager"] = _FakeInjectionManager()
+    session.__dict__["_run_event_hub"] = type(
+        "_RunEventHub", (), {"publish": lambda self, event: None}
+    )()
+    session.__dict__["_agent_repo"] = cast(object, None)
+    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
+        object, None
+    )
+
+    async def _build_agent_iteration_context(
+        **kwargs: object,
+    ) -> tuple[object, Sequence[ModelRequest | ModelResponse], str, object]:
+        _ = kwargs
+        prepared_prompt = SimpleNamespace(
+            history=(),
+            system_prompt="System prompt",
+            budget=SimpleNamespace(),
+            estimated_history_tokens_before_microcompact=0,
+            estimated_history_tokens_after_microcompact=0,
+            microcompact_compacted_message_count=0,
+            microcompact_compacted_part_count=0,
+        )
+        return prepared_prompt, [], "System prompt", _FakeAgent()
+
+    async def _close_run_scoped_llm_http_client(*, request: LLMRequest) -> None:
+        _ = request
+        return None
+
+    observed_histories: list[Sequence[ModelRequest | ModelResponse]] = []
+
+    def _drop_duplicate_leading_request(
+        *,
+        history: Sequence[ModelRequest | ModelResponse],
+        new_messages: list[ModelRequest | ModelResponse],
+    ) -> list[ModelRequest | ModelResponse]:
+        observed_histories.append(history)
+        return AgentLlmSession._drop_duplicate_leading_request(
+            session,
+            history=history,
+            new_messages=new_messages,
+        )
+
+    session.__dict__["_provider_history_for_model_turn_details"] = lambda **kwargs: (
+        provider_history,
+        (),
+    )
+    session.__dict__["_drop_duplicate_leading_request"] = (
+        _drop_duplicate_leading_request
+    )
+    session.__dict__["_build_agent_iteration_context"] = _build_agent_iteration_context
+    session.__dict__["_close_run_scoped_llm_http_client"] = (
+        _close_run_scoped_llm_http_client
+    )
+
+    result = await AgentLlmSession._generate_async(
+        session,
+        _build_request(user_prompt=None),
+        skip_initial_user_prompt_persist=True,
+    )
+
+    assert result == "done"
+    assert observed_histories
+    assert all(list(history) == provider_history for history in observed_histories)
+    assert len(message_repo.append_calls) == 1
+    appended_messages = message_repo.append_calls[0]
+    assert appended_messages == [final_response]
 
 
 def test_apply_streamed_text_fallback_repairs_truncated_final_message() -> None:

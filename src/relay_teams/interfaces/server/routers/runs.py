@@ -7,7 +7,7 @@ from typing import Annotated, ClassVar, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from relay_teams.interfaces.server.deps import get_run_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
@@ -62,6 +62,13 @@ class InjectMessageRequest(BaseModel):
     source: InjectionSource = InjectionSource.USER
     content: str = Field(min_length=1)
 
+    @field_validator("content")
+    @classmethod
+    def _reject_blank_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Injection content must not be empty")
+        return value
+
 
 class ResolveToolApprovalRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
@@ -93,6 +100,13 @@ class InjectSubagentRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     content: str = Field(min_length=1)
+
+    @field_validator("content")
+    @classmethod
+    def _reject_blank_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Injection content must not be empty")
+        return value
 
 
 class StopBackgroundTaskResponse(BaseModel):
@@ -332,8 +346,11 @@ async def inject_message(
                 payload={"source": req.source.value, "length": len(req.content)},
             )
         return result.model_dump()
-    except KeyError as exc:
-        raise http_exception_for(exc) from exc
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 400),),
+        ) from exc
 
 
 @router.get("/{run_id}/tool-approvals")
@@ -582,8 +599,8 @@ async def inject_subagent(
                 payload={"length": len(req.content)},
             )
         return {"status": "ok", "instance_id": instance_id}
-    except (KeyError, RuntimeError) as exc:
+    except (KeyError, RuntimeError, ValueError) as exc:
         raise http_exception_for(
             exc,
-            mappings=((RuntimeError, 409),),
+            mappings=((RuntimeError, 409), (ValueError, 400)),
         ) from exc

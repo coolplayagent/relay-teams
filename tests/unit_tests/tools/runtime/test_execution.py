@@ -9,10 +9,13 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import mkdtemp
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from pydantic_ai.messages import BinaryContent, ImageUrl, ToolReturn
 
+import relay_teams.tools.runtime.execution as execution_module
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.notifications import NotificationService, default_notification_config
@@ -21,6 +24,12 @@ from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventName
 from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.media import (
+    MediaModality,
+    MediaRefContentPart,
+    TextContentPart,
+    UserPromptContent,
+)
 
 from relay_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRepository,
@@ -42,8 +51,11 @@ from relay_teams.tools.runtime.models import (
     ToolResultProjection,
 )
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
-from relay_teams.tools.runtime.persisted_state import load_tool_call_state
-from relay_teams.tools.runtime.persisted_state import ToolApprovalMode
+from relay_teams.tools.runtime.persisted_state import (
+    ToolApprovalMode,
+    ToolExecutionStatus,
+    load_tool_call_state,
+)
 
 
 class _TaskDraftPayload(BaseModel):
@@ -60,7 +72,7 @@ class _FakeRunEventHub:
 
 
 class _FakeInjectionRecord:
-    def __init__(self, *, source: InjectionSource, content: str) -> None:
+    def __init__(self, *, source: InjectionSource, content: UserPromptContent) -> None:
         self.source = source
         self.content = content
 
@@ -79,7 +91,7 @@ class _FakeInjectionManager:
         recipient_instance_id: str,
         *,
         source: InjectionSource,
-        content: str,
+        content: UserPromptContent,
     ) -> _FakeInjectionRecord:
         _ = (run_id, recipient_instance_id)
         record = _FakeInjectionRecord(source=source, content=content)
@@ -135,6 +147,7 @@ class _FakeDeps:
         self.trace_id = "trace-1"
         self.task_id = "task-1"
         self.session_id = "session-1"
+        self.workspace_id = "workspace-1"
         self.instance_id = "inst-1"
         self.role_id = "spec_coder"
         self.role_registry = RoleRegistry()
@@ -156,6 +169,7 @@ class _FakeDeps:
         self.hook_service: object | None = None
         self.hook_runtime_env: dict[str, str] = {}
         self.injection_manager = _FakeInjectionManager()
+        self.media_asset_service: object | None = None
         self.approval_ticket_repo = ApprovalTicketRepository(db_path)
         self.run_runtime_repo = RunRuntimeRepository(db_path)
         self.shared_store = SharedStateRepository(Path(mkdtemp()) / "state.db")
@@ -877,6 +891,214 @@ def test_execute_tool_supports_projection_with_separate_visible_and_internal_dat
         cast(dict[str, JsonValue], state.result_envelope)["internal_data"],
     )
     assert internal_data["stdout"] == "/tmp\n"
+
+
+def test_execute_tool_returns_tool_return_for_tool_content_parts() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.media_asset_service = SimpleNamespace()
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-read-image-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "docs/relay_teams.png"},
+            action=lambda: ToolResultProjection(
+                visible_data={"type": "image"},
+                tool_content_parts=(TextContentPart(text="attached image"),),
+            ),
+            allow_tool_return=True,
+        )
+    )
+
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-read-image-1",
+    )
+
+    assert isinstance(result, ToolReturn)
+    payload = cast(dict[str, JsonValue], result.return_value)
+    meta = cast(dict[str, JsonValue], payload["meta"])
+    assert payload["ok"] is True
+    assert payload["data"] == {"type": "image"}
+    assert payload["error"] is None
+    assert isinstance(meta["duration_ms"], int | float)
+    assert meta["approval_required"] is False
+    assert meta["approval_status"] == "not_required"
+    assert meta["approval_mode"] == "policy_exempt"
+    assert meta["run_yolo"] is False
+    assert meta["tool_result_event_published"] is True
+    assert result.content == "attached image"
+    assert state is not None
+    assert state.result_envelope is not None
+    assert state.call_state == {}
+
+
+def test_execute_tool_hydrates_local_media_tool_return_content() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+
+    class _FakeMediaAssetService:
+        def to_provider_user_prompt_content(self, *, parts: object) -> object:
+            _ = parts
+            return (
+                ImageUrl(
+                    url="http://127.0.0.1:8000/api/sessions/session-1/media/asset-1/file",
+                    media_type="image/png",
+                    force_download="allow-local",
+                ),
+            )
+
+        def hydrate_user_prompt_content(self, *, content: object) -> object:
+            if isinstance(content, tuple):
+                return (
+                    BinaryContent(
+                        data=b"image-bytes",
+                        media_type="image/png",
+                    ),
+                )
+            return content
+
+    deps.media_asset_service = _FakeMediaAssetService()
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-read-image-hydrated-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "docs/relay_teams.png"},
+            action=lambda: ToolResultProjection(
+                visible_data={"type": "image"},
+                tool_content_parts=(
+                    MediaRefContentPart(
+                        asset_id="asset-1",
+                        session_id=deps.session_id,
+                        modality=MediaModality.IMAGE,
+                        mime_type="image/png",
+                        url="/api/sessions/session-1/media/asset-1/file",
+                        name="relay_teams.png",
+                    ),
+                ),
+            ),
+            allow_tool_return=True,
+        )
+    )
+
+    assert isinstance(result, ToolReturn)
+    assert isinstance(result.content, tuple)
+    assert len(result.content) == 1
+    assert isinstance(result.content[0], BinaryContent)
+    assert result.content[0].data == b"image-bytes"
+
+
+def test_execute_tool_rejects_model_content_without_tool_return_support() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-read-image-no-tool-return-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "docs/relay_teams.png"},
+            action=lambda: ToolResultProjection(
+                visible_data={"type": "image"},
+                tool_content_parts=(TextContentPart(text="attached image"),),
+            ),
+        )
+    )
+
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-read-image-no-tool-return-1",
+    )
+
+    assert isinstance(result, dict)
+    assert result["ok"] is False
+    error = cast(dict[str, JsonValue], result["error"])
+    assert error["message"] == (
+        "Tool read produced model content without enabling tool returns."
+    )
+    assert state is not None
+    assert state.execution_status == ToolExecutionStatus.FAILED
+    assert state.result_envelope is not None
+    record = cast(dict[str, JsonValue], state.result_envelope)
+    assert record["tool"] == "read"
+    assert cast(dict[str, JsonValue], record["visible_result"]) == result
+    tool_result_payloads = _tool_result_payloads(deps)
+    assert len(tool_result_payloads) == 1
+    assert tool_result_payloads[0]["tool_name"] == "read"
+    assert tool_result_payloads[0]["tool_call_id"] == "call-read-image-no-tool-return-1"
+    assert tool_result_payloads[0]["error"] is True
+    assert tool_result_payloads[0]["result"] == result
+
+
+def test_tool_return_content_handles_empty_missing_media_and_hydrated_text() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+
+    assert (
+        execution_module._tool_return_content(
+            ctx=cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            tool_content_parts=(),
+        )
+        == ""
+    )
+
+    media_part = MediaRefContentPart(
+        asset_id="asset-1",
+        session_id=deps.session_id,
+        modality=MediaModality.IMAGE,
+        mime_type="image/png",
+        url="/api/sessions/session-1/media/asset-1/file",
+        name="relay_teams.png",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Tool read returned media content without media asset support",
+    ):
+        execution_module._tool_return_content(
+            ctx=cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            tool_content_parts=(media_part,),
+        )
+
+    class _FakeMediaAssetService:
+        def to_provider_user_prompt_content(self, *, parts: object) -> object:
+            _ = parts
+            return ("attached image",)
+
+        def hydrate_user_prompt_content(self, *, content: object) -> object:
+            _ = content
+            return "flattened image"
+
+    deps.media_asset_service = _FakeMediaAssetService()
+
+    assert (
+        execution_module._tool_return_content(
+            ctx=cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            tool_content_parts=(media_part,),
+        )
+        == "flattened image"
+    )
 
 
 def test_load_tool_call_state_tolerates_legacy_rows_without_yolo_fields() -> None:
