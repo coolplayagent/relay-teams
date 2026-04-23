@@ -685,8 +685,9 @@ async def test_execute_preserves_existing_runtime_active_tools(
 
 
 @pytest.mark.asyncio
-async def test_execute_provider_uses_initial_active_local_tools_only(
+async def test_execute_provider_keeps_authorized_local_tools_registered(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider_factory = _RoleCapturingProviderFactory()
     role = RoleDefinition(
@@ -732,6 +733,72 @@ async def test_execute_provider_uses_initial_active_local_tools_only(
         workspace_id="default",
         conversation_id=build_conversation_id("session-1", "reader"),
     )
+    runtime_tools = RuntimeToolsSnapshot(
+        local_tools=(
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="activate_tools",
+                description="Activate tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="tool_search",
+                description="Discover tools.",
+            ),
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="read",
+                description="Read files.",
+            ),
+        ),
+    )
+    fake_workspace = SimpleNamespace(
+        ref=SimpleNamespace(
+            workspace_id="default",
+            conversation_id=build_conversation_id("session-1", "reader"),
+        ),
+        scope_root=tmp_path,
+        resolve_workdir=lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        type(service.workspace_manager),
+        "resolve",
+        lambda self, **kwargs: fake_workspace,
+    )
+
+    async def _fake_prepare_runtime_snapshot(
+        *,
+        role: RoleDefinition,
+        task: TaskEnvelope,
+        working_directory: Path | None,
+        worktree_root: Path | None,
+        workspace: object | None,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        objective: str,
+        existing_runtime_active_tools_json: str = "",
+    ) -> PreparedRuntimeSnapshot:
+        del role, task, working_directory, worktree_root, workspace
+        del shared_state_snapshot, objective
+        return PreparedRuntimeSnapshot(
+            prompt_sections=RuntimePromptSections(
+                prompt="runtime prompt",
+                base_instructions=(
+                    "Active Local Tools: read\nLocal Tools: read\nbase instructions"
+                ),
+            ),
+            runtime_tools_json=json.dumps(runtime_tools.model_dump(mode="json")),
+            runtime_active_tools_json=service._build_runtime_active_tools_json(
+                runtime_tools=runtime_tools,
+                existing_runtime_active_tools_json=existing_runtime_active_tools_json,
+            ),
+            user_prompt="read a file",
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_prepare_runtime_snapshot",
+        _fake_prepare_runtime_snapshot,
+    )
     task = TaskEnvelope(
         task_id="task-1",
         session_id="session-1",
@@ -759,7 +826,7 @@ async def test_execute_provider_uses_initial_active_local_tools_only(
     )
 
     runtime_record = agent_repo.get_instance(instance.instance_id)
-    assert provider_factory.role_tools_seen == [()]
+    assert provider_factory.role_tools_seen == [("read",)]
     assert json.loads(runtime_record.runtime_active_tools_json) == [
         "tool_search",
         "activate_tools",
@@ -769,6 +836,7 @@ async def test_execute_provider_uses_initial_active_local_tools_only(
 @pytest.mark.asyncio
 async def test_execute_keeps_explicit_tools_callable_without_discovery_tools(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider_factory = _RoleCapturingProviderFactory()
     role = RoleDefinition(
@@ -813,6 +881,62 @@ async def test_execute_keeps_explicit_tools_callable_without_discovery_tools(
         "reader",
         workspace_id="default",
         conversation_id=build_conversation_id("session-1", "reader"),
+    )
+    runtime_tools = RuntimeToolsSnapshot(
+        local_tools=(
+            RuntimeToolSnapshotEntry(
+                source="local",
+                name="read",
+                description="Read files.",
+            ),
+        ),
+    )
+    fake_workspace = SimpleNamespace(
+        ref=SimpleNamespace(
+            workspace_id="default",
+            conversation_id=build_conversation_id("session-1", "reader"),
+        ),
+        scope_root=tmp_path,
+        resolve_workdir=lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        type(service.workspace_manager),
+        "resolve",
+        lambda self, **kwargs: fake_workspace,
+    )
+
+    async def _fake_prepare_runtime_snapshot(
+        *,
+        role: RoleDefinition,
+        task: TaskEnvelope,
+        working_directory: Path | None,
+        worktree_root: Path | None,
+        workspace: object | None,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        objective: str,
+        existing_runtime_active_tools_json: str = "",
+    ) -> PreparedRuntimeSnapshot:
+        del role, task, working_directory, worktree_root, workspace
+        del shared_state_snapshot, objective
+        return PreparedRuntimeSnapshot(
+            prompt_sections=RuntimePromptSections(
+                prompt="runtime prompt",
+                base_instructions=(
+                    "Active Local Tools: read\nLocal Tools: read\nbase instructions"
+                ),
+            ),
+            runtime_tools_json=json.dumps(runtime_tools.model_dump(mode="json")),
+            runtime_active_tools_json=service._build_runtime_active_tools_json(
+                runtime_tools=runtime_tools,
+                existing_runtime_active_tools_json=existing_runtime_active_tools_json,
+            ),
+            user_prompt="read a file",
+        )
+
+    monkeypatch.setattr(
+        service,
+        "_prepare_runtime_snapshot",
+        _fake_prepare_runtime_snapshot,
     )
     task = TaskEnvelope(
         task_id="task-1",
@@ -1015,7 +1139,7 @@ async def test_execute_next_turn_uses_tools_activated_by_activate_tools(
     )
 
     runtime_record = agent_repo.get_instance(instance.instance_id)
-    assert provider_factory.role_tools_seen == [(), ("read",)]
+    assert provider_factory.role_tools_seen == [("read",), ("read",)]
     assert json.loads(runtime_record.runtime_active_tools_json) == [
         "tool_search",
         "activate_tools",

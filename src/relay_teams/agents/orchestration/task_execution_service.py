@@ -234,15 +234,10 @@ class TaskExecutionService(BaseModel):
             role_id=role_id,
             workspace_id=workspace.ref.workspace_id,
         )
-        role_for_execution = self._role_with_active_local_tools(
-            role=role_for_run,
-            session_id=task.session_id,
-            runtime_active_tools_json=instance_record.runtime_active_tools_json,
-        )
         runner = SubAgentRunner(
-            role=role_for_execution,
+            role=role_for_run,
             prompt_builder=self.prompt_builder,
-            provider=self.provider_factory(role_for_execution, task.session_id),
+            provider=self.provider_factory(role_for_run, task.session_id),
         )
         snapshot = self._shared_state_snapshot(
             session_id=task.session_id,
@@ -892,33 +887,6 @@ class TaskExecutionService(BaseModel):
             if isinstance(item, str):
                 parsed_names.append(item)
         return tuple(parsed_names)
-
-    def _role_with_active_local_tools(
-        self,
-        *,
-        role: RoleDefinition,
-        session_id: str,
-        runtime_active_tools_json: str,
-    ) -> RoleDefinition:
-        tool_registry = cast("ToolRegistry", self.tool_registry)
-        authorized_local_tools = tool_registry.resolve_names(
-            role.tools,
-            context=ToolResolutionContext(session_id=session_id),
-        )
-        active_local_tools = self._resolve_active_local_tools(
-            authorized_local_tools=authorized_local_tools,
-            runtime_active_tools_json=runtime_active_tools_json,
-        )
-        active_local_tool_set = set(active_local_tools)
-        return role.model_copy(
-            update={
-                "tools": tuple(
-                    tool_name
-                    for tool_name in role.tools
-                    if tool_name in active_local_tool_set
-                )
-            }
-        )
 
     def _resolve_active_local_tools(
         self,

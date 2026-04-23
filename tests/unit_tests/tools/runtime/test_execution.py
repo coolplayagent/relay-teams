@@ -16,6 +16,12 @@ import pytest
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.notifications import NotificationService, default_notification_config
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agents.instances.models import (
+    RuntimeToolSnapshotEntry,
+    RuntimeToolsSnapshot,
+)
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
@@ -154,6 +160,7 @@ class _FakeDeps:
         self.hook_service: object | None = None
         self.hook_runtime_env: dict[str, str] = {}
         self.injection_manager = _FakeInjectionManager()
+        self.agent_repo: AgentInstanceRepository | None = None
         self.approval_ticket_repo = ApprovalTicketRepository(db_path)
         self.run_runtime_repo = RunRuntimeRepository(db_path)
         self.shared_store = SharedStateRepository(Path(mkdtemp()) / "state.db")
@@ -568,6 +575,103 @@ def test_execute_tool_marks_value_error_as_non_retryable() -> None:
     assert result["ok"] is False
     assert error["type"] == "validation_error"
     assert error["retryable"] is False
+
+
+def test_execute_tool_blocks_deferred_local_tools_until_activation() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.agent_repo = AgentInstanceRepository(Path(mkdtemp()) / "instances.db")
+    deps.agent_repo.upsert_instance(
+        run_id=deps.run_id,
+        trace_id=deps.trace_id,
+        session_id=deps.session_id,
+        instance_id=deps.instance_id,
+        role_id=deps.role_id,
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        status=InstanceStatus.IDLE,
+    )
+    deps.agent_repo.update_runtime_snapshot(
+        deps.instance_id,
+        runtime_system_prompt="runtime prompt",
+        runtime_tools_json=RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="tool_search",
+                    description="Discover tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="activate_tools",
+                    description="Activate tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read files.",
+                ),
+            ),
+        ).model_dump_json(),
+        runtime_active_tools_json='["tool_search","activate_tools"]',
+    )
+    ctx = _FakeCtx(deps)
+    action_calls: list[str] = []
+
+    deferred_result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: action_calls.append("read") or "hello",
+        )
+    )
+
+    deferred_error = cast(dict[str, JsonValue], deferred_result["error"])
+    assert deferred_result["ok"] is False
+    assert deferred_error["type"] == "validation_error"
+    assert "currently deferred" in str(deferred_error["message"])
+    assert action_calls == []
+
+    deps.agent_repo.update_runtime_snapshot(
+        deps.instance_id,
+        runtime_system_prompt="runtime prompt",
+        runtime_tools_json=RuntimeToolsSnapshot(
+            local_tools=(
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="tool_search",
+                    description="Discover tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="activate_tools",
+                    description="Activate tools.",
+                ),
+                RuntimeToolSnapshotEntry(
+                    source="local",
+                    name="read",
+                    description="Read files.",
+                ),
+            ),
+        ).model_dump_json(),
+        runtime_active_tools_json='["tool_search","activate_tools","read"]',
+    )
+
+    activated_result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: action_calls.append("read") or "hello",
+        )
+    )
+
+    assert activated_result["ok"] is True
+    assert activated_result["data"] == "hello"
+    assert action_calls == ["read"]
 
 
 def test_execute_tool_call_rehydrates_pydantic_model_lists_from_future_annotations() -> (
