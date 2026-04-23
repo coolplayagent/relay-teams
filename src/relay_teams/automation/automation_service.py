@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Callable
+from typing import Callable, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import JsonValue
@@ -75,7 +75,7 @@ class AutomationService:
         workspace_service: WorkspaceService | None = None,
         session_ingress_service: GatewaySessionIngressService | None = None,
         role_registry: RoleRegistry | None = None,
-        get_role_registry: Callable[[], RoleRegistry | None] | None = None,
+        get_role_registry: Optional[Callable[[], Optional[RoleRegistry]]] = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
     ) -> None:
         self._repository = repository
