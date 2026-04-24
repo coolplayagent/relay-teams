@@ -23,6 +23,7 @@ LOGGER = get_logger(__name__)
 _WRITE_COORDINATORS: dict[str, RLock] = {}
 _WRITE_COORDINATORS_LOCK = RLock()
 _ASYNC_WRITE_COORDINATORS: dict[str, asyncio.Lock] = {}
+_RESOLVED_DB_PATH_KEYS: dict[str, str] = {}
 ResultT = TypeVar("ResultT")
 
 
@@ -239,8 +240,26 @@ def run_sqlite_write_with_retry(
     )
 
 
+def _resolved_db_path_key(db_path: Path) -> str:
+    candidate = Path(db_path)
+    raw_key = str(candidate)
+    if not candidate.is_absolute():
+        return str(candidate.resolve(strict=False))
+    with _WRITE_COORDINATORS_LOCK:
+        cached = _RESOLVED_DB_PATH_KEYS.get(raw_key)
+        if cached is not None:
+            return cached
+    resolved_key = str(candidate.resolve(strict=False))
+    with _WRITE_COORDINATORS_LOCK:
+        existing = _RESOLVED_DB_PATH_KEYS.get(raw_key)
+        if existing is not None:
+            return existing
+        _RESOLVED_DB_PATH_KEYS[raw_key] = resolved_key
+        return resolved_key
+
+
 def _write_coordinator_for(db_path: Path) -> RLock:
-    key = str(Path(db_path).resolve(strict=False))
+    key = _resolved_db_path_key(db_path)
     with _WRITE_COORDINATORS_LOCK:
         coordinator = _WRITE_COORDINATORS.get(key)
         if coordinator is None:
@@ -250,7 +269,7 @@ def _write_coordinator_for(db_path: Path) -> RLock:
 
 
 def _async_write_coordinator_for(db_path: Path) -> asyncio.Lock:
-    key = str(Path(db_path).resolve(strict=False))
+    key = _resolved_db_path_key(db_path)
     coordinator = _ASYNC_WRITE_COORDINATORS.get(key)
     if coordinator is None:
         coordinator = asyncio.Lock()

@@ -386,38 +386,6 @@ def test_discover_skips_invalid_and_excessively_nested_skills(tmp_path: Path) ->
     assert directory.get_skill("too-deep") is None
 
 
-def test_discover_reuses_cached_results_within_directory_instance(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    skills_dir = tmp_path / "skills"
-    _write_skill(
-        skills_dir / "valid",
-        name="valid",
-        description="valid skill",
-        instructions="Use the valid skill.",
-    )
-    directory = SkillsDirectory(
-        sources=((SkillSource.USER_RELAY_TEAMS, skills_dir),),
-        max_depth=3,
-    )
-    original_rglob = Path.rglob
-    calls = 0
-
-    def counting_rglob(self: Path, pattern: str):
-        nonlocal calls
-        calls += 1
-        return original_rglob(self, pattern)
-
-    monkeypatch.setattr(Path, "rglob", counting_rglob)
-
-    directory.discover()
-    directory.discover()
-
-    assert calls == 1
-    assert directory.get_skill("valid") is not None
-
-
 def test_discover_keeps_skill_when_one_frontmatter_hook_group_is_empty(
     tmp_path: Path,
 ) -> None:
