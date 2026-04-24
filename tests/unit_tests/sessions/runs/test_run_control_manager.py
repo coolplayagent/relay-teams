@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic_ai.messages import UserPromptPart
 
-from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
@@ -87,6 +87,66 @@ def test_release_paused_subagent_clears_blocking() -> None:
     assert released is not None
     assert mgr.get_paused_subagent("session-1") is None
     assert mgr.is_subagent_stop_requested(run_id="run-1", instance_id="inst-1") is False
+
+
+def test_get_coordinator_instance_id_uses_assigned_ephemeral_root(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_control_ephemeral_root.db"
+    agent_repo = AgentInstanceRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    mgr = RunControlManager()
+    mgr.bind_runtime(
+        run_event_hub=RunEventHub(),
+        injection_manager=RunInjectionManager(),
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        message_repo=MessageRepository(db_path),
+        event_bus=EventLog(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+    )
+    child_task = TaskEnvelope(
+        task_id="task-child",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        role_id="worker",
+        objective="child work",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="handle follow-up",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(child_task)
+    _ = task_repo.create(root_task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-ephemeral-root",
+        role_id="Coordinator",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        status=InstanceStatus.RUNNING,
+        lifecycle=InstanceLifecycle.EPHEMERAL,
+    )
+    task_repo.update_status(
+        root_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id="inst-ephemeral-root",
+    )
+
+    assert (
+        mgr.get_coordinator_instance_id(run_id="run-1", session_id="session-1")
+        == "inst-ephemeral-root"
+    )
+    assert agent_repo.get_session_role_instance_id("session-1", "Coordinator") is None
 
 
 def test_context_raises_when_cancelled() -> None:

@@ -618,7 +618,14 @@ class RunControlManager:
     def get_coordinator_instance_id(
         self, *, run_id: str, session_id: str
     ) -> str | None:
-        coordinator_role_id = self._root_role_id_for_run(run_id)
+        coordinator_role_id = None
+        for record in self._require_task_repo().list_by_trace(run_id):
+            if record.envelope.parent_task_id is not None:
+                continue
+            if record.assigned_instance_id:
+                return record.assigned_instance_id
+            coordinator_role_id = record.envelope.role_id
+            break
         if coordinator_role_id is None:
             return None
         return self._require_agent_repo().get_session_role_instance_id(
