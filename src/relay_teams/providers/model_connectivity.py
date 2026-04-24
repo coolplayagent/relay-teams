@@ -1803,6 +1803,23 @@ class ModelConnectivityProbeService:
         if config.provider == ProviderType.CODEAGENT and self._is_event_stream_response(
             response
         ):
+            error_message = self._extract_error_message(response_payload)
+            if error_message is not None:
+                return ModelConnectivityProbeResult(
+                    ok=False,
+                    provider=config.provider,
+                    model=config.model,
+                    latency_ms=latency_ms,
+                    checked_at=checked_at,
+                    diagnostics=ModelConnectivityDiagnostics(
+                        endpoint_reachable=True,
+                        auth_valid=True,
+                        rate_limited=False,
+                    ),
+                    error_code="invalid_response",
+                    error_message=error_message,
+                    retryable=False,
+                )
             token_usage = None
             if isinstance(response_payload, dict):
                 token_usage = self._extract_token_usage(response_payload.get("usage"))
@@ -2090,7 +2107,7 @@ class ModelConnectivityProbeService:
                     if isinstance(value, str) and value.strip():
                         model_id = value.strip()
                         break
-            if model_id is None or model_id in seen_model_ids:
+            if model_id is None or not model_id or model_id in seen_model_ids:
                 continue
             seen_model_ids.add(model_id)
             model_entries.append(

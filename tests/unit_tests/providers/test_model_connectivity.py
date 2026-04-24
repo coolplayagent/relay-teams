@@ -619,6 +619,46 @@ def test_probe_codeagent_accepts_event_stream_success_without_json(monkeypatch) 
     assert result.token_usage is None
 
 
+def test_probe_codeagent_rejects_event_stream_error_payload(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(["session-access-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    text='data: {"error":{"message":"invalid codeagent model"}}\n\n',
+                ),
+            )
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.CODEAGENT,
+                model="codeagent-chat",
+                codeagent_auth=CodeAgentAuthConfig(
+                    refresh_token="refresh-token",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.error_code == "invalid_response"
+    assert result.error_message == "invalid codeagent model"
+
+
 def test_probe_prefers_fresh_codeagent_oauth_session_over_saved_refresh_token(
     monkeypatch,
 ) -> None:
@@ -1603,6 +1643,23 @@ def test_extract_codeagent_model_entries_reads_models_field() -> None:
         "codeagent-chat",
         "codeagent-coder",
     )
+
+
+def test_extract_codeagent_model_entries_skips_blank_model_ids() -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    entries = service._extract_codeagent_model_entries(
+        {
+            "models": [
+                "   ",
+                {"name": "  "},
+                {"model": "codeagent-chat"},
+            ]
+        }
+    )
+
+    assert entries is not None
+    assert tuple(entry.model for entry in entries) == ("codeagent-chat",)
 
 
 def test_discover_models_merges_saved_maas_password_when_override_omits_it(
