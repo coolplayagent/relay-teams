@@ -11,6 +11,8 @@ export async function sendUserPrompt(
     thinking = null,
     targetRoleId = null,
     inputParts = null,
+    skills = null,
+    displayInputParts = null,
 ) {
     const resolvedInput = Array.isArray(inputParts) && inputParts.length > 0
         ? inputParts
@@ -28,6 +30,10 @@ export async function sendUserPrompt(
                 yolo: yolo === true,
                 thinking: thinking || { enabled: false, effort: null },
                 target_role_id: targetRoleId || null,
+                skills: Array.isArray(skills) && skills.length > 0 ? skills : null,
+                display_input: Array.isArray(displayInputParts) && displayInputParts.length > 0
+                    ? displayInputParts
+                    : [],
             }),
         },
         'Failed to create run',

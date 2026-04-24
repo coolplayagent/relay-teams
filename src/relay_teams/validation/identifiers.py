@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Optional
 
 from pydantic import BeforeValidator
 
@@ -64,3 +64,23 @@ def require_persisted_identifier(value: object, *, field_name: str) -> str:
     if normalized is None:
         raise ValueError(f"Invalid persisted {field_name}")
     return normalized
+
+
+def normalize_identifier_tuple(
+    value: object,
+    *,
+    field_name: str,
+) -> Optional[tuple[str, ...]]:
+    if value is None:
+        return None
+    raw_items: tuple[object, ...]
+    if isinstance(value, str):
+        raw_items = (value,)
+    elif isinstance(value, list | tuple):
+        raw_items = tuple(value)
+    else:
+        raise ValueError(f"Invalid persisted {field_name}")
+    return tuple(
+        require_persisted_identifier(raw_item, field_name=field_name)
+        for raw_item in raw_items
+    )

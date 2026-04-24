@@ -19,6 +19,7 @@ from relay_teams.workspace import (
     WorkspaceDiffFile,
     WorkspaceDiffListing,
     WorkspaceRecord,
+    WorkspaceSearchResponse,
     WorkspaceService,
     WorkspaceSnapshot,
     WorkspaceTreeListing,
@@ -209,6 +210,28 @@ async def get_workspace_tree_listing(
             service.get_workspace_tree_listing,
             workspace_id,
             directory_path=path,
+            mount_name=mount,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workspace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{workspace_id}/search", response_model=WorkspaceSearchResponse)
+async def search_workspace_paths(
+    workspace_id: RequiredIdentifierStr,
+    query: Annotated[str, Query()] = "",
+    limit: Annotated[int, Query(ge=1, le=500)] = 40,
+    mount: Annotated[str | None, Query()] = None,
+    service: WorkspaceService = Depends(get_workspace_service),
+) -> WorkspaceSearchResponse:
+    try:
+        return await asyncio.to_thread(
+            service.search_workspace_paths,
+            workspace_id,
+            query=query,
+            limit=limit,
             mount_name=mount,
         )
     except KeyError as exc:

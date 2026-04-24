@@ -7,8 +7,14 @@ from typing import cast
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from relay_teams.interfaces.server.deps import get_run_service
+from relay_teams.interfaces.server.deps import get_run_service, get_skill_registry
 from relay_teams.interfaces.server.routers import runs
+from relay_teams.media import (
+    ContentPart,
+    InlineMediaContentPart,
+    MediaModality,
+    MediaRefContentPart,
+)
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.runs.user_question_models import UserQuestionAnswer
 
@@ -194,10 +200,86 @@ class _FakeRunService:
         }
 
 
-def _create_client(fake_service: _FakeRunService) -> TestClient:
+class _FakeSkillRegistry:
+    def __init__(self) -> None:
+        self.resolve_calls: list[tuple[tuple[str, ...], bool, str | None]] = []
+
+    def resolve_known(
+        self,
+        skill_names: tuple[str, ...],
+        *,
+        strict: bool = True,
+        consumer: str | None = None,
+        expand_wildcards: bool = True,
+    ) -> tuple[str, ...]:
+        _ = expand_wildcards
+        self.resolve_calls.append((skill_names, strict, consumer))
+        if "missing" in skill_names:
+            raise ValueError("Unknown skills: ['missing']")
+        return tuple(skill_names)
+
+
+class _FakeSessionRecord:
+    def __init__(self) -> None:
+        self.workspace_id = "workspace-1"
+
+
+class _FakeSessionService:
+    def get_session(self, session_id: str) -> _FakeSessionRecord:
+        _ = session_id
+        return _FakeSessionRecord()
+
+
+class _FakeMediaAssetService:
+    def __init__(self) -> None:
+        self.normalize_calls: list[tuple[ContentPart, ...]] = []
+
+    def normalize_content_parts(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        parts: tuple[ContentPart, ...],
+    ) -> tuple[ContentPart, ...]:
+        _ = session_id, workspace_id
+        self.normalize_calls.append(parts)
+        normalized: list[ContentPart] = []
+        for index, part in enumerate(parts):
+            if isinstance(part, InlineMediaContentPart):
+                normalized.append(
+                    MediaRefContentPart(
+                        asset_id=f"asset-{len(self.normalize_calls)}-{index}",
+                        session_id="session-1",
+                        modality=part.modality,
+                        mime_type=part.mime_type,
+                        name=part.name,
+                        url=f"/api/sessions/session-1/media/asset-{index}",
+                        size_bytes=part.size_bytes,
+                    )
+                )
+                continue
+            normalized.append(part)
+        return tuple(normalized)
+
+
+class _FakeContainer:
+    def __init__(self, media_asset_service: _FakeMediaAssetService) -> None:
+        self.session_service = _FakeSessionService()
+        self.media_asset_service = media_asset_service
+
+
+def _create_client(
+    fake_service: _FakeRunService,
+    fake_skill_registry: _FakeSkillRegistry | None = None,
+    fake_container: _FakeContainer | None = None,
+) -> TestClient:
     app = FastAPI()
+    registry = fake_skill_registry or _FakeSkillRegistry()
+    if fake_container is not None:
+        app.state.container = fake_container
     app.include_router(runs.router, prefix="/api")
     app.dependency_overrides[get_run_service] = lambda: fake_service
+    app.dependency_overrides[get_skill_registry] = lambda: registry
     return TestClient(app)
 
 
@@ -237,6 +319,88 @@ def test_create_run_route_accepts_yolo() -> None:
     assert created.intent == "hello"
     assert created.yolo is True
     assert fake_service.started_run_ids == ["run-1"]
+
+
+def test_create_run_route_accepts_explicit_skills() -> None:
+    fake_service = _FakeRunService()
+    fake_skill_registry = _FakeSkillRegistry()
+    client = _create_client(fake_service, fake_skill_registry)
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "session_id": "session-1",
+            "input": [{"kind": "text", "text": "summarize"}],
+            "execution_mode": "ai",
+            "skills": ["pdf"],
+        },
+    )
+
+    assert response.status_code == 200
+    created = fake_service.created_run_inputs[0]
+    assert created.intent == "summarize"
+    assert created.skills == ("pdf",)
+    assert fake_skill_registry.resolve_calls == [
+        (("pdf",), True, "interfaces.server.routers.runs.create_run")
+    ]
+
+
+def test_create_run_route_reuses_input_media_refs_for_display_input() -> None:
+    fake_service = _FakeRunService()
+    fake_media_service = _FakeMediaAssetService()
+    client = _create_client(
+        fake_service,
+        fake_container=_FakeContainer(fake_media_service),
+    )
+    inline_media = {
+        "kind": "inline_media",
+        "modality": MediaModality.IMAGE.value,
+        "mime_type": "image/png",
+        "base64_data": "aGVsbG8=",
+        "name": "diagram.png",
+        "size_bytes": 5,
+    }
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "session_id": "session-1",
+            "input": [{"kind": "text", "text": "analyze"}, inline_media],
+            "display_input": [
+                {"kind": "text", "text": "/vision analyze"},
+                inline_media,
+            ],
+            "execution_mode": "ai",
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(fake_media_service.normalize_calls) == 1
+    created = fake_service.created_run_inputs[0]
+    input_media = created.input[1]
+    display_media = created.display_input[1]
+    assert isinstance(input_media, MediaRefContentPart)
+    assert isinstance(display_media, MediaRefContentPart)
+    assert input_media.asset_id == display_media.asset_id
+    assert created.display_intent == "/vision analyze\n\n[image: diagram.png]"
+
+
+def test_create_run_route_rejects_unknown_explicit_skill() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "session_id": "session-1",
+            "input": [{"kind": "text", "text": "summarize"}],
+            "execution_mode": "ai",
+            "skills": ["missing"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert fake_service.created_run_inputs == []
 
 
 def test_create_run_route_rejects_none_like_session_id() -> None:

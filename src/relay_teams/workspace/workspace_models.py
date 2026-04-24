@@ -403,6 +403,23 @@ class WorkspaceTreeListing(BaseModel):
     children: tuple[WorkspaceTreeNode, ...] = ()
 
 
+class WorkspaceSearchResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    kind: WorkspaceTreeNodeKind
+    mount_name: RequiredIdentifierStr = "default"
+
+
+class WorkspaceSearchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: RequiredIdentifierStr
+    query: str = ""
+    results: tuple[WorkspaceSearchResult, ...] = ()
+
+
 class WorkspaceDiffFileSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

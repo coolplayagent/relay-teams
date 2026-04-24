@@ -6,6 +6,7 @@ import pytest
 from relay_teams.validation import (
     OptionalIdentifierStr,
     RequiredIdentifierStr,
+    normalize_identifier_tuple,
     normalize_persisted_text,
     parse_persisted_datetime_or_none,
     require_persisted_identifier,
@@ -60,3 +61,15 @@ def test_parse_persisted_datetime_or_none_rejects_invalid_isoformat() -> None:
     assert parse_persisted_datetime_or_none("None") is None
     assert parse_persisted_datetime_or_none("not-a-datetime") is None
     assert parse_persisted_datetime_or_none("2026-03-30T06:52:47+00:00") is not None
+
+
+def test_normalize_identifier_tuple_rejects_mapping_payloads() -> None:
+    with pytest.raises(ValueError, match="Invalid persisted skills"):
+        normalize_identifier_tuple({"time": True}, field_name="skills")
+
+
+def test_normalize_identifier_tuple_accepts_explicit_sequences() -> None:
+    assert normalize_identifier_tuple([" time ", "pdf"], field_name="skills") == (
+        "time",
+        "pdf",
+    )

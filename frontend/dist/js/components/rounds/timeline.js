@@ -21,6 +21,7 @@ import {
     renderPromptContentParts,
     summarizePromptContentParts,
 } from '../messageRenderer/helpers/prompt.js';
+import { renderPromptTokenizedText } from '../../utils/promptTokens.js';
 import { clearRoundNavigator, renderRoundNavigator, setActiveRoundNav } from './navigator.js';
 import { applyRoundPage, fetchInitialRoundsPage, fetchOlderRoundsPage } from './paging.js';
 import { roundsState } from './state.js';
@@ -619,7 +620,7 @@ function buildRoundIntentBlock(intentText, intentParts = null) {
     const bodyEl = block.querySelector('.round-detail-intent-content');
     const collapseBtn = block.querySelector('.round-detail-intent-collapse');
     if (previewEl) {
-        previewEl.textContent = normalized;
+        renderPromptTokenizedText(previewEl, normalized);
     }
     if (toggleEl) {
         toggleEl.textContent = t('rounds.expand');
@@ -647,8 +648,23 @@ function buildRoundIntentBlock(intentText, intentParts = null) {
 }
 
 function renderRoundIntentStructuredContent(bodyEl, parts) {
-    renderPromptContentParts(bodyEl, parts, {
-        enableWorkspaceImagePreview: false,
+    bodyEl.replaceChildren();
+    const normalizedParts = Array.isArray(parts) ? parts : [];
+    normalizedParts.forEach(part => {
+        if (String(part?.kind || '') === 'text') {
+            const textEl = document.createElement('div');
+            textEl.className = 'msg-text round-detail-intent-text';
+            renderPromptTokenizedText(textEl, String(part.text || ''));
+            bodyEl.appendChild(textEl);
+            return;
+        }
+        const partHost = document.createElement('div');
+        renderPromptContentParts(partHost, [part], {
+            enableWorkspaceImagePreview: false,
+        });
+        if (partHost.childNodes.length > 0) {
+            bodyEl.appendChild(partHost);
+        }
     });
 }
 

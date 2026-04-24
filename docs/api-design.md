@@ -79,6 +79,83 @@ Notes:
 - Health stays `200 ok` for a reachable server even when builtin roles or local
   tools are degraded; inspect the `*_sanity` fields for diagnosis.
 
+### `GET /system/commands`
+
+Lists slash commands visible to a workspace.
+Query:
+- `workspace_id`
+
+Each command includes `name`, `aliases`, `description`, `argument_hint`, `allowed_modes`, `scope`, and `source_path`.
+
+### `GET /system/commands:catalog`
+
+Lists commands for Settings without depending on the active session workspace.
+Response fields:
+- `app_commands`: global commands from the app config `commands/` directory.
+- `workspaces[]`: each registered workspace with `workspace_id`, `root_path`, and project `commands[]`.
+
+Catalog command entries include `template` so Settings can open any discovered command for editing.
+
+### `POST /system/commands`
+
+Creates a Markdown slash command file.
+Request fields:
+- `scope`: `global` or `project`
+- `workspace_id`: required for `project`
+- `source`: project directory, one of `claude`, `codex`, `opencode`, or `relay_teams`
+- `relative_path`: relative `.md` file path inside the chosen command directory
+- `name`
+- `aliases`, optional
+- `description`
+- `argument_hint`
+- `allowed_modes`
+- `template`
+
+Global commands are written under the app config `commands/` directory. Project commands are written under the selected workspace command directory and must stay within the workspace writable scope. Existing files return `409`.
+
+### `PUT /system/commands`
+
+Updates an existing Markdown slash command file.
+Request fields:
+- `source_path`: existing `.md` command file path returned by the catalog
+- `name`
+- `aliases`, optional
+- `description`
+- `argument_hint`
+- `allowed_modes`
+- `template`
+
+The source path must be inside the app config `commands/` directory or a supported workspace command directory. Project command updates must stay within the workspace writable scope.
+
+### `GET /system/commands/{name}`
+
+Returns a command by canonical name or alias.
+Query:
+- `workspace_id`
+
+Response includes the list fields plus `template`.
+
+### `POST /system/commands:resolve`
+
+Resolves a leading slash command before creating a run.
+Request fields:
+- `workspace_id`
+- `raw_text`
+- `mode`, default `normal`
+- `cwd`, optional caller working directory
+
+Response fields:
+- `matched`
+- `raw_text`
+- `parsed_name`
+- `resolved_name`
+- `args`
+- `command`
+- `expanded_prompt`
+- `expanded_prompt_length`
+
+Unknown slash commands return `matched: false` so callers can preserve existing plain-text behavior. Known commands whose `allowed_modes` do not include the requested mode return `400`.
+
 ### `GET /system/configs`
 
 Returns runtime config load status for model, MCP, skills, and effective proxy settings.

@@ -4,18 +4,19 @@ import asyncio
 import json
 import logging
 import time
-from typing import Annotated, ClassVar, Literal, cast
+from typing import Annotated, ClassVar, Literal, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from relay_teams.interfaces.server.deps import get_run_service
+from relay_teams.interfaces.server.deps import get_run_service, get_skill_registry
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.logger import get_logger, log_event
 from relay_teams.media import (
     ContentPart,
     InlineMediaContentPart,
+    MediaRefContentPart,
 )
 from relay_teams.monitors import MonitorActionType, MonitorRule, MonitorSourceKind
 from relay_teams.sessions.runs.run_manager import RunManager
@@ -29,11 +30,56 @@ from relay_teams.sessions.runs.run_models import (
     RunKind,
     RunThinkingConfig,
 )
+from relay_teams.skills import SkillRegistry
 from relay_teams.trace import bind_trace_context
-from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
+from relay_teams.validation import (
+    OptionalIdentifierStr,
+    RequiredIdentifierStr,
+    normalize_identifier_tuple,
+)
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/runs", tags=["Runs"])
+
+
+def _reuse_normalized_inline_media_refs(
+    *,
+    raw_input: tuple[ContentPart, ...],
+    normalized_input: tuple[ContentPart, ...],
+    display_input: tuple[ContentPart, ...],
+) -> tuple[ContentPart, ...]:
+    normalized_refs: list[tuple[InlineMediaContentPart, MediaRefContentPart]] = []
+    for raw_part, normalized_part in zip(raw_input, normalized_input, strict=False):
+        if isinstance(raw_part, InlineMediaContentPart) and isinstance(
+            normalized_part, MediaRefContentPart
+        ):
+            normalized_refs.append((raw_part, normalized_part))
+    if not normalized_refs:
+        return display_input
+
+    reused_parts: list[ContentPart] = []
+    for part in display_input:
+        if isinstance(part, InlineMediaContentPart):
+            replacement = _find_normalized_media_ref(part, normalized_refs)
+            if replacement is not None:
+                reused_parts.append(replacement)
+                continue
+        reused_parts.append(part)
+    return tuple(reused_parts)
+
+
+def _find_normalized_media_ref(
+    part: InlineMediaContentPart,
+    normalized_refs: list[tuple[InlineMediaContentPart, MediaRefContentPart]],
+) -> MediaRefContentPart | None:
+    for raw_part, normalized_part in normalized_refs:
+        if part == raw_part:
+            return normalized_part
+    return None
+
+
+def _contains_inline_media(parts: tuple[ContentPart, ...]) -> bool:
+    return any(isinstance(part, InlineMediaContentPart) for part in parts)
 
 
 class CreateRunRequest(BaseModel):
@@ -41,12 +87,19 @@ class CreateRunRequest(BaseModel):
 
     session_id: RequiredIdentifierStr
     input: tuple[ContentPart, ...] = Field(default_factory=tuple)
+    display_input: tuple[ContentPart, ...] = Field(default_factory=tuple)
     run_kind: RunKind = RunKind.CONVERSATION
     generation_config: MediaGenerationConfig | None = None
     execution_mode: ExecutionMode = ExecutionMode.AI
     yolo: bool = False
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
     target_role_id: OptionalIdentifierStr = None
+    skills: Optional[tuple[str, ...]] = None
+
+    @field_validator("skills", mode="before")
+    @classmethod
+    def _normalize_skills(cls, value: object) -> Optional[tuple[str, ...]]:
+        return normalize_identifier_tuple(value, field_name="skills")
 
 
 class CreateRunResponse(BaseModel):
@@ -145,11 +198,17 @@ async def create_run(
     request: Request,
     req: CreateRunRequest,
     service: Annotated[RunManager, Depends(get_run_service)],
+    skill_registry: Annotated[SkillRegistry, Depends(get_skill_registry)],
 ) -> CreateRunResponse:
     started = time.perf_counter()
     try:
         normalized_input = req.input
-        if any(isinstance(part, InlineMediaContentPart) for part in req.input):
+        normalized_display_input = req.display_input
+        has_inline_media = any(
+            isinstance(part, InlineMediaContentPart)
+            for part in (*req.input, *req.display_input)
+        )
+        if has_inline_media:
             container = getattr(request.app.state, "container", None)
             if container is None:
                 raise HTTPException(
@@ -162,17 +221,41 @@ async def create_run(
                 workspace_id=session.workspace_id,
                 parts=req.input,
             )
+            if req.display_input:
+                display_input = _reuse_normalized_inline_media_refs(
+                    raw_input=req.input,
+                    normalized_input=normalized_input,
+                    display_input=req.display_input,
+                )
+                normalized_display_input = display_input
+                if _contains_inline_media(display_input):
+                    normalized_display_input = (
+                        container.media_asset_service.normalize_content_parts(
+                            session_id=req.session_id,
+                            workspace_id=session.workspace_id,
+                            parts=display_input,
+                        )
+                    )
         if not normalized_input:
             raise HTTPException(status_code=400, detail="Run input cannot be empty")
+        resolved_skills = None
+        if req.skills is not None:
+            resolved_skills = skill_registry.resolve_known(
+                tuple(req.skills),
+                strict=True,
+                consumer="interfaces.server.routers.runs.create_run",
+            )
         intent_input = IntentInput(
             session_id=req.session_id,
             input=normalized_input,
+            display_input=normalized_display_input,
             run_kind=req.run_kind,
             generation_config=req.generation_config,
             execution_mode=req.execution_mode,
             yolo=req.yolo,
             thinking=req.thinking,
             target_role_id=req.target_role_id,
+            skills=resolved_skills,
         )
 
         def create_and_start_run() -> tuple[str, str]:

@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import httpx
 import typer
 
+from relay_teams.commands.command_cli import build_commands_app
 from relay_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
 from relay_teams.env.env_cli import env_app
 from relay_teams.external_agents.agent_cli import build_external_agents_app
@@ -288,6 +289,11 @@ runs_app = build_runs_app(
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
 )
+commands_app = build_commands_app(
+    request_json=_module_request_json,
+    auto_start_if_needed=_module_auto_start,
+    default_base_url=DEFAULT_BASE_URL,
+)
 clawhub_app = build_clawhub_app(
     request_json=_module_request_json,
     auto_start_if_needed=_module_auto_start,
@@ -422,6 +428,7 @@ app.add_typer(skills_app, name="skills")
 app.add_typer(clawhub_app, name="clawhub")
 app.add_typer(metrics_app, name="metrics")
 app.add_typer(runs_app, name="runs")
+app.add_typer(commands_app, name="commands")
 app.add_typer(hooks_app, name="hooks")
 app.add_typer(gateway_app, name="gateway")
 

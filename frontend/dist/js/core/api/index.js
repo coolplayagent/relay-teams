@@ -48,10 +48,14 @@ export {
 } from './roles.js';
 
 export {
+    createCommand,
     deleteEnvironmentVariable,
     deleteExternalAgent,
     deleteModelProfile,
     fetchConfigStatus,
+    fetchCommand,
+    fetchCommandCatalog,
+    fetchCommands,
     fetchSshProfiles,
     fetchExternalAgent,
     fetchExternalAgents,
@@ -78,6 +82,7 @@ export {
     probeGitHubConnectivity,
     probeGitHubWebhookConnectivity,
     probeModelConnection,
+    resolveCommandPrompt,
     probeSshProfileConnection,
     probeWebConnectivity,
     fetchClawHubConfig,
@@ -106,6 +111,7 @@ export {
     testExternalAgent,
     validateHooksConfig,
     deleteSshProfile,
+    updateCommand,
 } from './system.js';
 
 export {
@@ -170,6 +176,7 @@ export {
     openWorkspace,
     openWorkspaceRoot,
     pickWorkspace,
+    searchWorkspacePaths,
     updateWorkspace,
 } from './workspaces.js';
 

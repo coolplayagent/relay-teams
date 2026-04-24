@@ -221,6 +221,9 @@ async function refreshDraftWorkspaces({ preferredWorkspaceId = '' } = {}) {
         state.pendingNewSessionWorkspaceId = selected;
         if (selected) {
             state.currentWorkspaceId = selected;
+            document.dispatchEvent(new CustomEvent('agent-teams-draft-workspace-selected', {
+                detail: { workspaceId: selected },
+            }));
         }
         draftWorkspaceLoadState = 'ready';
         renderWorkspaceSelector();
@@ -275,6 +278,9 @@ function bindWorkspaceSelectorInteractions(host) {
             state.currentWorkspaceId = workspaceId;
             draftWorkspaceError = '';
             draftWorkspaceMenuOpen = false;
+            document.dispatchEvent(new CustomEvent('agent-teams-draft-workspace-selected', {
+                detail: { workspaceId },
+            }));
             renderWorkspaceSelector();
         });
     });

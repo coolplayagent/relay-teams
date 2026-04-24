@@ -117,6 +117,7 @@ class CoordinatorGraph(BaseModel):
             trace_id=trace_id,
             role_id=root_role_id,
             objective=intent.intent,
+            skills=intent.skills,
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
         _ = self.task_repo.create(root_task)

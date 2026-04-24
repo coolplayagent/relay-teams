@@ -192,7 +192,8 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
         'data-tab="model"'
     )
     assert tabs_html.index('data-tab="model"') < tabs_html.index('data-tab="mcp"')
-    assert tabs_html.index('data-tab="mcp"') < tabs_html.index('data-tab="hooks"')
+    assert tabs_html.index('data-tab="mcp"') < tabs_html.index('data-tab="commands"')
+    assert tabs_html.index('data-tab="commands"') < tabs_html.index('data-tab="hooks"')
     assert tabs_html.index('data-tab="hooks"') < tabs_html.index('data-tab="agents"')
     assert tabs_html.index('data-tab="agents"') < tabs_html.index('data-tab="roles"')
     assert tabs_html.index('data-tab="roles"') < tabs_html.index(
@@ -211,6 +212,7 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     )
     assert ">Model</span>" in tabs_html
     assert ">MCP</span>" in tabs_html
+    assert ">Commands</span>" in tabs_html
     assert ">Hooks</span>" in tabs_html
     assert ">Agents</span>" in tabs_html
     assert ">Web</span>" in tabs_html
@@ -458,6 +460,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     )
 
     mock_model_profiles_path = tmp_path / "mockModelProfiles.mjs"
+    mock_commands_settings_path = tmp_path / "mockCommandsSettings.mjs"
     mock_hooks_settings_path = tmp_path / "mockHooksSettings.mjs"
     mock_agents_settings_path = tmp_path / "mockAgentsSettings.mjs"
     mock_environment_path = tmp_path / "mockEnvironmentVariables.mjs"
@@ -485,6 +488,20 @@ export function bindModelProfileHandlers() {
 export async function loadModelProfilesPanel() {
     globalThis.__loadCalls.model += 1;
 }
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_commands_settings_path.write_text(
+        """
+export function bindCommandsSettingsHandlers() {
+    globalThis.__bindCalls.commands += 1;
+}
+
+export async function loadCommandsSettingsPanel() {
+    globalThis.__loadCalls.commands += 1;
+}
+
+export function syncCommandsSettingsActions() {}
 """.strip(),
         encoding="utf-8",
     )
@@ -675,6 +692,8 @@ export function t(key) {
         'settings.panel.skills.description': 'Check installed skills and refresh the server-side registry.',
         'settings.panel.mcp.title': 'MCP',
         'settings.panel.mcp.description': 'Review the currently loaded MCP servers and reload the runtime view.',
+        'settings.panel.commands.title': 'Commands',
+        'settings.panel.commands.description': 'Review slash commands discovered for the active workspace.',
         'settings.panel.hooks.title': 'Hooks',
         'settings.panel.hooks.description': 'View currently loaded hooks and provide custom editing.',
         'settings.panel.agents.title': 'Agents',
@@ -710,6 +729,7 @@ export function translateDocument() {
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("./agentsSettings.js", "./mockAgentsSettings.mjs")
+        .replace("./commandsSettings.js", "./mockCommandsSettings.mjs")
         .replace("./hooksSettings.js", "./mockHooksSettings.mjs")
         .replace("./modelProfiles.js", "./mockModelProfiles.mjs")
         .replace("./environmentVariables.js", "./mockEnvironmentVariables.mjs")
@@ -889,6 +909,7 @@ function createDocument() {{
 
 globalThis.__bindCalls = {{
     model: 0,
+    commands: 0,
     hooks: 0,
     agents: 0,
     roles: 0,
@@ -905,6 +926,7 @@ globalThis.__bindCalls = {{
 }};
 globalThis.__loadCalls = {{
     model: 0,
+    commands: 0,
     hooks: 0,
     agents: 0,
     roles: 0,

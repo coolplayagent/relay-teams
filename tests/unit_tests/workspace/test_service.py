@@ -23,6 +23,9 @@ from relay_teams.workspace import (
     WorkspaceRepository,
     WorkspaceService,
     WorkspaceSshMountConfig,
+    WorkspaceTreeListing,
+    WorkspaceTreeNode,
+    WorkspaceTreeNodeKind,
     build_local_workspace_mount,
 )
 
@@ -539,6 +542,395 @@ def test_workspace_service_returns_progressive_snapshot_and_tree_listing(
     ]
     assert src_listing.children[0].has_children is True
     assert src_listing.children[1].has_children is False
+
+
+def test_workspace_service_searches_local_paths_and_skips_heavy_dirs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    (root_path / "src").mkdir(parents=True)
+    (root_path / "node_modules" / "pkg").mkdir(parents=True)
+    (root_path / ".git").mkdir(parents=True)
+    (root_path / "src" / "app.py").write_text('print("new")\n', encoding="utf-8")
+    (root_path / "node_modules" / "pkg" / "app.js").write_text(
+        "console.log(1)\n",
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(tuple(command))
+        return subprocess.CompletedProcess(
+            args=tuple(command),
+            returncode=0,
+            stdout="src/app.py\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(shutil, "which", lambda name: "rg" if name == "rg" else None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    listing = service.search_workspace_paths(
+        "project-alpha",
+        query="app",
+    )
+
+    assert listing.workspace_id == "project-alpha"
+    assert listing.query == "app"
+    assert [item.path for item in listing.results] == ["src/app.py"]
+    assert listing.results[0].kind == WorkspaceTreeNodeKind.FILE
+    assert listing.results[0].mount_name == "default"
+    assert any(arg == "--glob=!**/node_modules/**" for arg in calls[0])
+    assert "--glob=!.git/*" in calls[0]
+
+
+def test_workspace_service_search_uses_ripgrep_index_and_derived_dirs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(tuple(command))
+        return subprocess.CompletedProcess(
+            args=tuple(command),
+            returncode=0,
+            stdout="src/relay_teams/main.py\nREADME.md\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(shutil, "which", lambda name: "rg" if name == "rg" else None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(workspace_id="project-alpha", root_path=root_path)
+
+    listing = service.search_workspace_paths("project-alpha", query="relay", limit=10)
+
+    assert calls
+    assert "--files" in calls[0]
+    assert [item.path for item in listing.results] == [
+        "src/relay_teams/",
+        "src/relay_teams/main.py",
+    ]
+    assert listing.results[0].kind == WorkspaceTreeNodeKind.DIRECTORY
+
+
+def test_workspace_service_search_lists_directory_children_for_trailing_slash_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+
+    def fake_run(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = command
+        return subprocess.CompletedProcess(
+            args=tuple(command),
+            returncode=0,
+            stdout=(
+                "src/relay_teams/media/__init__.py\n"
+                "src/relay_teams/media/models.py\n"
+                "src/relay_teams/media/prompt_content.py\n"
+                "src/relay_teams/main.py\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(shutil, "which", lambda name: "rg" if name == "rg" else None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(workspace_id="project-alpha", root_path=root_path)
+
+    listing = service.search_workspace_paths(
+        "project-alpha",
+        query="src/relay_teams/media/",
+        limit=10,
+    )
+
+    assert [item.path for item in listing.results] == [
+        "src/relay_teams/media/__init__.py",
+        "src/relay_teams/media/models.py",
+        "src/relay_teams/media/prompt_content.py",
+    ]
+    assert all(item.kind == WorkspaceTreeNodeKind.FILE for item in listing.results)
+
+
+def test_workspace_service_search_falls_back_to_directory_listing_for_trailing_slash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    target_dir = root_path / "src" / "relay_teams" / "gateway"
+    target_dir.mkdir(parents=True)
+    (target_dir / "__init__.py").write_text("", encoding="utf-8")
+    (target_dir / "gateway_models.py").write_text("", encoding="utf-8")
+
+    def fake_run(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = command
+        return subprocess.CompletedProcess(
+            args=tuple(command),
+            returncode=0,
+            stdout="README.md\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(shutil, "which", lambda name: "rg" if name == "rg" else None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(workspace_id="project-alpha", root_path=root_path)
+
+    listing = service.search_workspace_paths(
+        "project-alpha",
+        query="src/relay_teams/gateway/",
+        limit=10,
+    )
+
+    assert [item.path for item in listing.results] == [
+        "src/relay_teams/gateway/__init__.py",
+        "src/relay_teams/gateway/gateway_models.py",
+    ]
+    assert all(item.kind == WorkspaceTreeNodeKind.FILE for item in listing.results)
+
+
+def test_workspace_service_search_trailing_slash_fallback_preserves_query_case(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    requested_directories: list[str] = []
+
+    def fake_run(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = command
+        return subprocess.CompletedProcess(
+            args=tuple(command),
+            returncode=0,
+            stdout="README.md\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(shutil, "which", lambda name: "rg" if name == "rg" else None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(workspace_id="project-alpha", root_path=root_path)
+
+    def fake_tree_listing(
+        workspace_id: str,
+        *,
+        directory_path: str = ".",
+        mount_name: str | None = None,
+    ) -> WorkspaceTreeListing:
+        requested_directories.append(directory_path)
+        return WorkspaceTreeListing(
+            workspace_id=workspace_id,
+            mount_name=mount_name or "default",
+            directory_path=directory_path,
+            children=(
+                WorkspaceTreeNode(
+                    name="Models.py",
+                    path=f"{directory_path}Models.py",
+                    kind=WorkspaceTreeNodeKind.FILE,
+                    has_children=False,
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(service, "get_workspace_tree_listing", fake_tree_listing)
+
+    listing = service.search_workspace_paths(
+        "project-alpha",
+        query="Src/Relay_Teams/Media/",
+        limit=10,
+    )
+
+    assert requested_directories == ["Src/Relay_Teams/Media/"]
+    assert [item.path for item in listing.results] == [
+        "Src/Relay_Teams/Media/Models.py"
+    ]
+
+
+def test_workspace_service_search_reuses_index_between_queries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    call_count = 0
+
+    def fake_run(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal call_count
+        call_count += 1
+        return subprocess.CompletedProcess(
+            args=tuple(command),
+            returncode=0,
+            stdout="src/app.py\nsrc/domain.py\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(shutil, "which", lambda name: "rg" if name == "rg" else None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(workspace_id="project-alpha", root_path=root_path)
+
+    first = service.search_workspace_paths("project-alpha", query="app")
+    second = service.search_workspace_paths("project-alpha", query="domain")
+
+    assert [item.path for item in first.results] == ["src/app.py"]
+    assert [item.path for item in second.results] == ["src/domain.py"]
+    assert call_count == 1
+
+
+def test_workspace_service_search_without_ripgrep_returns_shallow_index_first(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    (root_path / "src" / "relay_teams").mkdir(parents=True)
+    (root_path / "src" / "relay_teams" / "main.py").write_text(
+        'print("new")\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(workspace_id="project-alpha", root_path=root_path)
+
+    listing = service.search_workspace_paths("project-alpha", query="", limit=10)
+
+    assert [item.path for item in listing.results] == ["src/"]
+    assert listing.results[0].kind == WorkspaceTreeNodeKind.DIRECTORY
+
+
+def test_workspace_service_search_sorts_hidden_paths_last_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+
+    def fake_run(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=tuple(command),
+            returncode=0,
+            stdout=".hidden/config.py\nvisible.py\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(shutil, "which", lambda name: "rg" if name == "rg" else None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db")
+    )
+    _ = service.create_workspace(workspace_id="project-alpha", root_path=root_path)
+
+    default_listing = service.search_workspace_paths("project-alpha", query="", limit=3)
+    hidden_listing = service.search_workspace_paths(
+        "project-alpha", query=".hidden", limit=3
+    )
+
+    assert default_listing.results[0].path == "visible.py"
+    assert hidden_listing.results[0].path == ".hidden/"
+
+
+def test_workspace_service_rejects_explicit_non_local_search_mount(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_root = tmp_path / "local-root"
+    local_root.mkdir()
+    (local_root / "src").mkdir()
+    (local_root / "src" / "app.py").write_text('print("new")\n', encoding="utf-8")
+
+    def fake_run(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=tuple(command),
+            returncode=0,
+            stdout="src/app.py\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(shutil, "which", lambda name: "rg" if name == "rg" else None)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    service = WorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db"),
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        mounts=(
+            WorkspaceMountRecord(
+                mount_name="container",
+                provider=WorkspaceMountProvider.SSH,
+                provider_config=WorkspaceSshMountConfig(
+                    ssh_profile_id="container",
+                    remote_root="/srv/app",
+                ),
+            ),
+            build_local_workspace_mount(mount_name="default", root_path=local_root),
+        ),
+        default_mount_name="container",
+    )
+
+    fallback_listing = service.search_workspace_paths(
+        "project-alpha",
+        query="app",
+    )
+
+    assert [item.path for item in fallback_listing.results] == ["src/app.py"]
+    assert fallback_listing.results[0].mount_name == "default"
+    with pytest.raises(ValueError, match="Workspace mount is not local: container"):
+        _ = service.search_workspace_paths(
+            "project-alpha",
+            query="app",
+            mount_name="container",
+        )
 
 
 def test_workspace_service_lists_ssh_mount_tree_with_saved_profile(
