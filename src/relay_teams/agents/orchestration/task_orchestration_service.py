@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from pydantic import JsonValue
 
@@ -54,7 +56,9 @@ class TaskOrchestrationService:
         self._runtime_role_resolver = runtime_role_resolver
         self._hook_service = hook_service
         self._run_event_hub = run_event_hub
-        self._execution_semaphore = asyncio.Semaphore(MAX_PARALLEL_DELEGATED_TASKS)
+        self._execution_semaphores: dict[str, asyncio.Semaphore] = {}
+        self._execution_semaphore_ref_counts: dict[str, int] = {}
+        self._execution_semaphores_guard = asyncio.Lock()
         self._assignment_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._assignment_locks_guard = asyncio.Lock()
 
@@ -282,7 +286,7 @@ class TaskOrchestrationService:
             or "Execute this task contract and return the requested result."
         )
 
-        async with self._execution_semaphore:
+        async with self._run_execution_slot(run_id=resolved_run_id):
             await self._task_execution_service.execute(
                 instance_id=instance_id,
                 role_id=bound_role_id,
@@ -293,6 +297,36 @@ class TaskOrchestrationService:
         return {
             "task": _task_projection(refreshed),
         }
+
+    @asynccontextmanager
+    async def _run_execution_slot(self, *, run_id: str) -> AsyncIterator[None]:
+        semaphore = await self._execution_semaphore_for_run(run_id=run_id)
+        try:
+            async with semaphore:
+                yield
+        finally:
+            await self._release_execution_semaphore_for_run(run_id=run_id)
+
+    async def _execution_semaphore_for_run(self, *, run_id: str) -> asyncio.Semaphore:
+        async with self._execution_semaphores_guard:
+            semaphore = self._execution_semaphores.get(run_id)
+            if semaphore is None:
+                semaphore = asyncio.Semaphore(MAX_PARALLEL_DELEGATED_TASKS)
+                self._execution_semaphores[run_id] = semaphore
+            self._execution_semaphore_ref_counts[run_id] = (
+                self._execution_semaphore_ref_counts.get(run_id, 0) + 1
+            )
+            resolved_semaphore = semaphore
+        return resolved_semaphore
+
+    async def _release_execution_semaphore_for_run(self, *, run_id: str) -> None:
+        async with self._execution_semaphores_guard:
+            remaining = self._execution_semaphore_ref_counts.get(run_id, 1) - 1
+            if remaining <= 0:
+                self._execution_semaphore_ref_counts.pop(run_id, None)
+                self._execution_semaphores.pop(run_id, None)
+                return
+            self._execution_semaphore_ref_counts[run_id] = remaining
 
     async def _role_assignment_lock(
         self,
