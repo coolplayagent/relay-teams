@@ -122,6 +122,12 @@ class PromptHistoryMessageRepository(Protocol):
         conversation_id: str,
     ) -> list[ModelRequest | ModelResponse]: ...
 
+    def get_history_for_conversation_task(
+        self,
+        conversation_id: str,
+        task_id: str,
+    ) -> list[ModelRequest | ModelResponse]: ...
+
     def prune_conversation_history_to_safe_boundary(
         self,
         conversation_id: str,
@@ -244,6 +250,12 @@ class PromptHistoryService:
         allowed_skills: tuple[str, ...],
     ) -> PreparedPromptContext:
         history = self._load_safe_history_for_conversation(conversation_id)
+        history, protected_current_prompt = self._split_protected_current_prompt(
+            request=request,
+            conversation_id=conversation_id,
+            history=history,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+        )
         source_history = list(history)
         provisional_system_prompt = self.inject_compaction_summary(
             session_id=request.session_id,
@@ -288,6 +300,8 @@ class PromptHistoryService:
             request=request,
             history=history,
         )
+        if protected_current_prompt is not None:
+            history.append(protected_current_prompt)
         final_system_prompt = self.inject_compaction_summary(
             session_id=request.session_id,
             conversation_id=conversation_id,
@@ -311,6 +325,59 @@ class PromptHistoryService:
             microcompact_compacted_message_count=compacted_message_count,
             microcompact_compacted_part_count=compacted_part_count,
         )
+
+    def _split_protected_current_prompt(
+        self,
+        *,
+        request: LLMRequest,
+        conversation_id: str,
+        history: Sequence[ModelRequest | ModelResponse],
+        reserve_user_prompt_tokens: bool,
+    ) -> tuple[list[ModelRequest | ModelResponse], ModelRequest | None]:
+        candidate_history = list(history)
+        if not reserve_user_prompt_tokens:
+            return candidate_history, None
+        current_keys = self._current_request_prompt_keys(
+            request=request,
+            conversation_id=conversation_id,
+        )
+        if not current_keys:
+            return candidate_history, None
+        if not any(
+            history_ends_with_user_prompt(candidate_history, current_key)
+            for current_key in current_keys
+        ):
+            return candidate_history, None
+        protected_prompt = candidate_history.pop()
+        if not isinstance(protected_prompt, ModelRequest):
+            return candidate_history, None
+        return candidate_history, protected_prompt
+
+    def _current_request_prompt_keys(
+        self,
+        *,
+        request: LLMRequest,
+        conversation_id: str,
+    ) -> tuple[str, ...]:
+        keys: list[str] = []
+        current_content = self.current_request_prompt_content(request)
+        if current_content is not None:
+            current_key = user_prompt_content_key(current_content)
+            if current_key and current_key not in keys:
+                keys.append(current_key)
+        task_history = self._message_repo.get_history_for_conversation_task(
+            conversation_id,
+            request.task_id,
+        )
+        for message in reversed(task_history):
+            if not isinstance(message, ModelRequest):
+                continue
+            current_key = user_prompt_parts_key(parts=message.parts)
+            if current_key:
+                if current_key not in keys:
+                    keys.append(current_key)
+                break
+        return tuple(keys)
 
     def coerce_history_to_provider_safe_sequence(
         self,

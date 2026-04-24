@@ -66,6 +66,14 @@ class _NullPromptHistoryMessageRepo:
         _ = conversation_id
         return []
 
+    def get_history_for_conversation_task(
+        self,
+        conversation_id: str,
+        task_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        _ = (conversation_id, task_id)
+        return []
+
     def prune_conversation_history_to_safe_boundary(
         self,
         conversation_id: str,

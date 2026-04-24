@@ -200,6 +200,63 @@ async def test_prepare_prompt_context_applies_microcompact_before_full_compactio
 
 
 @pytest.mark.asyncio
+async def test_prepare_prompt_context_protects_precommitted_current_prompt_from_compaction() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    current_prompt = ModelRequest(parts=[UserPromptPart(content="Current prompt")])
+    base_history = [
+        ModelRequest(parts=[UserPromptPart(content="Older prompt")]),
+        ModelResponse(parts=[]),
+        current_prompt,
+    ]
+    compacted_history = [
+        ModelRequest(parts=[UserPromptPart(content="Compacted carryover")])
+    ]
+    session._config = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        context_window=600,
+    )
+    session._message_repo = cast(MessageRepository, _FakeMessageRepo(base_history))
+    session._conversation_microcompact_service = None
+    compaction_service = _FakeCompactionService(
+        applied=True,
+        messages=tuple(compacted_history),
+    )
+    session._conversation_compaction_service = cast(
+        ConversationCompactionService,
+        compaction_service,
+    )
+    session._hook_service = None
+    session._reminder_service = None
+    session._run_event_hub = cast(Any, None)
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Current prompt"),
+    )
+    session._estimated_mcp_context_tokens = _zero_mcp_context_tokens
+    session._estimated_tool_context_tokens = lambda **_kwargs: 120
+
+    prepared = await AgentLlmSession._prepare_prompt_context(
+        session,
+        request=_build_request(user_prompt=None),
+        conversation_id="conv-1",
+        system_prompt="System prompt",
+        reserve_user_prompt_tokens=True,
+        allowed_tools=("shell",),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+
+    assert list(prepared.history) == [*compacted_history, current_prompt]
+    assert compaction_service.calls
+    assert compaction_service.calls[0]["history"] == base_history[:-1]
+    assert compaction_service.calls[0]["source_history"] == base_history[:-1]
+
+
+@pytest.mark.asyncio
 async def test_maybe_compact_history_emits_pre_and_post_compact_hooks() -> None:
     session = object.__new__(AgentLlmSession)
     history = [

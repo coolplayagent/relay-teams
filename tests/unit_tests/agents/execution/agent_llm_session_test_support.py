@@ -142,6 +142,14 @@ class _FakeMessageRepo:
         self.requested_conversation_ids.append(conversation_id)
         return list(self._history)
 
+    def get_history_for_conversation_task(
+        self,
+        conversation_id: str,
+        task_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        _ = task_id
+        return self.get_history_for_conversation(conversation_id)
+
     def prune_conversation_history_to_safe_boundary(self, conversation_id: str) -> None:
         self.pruned_conversation_ids.append(conversation_id)
 

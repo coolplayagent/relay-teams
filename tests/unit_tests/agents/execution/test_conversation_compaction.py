@@ -300,6 +300,39 @@ def test_render_transcript_does_not_clip_first_tool_line_mid_token() -> None:
     assert transcript.startswith("User/Tool\nTool result [shell]:")
 
 
+def test_render_transcript_preserves_newest_compacted_turns_when_budget_clips() -> None:
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="head objective")]),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="shell",
+                    tool_call_id="call-1",
+                    content="\n".join(f"middle filler {index}" for index in range(80)),
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=(
+                        "Preserve exact facts.\n"
+                        "- phase-5 anchor: nylon-orbit-508\n"
+                        "- phase-5 checksum: CHK-P5-ER8"
+                    )
+                )
+            ]
+        ),
+    ]
+
+    transcript = compaction_module._render_transcript(history, max_chars=600)
+
+    assert "head objective" in transcript
+    assert "phase-5 anchor: nylon-orbit-508" in transcript
+    assert "phase-5 checksum: CHK-P5-ER8" in transcript
+    assert "transcript middle clipped" in transcript
+
+
 @pytest.mark.asyncio
 async def test_conversation_compaction_service_hides_messages_and_creates_marker(
     monkeypatch: pytest.MonkeyPatch,
