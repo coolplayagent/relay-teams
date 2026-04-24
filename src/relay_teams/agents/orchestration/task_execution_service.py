@@ -1101,6 +1101,12 @@ class TaskExecutionService(BaseModel):
             last_error=last_error,
         ):
             return
+        if self._promote_paused_runtime_lane(
+            run_id=run_id,
+            terminal_task_id=terminal_task_id,
+            last_error=last_error,
+        ):
+            return
         self.run_runtime_repo.update(
             run_id,
             status=status,
@@ -1158,6 +1164,52 @@ class TaskExecutionService(BaseModel):
             last_error=last_error,
         )
         return True
+
+    def _promote_paused_runtime_lane(
+        self,
+        *,
+        run_id: str,
+        terminal_task_id: str,
+        last_error: Optional[str],
+    ) -> bool:
+        if self.run_control_manager is None:
+            return False
+        if self.run_control_manager.is_run_stop_requested(run_id):
+            return False
+        for record in self.task_repo.list_by_trace(run_id):
+            task = record.envelope
+            instance_id = record.assigned_instance_id
+            if task.task_id == terminal_task_id:
+                continue
+            if task.parent_task_id is None:
+                continue
+            if record.status != TaskStatus.STOPPED:
+                continue
+            if not instance_id:
+                continue
+            if not (
+                self.run_control_manager.is_subagent_stop_requested(
+                    run_id=run_id,
+                    instance_id=instance_id,
+                )
+                or self.run_control_manager.is_subagent_paused(
+                    session_id=task.session_id,
+                    instance_id=instance_id,
+                )
+            ):
+                continue
+            self.run_runtime_repo.update(
+                run_id,
+                status=RunRuntimeStatus.STOPPED,
+                phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
+                active_instance_id=None,
+                active_task_id=task.task_id,
+                active_role_id=task.role_id,
+                active_subagent_instance_id=instance_id,
+                last_error=last_error or record.error_message or "Task stopped by user",
+            )
+            return True
+        return False
 
     def _shared_state_snapshot(
         self,

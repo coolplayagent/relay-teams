@@ -21,6 +21,7 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
+from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.agents.tasks.task_repository import TaskRepository
 
 
@@ -137,6 +138,86 @@ def test_mark_runtime_idle_after_success_preserves_other_running_lane(
     assert runtime.active_task_id == running_task.task_id
     assert runtime.active_role_id == "writer"
     assert runtime.active_subagent_instance_id == "inst-running"
+
+
+def test_mark_runtime_idle_after_success_restores_paused_lane(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "task_execution_runtime_paused_lane.db"
+    task_repo = TaskRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+    run_control_manager = RunControlManager()
+    service = TaskExecutionService.model_construct(
+        task_repo=task_repo,
+        run_runtime_repo=run_runtime_repo,
+        run_control_manager=run_control_manager,
+    )
+    completed_task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        role_id="writer",
+        objective="write first result",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    paused_task = TaskEnvelope(
+        task_id="task-2",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        role_id="reviewer",
+        objective="review second result",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(completed_task)
+    _ = task_repo.create(paused_task)
+    task_repo.update_status(
+        completed_task.task_id,
+        TaskStatus.COMPLETED,
+        assigned_instance_id="inst-completed",
+    )
+    task_repo.update_status(
+        paused_task.task_id,
+        TaskStatus.STOPPED,
+        assigned_instance_id="inst-paused",
+        error_message="Task stopped by user",
+    )
+    run_control_manager.pause_subagent(
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-paused",
+        role_id="reviewer",
+        task_id=paused_task.task_id,
+    )
+    run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            root_task_id="task-root",
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.SUBAGENT_RUNNING,
+            active_instance_id="inst-completed",
+            active_task_id=completed_task.task_id,
+            active_role_id="writer",
+            active_subagent_instance_id="inst-completed",
+        )
+    )
+
+    service._mark_runtime_idle_after_success(
+        run_id="run-1",
+        completed_task_id=completed_task.task_id,
+    )
+
+    runtime = run_runtime_repo.get("run-1")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.STOPPED
+    assert runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
+    assert runtime.active_instance_id is None
+    assert runtime.active_task_id == paused_task.task_id
+    assert runtime.active_role_id == "reviewer"
+    assert runtime.active_subagent_instance_id == "inst-paused"
+    assert runtime.last_error == "Task stopped by user"
 
 
 def test_mark_runtime_idle_after_success_prefers_subagent_over_coordinator(
