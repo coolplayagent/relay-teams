@@ -69,3 +69,33 @@ def test_append_and_enqueue_appends_even_when_run_is_inactive(tmp_path: Path) ->
     assert result.appended is True
     assert result.enqueued is False
     assert len(history) == 1
+
+
+def test_append_only_persists_without_queueing(tmp_path: Path) -> None:
+    db_path = tmp_path / "messages.db"
+    message_repo = MessageRepository(db_path)
+    injection_manager = RunInjectionManager()
+    injection_manager.activate("run-1")
+    sink = SystemInjectionSink(
+        injection_manager=injection_manager,
+        run_event_hub=RunEventHub(),
+        message_repo=message_repo,
+    )
+
+    result = sink.append_only(
+        session_id="session-1",
+        trace_id="run-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="role-1",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        content="<system-reminder>\nCheck todos.\n</system-reminder>",
+    )
+
+    history = message_repo.get_history_for_conversation("conversation-1")
+    injections = injection_manager.drain_at_boundary("run-1", "inst-1")
+    assert result.appended is True
+    assert result.enqueued is False
+    assert len(history) == 1
+    assert injections == ()

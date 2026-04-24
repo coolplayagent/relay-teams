@@ -1305,7 +1305,10 @@ def _observe_tool_result_reminders(
         if isinstance(meta_payload, dict)
         else {}
     )
-    reported_failure = _reported_failure_from_success_envelope(envelope)
+    reported_failure = _reported_failure_from_success_envelope(
+        tool_name=tool_name,
+        envelope=envelope,
+    )
     observed_ok = bool(envelope.get("ok") is True)
     error_type = str(error.get("type") or "")
     error_message = str(error.get("message") or "")
@@ -1335,15 +1338,22 @@ def _observe_tool_result_reminders(
 
 
 def _reported_failure_from_success_envelope(
+    *,
+    tool_name: str,
     envelope: dict[str, JsonValue],
 ) -> tuple[str, str] | None:
     if envelope.get("ok") is not True:
+        return None
+    if tool_name != "shell":
         return None
     data_payload = envelope.get("data")
     if not isinstance(data_payload, dict):
         return None
     data = cast(dict[str, JsonValue], data_payload)
     if data.get("status") != "failed":
+        return None
+    exit_code = data.get("exit_code")
+    if not isinstance(exit_code, int) or exit_code == 0:
         return None
 
     message = _reported_failure_message(data)

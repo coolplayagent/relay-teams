@@ -951,6 +951,43 @@ def test_execute_tool_reports_failed_status_projection_to_reminders() -> None:
     assert observation.error_message == "cat: missing.txt: No such file or directory"
 
 
+def test_execute_tool_ignores_domain_failed_status_for_successful_tools() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    reminder_service = _FakeReminderService()
+    deps.reminder_service = reminder_service
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-background-status"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="wait_background_task",
+            args_summary={"background_task_id": "bg-1"},
+            action=lambda: ToolResultProjection(
+                visible_data={
+                    "status": "failed",
+                    "background_task_id": "bg-1",
+                    "output": "background task failed after the wait completed",
+                },
+                internal_data={
+                    "status": "failed",
+                    "background_task_id": "bg-1",
+                },
+            ),
+        )
+    )
+
+    assert result["ok"] is True
+    assert len(reminder_service.observations) == 1
+    observation = reminder_service.observations[0]
+    assert observation.ok is True
+    assert observation.error_type == ""
+    assert observation.error_message == ""
+
+
 def test_execute_tool_returns_tool_return_for_tool_content_parts() -> None:
     deps = _FakeDeps(
         manager=_FakeApprovalManager(wait_result=("approve", "")),

@@ -32,6 +32,10 @@ class _CapturingSink:
         self.appended.append(str(kwargs["content"]))
         return SystemInjectionResult(appended=True, enqueued=True)
 
+    def append_only(self, **kwargs: object) -> SystemInjectionResult:
+        self.appended.append(str(kwargs["content"]))
+        return SystemInjectionResult(appended=True)
+
 
 def test_service_enqueues_tool_failure_reminder_once(tmp_path: Path) -> None:
     sink = _CapturingSink()
@@ -86,6 +90,7 @@ def test_service_appends_completion_retry_reminder(tmp_path: Path) -> None:
 
     assert decision.retry_completion is True
     assert len(sink.appended) == 1
+    assert sink.enqueued == []
     assert "finish tests" in sink.appended[0]
 
 

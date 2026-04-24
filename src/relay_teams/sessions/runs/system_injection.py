@@ -67,18 +67,16 @@ class SystemInjectionSink:
         content: UserPromptContent,
         source: InjectionSource = InjectionSource.SYSTEM,
     ) -> SystemInjectionResult:
-        appended = False
-        if self._message_repo is not None:
-            appended = self._message_repo.append_user_prompt_if_missing(
-                session_id=session_id,
-                workspace_id=workspace_id,
-                conversation_id=conversation_id,
-                agent_role_id=role_id,
-                instance_id=instance_id,
-                task_id=task_id,
-                trace_id=trace_id,
-                content=content,
-            )
+        appended = self._append(
+            session_id=session_id,
+            trace_id=trace_id,
+            task_id=task_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            content=content,
+        )
         record = self._enqueue(
             session_id=session_id,
             run_id=run_id,
@@ -90,6 +88,55 @@ class SystemInjectionSink:
             source=source,
         )
         return SystemInjectionResult(appended=appended, enqueued=record is not None)
+
+    def append_only(
+        self,
+        *,
+        session_id: str,
+        trace_id: str,
+        task_id: str,
+        instance_id: str,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        content: UserPromptContent,
+    ) -> SystemInjectionResult:
+        appended = self._append(
+            session_id=session_id,
+            trace_id=trace_id,
+            task_id=task_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            content=content,
+        )
+        return SystemInjectionResult(appended=appended)
+
+    def _append(
+        self,
+        *,
+        session_id: str,
+        trace_id: str,
+        task_id: str,
+        instance_id: str,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        content: UserPromptContent,
+    ) -> bool:
+        if self._message_repo is None:
+            return False
+        return self._message_repo.append_user_prompt_if_missing(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=role_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            content=content,
+        )
 
     def _enqueue(
         self,
