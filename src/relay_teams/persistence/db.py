@@ -265,7 +265,7 @@ def _write_coordinator_for(db_path: Path) -> RLock:
         if coordinator is None:
             coordinator = RLock()
             _WRITE_COORDINATORS[key] = coordinator
-        return coordinator
+    return coordinator
 
 
 def _async_write_coordinator_for(db_path: Path) -> asyncio.Lock:
