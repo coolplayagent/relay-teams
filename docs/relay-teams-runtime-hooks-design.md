@@ -792,6 +792,21 @@ The current implementation is still intentionally narrower than the full design 
 - hook conflict warning events described in section 7.2 are not yet implemented; the runtime currently applies the merged winning decision without a dedicated conflict event
 
 These remaining gaps do not block the current phase 1 rollout target.
+
+### 17.1.2 Hooks vs Built-In System Reminders
+
+Runtime hooks are the user/project/role/skill extension layer. They remain the right
+place for custom command, HTTP, prompt, or agent handlers.
+
+Built-in system reminders live in `src/relay_teams/reminders/` and own product
+runtime policy such as tool failure nudges, read-only streak nudges, incomplete todo
+completion guards, and post-compaction reminders. These policies must not be modeled
+as default hooks because they need deterministic execution, run-scoped state, and
+pre-terminal completion decisions.
+
+Hooks and reminders share the low-level `SystemInjectionSink`, but hooks do not own
+the reminder policy engine.
+
 ### 17.2 Phase 2
 
 Deliver:
@@ -917,5 +932,4 @@ The recommended first implementation cut is intentionally narrow:
 - add unit tests before expanding to prompt and agent hooks
 
 This gives Relay Teams a strong first cut of runtime hooks with limited architectural risk and minimal conflict with the current approval and orchestration model.
-
 

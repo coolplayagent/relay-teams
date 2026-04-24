@@ -1080,6 +1080,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             mcp_tool_context_token_cache=mcp_tool_context_token_cache,
             media_asset_service=getattr(self, "_media_asset_service", None),
             hook_service=getattr(self, "_hook_service", None),
+            reminder_service=getattr(self, "_reminder_service", None),
             run_event_hub=getattr(self, "_run_event_hub", None),
             load_safe_history_for_conversation=getattr(
                 self,

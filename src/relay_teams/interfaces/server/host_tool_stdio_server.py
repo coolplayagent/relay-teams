@@ -78,6 +78,7 @@ async def _run_stdio_server() -> None:
         metric_recorder=container.metric_recorder,
         im_tool_service=container.im_tool_service,
         computer_runtime=container.computer_runtime,
+        reminder_service=getattr(container, "reminder_service", None),
     )
 
     async def unavailable_request(

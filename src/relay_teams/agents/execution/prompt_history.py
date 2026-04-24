@@ -68,6 +68,11 @@ from relay_teams.media import (
 )
 from relay_teams.providers.model_config import ModelEndpointConfig
 from relay_teams.providers.provider_contracts import LLMRequest
+from relay_teams.reminders import (
+    ContextPressureObservation,
+    ReminderKind,
+    SystemReminderService,
+)
 from relay_teams.sessions.runs.assistant_errors import (
     AssistantRunError,
     AssistantRunErrorPayload,
@@ -201,6 +206,7 @@ class PromptHistoryService:
         mcp_tool_context_token_cache: dict[str, int],
         media_asset_service: object | None,
         hook_service: object | None,
+        reminder_service: SystemReminderService | None,
         run_event_hub: object,
         load_safe_history_for_conversation: Callable[
             [str], list[ModelRequest | ModelResponse]
@@ -215,6 +221,7 @@ class PromptHistoryService:
         self._mcp_tool_context_token_cache = mcp_tool_context_token_cache
         self._media_asset_service = media_asset_service
         self._hook_service = hook_service
+        self._reminder_service = reminder_service
         self._run_event_hub = run_event_hub
         self._load_safe_history_for_conversation = load_safe_history_for_conversation
 
@@ -603,6 +610,27 @@ class PromptHistoryService:
                     ),
                 ),
                 run_event_hub=self._run_event_hub,
+            )
+        if compacted_result.applied and self._reminder_service is not None:
+            _ = self._reminder_service.observe_context_pressure(
+                ContextPressureObservation(
+                    session_id=request.session_id,
+                    run_id=request.run_id,
+                    trace_id=request.trace_id,
+                    task_id=request.task_id,
+                    instance_id=request.instance_id,
+                    role_id=request.role_id,
+                    conversation_id=conversation_id,
+                    kind=ReminderKind.POST_COMPACTION,
+                    message_count_before=len(history),
+                    message_count_after=len(compacted_history),
+                    estimated_tokens_before=estimated_tokens_before_microcompact or 0,
+                    estimated_tokens_after=ConversationTokenEstimator().estimate_history_tokens(
+                        compacted_history
+                    ),
+                    threshold_tokens=plan.threshold_tokens,
+                    target_tokens=plan.target_tokens,
+                )
             )
         return compacted_history
 

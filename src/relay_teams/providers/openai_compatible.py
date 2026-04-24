@@ -52,6 +52,7 @@ from relay_teams.providers.provider_contracts import (
     ProviderCapabilities,
 )
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.reminders import SystemReminderService
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
@@ -133,6 +134,7 @@ class OpenAICompatibleProvider(LLMProvider):
         im_tool_service: ImToolService | None = None,
         computer_runtime: ComputerRuntime | None = None,
         hook_service: HookService | None = None,
+        reminder_service: SystemReminderService | None = None,
     ) -> None:
         self._config_ref = config
         self._media_asset_service = media_asset_service
@@ -189,6 +191,7 @@ class OpenAICompatibleProvider(LLMProvider):
             im_tool_service=im_tool_service,
             computer_runtime=computer_runtime,
             hook_service=hook_service,
+            reminder_service=reminder_service,
         )
 
     @override

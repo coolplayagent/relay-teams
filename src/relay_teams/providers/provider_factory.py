@@ -59,6 +59,7 @@ from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.reminders import SystemReminderService
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
@@ -114,6 +115,7 @@ def create_provider_factory(
     session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
     | None = None,
     hook_service: HookService | None = None,
+    reminder_service: SystemReminderService | None = None,
 ) -> Callable[[RoleDefinition, str | None], LLMProvider]:
     fallback_cooldown_registries: dict[tuple[str, ...], ProfileCooldownRegistry] = {}
     fallback_cooldown_registry_lock = Lock()
@@ -242,6 +244,7 @@ def create_provider_factory(
                 fallback_middleware=profile_fallback_middleware,
                 im_tool_service=im_tool_service,
                 hook_service=hook_service,
+                reminder_service=reminder_service,
             ),
         )
         return provider_registry.create(config_to_use)

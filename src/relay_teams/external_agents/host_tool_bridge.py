@@ -41,6 +41,7 @@ from relay_teams.monitors import MonitorService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.model_config import ModelCapabilities, ModelEndpointConfig
 from relay_teams.providers.provider_contracts import LLMRequest
+from relay_teams.reminders import SystemReminderService
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
@@ -187,6 +188,7 @@ class ExternalAcpHostToolBridge:
         im_tool_service: ImToolService | None = None,
         computer_runtime: ComputerRuntime | None = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
+        reminder_service: SystemReminderService | None = None,
     ) -> None:
         self._task_repo = task_repo
         self._shared_store = shared_store
@@ -221,6 +223,7 @@ class ExternalAcpHostToolBridge:
         self._im_tool_service = im_tool_service
         self._computer_runtime = computer_runtime
         self._shell_approval_repo = shell_approval_repo
+        self._reminder_service = reminder_service
 
         self._catalog_by_name: dict[str, HostedToolDefinition] = {}
         self._catalog_signature = ""
@@ -552,6 +555,7 @@ class ExternalAcpHostToolBridge:
             metric_recorder=self._metric_recorder,
             notification_service=self._get_notification_service(),
             im_tool_service=self._im_tool_service,
+            reminder_service=getattr(self, "_reminder_service", None),
             model_capabilities=self._resolve_request_model_capabilities(
                 request=request
             ),

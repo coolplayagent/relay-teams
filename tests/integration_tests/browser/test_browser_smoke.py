@@ -2481,6 +2481,8 @@ def test_browser_round_todo_card_renders_and_collapses(
         1,
         timeout=_WAIT_TIMEOUT_MS,
     )
+    expect(todo_card).not_to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
+    todo_card.locator(".round-todo-summary").click()
     expect(todo_card).to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
     expect(todo_card.locator(".round-todo-item")).to_have_count(
         3,

@@ -43,6 +43,12 @@ from relay_teams.media import MediaAssetService, merge_user_prompt_content
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.reminders import (
+    CompletionAttemptObservation,
+    IncompleteTodoItem,
+    ReminderDecision,
+    SystemReminderService,
+)
 from relay_teams.roles.memory_injection import build_role_with_memory
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
@@ -71,6 +77,8 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
+from relay_teams.sessions.runs.todo_models import TodoStatus
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.hooks import HookEventName, HookService, TaskCompletedInput
 from relay_teams.skills.skill_models import SkillInstructionEntry
 from relay_teams.skills.skill_registry import SkillRegistry
@@ -110,6 +118,8 @@ class TaskExecutionService(BaseModel):
     run_intent_repo: RunIntentRepository | None = None
     media_asset_service: MediaAssetService | None = None
     hook_service: HookService | None = None
+    todo_service: TodoService | None = None
+    reminder_service: SystemReminderService | None = None
 
     async def execute(
         self,
@@ -272,17 +282,19 @@ class TaskExecutionService(BaseModel):
                 runtime_prompt_sections=runtime_prompt_sections,
                 skill_instructions=prepared_runtime_snapshot.skill_instructions,
             )
-            result = await runner.run(
+            guarded_result = await self._run_with_completion_guard(
+                runner=runner,
                 task=task,
                 instance_id=instance_id,
-                workspace_id=workspace.ref.workspace_id,
-                working_directory=workspace.resolve_workdir(),
+                role_id=role_id,
+                workspace=workspace,
                 conversation_id=workspace.ref.conversation_id,
                 shared_state_snapshot=snapshot,
-                thinking=self._thinking_for_run(task.trace_id),
                 system_prompt_override=provider_system_prompt,
-                user_prompt=None,
             )
+            if isinstance(guarded_result, TaskExecutionResult):
+                return guarded_result
+            result = guarded_result
             self.task_repo.update_status(
                 task.task_id, TaskStatus.COMPLETED, result=result
             )
@@ -487,6 +499,139 @@ class TaskExecutionService(BaseModel):
                 error_code="internal_execution_error",
                 error_message=str(exc),
             )
+
+    async def _run_with_completion_guard(
+        self,
+        *,
+        runner: SubAgentRunner,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        workspace: WorkspaceHandle,
+        conversation_id: str,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        system_prompt_override: str,
+    ) -> str | TaskExecutionResult:
+        result = await self._run_agent_once(
+            runner=runner,
+            task=task,
+            instance_id=instance_id,
+            workspace=workspace,
+            conversation_id=conversation_id,
+            shared_state_snapshot=shared_state_snapshot,
+            system_prompt_override=system_prompt_override,
+        )
+        while True:
+            decision = self._evaluate_completion_guard(
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+                workspace=workspace,
+                conversation_id=conversation_id,
+                output_text=result,
+            )
+            if not decision.issue:
+                return result
+            if decision.retry_completion:
+                log_event(
+                    LOGGER,
+                    logging.INFO,
+                    event="task.execution.completion_reminder_retry",
+                    message="Retrying task after system reminder blocked completion",
+                    payload={
+                        "task_id": task.task_id,
+                        "instance_id": instance_id,
+                        "role_id": role_id,
+                        "reason": decision.reason,
+                    },
+                )
+                result = await self._run_agent_once(
+                    runner=runner,
+                    task=task,
+                    instance_id=instance_id,
+                    workspace=workspace,
+                    conversation_id=conversation_id,
+                    shared_state_snapshot=shared_state_snapshot,
+                    system_prompt_override=system_prompt_override,
+                )
+                continue
+            if decision.fail_completion:
+                assistant_message = build_assistant_error_message(
+                    error_code="incomplete_todos",
+                    error_message=decision.content,
+                )
+                return self._complete_with_assistant_error(
+                    task=task,
+                    instance_id=instance_id,
+                    role_id=role_id,
+                    conversation_id=conversation_id,
+                    workspace_id=workspace.ref.workspace_id,
+                    assistant_message=assistant_message,
+                    error_code="incomplete_todos",
+                    error_message=decision.content,
+                )
+            return result
+
+    async def _run_agent_once(
+        self,
+        *,
+        runner: SubAgentRunner,
+        task: TaskEnvelope,
+        instance_id: str,
+        workspace: WorkspaceHandle,
+        conversation_id: str,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        system_prompt_override: str,
+    ) -> str:
+        return await runner.run(
+            task=task,
+            instance_id=instance_id,
+            workspace_id=workspace.ref.workspace_id,
+            working_directory=workspace.resolve_workdir(),
+            conversation_id=conversation_id,
+            shared_state_snapshot=shared_state_snapshot,
+            thinking=self._thinking_for_run(task.trace_id),
+            system_prompt_override=system_prompt_override,
+            user_prompt=None,
+        )
+
+    def _evaluate_completion_guard(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        workspace: WorkspaceHandle,
+        conversation_id: str,
+        output_text: str,
+    ) -> ReminderDecision:
+        if self.reminder_service is None or self.todo_service is None:
+            return ReminderDecision()
+        if task.parent_task_id is not None:
+            return ReminderDecision()
+        snapshot = self.todo_service.get_for_run(
+            run_id=task.trace_id,
+            session_id=task.session_id,
+        )
+        incomplete = tuple(
+            IncompleteTodoItem(content=item.content, status=item.status.value)
+            for item in snapshot.items
+            if item.status != TodoStatus.COMPLETED
+        )
+        return self.reminder_service.evaluate_completion_attempt(
+            CompletionAttemptObservation(
+                session_id=task.session_id,
+                run_id=task.trace_id,
+                trace_id=task.trace_id,
+                task_id=task.task_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                workspace_id=workspace.ref.workspace_id,
+                conversation_id=conversation_id,
+                output_text=output_text,
+                incomplete_todos=incomplete,
+            )
+        )
 
     def _thinking_for_run(self, run_id: str) -> RunThinkingConfig:
         if self.run_intent_repo is None:

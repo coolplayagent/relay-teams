@@ -32,6 +32,15 @@
 
 `workspace_context` 是放置 workspace、日期、shell、run-specific 信息的默认位置。
 
+## System Reminders
+
+`<system-reminder>` 不属于 provider system prompt 的稳定前缀，也不应该作为
+`workspace_context` section 注入。它是运行时根据 tool、todo、compaction 等状态生成
+的 system-originated user-role message。
+
+这些消息进入会话历史或注入队列，由模型在下一次安全边界看到。这样可以避免为了短期
+运行时状态重写稳定 system prompt，同时保留完整的时间线可观测性。
+
 ## 稳定前缀规则
 
 为了保护 KV cache，下面内容不得因为 workspace、SSH profile、日期或 run 状态改变而移动或重写：

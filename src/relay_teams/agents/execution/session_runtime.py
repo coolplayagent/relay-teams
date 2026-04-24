@@ -302,6 +302,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 notification_service=self._notification_service,
                 im_tool_service=self._im_tool_service,
                 hook_service=hook_service,
+                reminder_service=getattr(self, "_reminder_service", None),
                 model_capabilities=self._config.capabilities,
                 hook_runtime_env=hook_runtime_env,
             )
