@@ -254,6 +254,9 @@ async def test_prepare_prompt_context_protects_precommitted_current_prompt_from_
     assert compaction_service.calls
     assert compaction_service.calls[0]["history"] == base_history[:-1]
     assert compaction_service.calls[0]["source_history"] == base_history[:-1]
+    budget = compaction_service.calls[0]["budget"]
+    assert isinstance(budget, ConversationCompactionBudget)
+    assert budget.estimated_user_prompt_tokens > 0
 
 
 @pytest.mark.asyncio

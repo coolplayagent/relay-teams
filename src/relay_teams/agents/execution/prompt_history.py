@@ -262,8 +262,12 @@ class PromptHistoryService:
             conversation_id=conversation_id,
             system_prompt=system_prompt,
         )
-        budget = await self.estimate_compaction_budget(
+        compaction_budget_request = self._request_with_protected_prompt_for_budget(
             request=request,
+            protected_prompt=protected_current_prompt,
+        )
+        budget = await self.estimate_compaction_budget(
+            request=compaction_budget_request,
             history=history,
             system_prompt=provisional_system_prompt,
             reserve_user_prompt_tokens=reserve_user_prompt_tokens,
@@ -378,6 +382,19 @@ class PromptHistoryService:
                     keys.append(current_key)
                 break
         return tuple(keys)
+
+    def _request_with_protected_prompt_for_budget(
+        self,
+        *,
+        request: LLMRequest,
+        protected_prompt: ModelRequest | None,
+    ) -> LLMRequest:
+        if protected_prompt is None or request.prompt_text.strip():
+            return request
+        prompt_text = extract_user_prompt_text(protected_prompt)
+        if prompt_text is None:
+            return request
+        return request.model_copy(update={"user_prompt": prompt_text, "input": ()})
 
     def coerce_history_to_provider_safe_sequence(
         self,

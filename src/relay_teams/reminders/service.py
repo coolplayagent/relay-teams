@@ -32,6 +32,7 @@ class SystemReminderService:
         self._state_repository = state_repository
         self._injection_sink = injection_sink
         self._policy = policy or SystemReminderPolicy()
+        self._fallback_states: dict[tuple[str, str], ReminderRunState] = {}
 
     @property
     def policy(self) -> SystemReminderPolicy:
@@ -135,6 +136,10 @@ class SystemReminderService:
         return decision
 
     def _load_state(self, *, session_id: str, run_id: str) -> ReminderRunState:
+        key = _state_cache_key(session_id=session_id, run_id=run_id)
+        fallback_state = self._fallback_states.get(key)
+        if fallback_state is not None:
+            return fallback_state
         try:
             return self._state_repository.get_run_state(
                 session_id=session_id,
@@ -158,13 +163,16 @@ class SystemReminderService:
         run_id: str,
         state: ReminderRunState,
     ) -> None:
+        key = _state_cache_key(session_id=session_id, run_id=run_id)
         try:
             self._state_repository.save_run_state(
                 session_id=session_id,
                 run_id=run_id,
                 state=state,
             )
+            self._fallback_states.pop(key, None)
         except Exception as exc:
+            self._fallback_states[key] = state
             log_event(
                 LOGGER,
                 logging.WARNING,
@@ -173,3 +181,7 @@ class SystemReminderService:
                 payload={"session_id": session_id, "run_id": run_id},
                 exc_info=exc,
             )
+
+
+def _state_cache_key(*, session_id: str, run_id: str) -> tuple[str, str]:
+    return session_id, run_id
