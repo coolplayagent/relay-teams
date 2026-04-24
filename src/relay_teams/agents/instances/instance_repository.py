@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
+from typing import Optional
 
 from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
 from relay_teams.agents.instances.models import AgentRuntimeRecord
@@ -101,8 +102,8 @@ class AgentInstanceRepository:
         workspace_id: str,
         conversation_id: str | None = None,
         status: InstanceStatus,
-        lifecycle: InstanceLifecycle | None = None,
-        parent_instance_id: str | None = None,
+        lifecycle: Optional[InstanceLifecycle] = None,
+        parent_instance_id: Optional[str] = None,
     ) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         resolved_conversation_id = conversation_id or build_conversation_id(

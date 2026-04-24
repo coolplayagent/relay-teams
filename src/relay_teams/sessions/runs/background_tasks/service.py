@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
-from typing import Protocol
+from typing import Optional, Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -129,8 +129,8 @@ class _BackgroundTaskAgentRepository(Protocol):
         workspace_id: str,
         conversation_id: str | None = None,
         status: InstanceStatus,
-        lifecycle: InstanceLifecycle | None = None,
-        parent_instance_id: str | None = None,
+        lifecycle: Optional[InstanceLifecycle] = None,
+        parent_instance_id: Optional[str] = None,
     ) -> None: ...
 
 
@@ -279,7 +279,7 @@ class BackgroundTaskService:
         session_id: str,
         instance_id: str,
         role_id: str,
-        tool_call_id: str | None,
+        tool_call_id: Optional[str],
         workspace: WorkspaceHandle,
         command: str,
         cwd: Path,
@@ -344,7 +344,7 @@ class BackgroundTaskService:
         session_id: str,
         instance_id: str,
         role_id: str,
-        tool_call_id: str | None,
+        tool_call_id: Optional[str],
         workspace_id: str,
         cwd: Path,
         subagent_role_id: str,
