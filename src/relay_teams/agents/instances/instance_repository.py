@@ -151,7 +151,7 @@ class AgentInstanceRepository:
                     now,
                     now,
                     lifecycle_value,
-                    lifecycle_value,
+                    parent_instance_id,
                 ),
             ),
             lock=self._lock,

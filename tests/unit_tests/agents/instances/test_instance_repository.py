@@ -112,9 +112,25 @@ def test_upsert_preserves_existing_lifecycle_when_not_explicit(
         workspace_id="workspace-1",
         conversation_id="conversation-1",
         status=InstanceStatus.IDLE,
+        parent_instance_id="inst-new-parent",
+    )
+
+    reparented = repository.get_instance("inst-1")
+    assert reparented.lifecycle == InstanceLifecycle.EPHEMERAL
+    assert reparented.parent_instance_id == "inst-new-parent"
+
+    repository.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="writer",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        status=InstanceStatus.IDLE,
         lifecycle=InstanceLifecycle.REUSABLE,
     )
 
     refreshed = repository.get_instance("inst-1")
     assert refreshed.lifecycle == InstanceLifecycle.REUSABLE
-    assert refreshed.parent_instance_id is None
+    assert refreshed.parent_instance_id == "inst-new-parent"

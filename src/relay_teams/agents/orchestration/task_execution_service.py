@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Union, cast
+from typing import Literal, Optional, Union, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai.messages import ModelRequest, UserContent, UserPromptPart
@@ -382,22 +382,32 @@ class TaskExecutionService(BaseModel):
                         payload_json="{}",
                     )
                 )
-            self.run_runtime_repo.update(
-                task.trace_id,
-                status=(
-                    RunRuntimeStatus.STOPPED if stopped else RunRuntimeStatus.FAILED
-                ),
-                phase=(
-                    RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
-                    if paused_subagent
-                    else RunRuntimePhase.IDLE
-                ),
-                active_instance_id=None,
-                active_task_id=task.task_id if paused_subagent else None,
-                active_role_id=role_id if paused_subagent else None,
-                active_subagent_instance_id=(instance_id if paused_subagent else None),
-                last_error="Task stopped by user" if stopped else "Task cancelled",
-            )
+            last_error = "Task stopped by user" if stopped else "Task cancelled"
+            if paused_subagent:
+                self.run_runtime_repo.update(
+                    task.trace_id,
+                    status=RunRuntimeStatus.STOPPED,
+                    phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
+                    active_instance_id=None,
+                    active_task_id=task.task_id,
+                    active_role_id=role_id,
+                    active_subagent_instance_id=instance_id,
+                    last_error=last_error,
+                )
+            else:
+                self._mark_runtime_after_terminal_task_update(
+                    run_id=task.trace_id,
+                    terminal_task_id=task.task_id,
+                    status=(
+                        RunRuntimeStatus.STOPPED if stopped else RunRuntimeStatus.FAILED
+                    ),
+                    phase=RunRuntimePhase.IDLE,
+                    active_instance_id=None,
+                    active_task_id=None,
+                    active_role_id=None,
+                    active_subagent_instance_id=None,
+                    last_error=last_error,
+                )
             log_event(
                 LOGGER,
                 logging.WARNING if stopped else logging.ERROR,
@@ -702,8 +712,9 @@ class TaskExecutionService(BaseModel):
             error_message=error_message or assistant_message,
         )
         _ = self.agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
-        self.run_runtime_repo.update(
-            task.trace_id,
+        self._mark_runtime_after_terminal_task_update(
+            run_id=task.trace_id,
+            terminal_task_id=task.task_id,
             status=RunRuntimeStatus.RUNNING,
             phase=RunRuntimePhase.IDLE,
             active_instance_id=None,
@@ -1042,15 +1053,66 @@ class TaskExecutionService(BaseModel):
         run_id: str,
         completed_task_id: str,
     ) -> None:
+        self._mark_runtime_after_terminal_task_update(
+            run_id=run_id,
+            terminal_task_id=completed_task_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.IDLE,
+            active_instance_id=None,
+            active_task_id=None,
+            active_role_id=None,
+            active_subagent_instance_id=None,
+            last_error=None,
+        )
+
+    def _mark_runtime_after_terminal_task_update(
+        self,
+        *,
+        run_id: str,
+        terminal_task_id: str,
+        status: RunRuntimeStatus,
+        phase: RunRuntimePhase,
+        active_instance_id: Optional[str],
+        active_task_id: Optional[str],
+        active_role_id: Optional[str],
+        active_subagent_instance_id: Optional[str],
+        last_error: Optional[str],
+    ) -> None:
         current = self.run_runtime_repo.get(run_id)
         if current is not None and current.active_task_id not in {
             None,
-            completed_task_id,
+            terminal_task_id,
         }:
+            if last_error is not None:
+                self.run_runtime_repo.update(run_id, last_error=last_error)
             return
+        if self._promote_running_runtime_lane(
+            run_id=run_id,
+            terminal_task_id=terminal_task_id,
+            last_error=last_error,
+        ):
+            return
+        self.run_runtime_repo.update(
+            run_id,
+            status=status,
+            phase=phase,
+            active_instance_id=active_instance_id,
+            active_task_id=active_task_id,
+            active_role_id=active_role_id,
+            active_subagent_instance_id=active_subagent_instance_id,
+            last_error=last_error,
+        )
+
+    def _promote_running_runtime_lane(
+        self,
+        *,
+        run_id: str,
+        terminal_task_id: str,
+        last_error: Optional[str],
+    ) -> bool:
         for record in self.task_repo.list_by_trace(run_id):
             task = record.envelope
-            if task.task_id == completed_task_id:
+            if task.task_id == terminal_task_id:
                 continue
             if record.status != TaskStatus.RUNNING:
                 continue
@@ -1071,19 +1133,10 @@ class TaskExecutionService(BaseModel):
                 active_subagent_instance_id=(
                     None if is_coordinator else record.assigned_instance_id
                 ),
-                last_error=None,
+                last_error=last_error,
             )
-            return
-        self.run_runtime_repo.update(
-            run_id,
-            status=RunRuntimeStatus.RUNNING,
-            phase=RunRuntimePhase.IDLE,
-            active_instance_id=None,
-            active_task_id=None,
-            active_role_id=None,
-            active_subagent_instance_id=None,
-            last_error=None,
-        )
+            return True
+        return False
 
     def _shared_state_snapshot(
         self,

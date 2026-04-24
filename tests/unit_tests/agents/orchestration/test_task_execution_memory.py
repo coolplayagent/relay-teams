@@ -137,3 +137,81 @@ def test_mark_runtime_idle_after_success_preserves_other_running_lane(
     assert runtime.active_task_id == running_task.task_id
     assert runtime.active_role_id == "writer"
     assert runtime.active_subagent_instance_id == "inst-running"
+
+
+def test_mark_runtime_after_terminal_failure_promotes_other_running_lane(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "task_execution_runtime_failure_lane.db"
+    task_repo = TaskRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+    service = TaskExecutionService.model_construct(
+        task_repo=task_repo,
+        run_runtime_repo=run_runtime_repo,
+    )
+    failed_task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        role_id="writer",
+        objective="write first result",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    running_task = TaskEnvelope(
+        task_id="task-2",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        role_id="writer",
+        objective="write second result",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(failed_task)
+    _ = task_repo.create(running_task)
+    task_repo.update_status(
+        failed_task.task_id,
+        TaskStatus.FAILED,
+        assigned_instance_id="inst-failed",
+        error_message="model failed",
+    )
+    task_repo.update_status(
+        running_task.task_id,
+        TaskStatus.RUNNING,
+        assigned_instance_id="inst-running",
+    )
+    run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            root_task_id="task-root",
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.SUBAGENT_RUNNING,
+            active_instance_id="inst-failed",
+            active_task_id=failed_task.task_id,
+            active_role_id="writer",
+            active_subagent_instance_id="inst-failed",
+        )
+    )
+
+    service._mark_runtime_after_terminal_task_update(
+        run_id="run-1",
+        terminal_task_id=failed_task.task_id,
+        status=RunRuntimeStatus.FAILED,
+        phase=RunRuntimePhase.IDLE,
+        active_instance_id=None,
+        active_task_id=None,
+        active_role_id=None,
+        active_subagent_instance_id=None,
+        last_error="model failed",
+    )
+
+    runtime = run_runtime_repo.get("run-1")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.RUNNING
+    assert runtime.phase == RunRuntimePhase.SUBAGENT_RUNNING
+    assert runtime.active_instance_id == "inst-running"
+    assert runtime.active_task_id == running_task.task_id
+    assert runtime.active_role_id == "writer"
+    assert runtime.active_subagent_instance_id == "inst-running"
+    assert runtime.last_error == "model failed"
