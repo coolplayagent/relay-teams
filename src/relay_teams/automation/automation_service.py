@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Callable, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import JsonValue
@@ -24,6 +24,8 @@ from relay_teams.automation.automation_event_repository import (
     AutomationExecutionEventRecord,
 )
 from relay_teams.automation.automation_models import (
+    AutomationDeliveryBinding,
+    AutomationDeliveryBindingCandidate,
     AutomationDeliveryEvent,
     AutomationExecutionHandle,
     AutomationFeishuBinding,
@@ -34,6 +36,7 @@ from relay_teams.automation.automation_models import (
     AutomationProjectUpdateInput,
     AutomationRunConfig,
     AutomationScheduleMode,
+    AutomationXiaolubanBinding,
 )
 from relay_teams.automation.automation_repository import AutomationProjectRepository
 from relay_teams.automation.errors import AutomationProjectNameConflictError
@@ -42,6 +45,9 @@ from relay_teams.automation.feishu_binding_service import (
 )
 from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
+)
+from relay_teams.automation.xiaoluban_binding_service import (
+    AutomationXiaolubanBindingService,
 )
 from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressBusyPolicy,
@@ -70,6 +76,7 @@ class AutomationService:
         session_service: SessionService,
         run_service: RunManager,
         feishu_binding_service: AutomationFeishuBindingService | None = None,
+        xiaoluban_binding_service: AutomationXiaolubanBindingService | None = None,
         delivery_service: AutomationDeliveryService | None = None,
         bound_session_queue_service: AutomationBoundSessionQueueService | None = None,
         workspace_service: WorkspaceService | None = None,
@@ -83,6 +90,7 @@ class AutomationService:
         self._session_service = session_service
         self._run_service = run_service
         self._feishu_binding_service = feishu_binding_service
+        self._xiaoluban_binding_service = xiaoluban_binding_service
         self._delivery_service = delivery_service
         self._bound_session_queue_service = bound_session_queue_service
         self._workspace_service = workspace_service
@@ -150,7 +158,7 @@ class AutomationService:
         )
         return self._repository.create(record)
 
-    def list_projects(self) -> tuple[AutomationProjectRecord, ...]:
+    def list_projects(self) -> Tuple[AutomationProjectRecord, ...]:
         return self._repository.list_all()
 
     def get_project(self, automation_project_id: str) -> AutomationProjectRecord:
@@ -158,10 +166,20 @@ class AutomationService:
 
     def list_feishu_bindings(
         self,
-    ) -> tuple[AutomationFeishuBindingCandidate, ...]:
+    ) -> Tuple[AutomationFeishuBindingCandidate, ...]:
         if self._feishu_binding_service is None:
             return ()
         return self._feishu_binding_service.list_candidates()
+
+    def list_delivery_bindings(
+        self,
+    ) -> Tuple[AutomationDeliveryBindingCandidate, ...]:
+        candidates: List[AutomationDeliveryBindingCandidate] = []
+        if self._feishu_binding_service is not None:
+            candidates.extend(self._feishu_binding_service.list_candidates())
+        if self._xiaoluban_binding_service is not None:
+            candidates.extend(self._xiaoluban_binding_service.list_candidates())
+        return tuple(candidates)
 
     def update_project(
         self,
@@ -185,10 +203,13 @@ class AutomationService:
             if payload.run_config is not None
             else existing.run_config
         )
-        delivery_binding = self._resolve_delivery_binding(
-            payload.delivery_binding,
-            existing_binding=existing.delivery_binding,
-        )
+        if "delivery_binding" in payload.model_fields_set:
+            delivery_binding = self._resolve_delivery_binding(
+                payload.delivery_binding,
+                existing_binding=None,
+            )
+        else:
+            delivery_binding = existing.delivery_binding
         delivery_events = self._resolve_delivery_events(
             binding=delivery_binding,
             requested_events=payload.delivery_events,
@@ -317,7 +338,7 @@ class AutomationService:
             return True
         return False
 
-    def run_now(self, automation_project_id: str) -> dict[str, JsonValue]:
+    def run_now(self, automation_project_id: str) -> Dict[str, JsonValue]:
         project = self._repository.get(automation_project_id)
         execution_handle = self._materialize_execution(project, reason="manual")
         return {
@@ -331,7 +352,7 @@ class AutomationService:
     def list_project_sessions(
         self,
         automation_project_id: str,
-    ) -> tuple[dict[str, object], ...]:
+    ) -> Tuple[Dict[str, object], ...]:
         project = self._repository.get(automation_project_id)
         sessions = list(
             self._session_service.list_sessions_by_project(
@@ -355,9 +376,12 @@ class AutomationService:
         sessions.sort(key=lambda item: str(item.get("updated_at", "")), reverse=True)
         return tuple(sessions)
 
-    def process_due_projects(self, now: datetime | None = None) -> tuple[str, ...]:
+    def process_due_projects(
+        self,
+        now: Optional[datetime] = None,
+    ) -> Tuple[str, ...]:
         effective_now = now or datetime.now(tz=UTC)
-        processed: list[str] = []
+        processed: List[str] = []
         for project in self._repository.list_due(effective_now):
             self._materialize_execution(project, reason="schedule", now=effective_now)
             processed.append(project.automation_project_id)
@@ -368,7 +392,7 @@ class AutomationService:
         project: AutomationProjectRecord,
         *,
         reason: str,
-        now: datetime | None = None,
+        now: Optional[datetime] = None,
     ) -> AutomationExecutionHandle:
         effective_now = now or datetime.now(tz=UTC)
         execution_event = self._record_execution_event(project, reason=reason)
@@ -503,24 +527,30 @@ class AutomationService:
 
     def _resolve_delivery_binding(
         self,
-        candidate: AutomationFeishuBinding | None,
+        candidate: Optional[AutomationDeliveryBinding],
         *,
-        existing_binding: AutomationFeishuBinding | None,
-    ) -> AutomationFeishuBinding | None:
+        existing_binding: Optional[AutomationDeliveryBinding],
+    ) -> Optional[AutomationDeliveryBinding]:
         binding = candidate if candidate is not None else existing_binding
         if binding is None:
             return None
-        if self._feishu_binding_service is None:
-            raise ValueError("Feishu delivery binding service is unavailable")
-        return self._feishu_binding_service.validate_binding(binding)
+        if isinstance(binding, AutomationFeishuBinding):
+            if self._feishu_binding_service is None:
+                raise ValueError("Feishu delivery binding service is unavailable")
+            return self._feishu_binding_service.validate_binding(binding)
+        if isinstance(binding, AutomationXiaolubanBinding):
+            if self._xiaoluban_binding_service is None:
+                raise ValueError("Xiaoluban delivery binding service is unavailable")
+            return self._xiaoluban_binding_service.validate_binding(binding)
+        raise ValueError(f"Unsupported delivery binding provider: {binding.provider}")
 
     def _resolve_delivery_events(
         self,
         *,
-        binding: AutomationFeishuBinding | None,
-        requested_events: tuple[AutomationDeliveryEvent, ...] | None,
-        existing_events: tuple[AutomationDeliveryEvent, ...],
-    ) -> tuple[AutomationDeliveryEvent, ...]:
+        binding: Optional[AutomationDeliveryBinding],
+        requested_events: Optional[Tuple[AutomationDeliveryEvent, ...]],
+        existing_events: Tuple[AutomationDeliveryEvent, ...],
+    ) -> Tuple[AutomationDeliveryEvent, ...]:
         if binding is None:
             return ()
         if requested_events is not None:
@@ -655,8 +685,10 @@ class AutomationService:
         *,
         project: AutomationProjectRecord,
         reason: str,
-    ) -> AutomationExecutionHandle | None:
+    ) -> Optional[AutomationExecutionHandle]:
         if project.delivery_binding is None:
+            return None
+        if project.delivery_binding.provider != "feishu":
             return None
         if self._bound_session_queue_service is None:
             raise RuntimeError(
@@ -705,15 +737,15 @@ def _validate_timezone(timezone_name: str) -> str:
 
 
 def _resolve_optional_text(
-    *, candidate: str | None, fallback: str | None
-) -> str | None:
+    *, candidate: Optional[str], fallback: Optional[str]
+) -> Optional[str]:
     if candidate is None:
         return fallback
     normalized = candidate.strip()
     return normalized or None
 
 
-def _normalize_optional_text(value: str | None) -> str | None:
+def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
     normalized = value.strip()
@@ -724,7 +756,7 @@ def _next_run_at_after_fire(
     *,
     project: AutomationProjectRecord,
     fired_at: datetime,
-) -> datetime | None:
+) -> Optional[datetime]:
     if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
         return None
     return _next_run_at(
@@ -739,11 +771,11 @@ def _next_run_at_after_fire(
 def _next_run_at(
     *,
     schedule_mode: AutomationScheduleMode,
-    cron_expression: str | None,
-    run_at: datetime | None,
+    cron_expression: Optional[str],
+    run_at: Optional[datetime],
     timezone_name: str,
     after: datetime,
-) -> datetime | None:
+) -> Optional[datetime]:
     if schedule_mode == AutomationScheduleMode.ONE_SHOT:
         if run_at is None:
             return None
@@ -828,9 +860,9 @@ def _parse_cron_field(field: str, minimum: int, maximum: int) -> set[int]:
 
 
 def _dedupe_delivery_events(
-    values: tuple[AutomationDeliveryEvent, ...],
-) -> tuple[AutomationDeliveryEvent, ...]:
-    ordered: list[AutomationDeliveryEvent] = []
+    values: Tuple[AutomationDeliveryEvent, ...],
+) -> Tuple[AutomationDeliveryEvent, ...]:
+    ordered: List[AutomationDeliveryEvent] = []
     seen: set[AutomationDeliveryEvent] = set()
     for value in values:
         if value in seen:

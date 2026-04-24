@@ -29,6 +29,7 @@ from relay_teams.automation.automation_models import (
     AutomationProjectUpdateInput,
     AutomationRunConfig,
     AutomationScheduleMode,
+    AutomationXiaolubanBinding,
 )
 from relay_teams.agents.orchestration.settings_models import (
     OrchestrationPreset,
@@ -38,6 +39,9 @@ from relay_teams.automation.automation_repository import AutomationProjectReposi
 from relay_teams.automation.automation_service import AutomationService
 from relay_teams.automation.feishu_binding_service import (
     AutomationFeishuBindingService,
+)
+from relay_teams.automation.xiaoluban_binding_service import (
+    AutomationXiaolubanBindingService,
 )
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.roles import RoleRegistry
@@ -95,6 +99,18 @@ class _FakeBoundSessionQueueService:
 
 class _FakeFeishuBindingService:
     def validate_binding(self, binding: object) -> object:
+        return binding
+
+
+class _FakeXiaolubanBindingService:
+    def __init__(self) -> None:
+        self.reject_bindings = False
+        self.validate_calls: list[object] = []
+
+    def validate_binding(self, binding: object) -> object:
+        self.validate_calls.append(binding)
+        if self.reject_bindings:
+            raise ValueError("Xiaoluban account cannot receive delivery")
         return binding
 
 
@@ -167,6 +183,7 @@ def _build_service(
     bound_session_queue_service: _FakeBoundSessionQueueService | None = None,
     delivery_service: _FakeDeliveryService | None = None,
     feishu_binding_service: object | None = None,
+    xiaoluban_binding_service: object | None = None,
     role_registry: _FakeRoleRegistry | None = None,
     get_role_registry: Callable[[], _FakeRoleRegistry | None] | None = None,
     orchestration_settings_service: _FakeOrchestrationSettingsService | None = None,
@@ -187,6 +204,10 @@ def _build_service(
         feishu_binding_service=cast(
             AutomationFeishuBindingService | None,
             feishu_binding_service,
+        ),
+        xiaoluban_binding_service=cast(
+            AutomationXiaolubanBindingService | None,
+            xiaoluban_binding_service,
         ),
         delivery_service=cast(AutomationDeliveryService | None, delivery_service),
         bound_session_queue_service=cast(
@@ -257,7 +278,10 @@ def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> No
     assert run_manager.started_run_ids == ["run-1"]
     assert (
         getattr(run_manager.create_calls[0], "intent")
-        == "触发定时任务 “nightly-report”：\nDraft a nightly report."
+        == "自动化项目“nightly-report”已由系统触发进入本次执行。\n"
+        "不要创建、启动或安排新的定时任务；定时调度由后台负责。"
+        "请直接完成以下任务：\n"
+        "Draft a nightly report."
     )
 
 
@@ -600,7 +624,10 @@ def test_process_due_projects_runs_one_shot_once_and_disables_it(
     assert run_manager.started_run_ids == ["run-1"]
     assert (
         getattr(run_manager.create_calls[0], "intent")
-        == "触发定时任务 “one-shot-report”：\nRun once."
+        == "自动化项目“one-shot-report”已由系统触发进入本次执行。\n"
+        "不要创建、启动或安排新的定时任务；定时调度由后台负责。"
+        "请直接完成以下任务：\n"
+        "Run once."
     )
 
 
@@ -816,6 +843,78 @@ def test_update_project_rejects_unknown_workspace(tmp_path: Path) -> None:
             created.automation_project_id,
             AutomationProjectUpdateInput(workspace_id="missing"),
         )
+
+
+def test_update_project_skips_xiaoluban_revalidation_for_unrelated_patch(
+    tmp_path: Path,
+) -> None:
+    binding_service = _FakeXiaolubanBindingService()
+    service, _, _ = _build_service(
+        tmp_path,
+        xiaoluban_binding_service=binding_service,
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="daily-briefing",
+            workspace_id="default",
+            prompt="Summarize the day.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * * 1-5",
+            timezone="UTC",
+            delivery_binding=AutomationXiaolubanBinding(
+                account_id="xlb_1",
+                display_name="小鲁班主账号",
+                derived_uid="uidself",
+                source_label="小鲁班主账号",
+            ),
+        )
+    )
+    binding_service.reject_bindings = True
+
+    updated = service.update_project(
+        created.automation_project_id,
+        AutomationProjectUpdateInput(prompt="Summarize the week."),
+    )
+
+    assert updated.prompt == "Summarize the week."
+    assert updated.delivery_binding == created.delivery_binding
+    assert len(binding_service.validate_calls) == 1
+
+
+def test_update_project_can_clear_xiaoluban_binding_without_revalidation(
+    tmp_path: Path,
+) -> None:
+    binding_service = _FakeXiaolubanBindingService()
+    service, _, _ = _build_service(
+        tmp_path,
+        xiaoluban_binding_service=binding_service,
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="daily-briefing",
+            workspace_id="default",
+            prompt="Summarize the day.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * * 1-5",
+            timezone="UTC",
+            delivery_binding=AutomationXiaolubanBinding(
+                account_id="xlb_1",
+                display_name="小鲁班主账号",
+                derived_uid="uidself",
+                source_label="小鲁班主账号",
+            ),
+        )
+    )
+    binding_service.reject_bindings = True
+
+    updated = service.update_project(
+        created.automation_project_id,
+        AutomationProjectUpdateInput(delivery_binding=None),
+    )
+
+    assert updated.delivery_binding is None
+    assert updated.delivery_events == ()
+    assert len(binding_service.validate_calls) == 1
 
 
 def test_enable_project_rejects_unknown_workspace_on_persisted_record(

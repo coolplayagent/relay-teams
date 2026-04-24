@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+from threading import Thread
+import time
+from typing import TypedDict, cast
 from uuid import uuid4
 
 import httpx
@@ -11,6 +16,11 @@ import pytest
 from relay_teams.env.web_config_models import DEFAULT_SEARXNG_INSTANCE_SEEDS
 
 from integration_tests.support.api_helpers import stream_run_until_terminal
+
+
+class _XiaolubanCapturedRequest(TypedDict):
+    path: str
+    payload: dict[str, object]
 
 
 def test_system_config_roundtrips_and_prompt_preview(
@@ -357,6 +367,108 @@ def test_workspace_automation_and_feishu_gateway_routes(
     assert delete_feishu_response.json() == {"status": "ok"}
 
 
+def test_xiaoluban_delivery_binding_and_run_flow(
+    api_client: httpx.Client,
+    tmp_path: Path,
+) -> None:
+    workspace_id = f"xlb-ws-{uuid4().hex[:8]}"
+    workspace_root = _create_git_workspace(tmp_path / workspace_id)
+    create_workspace_response = api_client.post(
+        "/api/workspaces",
+        json={
+            "workspace_id": workspace_id,
+            "root_path": str(workspace_root),
+        },
+    )
+    create_workspace_response.raise_for_status()
+
+    capture_server, capture_thread = _start_xiaoluban_capture_server()
+    try:
+        create_xiaoluban_response = api_client.post(
+            "/api/gateway/xiaoluban/accounts",
+            json={
+                "display_name": "Integration Xiaoluban",
+                "token": "uidself_1234567890abcdef1234567890abcdef",
+                "base_url": f"http://127.0.0.1:{capture_server.server_port}/send",
+                "enabled": True,
+            },
+        )
+        create_xiaoluban_response.raise_for_status()
+        xiaoluban_payload = create_xiaoluban_response.json()
+        account_id = str(xiaoluban_payload["account_id"])
+        assert xiaoluban_payload["derived_uid"] == "uidself"
+        assert xiaoluban_payload["secret_status"]["token_configured"] is True
+
+        delivery_bindings_response = api_client.get("/api/automation/delivery-bindings")
+        delivery_bindings_response.raise_for_status()
+        delivery_bindings_payload = delivery_bindings_response.json()
+        xiaoluban_binding = next(
+            (
+                item
+                for item in delivery_bindings_payload
+                if str(item.get("provider") or "") == "xiaoluban"
+                and str(item.get("account_id") or "") == account_id
+            ),
+            None,
+        )
+        assert xiaoluban_binding is not None
+
+        create_project_response = api_client.post(
+            "/api/automation/projects",
+            json={
+                "name": f"xlb-automation-{uuid4().hex[:8]}",
+                "display_name": "Xiaoluban Delivery Integration",
+                "workspace_id": workspace_id,
+                "prompt": "Summarize the integration workspace in one sentence.",
+                "schedule_mode": "cron",
+                "cron_expression": "0 9 * * *",
+                "timezone": "UTC",
+                "delivery_binding": {
+                    "provider": "xiaoluban",
+                    "account_id": account_id,
+                    "display_name": str(xiaoluban_binding["display_name"]),
+                    "derived_uid": str(xiaoluban_binding["derived_uid"]),
+                    "source_label": str(xiaoluban_binding["source_label"]),
+                },
+                "delivery_events": ["completed"],
+                "run_config": {
+                    "session_mode": "normal",
+                    "execution_mode": "ai",
+                    "yolo": True,
+                    "thinking": {"enabled": False, "effort": None},
+                },
+                "enabled": False,
+            },
+        )
+        create_project_response.raise_for_status()
+        project_payload = create_project_response.json()
+        automation_project_id = str(project_payload["automation_project_id"])
+        assert project_payload["delivery_binding"]["provider"] == "xiaoluban"
+
+        run_project_response = api_client.post(
+            f"/api/automation/projects/{automation_project_id}:run"
+        )
+        run_project_response.raise_for_status()
+        run_project_payload = run_project_response.json()
+        run_id = str(run_project_payload.get("run_id") or "")
+        assert run_id
+
+        events = stream_run_until_terminal(api_client, run_id=run_id)
+        assert events[-1]["event_type"] == "run_completed"
+
+        captured_request = _wait_for_xiaoluban_request(capture_server)
+        assert captured_request["path"] == "/send"
+        captured_payload = captured_request["payload"]
+        assert captured_payload["receiver"] == "uidself"
+        assert captured_payload["auth"] == "uidself_1234567890abcdef1234567890abcdef"
+        assert str(captured_payload["content"]).strip()
+        assert "Xiaoluban Delivery Integration" in str(captured_payload["content"])
+    finally:
+        capture_server.shutdown()
+        capture_server.server_close()
+        capture_thread.join(timeout=5.0)
+
+
 def _write_acp_probe_script(tmp_path: Path) -> Path:
     script_path = tmp_path / "acp_probe.py"
     script_path.write_text(
@@ -422,6 +534,56 @@ def _create_git_workspace(workspace_root: Path) -> Path:
         encoding="utf-8",
     )
     return workspace_root
+
+
+class _XiaolubanCaptureServer(ThreadingHTTPServer):
+    requests: list[_XiaolubanCapturedRequest]
+
+
+def _start_xiaoluban_capture_server() -> tuple[_XiaolubanCaptureServer, Thread]:
+    class _XiaolubanCaptureHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            content_length = int(self.headers.get("Content-Length", "0"))
+            raw_body = self.rfile.read(content_length).decode("utf-8")
+            payload = cast(dict[str, object], json.loads(raw_body))
+            server = cast(_XiaolubanCaptureServer, self.server)
+            server.requests.append(
+                {
+                    "path": self.path,
+                    "payload": payload,
+                }
+            )
+            response_body = json.dumps({"message_id": "xlbmsg_integration"}).encode(
+                "utf-8"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = _XiaolubanCaptureServer(("127.0.0.1", 0), _XiaolubanCaptureHandler)
+    server.requests = []
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread
+
+
+def _wait_for_xiaoluban_request(
+    server: _XiaolubanCaptureServer,
+    *,
+    timeout_seconds: float = 20.0,
+) -> _XiaolubanCapturedRequest:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        requests = list(server.requests)
+        if requests:
+            return requests[-1]
+        time.sleep(0.1)
+    raise AssertionError("Timed out waiting for Xiaoluban delivery request.")
 
 
 def _run_git_command(workspace_root: Path, *args: str) -> None:

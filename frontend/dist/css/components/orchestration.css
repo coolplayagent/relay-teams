@@ -281,6 +281,7 @@
 
 .feedback-dialog-submit-error {
     margin-top: 0.8rem;
+    padding: 0 1.15rem;
     color: var(--danger);
     font-size: 0.8rem;
     line-height: 1.5;

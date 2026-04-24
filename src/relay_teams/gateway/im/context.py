@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from relay_teams.automation.automation_models import AutomationProjectRecord
+from relay_teams.automation.automation_models import (
+    AutomationFeishuBinding,
+    AutomationProjectRecord,
+)
 from relay_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
     FEISHU_METADATA_CHAT_TYPE_KEY,
@@ -242,6 +245,8 @@ def _resolve_automation_binding_context(
         return None
     binding = project.delivery_binding
     if binding is None:
+        return None
+    if not isinstance(binding, AutomationFeishuBinding):
         return None
     runtime_config = runtime_config_lookup.get_runtime_config_by_trigger_id(
         binding.trigger_id

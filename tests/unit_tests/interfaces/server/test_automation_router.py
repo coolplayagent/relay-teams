@@ -6,18 +6,20 @@ from typing import Callable
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from relay_teams.automation.automation_models import (
+from relay_teams.automation import (
+    AutomationDeliveryBindingCandidate,
     AutomationDeliveryEvent,
     AutomationFeishuBinding,
     AutomationFeishuBindingCandidate,
     AutomationProjectCreateInput,
+    AutomationProjectNameConflictError,
     AutomationProjectRecord,
     AutomationProjectStatus,
     AutomationProjectUpdateInput,
     AutomationRunConfig,
     AutomationScheduleMode,
+    AutomationXiaolubanBindingCandidate,
 )
-from relay_teams.automation.errors import AutomationProjectNameConflictError
 from relay_teams.interfaces.server.deps import get_automation_service
 from relay_teams.interfaces.server.routers import automation
 
@@ -31,6 +33,7 @@ class _FakeAutomationService:
         self.updated_payloads: list[tuple[str, AutomationProjectUpdateInput]] = []
         self.delete_error: Exception | None = None
         self.list_feishu_bindings_calls = 0
+        self.list_delivery_bindings_calls = 0
 
     def create_project(
         self, req: AutomationProjectCreateInput
@@ -39,6 +42,10 @@ class _FakeAutomationService:
         if req.name == "duplicate-project":
             raise AutomationProjectNameConflictError(
                 f"Automation project name already exists: {req.name}"
+            )
+        if req.name == "invalid-binding":
+            raise ValueError(
+                "delivery_binding must reference an existing Xiaoluban account"
             )
         return AutomationProjectRecord(
             automation_project_id="aut_created",
@@ -111,6 +118,21 @@ class _FakeAutomationService:
                 session_id="session-im-1",
                 session_title="feishu_main - Release Updates",
                 updated_at=datetime(2026, 3, 23, 8, 0, tzinfo=UTC),
+            ),
+        )
+
+    def list_delivery_bindings(
+        self,
+    ) -> tuple[AutomationDeliveryBindingCandidate, ...]:
+        self.list_delivery_bindings_calls += 1
+        return (
+            *self.list_feishu_bindings(),
+            AutomationXiaolubanBindingCandidate(
+                account_id="xlb_1",
+                display_name="小鲁班主账号",
+                derived_uid="uid_self",
+                source_label="发送给自己（uid_self）",
+                updated_at=datetime(2026, 3, 23, 8, 30, tzinfo=UTC),
             ),
         )
 
@@ -272,6 +294,25 @@ def test_create_project_route_maps_name_conflict_to_409() -> None:
     assert "already exists" in response.json()["detail"]
 
 
+def test_create_project_route_maps_invalid_binding_to_422() -> None:
+    client = _client(_FakeAutomationService())
+
+    response = client.post(
+        "/api/automation/projects",
+        json={
+            "name": "invalid-binding",
+            "workspace_id": "default",
+            "prompt": "Summarize the day.",
+            "schedule_mode": "cron",
+            "cron_expression": "0 9 * * *",
+            "timezone": "UTC",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "existing Xiaoluban account" in response.json()["detail"]
+
+
 def test_create_project_route_rejects_none_like_workspace_id() -> None:
     fake_service = _FakeAutomationService()
     client = _client(fake_service)
@@ -319,6 +360,20 @@ def test_list_feishu_bindings_route_returns_candidates() -> None:
     assert fake_service.list_feishu_bindings_calls == 1
 
 
+def test_list_delivery_bindings_route_returns_mixed_candidates() -> None:
+    fake_service = _FakeAutomationService()
+    client = _client(fake_service)
+
+    response = client.get("/api/automation/delivery-bindings")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload[0]["provider"] == "feishu"
+    assert payload[1]["provider"] == "xiaoluban"
+    assert payload[1]["account_id"] == "xlb_1"
+    assert fake_service.list_delivery_bindings_calls == 1
+
+
 def test_automation_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
     calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
@@ -336,6 +391,7 @@ def test_automation_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
     client = _client(fake_service)
 
     requests = [
+        client.get("/api/automation/delivery-bindings"),
         client.get("/api/automation/feishu-bindings"),
         client.post(
             "/api/automation/projects",
@@ -363,6 +419,7 @@ def test_automation_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
 
     assert [response.status_code for response in requests] == [200] * len(requests)
     assert [call[0] for call in calls] == [
+        "list_delivery_bindings",
         "list_feishu_bindings",
         "create_project",
         "list_projects",

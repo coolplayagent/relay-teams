@@ -1846,6 +1846,100 @@ def test_browser_workspace_and_automation_project_views(
     )
 
 
+def test_browser_gateway_xiaoluban_and_automation_binding_flow(
+    browser_page: Page,
+    integration_env: IntegrationEnvironment,
+) -> None:
+    page = browser_page
+    _open_app(page, integration_env)
+
+    xiaoluban_token = "uidself_1234567890abcdef1234567890abcdef"
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "POST"
+            and response.url
+            == f"{integration_env.api_base_url}/api/gateway/xiaoluban/accounts"
+        )
+    ) as create_xiaoluban_response_info:
+        page.locator('.home-feature-item[data-feature-id="gateway"]').click()
+        expect(page.locator("#project-view")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+        page.locator("[data-feature-gateway-add-xiaoluban]").click()
+        expect(page.locator('[role="alertdialog"]')).to_be_visible(
+            timeout=_WAIT_TIMEOUT_MS
+        )
+        expect(page.locator('[data-feedback-form-input="display_name"]')).to_have_value(
+            re.compile(r"(Xiaoluban|小鲁班)"),
+            timeout=_WAIT_TIMEOUT_MS,
+        )
+        expect(page.locator('[data-feedback-form-input="base_url"]')).to_have_count(0)
+        expect(page.locator('[data-feedback-form-input="enabled"]')).to_have_count(0)
+        page.locator('[data-feedback-form-input="token"]').fill(xiaoluban_token)
+        page.locator("[data-feedback-confirm]").click()
+    create_xiaoluban_response = create_xiaoluban_response_info.value
+    assert create_xiaoluban_response.ok
+    create_xiaoluban_payload = json.loads(
+        create_xiaoluban_response.request.post_data or "{}"
+    )
+    assert create_xiaoluban_payload["display_name"] in {"Xiaoluban", "小鲁班"}
+    assert create_xiaoluban_payload["token"] == xiaoluban_token
+    assert "base_url" not in create_xiaoluban_payload
+    assert "enabled" not in create_xiaoluban_payload
+    created_account = create_xiaoluban_response.json()
+    assert str(created_account.get("display_name") or "") in {"Xiaoluban", "小鲁班"}
+    assert str(created_account.get("derived_uid") or "") == "uidself"
+    expect(page.locator("#project-view-content")).to_contain_text(
+        re.compile(r"(Xiaoluban|小鲁班)"),
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    account_id = str(created_account["account_id"])
+
+    automation_name = f"Browser Xiaoluban Automation {uuid4().hex[:6]}"
+    with page.expect_request(
+        lambda request: (
+            request.method == "POST"
+            and request.url == f"{integration_env.api_base_url}/api/automation/projects"
+        )
+    ) as create_automation_request_info:
+        page.locator('.home-feature-item[data-feature-id="automation"]').click()
+        expect(page.locator("#project-view")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+        page.locator(
+            ".project-view-toolbar-actions [data-feature-automation-create]"
+        ).click()
+        expect(page.locator("#automation-editor-display-name-input")).to_be_visible(
+            timeout=_WAIT_TIMEOUT_MS
+        )
+        page.locator("#automation-editor-display-name-input").fill(automation_name)
+        page.locator("#automation-editor-workspace-id-input").select_option("default")
+        page.locator("#automation-editor-prompt-input").fill(
+            "Send the Xiaoluban automation summary."
+        )
+        page.locator("#automation-editor-schedule-kind-input").select_option("weekdays")
+        page.locator("#automation-editor-time-input").fill("10:15")
+        page.locator("#automation-editor-delivery-binding-input").select_option(
+            f"xiaoluban::{account_id}"
+        )
+        page.locator("#automation-editor-delivery-started-input").uncheck()
+        page.locator("#automation-editor-delivery-completed-input").check()
+        page.locator("#automation-editor-delivery-failed-input").uncheck()
+        page.locator("[data-automation-editor-save]").click()
+    create_automation_payload = json.loads(
+        create_automation_request_info.value.post_data or "{}"
+    )
+    assert create_automation_payload["delivery_binding"] == {
+        "provider": "xiaoluban",
+        "account_id": account_id,
+        "display_name": str(created_account["display_name"]),
+        "derived_uid": "uidself",
+        "source_label": "发送给自己（uidself）",
+    }
+    assert create_automation_payload["delivery_events"] == ["completed"]
+    expect(
+        page.locator("[data-automation-home-project-id]").filter(
+            has_text=automation_name
+        )
+    ).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+
+
 def test_browser_sidebar_lazy_loads_subagent_sessions_on_initial_open(
     browser_page: Page,
     integration_env: IntegrationEnvironment,

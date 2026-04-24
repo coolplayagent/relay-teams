@@ -6,21 +6,33 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import JsonValue
 from starlette.concurrency import run_in_threadpool
 
-from relay_teams.automation.automation_models import (
+from relay_teams.automation import (
+    AutomationDeliveryBindingCandidate,
     AutomationFeishuBindingCandidate,
     AutomationProjectCreateInput,
+    AutomationProjectNameConflictError,
     AutomationProjectRecord,
     AutomationProjectStatus,
     AutomationProjectUpdateInput,
+    AutomationService,
 )
-from relay_teams.automation.automation_service import AutomationService
-from relay_teams.automation.errors import AutomationProjectNameConflictError
 from relay_teams.interfaces.server.deps import get_automation_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.interfaces.server.write_models import DeleteRequest
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(prefix="/automation", tags=["Automation"])
+
+
+@router.get(
+    "/delivery-bindings",
+    response_model=list[AutomationDeliveryBindingCandidate],
+)
+async def list_delivery_bindings(
+    service: Annotated[AutomationService, Depends(get_automation_service)],
+) -> list[AutomationDeliveryBindingCandidate]:
+    bindings = await run_in_threadpool(service.list_delivery_bindings)
+    return list(bindings)
 
 
 @router.get("/feishu-bindings", response_model=list[AutomationFeishuBindingCandidate])

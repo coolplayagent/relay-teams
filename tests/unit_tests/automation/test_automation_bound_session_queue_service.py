@@ -337,7 +337,10 @@ def test_materialize_execution_starts_in_bound_session_when_idle(
     assert len(run_service.created_intents) == 1
     assert (
         content_parts_to_text(run_service.created_intents[0].input)
-        == "触发定时任务 “Daily Briefing”：\nSummarize the day."
+        == "自动化项目“Daily Briefing”已由系统触发进入本次执行。\n"
+        "不要创建、启动或安排新的定时任务；定时调度由后台负责。"
+        "请直接完成以下任务：\n"
+        "Summarize the day."
     )
     assert (
         run_service.created_intents[0].conversation_context is not None
@@ -386,7 +389,10 @@ def test_materialize_execution_queues_when_bound_session_is_busy(
     assert len(queued_records) == 1
     assert (
         queued_records[0].prompt
-        == "触发定时任务 “Daily Briefing”：\nSummarize the day."
+        == "自动化项目“Daily Briefing”已由系统触发进入本次执行。\n"
+        "不要创建、启动或安排新的定时任务；定时调度由后台负责。"
+        "请直接完成以下任务：\n"
+        "Summarize the day."
     )
     assert (
         queued_records[0].queue_message
@@ -440,7 +446,10 @@ def test_process_pending_starts_queued_run_after_bound_session_becomes_idle(
     assert len(run_service.created_intents) == 1
     assert (
         content_parts_to_text(run_service.created_intents[0].input)
-        == "触发定时任务 “Daily Briefing”：\nSummarize the day."
+        == "自动化项目“Daily Briefing”已由系统触发进入本次执行。\n"
+        "不要创建、启动或安排新的定时任务；定时调度由后台负责。"
+        "请直接完成以下任务：\n"
+        "Summarize the day."
     )
     assert run_service.started_run_ids == ["run-1"]
     assert len(waiting_records) == 1

@@ -8,11 +8,12 @@ from pathlib import Path
 from threading import RLock
 
 from relay_teams.automation.automation_models import (
+    AutomationDeliveryBinding,
     AutomationCleanupStatus,
     AutomationDeliveryEvent,
     AutomationDeliveryStatus,
-    AutomationFeishuBinding,
     AutomationRunDeliveryRecord,
+    validate_automation_delivery_binding,
 )
 from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 
@@ -607,12 +608,18 @@ class AutomationDeliveryRepository:
         )
 
 
-def _binding_to_json(binding: AutomationFeishuBinding) -> str:
+def _binding_to_json(binding: AutomationDeliveryBinding) -> str:
     return json.dumps(binding.model_dump(mode="json"))
 
 
-def _binding_from_json(value: str) -> AutomationFeishuBinding:
-    return AutomationFeishuBinding.model_validate(json.loads(value))
+def _binding_from_json(value: str) -> AutomationDeliveryBinding:
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise ValueError("Invalid automation delivery binding payload")
+    normalized = dict(parsed)
+    if "provider" not in normalized and "trigger_id" in normalized:
+        normalized["provider"] = "feishu"
+    return validate_automation_delivery_binding(normalized)
 
 
 def _events_to_json(events: tuple[AutomationDeliveryEvent, ...]) -> str:

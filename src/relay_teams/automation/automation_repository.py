@@ -6,17 +6,19 @@ import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, Optional, Tuple
 
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.automation.errors import AutomationProjectNameConflictError
 from relay_teams.automation.automation_models import (
+    AutomationDeliveryBinding,
     AutomationDeliveryEvent,
-    AutomationFeishuBinding,
     AutomationProjectRecord,
     AutomationProjectStatus,
     AutomationRunConfig,
     AutomationScheduleMode,
+    validate_automation_delivery_binding,
 )
 from relay_teams.logger import get_logger, log_event
 from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
@@ -196,7 +198,7 @@ class AutomationProjectRepository(SharedSqliteRepository):
                 f"Unknown automation_project_id: {automation_project_id}"
             ) from exc
 
-    def list_all(self) -> tuple[AutomationProjectRecord, ...]:
+    def list_all(self) -> Tuple[AutomationProjectRecord, ...]:
         rows = self._run_read(
             lambda: self._conn.execute(
                 """
@@ -209,7 +211,7 @@ class AutomationProjectRepository(SharedSqliteRepository):
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
 
-    def list_due(self, now: datetime) -> tuple[AutomationProjectRecord, ...]:
+    def list_due(self, now: datetime) -> Tuple[AutomationProjectRecord, ...]:
         rows = self._run_read(
             lambda: self._conn.execute(
                 """
@@ -239,7 +241,7 @@ class AutomationProjectRepository(SharedSqliteRepository):
             ),
         )
 
-    def _to_row(self, record: AutomationProjectRecord) -> tuple[object, ...]:
+    def _to_row(self, record: AutomationProjectRecord) -> Tuple[object, ...]:
         return (
             record.automation_project_id,
             record.name,
@@ -315,7 +317,7 @@ class AutomationProjectRepository(SharedSqliteRepository):
             updated_at=updated_at,
         )
 
-    def _record_or_none(self, row: sqlite3.Row) -> AutomationProjectRecord | None:
+    def _record_or_none(self, row: sqlite3.Row) -> Optional[AutomationProjectRecord]:
         try:
             return self._to_record(row)
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
@@ -323,17 +325,17 @@ class AutomationProjectRepository(SharedSqliteRepository):
             return None
 
 
-def _to_iso(value: datetime | None) -> str | None:
+def _to_iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat() if value is not None else None
 
 
-def _binding_to_json(binding: AutomationFeishuBinding | None) -> str | None:
+def _binding_to_json(binding: Optional[AutomationDeliveryBinding]) -> Optional[str]:
     if binding is None:
         return None
     return json.dumps(binding.model_dump(mode="json"))
 
 
-def _binding_from_json(value: object) -> AutomationFeishuBinding | None:
+def _binding_from_json(value: object) -> Optional[AutomationDeliveryBinding]:
     if value is None:
         return None
     payload = str(value).strip()
@@ -343,15 +345,18 @@ def _binding_from_json(value: object) -> AutomationFeishuBinding | None:
     if not isinstance(parsed, dict):
         raise ValueError("Invalid automation delivery binding payload")
     normalized = dict(parsed)
-    normalized["session_id"] = normalize_persisted_text(parsed.get("session_id"))
-    return AutomationFeishuBinding.model_validate(normalized)
+    if "provider" not in normalized and "trigger_id" in normalized:
+        normalized["provider"] = "feishu"
+    if normalized.get("provider") == "feishu":
+        normalized["session_id"] = normalize_persisted_text(parsed.get("session_id"))
+    return validate_automation_delivery_binding(normalized)
 
 
-def _events_to_json(events: tuple[AutomationDeliveryEvent, ...]) -> str:
+def _events_to_json(events: Tuple[AutomationDeliveryEvent, ...]) -> str:
     return json.dumps([event.value for event in events])
 
 
-def _events_from_json(value: object) -> tuple[AutomationDeliveryEvent, ...]:
+def _events_from_json(value: object) -> Tuple[AutomationDeliveryEvent, ...]:
     payload = str(value or "").strip() or "[]"
     parsed = json.loads(payload)
     if not isinstance(parsed, list):
@@ -377,7 +382,7 @@ def _load_required_project_timestamps(
     *,
     row: sqlite3.Row,
     automation_project_id: str,
-) -> tuple[datetime, datetime]:
+) -> Tuple[datetime, datetime]:
     created_at = parse_persisted_datetime_or_none(row["created_at"])
     updated_at = parse_persisted_datetime_or_none(row["updated_at"])
     if created_at is None:
@@ -402,7 +407,7 @@ def _optional_project_timestamp(
     row: sqlite3.Row,
     automation_project_id: str,
     field_name: str,
-) -> datetime | None:
+) -> Optional[datetime]:
     raw_value = row[field_name]
     if normalize_persisted_text(raw_value) is None:
         return None
@@ -429,7 +434,7 @@ def _log_invalid_automation_timestamp(
     field_name: str,
     raw_preview: str,
 ) -> None:
-    payload: dict[str, JsonValue] = {
+    payload: Dict[str, JsonValue] = {
         "automation_project_id": automation_project_id,
         "field_name": field_name,
         "raw_preview": raw_preview,
@@ -444,7 +449,7 @@ def _log_invalid_automation_timestamp(
 
 
 def _log_invalid_automation_row(*, row: sqlite3.Row, error: Exception) -> None:
-    payload: dict[str, JsonValue] = {
+    payload: Dict[str, JsonValue] = {
         "automation_project_id": _persisted_value_preview(row["automation_project_id"]),
         "workspace_id": _persisted_value_preview(row["workspace_id"]),
         "trigger_id": _persisted_value_preview(row["trigger_id"]),

@@ -4,17 +4,20 @@
  */
 import {
     createAutomationProject,
+    createXiaolubanGatewayAccount,
     createGitHubRepoSubscription,
     createGitHubTriggerAccount,
     createGitHubTriggerRule,
     createTrigger,
     deleteAutomationProject,
+    deleteXiaolubanGatewayAccount,
     deleteGitHubRepoSubscription,
     deleteGitHubTriggerAccount,
     deleteGitHubTriggerRule,
     deleteTrigger,
     deleteWeChatGatewayAccount,
     disableAutomationProject,
+    disableXiaolubanGatewayAccount,
     disableGitHubRepoSubscription,
     disableGitHubTriggerAccount,
     disableGitHubTriggerRule,
@@ -24,6 +27,7 @@ import {
     enableGitHubTriggerAccount,
     enableGitHubTriggerRule,
     enableTrigger,
+    enableXiaolubanGatewayAccount,
     enableWeChatGatewayAccount,
     enableAutomationProject,
     fetchAutomationFeishuBindings,
@@ -39,6 +43,7 @@ import {
     fetchRoleConfigOptions,
     fetchSshProfiles,
     fetchTriggers,
+    fetchXiaolubanGatewayAccounts,
     fetchWeChatGatewayAccounts,
     fetchWorkspaceDiffFile,
     fetchWorkspaces,
@@ -55,6 +60,7 @@ import {
     updateGitHubTriggerAccount,
     updateGitHubTriggerRule,
     updateTrigger,
+    updateXiaolubanGatewayAccount,
     updateWeChatGatewayAccount,
     waitWeChatGatewayLogin,
 } from '../core/api.js';
@@ -132,6 +138,7 @@ const FEATURE_GITHUB_FIELD_IDS = Object.freeze({
     webhookStatusId: 'feature-github-webhook-probe-status',
 });
 const FEISHU_PLATFORM = 'feishu';
+const XIAOLUBAN_PLATFORM = 'xiaoluban';
 const WECHAT_PLATFORM = 'wechat';
 const DEFAULT_TRIGGER_RULE = 'mention_only';
 const DEFAULT_SESSION_MODE = 'normal';
@@ -152,7 +159,7 @@ function createInitialAutomationHomeDetail() {
         project: null,
         sessions: [],
         workspace: null,
-        feishuBindings: [],
+        deliveryBindings: [],
         normalRoles: [],
         orchestrationPresets: [],
     };
@@ -177,12 +184,14 @@ function createInitialAutomationEditorState() {
         message: '',
         confirmLabel: '',
         workspaces: [],
-        feishuBindings: [],
+        deliveryBindings: [],
         normalRoles: [],
         orchestrationPresets: [],
         draft: null,
+        submitHandler: null,
         resolve: null,
         errorMessage: '',
+        submitting: false,
     };
 }
 
@@ -191,6 +200,7 @@ function createInitialGatewayFeatureState() {
         feishuTriggers: [],
         feishuEditingTriggerId: '',
         feishuDraft: null,
+        xiaolubanAccounts: [],
         wechatAccounts: [],
         workspaces: [],
         normalRoles: [],
@@ -209,6 +219,50 @@ function formatMessage(key, values = {}) {
         (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
         t(key),
     );
+}
+
+function readErrorDetail(error) {
+    return String(error?.detail || error?.message || error || '').trim();
+}
+
+function mapXiaolubanGatewayError(error) {
+    const detail = readErrorDetail(error);
+    if (detail === 'token format is invalid') {
+        return t('settings.gateway.xiaoluban_token_invalid');
+    }
+    if (detail === 'token must be a personal Xiaoluban token') {
+        return t('settings.gateway.xiaoluban_personal_token_only');
+    }
+    if (detail === 'token must not be empty') {
+        return t('settings.gateway.xiaoluban_missing_token');
+    }
+    return t('settings.gateway.xiaoluban_save_failed_message');
+}
+
+function mapAutomationEditorError(error) {
+    const detail = readErrorDetail(error);
+    if (
+        detail
+        === 'delivery_binding.account_id does not have usable Xiaoluban credentials'
+    ) {
+        return t('automation.delivery.xiaoluban_credentials_unusable');
+    }
+    if (
+        detail
+        === 'delivery_binding must reference an existing Xiaoluban account'
+    ) {
+        return t('automation.delivery.xiaoluban_account_missing');
+    }
+    if (
+        detail
+        && !detail.startsWith('delivery_binding.')
+        && !detail.startsWith('Failed to ')
+        && detail !== 'Failed to fetch'
+        && !detail.toLowerCase().includes('network')
+    ) {
+        return detail;
+    }
+    return t('automation.delivery.save_failed');
 }
 
 function createFeishuTriggerDraft(trigger = null) {
@@ -644,7 +698,20 @@ const AUTOMATION_TIMEZONE_OPTIONS = [
     { value: 'Europe/London', label: 'Europe/London' },
 ];
 
-function buildFeishuBindingKey(binding) {
+function resolveDeliveryProviderLabel(provider) {
+    const normalizedProvider = String(provider || '').trim().toLowerCase();
+    if (normalizedProvider === XIAOLUBAN_PLATFORM) {
+        return t('settings.gateway.xiaoluban_title');
+    }
+    return t('settings.gateway.im_feishu_title');
+}
+
+function buildAutomationBindingKey(binding) {
+    const provider = String(binding?.provider || FEISHU_PLATFORM).trim().toLowerCase();
+    if (provider === XIAOLUBAN_PLATFORM) {
+        const accountId = String(binding?.account_id || '').trim();
+        return accountId ? `${provider}::${accountId}` : '';
+    }
     const triggerId = String(binding?.trigger_id || '').trim();
     const tenantKey = String(binding?.tenant_key || '').trim();
     const chatId = String(binding?.chat_id || '').trim();
@@ -652,21 +719,33 @@ function buildFeishuBindingKey(binding) {
     if (!triggerId || !tenantKey || !chatId || !sessionId) {
         return '';
     }
-    return `${triggerId}::${tenantKey}::${chatId}::${sessionId}`;
+    return `${provider}::${triggerId}::${tenantKey}::${chatId}::${sessionId}`;
 }
 
-function buildFeishuBindingOptions(bindings) {
+function buildAutomationBindingOptions(bindings) {
     const safeBindings = Array.isArray(bindings) ? bindings : [];
     const options = [
         {
             value: '',
-            label: t('sidebar.feishu_delivery_none'),
-            description: t('sidebar.feishu_delivery_none_copy'),
+            label: t('sidebar.delivery_none'),
+            description: t('sidebar.delivery_none_copy'),
         },
     ];
     safeBindings.forEach(binding => {
-        const bindingKey = buildFeishuBindingKey(binding);
+        const bindingKey = buildAutomationBindingKey(binding);
         if (!bindingKey) {
+            return;
+        }
+        const providerLabel = resolveDeliveryProviderLabel(binding?.provider);
+        if (String(binding?.provider || '').trim().toLowerCase() === XIAOLUBAN_PLATFORM) {
+            const displayName = String(binding?.display_name || '').trim();
+            const sourceLabel = String(binding?.source_label || '').trim();
+            const derivedUid = String(binding?.derived_uid || '').trim();
+            options.push({
+                value: bindingKey,
+                label: sourceLabel || displayName || derivedUid || bindingKey,
+                description: [providerLabel, displayName || derivedUid].filter(Boolean).join(' - '),
+            });
             return;
         }
         const triggerName = String(binding?.trigger_name || '').trim();
@@ -676,17 +755,28 @@ function buildFeishuBindingOptions(bindings) {
         options.push({
             value: bindingKey,
             label: sessionTitle || sourceLabel || bindingKey,
-            description: [triggerName, chatType].filter(Boolean).join(' - '),
+            description: [providerLabel, triggerName, chatType].filter(Boolean).join(' - '),
         });
     });
     return options;
 }
 
-function resolveFeishuBindingDisplayName(binding, bindings) {
-    const bindingKey = buildFeishuBindingKey(binding);
+function resolveAutomationBindingDisplayName(binding, bindings) {
+    const bindingKey = buildAutomationBindingKey(binding);
     const candidate = (Array.isArray(bindings) ? bindings : []).find(
-        item => buildFeishuBindingKey(item) === bindingKey,
+        item => buildAutomationBindingKey(item) === bindingKey,
     );
+    if (String(binding?.provider || '').trim().toLowerCase() === XIAOLUBAN_PLATFORM) {
+        const sourceLabel = String(candidate?.source_label || binding?.source_label || '').trim();
+        if (sourceLabel) {
+            return sourceLabel;
+        }
+        const displayName = String(candidate?.display_name || binding?.display_name || '').trim();
+        if (displayName) {
+            return displayName;
+        }
+        return String(binding?.derived_uid || '').trim();
+    }
     const sessionTitle = String(candidate?.session_title || '').trim();
     if (sessionTitle) {
         return sessionTitle;
@@ -741,7 +831,7 @@ async function fetchAutomationSessionConfigDependencies(context) {
 }
 
 export async function requestAutomationProjectInput(project = {}, dialogOptions = {}) {
-    const [workspaces, feishuBindings, sessionConfigDependencies] = await Promise.all([
+    const [workspaces, deliveryBindings, sessionConfigDependencies] = await Promise.all([
         fetchWorkspaces(),
         fetchAutomationFeishuBindings(),
         fetchAutomationSessionConfigDependencies('editor'),
@@ -776,10 +866,13 @@ export async function requestAutomationProjectInput(project = {}, dialogOptions 
             message: String(dialogOptions?.message || defaultMessage).trim() || defaultMessage,
             confirmLabel: String(dialogOptions?.confirmLabel || defaultConfirmLabel).trim() || defaultConfirmLabel,
             workspaces: workspaceList,
-            feishuBindings,
+            deliveryBindings,
             normalRoles,
             orchestrationPresets,
             draft,
+            submitHandler: typeof dialogOptions?.submitHandler === 'function'
+                ? dialogOptions.submitHandler
+                : null,
             resolve,
             errorMessage: '',
         };
@@ -975,6 +1068,7 @@ function createAutomationEditorDraft(project, workspaces, normalRoles = [], orch
     const deliveryEvents = buildAutomationDeliveryEvents(project);
     const persistedNormalRootRoleId = String(runConfig?.normal_root_role_id || '').trim();
     const persistedOrchestrationPresetId = String(runConfig?.orchestration_preset_id || '').trim();
+    const hasDeliveryBinding = String(buildAutomationBindingKey(project?.delivery_binding)).trim().length > 0;
     return {
         display_name: String(project?.display_name || project?.name || '').trim(),
         workspace_id: String(project?.workspace_id || firstWorkspaceId).trim(),
@@ -992,10 +1086,10 @@ function createAutomationEditorDraft(project, workspaces, normalRoles = [], orch
         yolo: runConfig?.yolo !== false,
         thinking_enabled: runConfig?.thinking?.enabled === true,
         thinking_effort: String(runConfig?.thinking?.effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT,
-        delivery_binding_key: buildFeishuBindingKey(project?.delivery_binding),
-        delivery_event_started: deliveryEvents.started || !project?.automation_project_id,
-        delivery_event_completed: deliveryEvents.completed || !project?.automation_project_id,
-        delivery_event_failed: deliveryEvents.failed || !project?.automation_project_id,
+        delivery_binding_key: buildAutomationBindingKey(project?.delivery_binding),
+        delivery_event_started: hasDeliveryBinding ? deliveryEvents.started : true,
+        delivery_event_completed: hasDeliveryBinding ? deliveryEvents.completed : true,
+        delivery_event_failed: hasDeliveryBinding ? deliveryEvents.failed : true,
         schedule_kind: schedule.kind,
         time_of_day: schedule.time,
         weekly_day: schedule.weekday,
@@ -1091,7 +1185,7 @@ function buildAutomationSchedulePayload(draft) {
     };
 }
 
-function buildAutomationProjectPayload(draft, feishuBindings, project) {
+function buildAutomationProjectPayload(draft, deliveryBindings, project) {
     const displayName = String(draft?.display_name || '').trim();
     const workspaceId = String(draft?.workspace_id || '').trim();
     const prompt = String(draft?.prompt || '').trim();
@@ -1113,8 +1207,8 @@ function buildAutomationProjectPayload(draft, feishuBindings, project) {
     }
     const schedulePayload = buildAutomationSchedulePayload({ ...draft, timezone });
     const selectedBindingKey = String(draft?.delivery_binding_key || '').trim();
-    const selectedBinding = (Array.isArray(feishuBindings) ? feishuBindings : []).find(
-        binding => buildFeishuBindingKey(binding) === selectedBindingKey,
+    const selectedBinding = (Array.isArray(deliveryBindings) ? deliveryBindings : []).find(
+        binding => buildAutomationBindingKey(binding) === selectedBindingKey,
     ) || null;
     const nextDeliveryEvents = selectedBinding ? [
         draft?.delivery_event_started === true ? 'started' : null,
@@ -1147,16 +1241,30 @@ function buildAutomationProjectPayload(draft, feishuBindings, project) {
             },
         },
         ...schedulePayload,
-        delivery_binding: selectedBinding ? {
-            provider: 'feishu',
-            trigger_id: String(selectedBinding.trigger_id || '').trim(),
-            tenant_key: String(selectedBinding.tenant_key || '').trim(),
-            chat_id: String(selectedBinding.chat_id || '').trim(),
-            session_id: String(selectedBinding.session_id || '').trim(),
-            chat_type: String(selectedBinding.chat_type || '').trim(),
-            source_label: String(selectedBinding.source_label || '').trim(),
-        } : null,
+        delivery_binding: selectedBinding ? buildAutomationBindingPayload(selectedBinding) : null,
         delivery_events: nextDeliveryEvents,
+    };
+}
+
+function buildAutomationBindingPayload(binding) {
+    const provider = String(binding?.provider || FEISHU_PLATFORM).trim().toLowerCase();
+    if (provider === XIAOLUBAN_PLATFORM) {
+        return {
+            provider: XIAOLUBAN_PLATFORM,
+            account_id: String(binding?.account_id || '').trim(),
+            display_name: String(binding?.display_name || '').trim(),
+            derived_uid: String(binding?.derived_uid || '').trim(),
+            source_label: String(binding?.source_label || '').trim(),
+        };
+    }
+    return {
+        provider: FEISHU_PLATFORM,
+        trigger_id: String(binding?.trigger_id || '').trim(),
+        tenant_key: String(binding?.tenant_key || '').trim(),
+        chat_id: String(binding?.chat_id || '').trim(),
+        session_id: String(binding?.session_id || '').trim(),
+        chat_type: String(binding?.chat_type || '').trim(),
+        source_label: String(binding?.source_label || '').trim(),
     };
 }
 
@@ -1323,7 +1431,7 @@ function renderAutomationEditorModal() {
         return;
     }
     const draft = currentAutomationEditorState.draft;
-    const bindingOptions = buildFeishuBindingOptions(currentAutomationEditorState.feishuBindings);
+    const bindingOptions = buildAutomationBindingOptions(currentAutomationEditorState.deliveryBindings);
     const workspaceOptions = (Array.isArray(currentAutomationEditorState.workspaces) ? currentAutomationEditorState.workspaces : []).map(workspace => ({
         value: String(workspace?.workspace_id || '').trim(),
         label: formatWorkspaceOptionLabel(workspace),
@@ -1448,7 +1556,7 @@ function renderAutomationEditorModal() {
                             </div>
                             <div class="automation-editor-grid automation-editor-grid-1">
                                 <label class="automation-editor-field">
-                                    <span>${escapeHtml(t('sidebar.feishu_chat'))}</span>
+                                    <span>${escapeHtml(t('sidebar.delivery_target'))}</span>
                                     <select id="automation-editor-delivery-binding-input" data-automation-editor-binding>
                                         ${renderAutomationEditorFieldOptions(bindingOptions, draft.delivery_binding_key)}
                                     </select>
@@ -1480,6 +1588,11 @@ function renderAutomationEditorModal() {
             </div>
         </div>
     `;
+    if (currentAutomationEditorState.submitting === true) {
+        root.querySelectorAll('button,input,select,textarea').forEach(node => {
+            node.disabled = true;
+        });
+    }
     bindAutomationEditorModal();
 }
 
@@ -1499,25 +1612,46 @@ function bindAutomationEditorModal() {
     }
     root.querySelectorAll('[data-automation-editor-close],[data-automation-editor-cancel]').forEach(button => {
         button.addEventListener('click', () => {
+            if (currentAutomationEditorState.submitting === true) {
+                return;
+            }
             settleAutomationEditor(null);
         });
     });
     root.querySelector('[data-automation-editor-save]')?.addEventListener('click', () => {
-        try {
-            const draft = syncAutomationEditorDraftFromDom();
-            const payload = buildAutomationProjectPayload(
-                draft,
-                currentAutomationEditorState.feishuBindings,
-                currentAutomationEditorState.project || { name: currentAutomationEditorState.projectId },
-            );
-            settleAutomationEditor(payload);
-        } catch (error) {
-            currentAutomationEditorState = {
-                ...currentAutomationEditorState,
-                errorMessage: String(error?.message || error || ''),
-            };
-            renderAutomationEditorModal();
-        }
+        void (async () => {
+            if (currentAutomationEditorState.submitting === true) {
+                return;
+            }
+            try {
+                const draft = syncAutomationEditorDraftFromDom();
+                const payload = buildAutomationProjectPayload(
+                    draft,
+                    currentAutomationEditorState.deliveryBindings,
+                    currentAutomationEditorState.project || { name: currentAutomationEditorState.projectId },
+                );
+                currentAutomationEditorState = {
+                    ...currentAutomationEditorState,
+                    draft,
+                    errorMessage: '',
+                    submitting: true,
+                };
+                renderAutomationEditorModal();
+                if (typeof currentAutomationEditorState.submitHandler === 'function') {
+                    const result = await currentAutomationEditorState.submitHandler(payload);
+                    settleAutomationEditor(result ?? payload);
+                    return;
+                }
+                settleAutomationEditor(payload);
+            } catch (error) {
+                currentAutomationEditorState = {
+                    ...currentAutomationEditorState,
+                    errorMessage: mapAutomationEditorError(error),
+                    submitting: false,
+                };
+                renderAutomationEditorModal();
+            }
+        })();
     });
     root.querySelector('[data-automation-editor-schedule-kind]')?.addEventListener('change', event => {
         const draft = syncAutomationEditorDraftFromDom();
@@ -1547,16 +1681,25 @@ function bindAutomationEditorModal() {
     });
     root.querySelector('[data-automation-editor-binding]')?.addEventListener('change', event => {
         const draft = syncAutomationEditorDraftFromDom();
-        const bindingSelected = String(event?.target?.value || '').trim().length > 0;
+        const previousBindingSelected = String(currentAutomationEditorState?.draft?.delivery_binding_key || '').trim().length > 0;
+        const nextBindingKey = String(event?.target?.value || '').trim();
+        const bindingSelected = nextBindingKey.length > 0;
+        const shouldEnableDefaultDeliveryEvents = bindingSelected && !previousBindingSelected;
         currentAutomationEditorState = {
             ...currentAutomationEditorState,
             errorMessage: '',
             draft: {
                 ...draft,
-                delivery_binding_key: String(event?.target?.value || '').trim(),
-                delivery_event_started: bindingSelected ? draft.delivery_event_started : false,
-                delivery_event_completed: bindingSelected ? draft.delivery_event_completed : false,
-                delivery_event_failed: bindingSelected ? draft.delivery_event_failed : false,
+                delivery_binding_key: nextBindingKey,
+                delivery_event_started: shouldEnableDefaultDeliveryEvents
+                    ? true
+                    : (bindingSelected ? draft.delivery_event_started : false),
+                delivery_event_completed: shouldEnableDefaultDeliveryEvents
+                    ? true
+                    : (bindingSelected ? draft.delivery_event_completed : false),
+                delivery_event_failed: shouldEnableDefaultDeliveryEvents
+                    ? true
+                    : (bindingSelected ? draft.delivery_event_failed : false),
             },
         };
         renderAutomationEditorModal();
@@ -1604,6 +1747,22 @@ function normalizeWeChatAccounts(payload) {
         .filter(account => account.account_id);
 }
 
+function normalizeXiaolubanAccounts(payload) {
+    const rows = Array.isArray(payload) ? payload : [];
+    return rows
+        .map(account => ({
+            account_id: String(account?.account_id || '').trim(),
+            display_name: String(account?.display_name || account?.account_id || '').trim(),
+            base_url: String(account?.base_url || '').trim(),
+            status: String(account?.status || 'disabled').trim() || 'disabled',
+            derived_uid: String(account?.derived_uid || '').trim(),
+            secret_status: account?.secret_status && typeof account.secret_status === 'object'
+                ? { ...account.secret_status }
+                : {},
+        }))
+        .filter(account => account.account_id);
+}
+
 function normalizeGatewayWorkspaces(payload) {
     return (Array.isArray(payload) ? payload : [])
         .map(workspace => ({
@@ -1633,9 +1792,11 @@ function normalizeOrchestrationPresets(payload) {
 
 function resolveGatewayFeatureSummary(featureState) {
     const feishuCount = Array.isArray(featureState?.feishuTriggers) ? featureState.feishuTriggers.length : 0;
+    const xiaolubanCount = Array.isArray(featureState?.xiaolubanAccounts) ? featureState.xiaolubanAccounts.length : 0;
     const wechatCount = Array.isArray(featureState?.wechatAccounts) ? featureState.wechatAccounts.length : 0;
     return formatMessage('feature.gateway.summary', {
         feishu: feishuCount,
+        xiaoluban: xiaolubanCount,
         wechat: wechatCount,
     });
 }
@@ -1781,7 +1942,7 @@ async function loadAutomationHomeDetail(projectId) {
         currentAutomationProject = null;
         return;
     }
-    const [project, sessions, workspaces, feishuBindings, sessionConfigDependencies] = await Promise.all([
+    const [project, sessions, workspaces, deliveryBindings, sessionConfigDependencies] = await Promise.all([
         fetchAutomationProject(normalizedProjectId),
         fetchAutomationProjectSessions(normalizedProjectId),
         fetchWorkspaces(),
@@ -1792,7 +1953,7 @@ async function loadAutomationHomeDetail(projectId) {
         project,
         sessions: Array.isArray(sessions) ? sessions : [],
         workspace: findWorkspaceById(workspaces, project?.workspace_id),
-        feishuBindings: Array.isArray(feishuBindings) ? feishuBindings : [],
+        deliveryBindings: Array.isArray(deliveryBindings) ? deliveryBindings : [],
         normalRoles: Array.isArray(sessionConfigDependencies?.normalRoles)
             ? sessionConfigDependencies.normalRoles
             : [],
@@ -2678,6 +2839,85 @@ async function requestWeChatAccountInput(account) {
     };
 }
 
+async function requestXiaolubanAccountInput(account, submitHandler = null) {
+    const isEditing = String(account?.account_id || '').trim().length > 0;
+    const accountId = String(account?.account_id || '').trim();
+    const tokenConfigured = account?.secret_status?.token_configured === true;
+    const fallbackDisplayName = String(
+        account?.display_name || t('settings.gateway.xiaoluban_title'),
+    ).trim();
+    const values = await showFormDialog({
+        title: isEditing
+            ? t('settings.gateway.xiaoluban_account_editor')
+            : t('feature.gateway.add_xiaoluban'),
+        message: accountId
+            ? formatMessage('settings.gateway.xiaoluban_internal_id_copy', {
+                account_id: accountId,
+            })
+            : '',
+        tone: 'info',
+        confirmLabel: t('settings.action.save'),
+        cancelLabel: t('settings.action.cancel'),
+        fields: [
+            {
+                id: 'display_name',
+                label: t('settings.gateway.display_name'),
+                value: fallbackDisplayName,
+            },
+            {
+                id: 'token',
+                label: t('settings.gateway.xiaoluban_token'),
+                value: '',
+                placeholder: isEditing ? '' : 'uid_xxx...',
+                description: isEditing && tokenConfigured
+                    ? t('settings.gateway.xiaoluban_token_edit_copy')
+                    : t('settings.gateway.xiaoluban_token_copy'),
+            },
+        ],
+        submitHandler: typeof submitHandler === 'function'
+            ? async formValues => {
+                const displayName = String(formValues?.display_name || '').trim() || fallbackDisplayName;
+                const token = String(formValues?.token || '').trim();
+                if (!isEditing && !token) {
+                    throw new Error(t('settings.gateway.xiaoluban_missing_token'));
+                }
+                const payload = {
+                    display_name: displayName,
+                };
+                if (token) {
+                    payload.token = token;
+                }
+                try {
+                    return await submitHandler(payload);
+                } catch (error) {
+                    throw new Error(mapXiaolubanGatewayError(error));
+                }
+            }
+            : null,
+    });
+    if (!values) {
+        return null;
+    }
+    if (typeof submitHandler === 'function') {
+        return values;
+    }
+    if (typeof values !== 'object') {
+        return null;
+    }
+    const displayName = String(values.display_name || '').trim() || fallbackDisplayName;
+    const token = String(values.token || '').trim();
+    if (!isEditing && !token) {
+        throw new Error(t('settings.gateway.xiaoluban_missing_token'));
+    }
+    const payload = {
+        display_name: displayName,
+    };
+    if (token) {
+        payload.token = token;
+    }
+    return payload;
+}
+
 export function initializeProjectView() {
     syncActionLabels();
     if (els.projectViewReloadBtn) {
@@ -2857,8 +3097,9 @@ export async function openImFeatureView() {
     openFeatureShell(FEATURE_VIEW_IDS.gateway);
     renderFeatureLoadingState(t('feature.gateway.title'), t('workspace_view.loading'));
     try {
-        const [triggers, wechatAccounts, workspaces, roleOptions, orchestrationConfig] = await Promise.all([
+        const [triggers, xiaolubanAccounts, wechatAccounts, workspaces, roleOptions, orchestrationConfig] = await Promise.all([
             fetchTriggers(),
+            fetchXiaolubanGatewayAccounts(),
             fetchWeChatGatewayAccounts(),
             fetchWorkspaces(),
             fetchRoleConfigOptions(),
@@ -2869,6 +3110,7 @@ export async function openImFeatureView() {
             feishuTriggers: normalizeFeishuTriggers(triggers),
             feishuEditingTriggerId: '',
             feishuDraft: null,
+            xiaolubanAccounts: normalizeXiaolubanAccounts(xiaolubanAccounts),
             wechatAccounts: normalizeWeChatAccounts(wechatAccounts),
             workspaces: normalizeGatewayWorkspaces(workspaces),
             normalRoles: normalizeRoleOptions(roleOptions),
@@ -3906,7 +4148,7 @@ function renderAutomationHomeDetail(detail) {
     }
     const sessions = Array.isArray(detail?.sessions) ? detail.sessions : [];
     const workspaceRecord = detail?.workspace;
-    const feishuBindings = Array.isArray(detail?.feishuBindings) ? detail.feishuBindings : [];
+    const deliveryBindings = Array.isArray(detail?.deliveryBindings) ? detail.deliveryBindings : [];
     const normalRoles = Array.isArray(detail?.normalRoles) ? detail.normalRoles : [];
     const orchestrationPresets = Array.isArray(detail?.orchestrationPresets) ? detail.orchestrationPresets : [];
     const runConfig = project?.run_config && typeof project.run_config === 'object' ? project.run_config : {};
@@ -3919,7 +4161,7 @@ function renderAutomationHomeDetail(detail) {
         ? project.delivery_binding
         : null;
     const deliveryBindingName = deliveryBinding
-        ? resolveFeishuBindingDisplayName(deliveryBinding, feishuBindings)
+        ? resolveAutomationBindingDisplayName(deliveryBinding, deliveryBindings)
         : '';
     const deliveryEvents = Array.isArray(project?.delivery_events) ? project.delivery_events : [];
     const workspaceId = String(project?.workspace_id || '').trim() || 'automation-system';
@@ -3972,8 +4214,8 @@ function renderAutomationHomeDetail(detail) {
                         <div><span>${escapeHtml(t('automation.workspace.directory'))}</span><code>${escapeHtml(workspaceRootPath)}</code></div>
                         <div><span>${escapeHtml(t('workspace_view.delivery_events'))}</span><strong>${escapeHtml(deliveryEvents.length > 0 ? deliveryEvents.join(', ') : t('workspace_view.delivery_disabled'))}</strong></div>
                         ${deliveryBinding ? `
-                            <div><span>${escapeHtml(t('workspace_view.feishu_trigger'))}</span><strong>${escapeHtml(String(deliveryBinding?.trigger_id || ''))}</strong></div>
-                            <div><span>${escapeHtml(t('workspace_view.feishu_chat'))}</span><strong>${escapeHtml(deliveryBindingName)}</strong></div>
+                            <div><span>${escapeHtml(t('workspace_view.delivery_provider'))}</span><strong>${escapeHtml(resolveDeliveryProviderLabel(deliveryBinding?.provider))}</strong></div>
+                            <div><span>${escapeHtml(t('workspace_view.delivery_target'))}</span><strong>${escapeHtml(deliveryBindingName)}</strong></div>
                         ` : ''}
                     </div>
                 </section>
@@ -4107,6 +4349,51 @@ function renderGatewayWeChatRecords(accounts) {
                             <button class="settings-inline-action settings-list-action" type="button" data-feature-wechat-toggle="${escapeHtml(accountId)}">${escapeHtml(status === 'enabled' ? t('settings.gateway.disable_account') : t('settings.gateway.enable_account'))}</button>
                             <button class="settings-inline-action settings-list-action" type="button" data-feature-wechat-edit="${escapeHtml(accountId)}">${escapeHtml(t('settings.action.edit'))}</button>
                             <button class="settings-inline-action settings-list-action" type="button" data-feature-wechat-delete="${escapeHtml(accountId)}">${escapeHtml(t('settings.action.delete'))}</button>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+function renderGatewayXiaolubanRecords(accounts) {
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+        return `
+            <div class="feature-panel-body">
+                ${renderFeatureEmptyState(
+                    t('settings.gateway.xiaoluban_none'),
+                    t('settings.gateway.xiaoluban_none_copy'),
+                )}
+            </div>
+        `;
+    }
+    return `
+        <div class="role-records trigger-records gateway-records">
+            ${accounts.map(account => {
+                const accountId = String(account?.account_id || '').trim();
+                const status = String(account?.status || 'disabled').trim() || 'disabled';
+                const derivedUid = String(account?.derived_uid || '').trim();
+                const tokenConfigured = account?.secret_status?.token_configured === true;
+                return `
+                    <div class="role-record gateway-feature-record" data-feature-xiaoluban-record="${escapeHtml(accountId)}">
+                        <div class="role-record-main">
+                            <div class="role-record-title-row trigger-record-title-row">
+                                <div class="role-record-title">${escapeHtml(String(account?.display_name || accountId))}</div>
+                                <div class="profile-card-chips role-record-chips">
+                                    <span class="profile-card-chip">${escapeHtml(t(`automation.status.${status}`))}</span>
+                                    <span class="profile-card-chip">${escapeHtml(tokenConfigured ? t('settings.triggers.credentials_ready') : t('settings.triggers.credentials_missing'))}</span>
+                                    ${derivedUid ? `<span class="profile-card-chip">${escapeHtml(derivedUid)}</span>` : ''}
+                                </div>
+                            </div>
+                            <div class="role-record-meta trigger-record-meta">
+                                ${accountId ? `<span>${escapeHtml(formatMessage('settings.gateway.xiaoluban_internal_id_copy', { account_id: accountId }))}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="role-record-actions trigger-record-actions">
+                            <button class="settings-inline-action settings-list-action" type="button" data-feature-xiaoluban-toggle="${escapeHtml(accountId)}">${escapeHtml(status === 'enabled' ? t('settings.gateway.disable_account') : t('settings.gateway.enable_account'))}</button>
+                            <button class="settings-inline-action settings-list-action" type="button" data-feature-xiaoluban-edit="${escapeHtml(accountId)}">${escapeHtml(t('settings.action.edit'))}</button>
+                            <button class="settings-inline-action settings-list-action" type="button" data-feature-xiaoluban-delete="${escapeHtml(accountId)}">${escapeHtml(t('settings.action.delete'))}</button>
                         </div>
                     </div>
                 `;
@@ -4263,6 +4550,7 @@ function renderGatewayFeatureView() {
         return;
     }
     const feishuTriggers = Array.isArray(currentGatewayFeatureState.feishuTriggers) ? currentGatewayFeatureState.feishuTriggers : [];
+    const xiaolubanAccounts = Array.isArray(currentGatewayFeatureState.xiaolubanAccounts) ? currentGatewayFeatureState.xiaolubanAccounts : [];
     const wechatAccounts = Array.isArray(currentGatewayFeatureState.wechatAccounts) ? currentGatewayFeatureState.wechatAccounts : [];
     els.projectViewContent.innerHTML = `
         <div class="feature-page feature-page-neutral gateway-feature-page">
@@ -4302,11 +4590,32 @@ function renderGatewayFeatureView() {
                     ${renderGatewayWeChatRecords(wechatAccounts)}
                 </div>
             </section>
+            <section class="workspace-view-panel gateway-section">
+                <div class="workspace-view-panel-header gateway-section-header">
+                    <div class="gateway-section-headline">
+                        <h3>${escapeHtml(t('feature.gateway.xiaoluban_section'))}</h3>
+                        <p>${escapeHtml(t('settings.gateway.xiaoluban_none_copy'))}</p>
+                    </div>
+                    <button class="secondary-btn gateway-section-btn" type="button" data-feature-gateway-add-xiaoluban>${escapeHtml(t('feature.gateway.add_xiaoluban'))}</button>
+                </div>
+                <div class="gateway-section-body">
+                    ${renderGatewaySummaryChips([
+                        t('settings.gateway.gateway_count').replace('{count}', String(xiaolubanAccounts.length)),
+                        t('settings.triggers.enabled_count').replace('{count}', String(xiaolubanAccounts.filter(account => String(account?.status || '').trim() === 'enabled').length)),
+                    ])}
+                    ${renderGatewayXiaolubanRecords(xiaolubanAccounts)}
+                </div>
+            </section>
         </div>
     `;
     els.projectViewContent.querySelectorAll('[data-feature-gateway-add-feishu]').forEach(button => {
         button.addEventListener('click', () => {
             void handleCreateFeishuFeatureTrigger();
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-feature-gateway-add-xiaoluban]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleCreateXiaolubanFeatureAccount();
         });
     });
     els.projectViewContent.querySelectorAll('[data-feature-gateway-connect-wechat]').forEach(button => {
@@ -4327,6 +4636,21 @@ function renderGatewayFeatureView() {
     els.projectViewContent.querySelectorAll('[data-feature-feishu-delete]').forEach(button => {
         button.addEventListener('click', () => {
             void handleDeleteFeishuFeatureTrigger(button.getAttribute('data-feature-feishu-delete'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-feature-xiaoluban-edit]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleEditXiaolubanFeatureAccount(button.getAttribute('data-feature-xiaoluban-edit'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-feature-xiaoluban-toggle]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleToggleXiaolubanFeatureAccount(button.getAttribute('data-feature-xiaoluban-toggle'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-feature-xiaoluban-delete]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleDeleteXiaolubanFeatureAccount(button.getAttribute('data-feature-xiaoluban-delete'));
         });
     });
     els.projectViewContent.querySelectorAll('[data-feature-wechat-edit]').forEach(button => {
@@ -4648,13 +4972,14 @@ async function handleGitHubDeleteRuleFeature(triggerRuleId) {
 }
 
 async function handleAutomationCreateFeature() {
-    const payload = await requestAutomationProjectInput({});
-    if (!payload) {
+    const created = await requestAutomationProjectInput({}, {
+        submitHandler: async payload => await createAutomationProject(payload),
+    });
+    if (!created) {
         return;
     }
-    await createAutomationProject(payload);
     document.dispatchEvent(new CustomEvent('agent-teams-projects-changed'));
-    await openAutomationHomeView();
+    await openAutomationHomeView(String(created?.automation_project_id || ''));
 }
 
 async function handleAutomationSelectFeatureProject(projectId) {
@@ -4667,13 +4992,19 @@ async function handleAutomationEditFeatureProject() {
     if (!project) {
         return;
     }
-    const payload = await requestAutomationProjectInput(project);
-    if (!payload) {
+    const updated = await requestAutomationProjectInput(project, {
+        submitHandler: async payload => await updateAutomationProject(
+            String(project?.automation_project_id || ''),
+            payload,
+        ),
+    });
+    if (!updated) {
         return;
     }
-    await updateAutomationProject(String(project?.automation_project_id || ''), payload);
     document.dispatchEvent(new CustomEvent('agent-teams-projects-changed'));
-    await openAutomationHomeView(String(project?.automation_project_id || ''));
+    await openAutomationHomeView(
+        String(updated?.automation_project_id || project?.automation_project_id || ''),
+    );
 }
 
 async function handleAutomationRunFeatureProject() {
@@ -4974,6 +5305,97 @@ async function handleEditWeChatFeatureAccount(accountId) {
     }
 }
 
+async function handleCreateXiaolubanFeatureAccount() {
+    try {
+        const created = await requestXiaolubanAccountInput(
+            null,
+            async payload => await createXiaolubanGatewayAccount(payload),
+        );
+        if (!created) {
+            return;
+        }
+        showToast({
+            title: t('settings.gateway.saved'),
+            message: t('settings.gateway.xiaoluban_saved_message'),
+            tone: 'success',
+        });
+        await openImFeatureView();
+    } catch (error) {
+        showToast({
+            title: t('settings.gateway.save_failed'),
+            message: String(error?.message || error || ''),
+            tone: 'danger',
+        });
+    }
+}
+
+async function handleEditXiaolubanFeatureAccount(accountId) {
+    const account = currentGatewayFeatureState.xiaolubanAccounts.find(item => item.account_id === String(accountId || '').trim());
+    if (!account) {
+        return;
+    }
+    try {
+        const updated = await requestXiaolubanAccountInput(
+            account,
+            async payload => await updateXiaolubanGatewayAccount(account.account_id, payload),
+        );
+        if (!updated) {
+            return;
+        }
+        showToast({
+            title: t('settings.gateway.saved'),
+            message: t('settings.gateway.xiaoluban_saved_message'),
+            tone: 'success',
+        });
+        await openImFeatureView();
+    } catch (error) {
+        showToast({
+            title: t('settings.gateway.save_failed'),
+            message: String(error?.message || error || ''),
+            tone: 'danger',
+        });
+    }
+}
+
+async function handleToggleXiaolubanFeatureAccount(accountId) {
+    const account = currentGatewayFeatureState.xiaolubanAccounts.find(item => item.account_id === String(accountId || '').trim());
+    if (!account) {
+        return;
+    }
+    if (String(account?.status || '').trim() === 'enabled') {
+        await disableXiaolubanGatewayAccount(account.account_id);
+    } else {
+        await enableXiaolubanGatewayAccount(account.account_id);
+    }
+    await openImFeatureView();
+}
+
+async function handleDeleteXiaolubanFeatureAccount(accountId) {
+    const account = currentGatewayFeatureState.xiaolubanAccounts.find(item => item.account_id === String(accountId || '').trim());
+    if (!account) {
+        return;
+    }
+    const confirmed = await showConfirmDialog({
+        title: t('settings.gateway.delete_confirm_title'),
+        message: formatMessage('settings.gateway.delete_confirm_message', {
+            name: String(account?.display_name || account?.account_id || ''),
+        }),
+        tone: 'danger',
+        confirmLabel: t('settings.action.delete'),
+        cancelLabel: t('settings.action.cancel'),
+    });
+    if (!confirmed) {
+        return;
+    }
+    await deleteXiaolubanGatewayAccount(account.account_id);
+    showToast({
+        title: t('settings.gateway.deleted'),
+        message: t('settings.gateway.xiaoluban_deleted_message'),
+        tone: 'success',
+    });
+    await openImFeatureView();
+}
+
 async function handleToggleWeChatFeatureAccount(accountId) {
     const account = currentGatewayFeatureState.wechatAccounts.find(item => item.account_id === String(accountId || '').trim());
     if (!account) {
@@ -5057,7 +5479,7 @@ function renderAutomationErrorState(project, error) {
     }
 }
 
-function renderAutomationProjectView(project, sessions, workspaceRecord = null, feishuBindings = []) {
+function renderAutomationProjectView(project, sessions, workspaceRecord = null, deliveryBindings = []) {
     const safeSessions = Array.isArray(sessions) ? sessions : [];
     const status = String(project?.status || '').trim() || 'unknown';
     const scheduleMode = String(project?.schedule_mode || '').trim() || 'cron';
@@ -5077,7 +5499,7 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null, 
         ? project.delivery_binding
         : null;
     const deliveryBindingName = deliveryBinding
-        ? resolveFeishuBindingDisplayName(deliveryBinding, feishuBindings)
+        ? resolveAutomationBindingDisplayName(deliveryBinding, deliveryBindings)
         : '';
     const deliveryEvents = Array.isArray(project?.delivery_events) ? project.delivery_events : [];
     const deliveryEventsLabel = deliveryEvents.length > 0 ? deliveryEvents.join(', ') : 'none';
@@ -5171,7 +5593,7 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null, 
                 <section class="workspace-view-panel automation-binding-panel">
                     <div class="workspace-view-panel-header">
                         <h3>${escapeHtml(t('workspace_view.bindings'))}</h3>
-                        <span class="workspace-view-panel-meta">${escapeHtml(deliveryBinding ? 'Feishu' : t('workspace_view.delivery_disabled'))}</span>
+                        <span class="workspace-view-panel-meta">${escapeHtml(deliveryBinding ? resolveDeliveryProviderLabel(deliveryBinding?.provider) : t('workspace_view.delivery_disabled'))}</span>
                     </div>
                     <div class="automation-binding-list">
                         <div class="automation-binding-item">
@@ -5188,17 +5610,19 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null, 
                         </div>
                         ${deliveryBinding ? `
                             <div class="automation-binding-item">
-                                <span>${escapeHtml(t('workspace_view.feishu_trigger'))}</span>
-                                <strong>${escapeHtml(String(deliveryBinding.trigger_id || ''))}</strong>
+                                <span>${escapeHtml(t('workspace_view.delivery_provider'))}</span>
+                                <strong>${escapeHtml(resolveDeliveryProviderLabel(deliveryBinding?.provider))}</strong>
                             </div>
                             <div class="automation-binding-item">
-                                <span>${escapeHtml(t('workspace_view.feishu_chat'))}</span>
+                                <span>${escapeHtml(t('workspace_view.delivery_target'))}</span>
                                 <strong>${escapeHtml(deliveryBindingName)}</strong>
                             </div>
-                            <div class="automation-binding-item">
+                            ${String(deliveryBinding?.provider || '').trim().toLowerCase() === FEISHU_PLATFORM ? `
+                                <div class="automation-binding-item">
                                 <span>${escapeHtml(t('workspace_view.chat_type'))}</span>
                                 <strong>${escapeHtml(String(deliveryBinding.chat_type || ''))}</strong>
-                            </div>
+                                </div>
+                            ` : ''}
                         ` : ''}
                     </div>
                 </section>
@@ -5234,13 +5658,19 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null, 
     `;
 
     const editAction = async () => {
-        const nextPayload = await requestAutomationProjectInput(project);
-        if (!nextPayload) {
+        const updated = await requestAutomationProjectInput(project, {
+            submitHandler: async payload => await updateAutomationProject(
+                String(project?.automation_project_id || ''),
+                payload,
+            ),
+        });
+        if (!updated) {
             return;
         }
-        await updateAutomationProject(String(project?.automation_project_id || ''), nextPayload);
         document.dispatchEvent(new CustomEvent('agent-teams-projects-changed'));
-        await openAutomationProjectView(project);
+        await openAutomationProjectView(
+            updated?.automation_project_id ? updated : project,
+        );
     };
     document.querySelector('[data-automation-edit]')?.addEventListener('click', editAction);
     const runAction = async () => {

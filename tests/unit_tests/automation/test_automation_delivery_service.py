@@ -22,6 +22,7 @@ from relay_teams.automation.automation_models import (
     AutomationProjectStatus,
     AutomationRunConfig,
     AutomationScheduleMode,
+    AutomationXiaolubanBinding,
 )
 from relay_teams.gateway.feishu.models import FeishuEnvironment
 from relay_teams.media import content_parts_from_text
@@ -133,6 +134,30 @@ class _FakeNotificationService:
         return True
 
 
+class _FakeXiaolubanGatewayService:
+    def __init__(self) -> None:
+        self.sent_messages: list[dict[str, object]] = []
+        self.fail_send_key_error = False
+
+    def send_text_message(
+        self,
+        *,
+        account_id: str,
+        text: str,
+        receiver_uid: str | None = None,
+    ) -> str:
+        if self.fail_send_key_error:
+            raise KeyError(f"Unknown Xiaoluban account_id: {account_id}")
+        self.sent_messages.append(
+            {
+                "account_id": account_id,
+                "text": text,
+                "receiver_uid": receiver_uid,
+            }
+        )
+        return f"xlbmsg_{len(self.sent_messages)}"
+
+
 def _build_project() -> AutomationProjectRecord:
     return AutomationProjectRecord(
         automation_project_id="aut_1",
@@ -158,6 +183,19 @@ def _build_project() -> AutomationProjectRecord:
             AutomationDeliveryEvent.FAILED,
         ),
         trigger_id="trg_schedule",
+    )
+
+
+def _build_xiaoluban_project() -> AutomationProjectRecord:
+    return _build_project().model_copy(
+        update={
+            "delivery_binding": AutomationXiaolubanBinding(
+                account_id="xlb_main",
+                display_name="小鲁班主账号",
+                derived_uid="stale_uid",
+                source_label="发送给自己（stale_uid）",
+            )
+        }
     )
 
 
@@ -192,6 +230,41 @@ def _build_service(
         event_log,
         repository,
         notification_service,
+    )
+
+
+def _build_service_with_xiaoluban(
+    tmp_path: Path,
+) -> tuple[
+    AutomationDeliveryService,
+    _FakeFeishuClient,
+    _FakeXiaolubanGatewayService,
+    RunRuntimeRepository,
+    EventLog,
+    AutomationDeliveryRepository,
+]:
+    db_path = tmp_path / "automation-delivery-xlb.db"
+    repository = AutomationDeliveryRepository(db_path)
+    feishu_client = _FakeFeishuClient()
+    xiaoluban_gateway_service = _FakeXiaolubanGatewayService()
+    run_runtime_repo = RunRuntimeRepository(db_path)
+    event_log = EventLog(db_path)
+    service = AutomationDeliveryService(
+        repository=repository,
+        runtime_config_lookup=_FakeRuntimeConfigLookup(),
+        feishu_client=feishu_client,
+        xiaoluban_gateway_service=xiaoluban_gateway_service,
+        run_runtime_repo=run_runtime_repo,
+        event_log=event_log,
+        notification_service=_FakeNotificationService(),
+    )
+    return (
+        service,
+        feishu_client,
+        xiaoluban_gateway_service,
+        run_runtime_repo,
+        event_log,
+        repository,
     )
 
 
@@ -646,3 +719,167 @@ def test_automation_delivery_worker_stop_times_out_for_stalled_processing() -> N
         assert await asyncio.to_thread(service.finished.wait, 1.0)
 
     asyncio.run(run_worker())
+
+
+def test_register_run_sends_started_message_to_xiaoluban_account(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        feishu_client,
+        xiaoluban_gateway_service,
+        _run_runtime_repo,
+        _event_log,
+        repository,
+    ) = _build_service_with_xiaoluban(tmp_path)
+
+    record = service.register_run(
+        project=_build_xiaoluban_project(),
+        session_id="session-1",
+        run_id="run-1",
+        reason="manual",
+    )
+
+    assert record is not None
+    assert feishu_client.sent_messages == []
+    assert xiaoluban_gateway_service.sent_messages == [
+        {
+            "account_id": "xlb_main",
+            "text": "定时任务 Daily Briefing 开始执行",
+            "receiver_uid": None,
+        }
+    ]
+    persisted = repository.get_by_run_id("run-1")
+    assert persisted.started_message_id == "xlbmsg_1"
+    assert persisted.binding.provider == "xiaoluban"
+
+
+def test_register_run_marks_started_delivery_pending_when_xiaoluban_account_is_missing(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        _feishu_client,
+        xiaoluban_gateway_service,
+        _run_runtime_repo,
+        _event_log,
+        repository,
+    ) = _build_service_with_xiaoluban(tmp_path)
+    xiaoluban_gateway_service.fail_send_key_error = True
+
+    record = service.register_run(
+        project=_build_xiaoluban_project(),
+        session_id="session-1",
+        run_id="run-1",
+        reason="manual",
+    )
+
+    assert record is not None
+    persisted = repository.get_by_run_id("run-1")
+    assert persisted.started_status == AutomationDeliveryStatus.PENDING
+    assert persisted.started_attempts == 1
+    assert persisted.last_error == "missing_xiaoluban_account"
+
+
+def test_process_pending_sends_default_completed_message_to_xiaoluban(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        _feishu_client,
+        xiaoluban_gateway_service,
+        run_runtime_repo,
+        event_log,
+        repository,
+    ) = _build_service_with_xiaoluban(tmp_path)
+    _ = service.register_run(
+        project=_build_xiaoluban_project(),
+        session_id="session-1",
+        run_id="run-1",
+        reason="schedule",
+    )
+    run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.COMPLETED,
+            phase=RunRuntimePhase.TERMINAL,
+        )
+    )
+    event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed","output":"   "}',
+            occurred_at=datetime.now(tz=timezone.utc),
+        )
+    )
+
+    progressed = service.process_pending()
+
+    assert progressed is True
+    assert xiaoluban_gateway_service.sent_messages == [
+        {
+            "account_id": "xlb_main",
+            "text": "定时任务 Daily Briefing 开始执行",
+            "receiver_uid": None,
+        },
+        {
+            "account_id": "xlb_main",
+            "text": "定时任务 Daily Briefing 执行完成。",
+            "receiver_uid": None,
+        },
+    ]
+    persisted = repository.get_by_run_id("run-1")
+    assert persisted.terminal_status == AutomationDeliveryStatus.SENT
+    assert persisted.terminal_event == AutomationDeliveryEvent.COMPLETED
+    assert persisted.terminal_message == "定时任务 Daily Briefing 执行完成。"
+
+
+def test_process_pending_marks_terminal_delivery_pending_when_xiaoluban_account_is_missing(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        _feishu_client,
+        xiaoluban_gateway_service,
+        run_runtime_repo,
+        event_log,
+        repository,
+    ) = _build_service_with_xiaoluban(tmp_path)
+    _ = service.register_run(
+        project=_build_xiaoluban_project(),
+        session_id="session-1",
+        run_id="run-1",
+        reason="schedule",
+    )
+    xiaoluban_gateway_service.fail_send_key_error = True
+    run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.COMPLETED,
+            phase=RunRuntimePhase.TERMINAL,
+        )
+    )
+    event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed","output":"   "}',
+            occurred_at=datetime.now(tz=timezone.utc),
+        )
+    )
+
+    progressed = service.process_pending()
+
+    assert progressed is True
+    persisted = repository.get_by_run_id("run-1")
+    assert persisted.terminal_status == AutomationDeliveryStatus.PENDING
+    assert persisted.terminal_attempts == 1
+    assert persisted.terminal_message == "定时任务 Daily Briefing 执行完成。"
+    assert persisted.last_error == "missing_xiaoluban_account"

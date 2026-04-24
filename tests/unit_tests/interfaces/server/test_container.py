@@ -355,6 +355,9 @@ async def test_container_binds_background_completion_sink_during_start(
     async def _fake_automation_bound_session_start() -> None:
         start_calls.append("automation-bound-session")
 
+    async def _fake_github_trigger_action_start() -> None:
+        start_calls.append("github-trigger-action")
+
     monkeypatch.setattr(
         container.automation_delivery_worker,
         "start",
@@ -364,6 +367,11 @@ async def test_container_binds_background_completion_sink_during_start(
         container.automation_bound_session_queue_worker,
         "start",
         _fake_automation_bound_session_start,
+    )
+    monkeypatch.setattr(
+        container.github_trigger_action_worker,
+        "start",
+        _fake_github_trigger_action_start,
     )
 
     async def _fake_scheduler_start() -> None:
@@ -387,6 +395,7 @@ async def test_container_binds_background_completion_sink_during_start(
         "feishu-message-pool",
         "automation-delivery",
         "automation-bound-session",
+        "github-trigger-action",
         "scheduler",
     ]
 

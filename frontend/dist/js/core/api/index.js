@@ -135,12 +135,18 @@ export {
 } from './triggers.js';
 
 export {
+    createXiaolubanGatewayAccount,
+    deleteXiaolubanGatewayAccount,
+    disableXiaolubanGatewayAccount,
+    enableXiaolubanGatewayAccount,
     deleteWeChatGatewayAccount,
+    fetchXiaolubanGatewayAccounts,
     disableWeChatGatewayAccount,
     enableWeChatGatewayAccount,
     fetchWeChatGatewayAccounts,
     reloadWeChatGateway,
     startWeChatGatewayLogin,
+    updateXiaolubanGatewayAccount,
     updateWeChatGatewayAccount,
     waitWeChatGatewayLogin,
 } from './gateway.js';
@@ -175,6 +181,7 @@ export {
     deleteAutomationProject,
     disableAutomationProject,
     enableAutomationProject,
+    fetchAutomationDeliveryBindings,
     fetchAutomationFeishuBindings,
     fetchAutomationProject,
     fetchAutomationProjectSessions,

@@ -4,12 +4,16 @@
  */
 import { requestJson } from './request.js';
 
-export async function fetchAutomationFeishuBindings() {
+export async function fetchAutomationDeliveryBindings() {
     return requestJson(
-        '/api/automation/feishu-bindings',
+        '/api/automation/delivery-bindings',
         undefined,
-        'Failed to fetch automation Feishu bindings',
+        'Failed to fetch automation delivery bindings',
     );
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return fetchAutomationDeliveryBindings();
 }
 
 export async function fetchAutomationProjects() {

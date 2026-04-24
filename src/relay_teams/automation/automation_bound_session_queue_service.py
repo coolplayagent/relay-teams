@@ -137,6 +137,8 @@ class AutomationBoundSessionQueueService:
         binding = project.delivery_binding
         if binding is None:
             return None
+        if not isinstance(binding, AutomationFeishuBinding):
+            return None
         session_id = str(binding.session_id or "").strip()
         if not session_id:
             raise RuntimeError("missing_bound_session_id")
