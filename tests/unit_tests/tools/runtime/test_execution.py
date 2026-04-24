@@ -292,6 +292,46 @@ def test_execute_tool_returns_standard_envelope() -> None:
     assert tool_result_payloads[0]["result"] == result
 
 
+def test_execute_tool_call_reuses_persisted_result_for_duplicate_tool_call_id() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-read-duplicate"
+    call_count = 0
+
+    def action(path: str) -> dict[str, JsonValue]:
+        nonlocal call_count
+        assert path == "README.md"
+        call_count += 1
+        return {"value": call_count}
+
+    first = asyncio.run(
+        execute_tool_call(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path_len": len("README.md")},
+            action=action,
+            raw_args={"ctx": ctx, "path": "README.md"},
+        )
+    )
+    second = asyncio.run(
+        execute_tool_call(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path_len": len("README.md")},
+            action=lambda path: {"path": path, "value": 999},
+            raw_args={"ctx": ctx, "path": "README.md"},
+        )
+    )
+
+    assert call_count == 1
+    assert second == first
+    assert cast(dict[str, JsonValue], second)["data"] == {"value": 1}
+    assert len(_tool_result_payloads(deps)) == 1
+
+
 def test_execute_tool_skips_approval_flow_when_yolo_enabled() -> None:
     manager = _FakeApprovalManager(wait_result=("approve", ""))
     deps = _FakeDeps(

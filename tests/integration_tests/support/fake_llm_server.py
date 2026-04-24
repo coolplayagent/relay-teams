@@ -323,6 +323,12 @@ def _plan_orch_clone_benchmark_response(messages: list[object]) -> dict[str, obj
         messages,
         prefix="call-orch-clone-dispatch-",
     )
+    cleared_todos = bool(
+        _extract_tool_call_ids(
+            messages,
+            prefix="call-orch-clone-clear-todos",
+        )
+    )
     if not task_ids:
         return {
             "kind": "tool_call",
@@ -340,6 +346,13 @@ def _plan_orch_clone_benchmark_response(messages: list[object]) -> dict[str, obj
                     for index in range(config.task_count)
                 ]
             },
+        }
+    if len(dispatched_call_ids) >= len(task_ids) and not cleared_todos:
+        return {
+            "kind": "tool_call",
+            "tool_name": "todo_write",
+            "tool_call_id": "call-orch-clone-clear-todos",
+            "arguments": {"items": []},
         }
     if len(dispatched_call_ids) >= len(task_ids):
         return {
