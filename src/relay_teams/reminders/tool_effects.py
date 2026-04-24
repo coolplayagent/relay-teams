@@ -12,6 +12,8 @@ READ_ONLY_TOOLS = frozenset(
         "list_monitors",
         "list_run_tasks",
         "office_read_markdown",
+        "orch_list_available_roles",
+        "orch_list_delegated_tasks",
         "read",
         "ripgrep",
         "todo_read",
