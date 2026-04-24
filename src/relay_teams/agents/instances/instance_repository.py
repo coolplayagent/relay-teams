@@ -5,8 +5,9 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
+from typing import Optional
 
-from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
 from relay_teams.agents.instances.models import AgentRuntimeRecord
 from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
 from relay_teams.workspace import build_conversation_id
@@ -35,6 +36,8 @@ class AgentInstanceRepository:
                     workspace_id TEXT NOT NULL DEFAULT '',
                     conversation_id TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
+                    lifecycle TEXT NOT NULL DEFAULT 'reusable',
+                    parent_instance_id TEXT,
                     runtime_system_prompt TEXT NOT NULL DEFAULT '',
                     runtime_tools_json TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -64,6 +67,14 @@ class AgentInstanceRepository:
                 self._conn.execute(
                     "ALTER TABLE agent_instances ADD COLUMN runtime_tools_json TEXT NOT NULL DEFAULT ''"
                 )
+            if "lifecycle" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE agent_instances ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'reusable'"
+                )
+            if "parent_instance_id" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE agent_instances ADD COLUMN parent_instance_id TEXT"
+                )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_agent_instances_run_status ON agent_instances(run_id, status)"
             )
@@ -91,19 +102,22 @@ class AgentInstanceRepository:
         workspace_id: str,
         conversation_id: str | None = None,
         status: InstanceStatus,
+        lifecycle: Optional[InstanceLifecycle] = None,
+        parent_instance_id: Optional[str] = None,
     ) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         resolved_conversation_id = conversation_id or build_conversation_id(
             session_id,
             role_id,
         )
+        lifecycle_value = lifecycle.value if lifecycle is not None else None
         run_sqlite_write_with_retry(
             conn=self._conn,
             db_path=self._db_path,
             operation=lambda: self._conn.execute(
                 """
-                INSERT INTO agent_instances(run_id, trace_id, session_id, instance_id, role_id, workspace_id, conversation_id, status, runtime_system_prompt, runtime_tools_json, created_at, updated_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?)
+                INSERT INTO agent_instances(run_id, trace_id, session_id, instance_id, role_id, workspace_id, conversation_id, status, lifecycle, parent_instance_id, runtime_system_prompt, runtime_tools_json, created_at, updated_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 'reusable'), ?, '', '', ?, ?)
                 ON CONFLICT(instance_id)
                 DO UPDATE SET
                     run_id=excluded.run_id,
@@ -113,6 +127,14 @@ class AgentInstanceRepository:
                     status=excluded.status,
                     workspace_id=excluded.workspace_id,
                     conversation_id=excluded.conversation_id,
+                    lifecycle=CASE
+                        WHEN ? IS NULL THEN agent_instances.lifecycle
+                        ELSE excluded.lifecycle
+                    END,
+                    parent_instance_id=CASE
+                        WHEN ? IS NULL THEN agent_instances.parent_instance_id
+                        ELSE excluded.parent_instance_id
+                    END,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -124,8 +146,12 @@ class AgentInstanceRepository:
                     workspace_id,
                     resolved_conversation_id,
                     status.value,
+                    lifecycle_value,
+                    parent_instance_id,
                     now,
                     now,
+                    lifecycle_value,
+                    parent_instance_id,
                 ),
             ),
             lock=self._lock,
@@ -278,10 +304,10 @@ class AgentInstanceRepository:
                 """
                 SELECT *
                 FROM agent_instances
-                WHERE session_id=?
+                WHERE session_id=? AND lifecycle=?
                 ORDER BY role_id ASC, updated_at DESC, created_at DESC
                 """,
-                (session_id,),
+                (session_id, InstanceLifecycle.REUSABLE.value),
             ).fetchall()
         latest_by_role: dict[str, AgentRuntimeRecord] = {}
         for row in rows:
@@ -309,11 +335,11 @@ class AgentInstanceRepository:
                 """
                 SELECT *
                 FROM agent_instances
-                WHERE session_id=? AND role_id=?
+                WHERE session_id=? AND role_id=? AND lifecycle=?
                 ORDER BY updated_at DESC, created_at DESC
                 LIMIT 1
                 """,
-                (session_id, role_id),
+                (session_id, role_id, InstanceLifecycle.REUSABLE.value),
             ).fetchone()
         if row is None:
             return None
@@ -364,6 +390,10 @@ class AgentInstanceRepository:
                 )
             ),
             status=InstanceStatus(str(row["status"])),
+            lifecycle=InstanceLifecycle(str(row["lifecycle"] or "reusable")),
+            parent_instance_id=str(row["parent_instance_id"])
+            if row["parent_instance_id"]
+            else None,
             runtime_system_prompt=str(row["runtime_system_prompt"] or ""),
             runtime_tools_json=str(row["runtime_tools_json"] or ""),
             created_at=datetime.fromisoformat(str(row["created_at"])),

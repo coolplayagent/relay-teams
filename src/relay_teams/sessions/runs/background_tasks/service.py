@@ -5,12 +5,12 @@ import asyncio
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
-from typing import Protocol
+from typing import Optional, Protocol
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
-from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
 from relay_teams.agents.instances.models import (
     SubAgentInstance,
     create_subagent_instance,
@@ -129,6 +129,8 @@ class _BackgroundTaskAgentRepository(Protocol):
         workspace_id: str,
         conversation_id: str | None = None,
         status: InstanceStatus,
+        lifecycle: Optional[InstanceLifecycle] = None,
+        parent_instance_id: Optional[str] = None,
     ) -> None: ...
 
 
@@ -277,7 +279,7 @@ class BackgroundTaskService:
         session_id: str,
         instance_id: str,
         role_id: str,
-        tool_call_id: str | None,
+        tool_call_id: Optional[str],
         workspace: WorkspaceHandle,
         command: str,
         cwd: Path,
@@ -342,7 +344,7 @@ class BackgroundTaskService:
         session_id: str,
         instance_id: str,
         role_id: str,
-        tool_call_id: str | None,
+        tool_call_id: Optional[str],
         workspace_id: str,
         cwd: Path,
         subagent_role_id: str,
@@ -1082,6 +1084,7 @@ class BackgroundTaskService:
             workspace_id=workspace_id,
             conversation_id=subagent_instance.conversation_id,
             status=InstanceStatus.IDLE,
+            lifecycle=InstanceLifecycle.EPHEMERAL,
         )
         task_repo.create(subagent_task)
         self._record_subagent_task_created(

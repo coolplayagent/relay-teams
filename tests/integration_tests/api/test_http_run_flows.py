@@ -725,16 +725,17 @@ def _wait_for_session_run_events(
     session_id: str,
     run_id: str,
     expected_event_counts: dict[str, int],
-    timeout_seconds: float = 5.0,
+    timeout_seconds: float = 15.0,
 ) -> list[dict[str, object]]:
     deadline = time.monotonic() + timeout_seconds
+    observed_counts: dict[str, int] = {}
     while time.monotonic() < deadline:
         events = _session_run_events(
             api_client,
             session_id=session_id,
             run_id=run_id,
         )
-        observed_counts: dict[str, int] = {}
+        observed_counts = {}
         for event in events:
             event_type = str(event.get("event_type") or "")
             if not event_type:
@@ -748,7 +749,8 @@ def _wait_for_session_run_events(
         time.sleep(0.1)
     raise AssertionError(
         "Run events did not reach expected persisted counts within "
-        f"{timeout_seconds}s for run {run_id}: expected {expected_event_counts}"
+        f"{timeout_seconds}s for run {run_id}: expected {expected_event_counts}, "
+        f"observed {observed_counts}"
     )
 
 

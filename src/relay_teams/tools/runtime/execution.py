@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, ValidationError
 from pydantic_ai.messages import ToolReturn
 
 import asyncio
@@ -183,7 +183,6 @@ async def execute_tool(
                 "role_id": ctx.deps.role_id,
             },
         )
-
         meta: dict[str, JsonValue] = {}
         effective_tool_input = dict(args_summary if tool_input is None else tool_input)
         _raise_if_stopped(ctx)
@@ -199,6 +198,27 @@ async def execute_tool(
             tool_input=effective_tool_input,
         )
         args_summary = dict(effective_tool_input)
+        reusable_result = _reusable_tool_result(
+            ctx=ctx,
+            args_preview=_safe_json(args_summary),
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            allow_tool_return=allow_tool_return,
+        )
+        if pre_tool_error is None and reusable_result is not None:
+            log_event(
+                LOGGER,
+                logging.INFO,
+                event="tool.call.reused_result",
+                message="Reused persisted tool result for duplicate tool call",
+                payload={
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "instance_id": ctx.deps.instance_id,
+                    "role_id": ctx.deps.role_id,
+                },
+            )
+            return reusable_result
         resolved_approval_request = (
             approval_request_factory(effective_tool_input)
             if approval_request_factory is not None
@@ -354,6 +374,7 @@ async def execute_tool(
                 internal_data=internal_data,
                 runtime_meta=meta,
                 execution_status=ToolExecutionStatus.COMPLETED,
+                tool_content_parts=tool_content_parts,
             )
             _record_tool_metrics(
                 ctx=ctx,
@@ -558,6 +579,73 @@ async def execute_tool_call(
     )
 
 
+def _reusable_tool_result(
+    *,
+    ctx: ToolContext,
+    args_preview: str,
+    tool_call_id: str,
+    tool_name: str,
+    allow_tool_return: bool,
+) -> Optional[ToolReturn | dict[str, JsonValue]]:
+    state = load_tool_call_state(
+        shared_store=ctx.deps.shared_store,
+        task_id=ctx.deps.task_id,
+        tool_call_id=tool_call_id,
+    )
+    if state is None or state.tool_name != tool_name:
+        return None
+    if state.args_preview != args_preview:
+        return None
+    if not _state_matches_runtime_scope(ctx=ctx, state_run_id=state.run_id):
+        return None
+    if state.execution_status not in {
+        ToolExecutionStatus.COMPLETED,
+        ToolExecutionStatus.FAILED,
+    }:
+        return None
+    result_envelope = state.result_envelope
+    if not isinstance(result_envelope, dict):
+        return None
+    try:
+        record = ToolInternalRecord.model_validate(result_envelope)
+    except ValidationError:
+        record = None
+    if record is not None:
+        visible_result = _normalize_json_object(
+            record.visible_result.model_dump(mode="json")
+        )
+        if record.tool_content_parts and allow_tool_return:
+            try:
+                tool_return_content = _tool_return_content(
+                    ctx=ctx,
+                    tool_name=tool_name,
+                    tool_content_parts=tuple(record.tool_content_parts),
+                )
+            except Exception as exc:
+                return _visible_envelope(
+                    ok=False,
+                    error=_error_payload(exc),
+                    meta={"reused_tool_call": True},
+                )
+            return ToolReturn(
+                return_value=visible_result,
+                content=tool_return_content,
+            )
+        return visible_result
+    visible_result = result_envelope.get("visible_result")
+    if isinstance(visible_result, dict):
+        return _normalize_json_object(visible_result)
+    return _normalize_json_object(result_envelope)
+
+
+def _state_matches_runtime_scope(
+    *,
+    ctx: ToolContext,
+    state_run_id: str,
+) -> bool:
+    return not state_run_id or state_run_id == ctx.deps.run_id
+
+
 def _record_tool_metrics(
     *,
     ctx: ToolContext,
@@ -663,6 +751,15 @@ def _normalize_result_payload(
     return normalized, normalized, ()
 
 
+def _normalize_json_object(value: object) -> dict[str, JsonValue]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, JsonValue] = {}
+    for key, item in value.items():
+        normalized[str(key)] = _normalize_json_value(item)
+    return normalized
+
+
 # noinspection PyTypeHints
 def _tool_return_content(
     *,
@@ -718,11 +815,7 @@ def _normalize_json_value(value: object) -> JsonValue:
         items = cast(tuple[object, ...], value)
         return [_normalize_json_value(item) for item in items]
     if isinstance(value, dict):
-        entries = cast(dict[object, object], value)
-        normalized: dict[str, JsonValue] = {}
-        for key, item in entries.items():
-            normalized[str(key)] = _normalize_json_value(item)
-        return normalized
+        return _normalize_json_object(value)
     return str(value)
 
 
@@ -1068,7 +1161,7 @@ async def _apply_pre_tool_hooks(
         )
     next_args = tool_input
     if isinstance(bundle.updated_input, dict):
-        next_args = cast(dict[str, JsonValue], bundle.updated_input)
+        next_args = _normalize_json_object(bundle.updated_input)
     return next_args, None, bundle.decision == HookDecisionType.ASK
 
 
@@ -1385,7 +1478,7 @@ async def _handle_tool_approval(
     ctx: ToolContext,
     tool_name: str,
     args_summary: dict[str, JsonValue],
-    approval_args_summary: dict[str, JsonValue] | None,
+    approval_args_summary: Optional[dict[str, JsonValue]],
     meta: dict[str, JsonValue],
     tool_call_id: str,
     approval_request: ToolApprovalRequest | None = None,
@@ -1886,12 +1979,14 @@ def _internal_record(
     visible_envelope: dict[str, JsonValue],
     internal_data: Optional[JsonValue],
     runtime_meta: dict[str, JsonValue],
+    tool_content_parts: tuple[ContentPart, ...],
 ) -> dict[str, JsonValue]:
     record = ToolInternalRecord(
         tool=tool_name,
         visible_result=ToolResultEnvelope.model_validate(visible_envelope),
         internal_data=internal_data,
         runtime_meta=runtime_meta,
+        tool_content_parts=tool_content_parts,
     )
     return cast(dict[str, JsonValue], record.model_dump(mode="json"))
 
@@ -1906,6 +2001,7 @@ def _persist_tool_record(
     internal_data: JsonValue | None,
     runtime_meta: dict[str, JsonValue],
     execution_status: ToolExecutionStatus,
+    tool_content_parts: tuple[ContentPart, ...] = (),
 ) -> None:
     approval_status = _approval_status_from_meta(runtime_meta)
     approval_mode = _approval_mode_from_meta(runtime_meta)
@@ -1914,6 +2010,7 @@ def _persist_tool_record(
         visible_envelope=visible_envelope,
         internal_data=internal_data,
         runtime_meta=runtime_meta,
+        tool_content_parts=tool_content_parts,
     )
     current_state = load_tool_call_state(
         shared_store=ctx.deps.shared_store,

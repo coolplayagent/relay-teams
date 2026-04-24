@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
 from relay_teams.agents.instances.ids import new_instance_id
 from relay_teams.workspace.ids import (
     build_conversation_id,
@@ -63,6 +63,8 @@ class AgentRuntimeRecord(BaseModel):
     workspace_id: str = Field(min_length=1)
     conversation_id: str = Field(min_length=1)
     status: InstanceStatus
+    lifecycle: InstanceLifecycle = InstanceLifecycle.REUSABLE
+    parent_instance_id: Optional[str] = None
     runtime_system_prompt: str = ""
     runtime_tools_json: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))

@@ -31,8 +31,8 @@ Common validation rules:
 - A delegated task binds to exactly one delegated role and one subagent instance on first dispatch.
 - Re-dispatching an `assigned` or `stopped` task reuses its bound instance.
 - `completed`, `failed`, and `timeout` tasks must be replaced instead of re-dispatched.
-- In one session, delegated tasks with the same bound `role_id` reuse the same session-level subagent instance.
-- Same-role task dispatch is serial only. If a role instance is already busy or paused on another task, dispatch returns a runtime conflict.
+- In one session, non-concurrent delegated tasks with the same bound `role_id` reuse the same session-level subagent instance.
+- Same-role concurrent dispatch uses an ephemeral clone with its own conversation; the reusable role instance remains the continuity anchor for future non-concurrent tasks.
 
 Task status values:
 - `created`
@@ -1090,10 +1090,11 @@ Notes:
 
 ### `GET /sessions/{session_id}/agents`
 
-Lists one session-level agent instance per delegated role in the session. Each entry also includes a compact reflection preview for the subagent role in the current workspace, plus the latest runtime system prompt snapshot and runtime tools JSON captured before the most recent subagent execution step.
+Lists one reusable session-level agent instance per delegated role in the session. Each entry also includes a compact reflection preview for the subagent role in the current workspace, plus the latest runtime system prompt snapshot and runtime tools JSON captured before the most recent subagent execution step.
 
 Notes:
 - This endpoint continues to back the orchestration/legacy right-rail agent list.
+- Ephemeral same-role clones are excluded from this projection.
 - Normal-mode `spawn_subagent` child sessions are excluded from this projection.
 
 Response fields include:
@@ -1840,7 +1841,7 @@ Internal dispatch rules:
 - `completed`, `failed`, or `timeout`: rejected; create a replacement task instead.
 - `running`: rejected as a conflict.
 - After the first dispatch, the delegated role is fixed for that task. To change roles, create a replacement task.
-- If another task already holds the same role instance in `assigned`, `running`, or `stopped`, dispatch is rejected as a conflict.
+- If another task already holds the reusable role instance in `assigned`, `running`, or `stopped`, a created task is assigned to an ephemeral clone with a private conversation.
 
 ## Role APIs
 

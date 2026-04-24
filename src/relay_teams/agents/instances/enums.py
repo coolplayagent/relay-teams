@@ -10,3 +10,8 @@ class InstanceStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     TIMEOUT = "timeout"
+
+
+class InstanceLifecycle(str, Enum):
+    REUSABLE = "reusable"
+    EPHEMERAL = "ephemeral"

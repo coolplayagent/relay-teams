@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional, Union, cast
 
@@ -35,13 +36,13 @@ from relay_teams.agents.instances.models import (
 )
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
-from relay_teams.agents.tasks.models import TaskEnvelope
+from relay_teams.agents.tasks.models import TaskEnvelope, TaskRecord
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.logger import get_logger, log_event
 from relay_teams.media import MediaAssetService, merge_user_prompt_content
 from relay_teams.mcp.mcp_registry import McpRegistry
-from relay_teams.persistence.scope_models import ScopeRef, ScopeType
+from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.reminders import (
     CompletionAttemptObservation,
@@ -90,6 +91,7 @@ from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
 
 LOGGER = get_logger(__name__)
 ProviderUserPromptContent = str | tuple[UserContent, ...]
+TASK_MEMORY_RESULT_EXCERPT_CHARS = 2000
 
 
 class TaskExecutionService(BaseModel):
@@ -299,15 +301,9 @@ class TaskExecutionService(BaseModel):
                 task.task_id, TaskStatus.COMPLETED, result=result
             )
             _ = self.agent_repo.mark_status(instance_id, InstanceStatus.COMPLETED)
-            self.run_runtime_repo.update(
-                task.trace_id,
-                status=RunRuntimeStatus.RUNNING,
-                phase=RunRuntimePhase.IDLE,
-                active_instance_id=None,
-                active_task_id=None,
-                active_role_id=None,
-                active_subagent_instance_id=None,
-                last_error=None,
+            self._mark_runtime_idle_after_success(
+                run_id=task.trace_id,
+                completed_task_id=task.task_id,
             )
             self.event_bus.emit(
                 EventEnvelope(
@@ -330,6 +326,8 @@ class TaskExecutionService(BaseModel):
                 workspace_id=workspace.ref.workspace_id,
                 task=task,
                 conversation_id=workspace.ref.conversation_id,
+                instance_id=instance_id,
+                lifecycle=instance_record.lifecycle.value,
                 result=result,
             )
             log_event(
@@ -384,22 +382,37 @@ class TaskExecutionService(BaseModel):
                         payload_json="{}",
                     )
                 )
-            self.run_runtime_repo.update(
-                task.trace_id,
-                status=(
-                    RunRuntimeStatus.STOPPED if stopped else RunRuntimeStatus.FAILED
-                ),
-                phase=(
-                    RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
-                    if paused_subagent
-                    else RunRuntimePhase.IDLE
-                ),
-                active_instance_id=None,
-                active_task_id=task.task_id if paused_subagent else None,
-                active_role_id=role_id if paused_subagent else None,
-                active_subagent_instance_id=(instance_id if paused_subagent else None),
-                last_error="Task stopped by user" if stopped else "Task cancelled",
-            )
+            last_error = "Task stopped by user" if stopped else "Task cancelled"
+            if paused_subagent:
+                if not self._promote_running_runtime_lane(
+                    run_id=task.trace_id,
+                    terminal_task_id=task.task_id,
+                    last_error=last_error,
+                ):
+                    self.run_runtime_repo.update(
+                        task.trace_id,
+                        status=RunRuntimeStatus.STOPPED,
+                        phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
+                        active_instance_id=None,
+                        active_task_id=task.task_id,
+                        active_role_id=role_id,
+                        active_subagent_instance_id=instance_id,
+                        last_error=last_error,
+                    )
+            else:
+                self._mark_runtime_after_terminal_task_update(
+                    run_id=task.trace_id,
+                    terminal_task_id=task.task_id,
+                    status=(
+                        RunRuntimeStatus.STOPPED if stopped else RunRuntimeStatus.FAILED
+                    ),
+                    phase=RunRuntimePhase.IDLE,
+                    active_instance_id=None,
+                    active_task_id=None,
+                    active_role_id=None,
+                    active_subagent_instance_id=None,
+                    last_error=last_error,
+                )
             log_event(
                 LOGGER,
                 logging.WARNING if stopped else logging.ERROR,
@@ -704,8 +717,9 @@ class TaskExecutionService(BaseModel):
             error_message=error_message or assistant_message,
         )
         _ = self.agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
-        self.run_runtime_repo.update(
-            task.trace_id,
+        self._mark_runtime_after_terminal_task_update(
+            run_id=task.trace_id,
+            terminal_task_id=task.task_id,
             status=RunRuntimeStatus.RUNNING,
             phase=RunRuntimePhase.IDLE,
             active_instance_id=None,
@@ -1004,10 +1018,198 @@ class TaskExecutionService(BaseModel):
         workspace_id: str,
         task: TaskEnvelope,
         conversation_id: str,
+        instance_id: str,
+        lifecycle: str,
         result: str,
     ) -> None:
-        del role_id, workspace_id, task, conversation_id, result
-        return
+        payload: dict[str, JsonValue] = {
+            "task_id": task.task_id,
+            "title": task.title or "",
+            "objective": task.objective[:500],
+            "role_id": role_id,
+            "workspace_id": workspace_id,
+            "conversation_id": conversation_id,
+            "instance_id": instance_id,
+            "lifecycle": lifecycle,
+            "result_excerpt": _truncate_task_memory_result(result),
+            "completed_at": datetime.now(tz=timezone.utc).isoformat(),
+        }
+        try:
+            self.shared_store.manage_state(
+                StateMutation(
+                    scope=ScopeRef(
+                        scope_type=ScopeType.ROLE,
+                        scope_id=f"{task.session_id}:{role_id}",
+                    ),
+                    key=f"task_result:{task.task_id}",
+                    value_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                )
+            )
+        except Exception:
+            LOGGER.warning(
+                "Failed to persist completed task memory",
+                extra={
+                    "task_id": task.task_id,
+                    "role_id": role_id,
+                    "instance_id": instance_id,
+                },
+                exc_info=True,
+            )
+
+    def _mark_runtime_idle_after_success(
+        self,
+        *,
+        run_id: str,
+        completed_task_id: str,
+    ) -> None:
+        self._mark_runtime_after_terminal_task_update(
+            run_id=run_id,
+            terminal_task_id=completed_task_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.IDLE,
+            active_instance_id=None,
+            active_task_id=None,
+            active_role_id=None,
+            active_subagent_instance_id=None,
+            last_error=None,
+        )
+
+    def _mark_runtime_after_terminal_task_update(
+        self,
+        *,
+        run_id: str,
+        terminal_task_id: str,
+        status: RunRuntimeStatus,
+        phase: RunRuntimePhase,
+        active_instance_id: Optional[str],
+        active_task_id: Optional[str],
+        active_role_id: Optional[str],
+        active_subagent_instance_id: Optional[str],
+        last_error: Optional[str],
+    ) -> None:
+        current = self.run_runtime_repo.get(run_id)
+        if current is not None and current.active_task_id not in {
+            None,
+            terminal_task_id,
+        }:
+            if last_error is not None:
+                self.run_runtime_repo.update(run_id, last_error=last_error)
+            return
+        if self._promote_running_runtime_lane(
+            run_id=run_id,
+            terminal_task_id=terminal_task_id,
+            last_error=last_error,
+        ):
+            return
+        if self._promote_paused_runtime_lane(
+            run_id=run_id,
+            terminal_task_id=terminal_task_id,
+            last_error=last_error,
+        ):
+            return
+        self.run_runtime_repo.update(
+            run_id,
+            status=status,
+            phase=phase,
+            active_instance_id=active_instance_id,
+            active_task_id=active_task_id,
+            active_role_id=active_role_id,
+            active_subagent_instance_id=active_subagent_instance_id,
+            last_error=last_error,
+        )
+
+    def _promote_running_runtime_lane(
+        self,
+        *,
+        run_id: str,
+        terminal_task_id: str,
+        last_error: Optional[str],
+    ) -> bool:
+        coordinator_record: Optional[TaskRecord] = None
+        promoted_record: Optional[TaskRecord] = None
+        for record in self.task_repo.list_by_trace(run_id):
+            task = record.envelope
+            if task.task_id == terminal_task_id:
+                continue
+            if record.status != TaskStatus.RUNNING:
+                continue
+            if not record.assigned_instance_id:
+                continue
+            if task.parent_task_id is not None:
+                promoted_record = record
+                break
+            if coordinator_record is None:
+                coordinator_record = record
+        if promoted_record is None:
+            promoted_record = coordinator_record
+        if promoted_record is None:
+            return False
+        task = promoted_record.envelope
+        instance_id = promoted_record.assigned_instance_id
+        if not instance_id:
+            return False
+        is_coordinator = task.parent_task_id is None
+        self.run_runtime_repo.update(
+            run_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=(
+                RunRuntimePhase.COORDINATOR_RUNNING
+                if is_coordinator
+                else RunRuntimePhase.SUBAGENT_RUNNING
+            ),
+            active_instance_id=instance_id,
+            active_task_id=task.task_id,
+            active_role_id=task.role_id,
+            active_subagent_instance_id=(None if is_coordinator else instance_id),
+            last_error=last_error,
+        )
+        return True
+
+    def _promote_paused_runtime_lane(
+        self,
+        *,
+        run_id: str,
+        terminal_task_id: str,
+        last_error: Optional[str],
+    ) -> bool:
+        if self.run_control_manager is None:
+            return False
+        if self.run_control_manager.is_run_stop_requested(run_id):
+            return False
+        for record in self.task_repo.list_by_trace(run_id):
+            task = record.envelope
+            instance_id = record.assigned_instance_id
+            if task.task_id == terminal_task_id:
+                continue
+            if task.parent_task_id is None:
+                continue
+            if record.status != TaskStatus.STOPPED:
+                continue
+            if not instance_id:
+                continue
+            if not (
+                self.run_control_manager.is_subagent_stop_requested(
+                    run_id=run_id,
+                    instance_id=instance_id,
+                )
+                or self.run_control_manager.is_subagent_paused(
+                    session_id=task.session_id,
+                    instance_id=instance_id,
+                )
+            ):
+                continue
+            self.run_runtime_repo.update(
+                run_id,
+                status=RunRuntimeStatus.STOPPED,
+                phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
+                active_instance_id=None,
+                active_task_id=task.task_id,
+                active_role_id=task.role_id,
+                active_subagent_instance_id=instance_id,
+                last_error=last_error or record.error_message or "Task stopped by user",
+            )
+            return True
+        return False
 
     def _shared_state_snapshot(
         self,
@@ -1188,6 +1390,13 @@ class TaskExecutionService(BaseModel):
         if prompt_override:
             return prompt_override
         return task.objective.strip()
+
+
+def _truncate_task_memory_result(result: str) -> str:
+    normalized = " ".join(result.strip().split())
+    if len(normalized) <= TASK_MEMORY_RESULT_EXCERPT_CHARS:
+        return normalized
+    return normalized[:TASK_MEMORY_RESULT_EXCERPT_CHARS].rstrip() + "..."
 
 
 class PreparedRuntimeSnapshot(BaseModel):

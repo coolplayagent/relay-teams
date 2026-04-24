@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from pydantic import JsonValue
 
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import cast
 
 import pytest
 
+import relay_teams.agents.orchestration.task_orchestration_service as task_orchestration_service_module
 from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
@@ -16,6 +18,7 @@ from relay_teams.hooks import HookService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 
+from relay_teams.agents.instances.enums import InstanceLifecycle
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.event_stream import RunEventHub
@@ -48,6 +51,54 @@ class _FakeTaskExecutionService:
             result=result,
         )
         return result
+
+
+class _BlockingTaskExecutionService:
+    def __init__(self, task_repo: TaskRepository) -> None:
+        self._task_repo = task_repo
+        self.started_task_ids: list[str] = []
+        self._started_events: dict[str, asyncio.Event] = {}
+        self._release_events: dict[str, asyncio.Event] = {}
+
+    async def execute(
+        self,
+        *,
+        instance_id: str,
+        role_id: str,
+        task: TaskEnvelope,
+        user_prompt_override: str | None = None,
+    ) -> str:
+        self.started_task_ids.append(task.task_id)
+        self._started_event(task.task_id).set()
+        await self._release_event(task.task_id).wait()
+        result = f"done:{task.task_id}"
+        self._task_repo.update_status(
+            task.task_id,
+            TaskStatus.COMPLETED,
+            assigned_instance_id=instance_id,
+            result=result,
+        )
+        return result
+
+    async def wait_started(self, task_id: str) -> None:
+        await asyncio.wait_for(self._started_event(task_id).wait(), timeout=1.0)
+
+    def release(self, task_id: str) -> None:
+        self._release_event(task_id).set()
+
+    def _started_event(self, task_id: str) -> asyncio.Event:
+        event = self._started_events.get(task_id)
+        if event is None:
+            event = asyncio.Event()
+            self._started_events[task_id] = event
+        return event
+
+    def _release_event(self, task_id: str) -> asyncio.Event:
+        event = self._release_events.get(task_id)
+        if event is None:
+            event = asyncio.Event()
+            self._release_events[task_id] = event
+        return event
 
 
 class _CapturingHookService:
@@ -139,6 +190,33 @@ def _build_service(
         session_repo=session_repo,
     )
     return service, task_repo, agent_repo, message_repo, execution_service
+
+
+def _create_assigned_task(
+    *,
+    task_repo: TaskRepository,
+    task_id: str,
+    session_id: str,
+    run_id: str,
+    instance_id: str,
+) -> None:
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id=task_id,
+            session_id=session_id,
+            parent_task_id=f"{run_id}-root",
+            trace_id=run_id,
+            role_id="spec_coder",
+            title=f"Task {task_id}",
+            objective=f"Execute {task_id}",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    task_repo.update_status(
+        task_id=task_id,
+        status=TaskStatus.ASSIGNED,
+        assigned_instance_id=instance_id,
+    )
 
 
 @pytest.mark.asyncio
@@ -414,13 +492,13 @@ async def test_dispatch_task_reuses_session_role_instance_across_tasks(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_task_rejects_same_role_while_other_task_is_in_progress(
+async def test_dispatch_task_clones_same_role_while_reusable_instance_is_busy(
     tmp_path: Path,
 ) -> None:
     (
         service,
         task_repo,
-        _agent_repo,
+        agent_repo,
         _message_repo,
         _execution_service,
     ) = _build_service(tmp_path / "task_orchestration_role_busy.db")
@@ -463,16 +541,270 @@ async def test_dispatch_task_rejects_same_role_while_other_task_is_in_progress(
         assigned_instance_id=instance_id,
     )
 
-    with pytest.raises(ValueError, match="Role spec_coder is busy with task"):
+    second_dispatch = await service.dispatch_task(
+        run_id="run-1",
+        task_id=second.envelope.task_id,
+        role_id="spec_coder",
+    )
+
+    second_record = task_repo.get(second.envelope.task_id)
+    second_task = cast(dict[str, JsonValue], second_dispatch["task"])
+    clone_instance_id = str(second_task["assigned_instance_id"])
+    assert clone_instance_id != instance_id
+    assert second_record.assigned_instance_id == clone_instance_id
+    assert second_record.status == TaskStatus.COMPLETED
+
+    clone = agent_repo.get_instance(clone_instance_id)
+    assert clone.lifecycle == InstanceLifecycle.EPHEMERAL
+    assert clone.parent_instance_id == instance_id
+    session_agents = agent_repo.list_session_role_instances("session-1")
+    assert len(session_agents) == 1
+    assert session_agents[0].instance_id == instance_id
+    assert session_agents[0].lifecycle == InstanceLifecycle.REUSABLE
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_limits_execution_slots_per_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        task_orchestration_service_module,
+        "MAX_PARALLEL_DELEGATED_TASKS",
+        1,
+    )
+    db_path = tmp_path / "task_orchestration_per_run_slots.db"
+    task_repo = TaskRepository(db_path)
+    execution_service = _BlockingTaskExecutionService(task_repo)
+    service = TaskOrchestrationService(
+        task_repo=task_repo,
+        role_registry=_build_role_registry(),
+        agent_repo=AgentInstanceRepository(db_path),
+        task_execution_service=cast(TaskExecutionService, execution_service),
+        message_repo=MessageRepository(db_path),
+    )
+    _create_assigned_task(
+        task_repo=task_repo,
+        task_id="task-run-1",
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-run-1",
+    )
+    _create_assigned_task(
+        task_repo=task_repo,
+        task_id="task-run-2",
+        session_id="session-2",
+        run_id="run-2",
+        instance_id="inst-run-2",
+    )
+
+    first_dispatch = asyncio.create_task(
+        service.dispatch_task(
+            run_id="run-1",
+            task_id="task-run-1",
+            role_id="spec_coder",
+        )
+    )
+    await execution_service.wait_started("task-run-1")
+    second_dispatch = asyncio.create_task(
+        service.dispatch_task(
+            run_id="run-2",
+            task_id="task-run-2",
+            role_id="spec_coder",
+        )
+    )
+    try:
+        await execution_service.wait_started("task-run-2")
+    finally:
+        execution_service.release("task-run-1")
+        execution_service.release("task-run-2")
+        dispatch_results = await asyncio.gather(
+            first_dispatch,
+            second_dispatch,
+            return_exceptions=True,
+        )
+        for dispatch_result in dispatch_results:
+            if isinstance(dispatch_result, BaseException):
+                raise dispatch_result
+
+    assert execution_service.started_task_ids == ["task-run-1", "task-run-2"]
+    assert service._execution_semaphores == {}
+    assert service._execution_semaphore_ref_counts == {}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_binds_unassigned_created_task_to_requested_role(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        task_repo,
+        _agent_repo,
+        _message_repo,
+        execution_service,
+    ) = _build_service(tmp_path / "task_orchestration_bind_unassigned.db")
+    created = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id=None,
+            title="Implement endpoint",
+            objective="Implement the endpoint",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    payload = await service.dispatch_task(
+        run_id="run-1",
+        task_id=created.envelope.task_id,
+        role_id="spec_coder",
+    )
+
+    record = task_repo.get(created.envelope.task_id)
+    task_payload = cast(dict[str, JsonValue], payload["task"])
+    assert record.envelope.role_id == "spec_coder"
+    assert task_payload["assigned_role_id"] == "spec_coder"
+    assert execution_service.calls[0][1:3] == ("spec_coder", created.envelope.task_id)
+    assert service._assignment_locks == {}
+    assert service._assignment_lock_ref_counts == {}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_rejects_created_task_role_rebinding(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_rebind_created.db"
+    )
+    created = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="reviewer",
+            title="Review endpoint",
+            objective="Review the endpoint",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    with pytest.raises(ValueError, match="already bound to role reviewer"):
         await service.dispatch_task(
             run_id="run-1",
-            task_id=second.envelope.task_id,
+            task_id=created.envelope.task_id,
             role_id="spec_coder",
         )
 
-    second_record = task_repo.get(second.envelope.task_id)
-    assert second_record.assigned_instance_id == instance_id
-    assert second_record.status == TaskStatus.ASSIGNED
+
+@pytest.mark.asyncio
+async def test_dispatch_task_uses_assignment_done_by_parallel_dispatch(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        task_repo,
+        _agent_repo,
+        _message_repo,
+        execution_service,
+    ) = _build_service(tmp_path / "task_orchestration_parallel_assignment.db")
+    created = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title="Implement endpoint",
+            objective="Implement the endpoint",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    async with service._role_assignment_lock_slot(
+        session_id="session-1",
+        role_id="spec_coder",
+    ) as assignment_lock:
+        await assignment_lock.acquire()
+        dispatch_task = asyncio.create_task(
+            service.dispatch_task(
+                run_id="run-1",
+                task_id=created.envelope.task_id,
+                role_id="spec_coder",
+            )
+        )
+        await asyncio.sleep(0)
+        task_repo.update_status(
+            created.envelope.task_id,
+            TaskStatus.ASSIGNED,
+            assigned_instance_id="inst-existing",
+        )
+        assignment_lock.release()
+
+    payload = await dispatch_task
+
+    task_payload = cast(dict[str, JsonValue], payload["task"])
+    assert task_payload["assigned_instance_id"] == "inst-existing"
+    assert execution_service.calls == [
+        (
+            "inst-existing",
+            "spec_coder",
+            created.envelope.task_id,
+            "Execute this task contract and return the requested result.",
+        )
+    ]
+    assert service._assignment_locks == {}
+    assert service._assignment_lock_ref_counts == {}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_revalidates_role_after_parallel_assignment(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_parallel_assignment_role.db"
+    )
+    created = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title="Implement endpoint",
+            objective="Implement the endpoint",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    async with service._role_assignment_lock_slot(
+        session_id="session-1",
+        role_id="spec_coder",
+    ) as assignment_lock:
+        await assignment_lock.acquire()
+        dispatch_task = asyncio.create_task(
+            service.dispatch_task(
+                run_id="run-1",
+                task_id=created.envelope.task_id,
+                role_id="spec_coder",
+            )
+        )
+        await asyncio.sleep(0)
+        _ = task_repo.update_envelope(
+            created.envelope.task_id,
+            created.envelope.model_copy(update={"role_id": "reviewer"}),
+        )
+        task_repo.update_status(
+            created.envelope.task_id,
+            TaskStatus.ASSIGNED,
+            assigned_instance_id="inst-reviewer",
+        )
+        assignment_lock.release()
+
+    with pytest.raises(ValueError, match="already bound to role reviewer"):
+        await dispatch_task
+    assert service._assignment_locks == {}
+    assert service._assignment_lock_ref_counts == {}
 
 
 @pytest.mark.asyncio

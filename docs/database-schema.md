@@ -130,6 +130,8 @@ CREATE TABLE IF NOT EXISTS agent_instances (
     workspace_id          TEXT NOT NULL DEFAULT '',
     conversation_id       TEXT NOT NULL DEFAULT '',
     status                TEXT NOT NULL,
+    lifecycle             TEXT NOT NULL DEFAULT 'reusable',
+    parent_instance_id    TEXT,
     runtime_system_prompt TEXT NOT NULL DEFAULT '',
     runtime_tools_json    TEXT NOT NULL DEFAULT '',
     created_at            TEXT NOT NULL,
@@ -143,9 +145,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_instances_run_status
 Purpose: runtime snapshot of agent instances. Besides lifecycle state, each row now stores the latest runtime system prompt and runtime tools JSON shown in the subagent panel.
 
 Notes:
-- Runtime semantics are session-level: one delegated role instance is reused across all tasks in the same session.
+- Runtime semantics distinguish reusable session role instances from ephemeral clones.
 - `run_id` / `trace_id` are last-observed execution metadata, not uniqueness keys.
-- New dispatches for the same `session_id + role_id` reuse the existing row instead of creating a new instance.
+- New non-concurrent dispatches for the same `session_id + role_id` reuse the existing `reusable` row.
+- Same-role concurrent dispatches may create `ephemeral` clone rows whose `parent_instance_id` points at the reusable instance.
 - `workspace_id` is the execution workspace bound from the owning session.
 - `conversation_id` is the conversation continuity key for the role instance.
 
