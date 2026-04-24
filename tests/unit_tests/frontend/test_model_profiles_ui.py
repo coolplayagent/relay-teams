@@ -148,6 +148,22 @@ export async function saveModelProfile(name, profile) {
     globalThis.__savedProfile = { name, profile };
 }
 
+export async function startCodeAgentOAuth() {
+    globalThis.__codeAgentOAuthStartCalls = (globalThis.__codeAgentOAuthStartCalls || 0) + 1;
+    return {
+        auth_session_id: "mock-auth-session",
+        authorization_url: "https://example.test/codeagent-sso",
+    };
+}
+
+export async function fetchCodeAgentOAuthSession(authSessionId) {
+    globalThis.__codeAgentOAuthSessionChecks = globalThis.__codeAgentOAuthSessionChecks || [];
+    globalThis.__codeAgentOAuthSessionChecks.push(authSessionId);
+    return {
+        completed: true,
+    };
+}
+
 export async function reloadModelConfig() {
     globalThis.__reloadCalled = true;
 }
@@ -3210,6 +3226,110 @@ console.log(JSON.stringify({
     ]
 
 
+def test_codeagent_sso_login_blocks_repeated_clicks_while_in_progress(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+globalThis.setTimeout = callback => {
+    callback();
+    return 0;
+};
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider").value = "codeagent";
+document.getElementById("profile-provider").onchange();
+
+const loginPromise = document.getElementById("profile-codeagent-login-status").onclick();
+const disabledWhileStarting = document.getElementById("profile-codeagent-login-status").disabled;
+
+document.getElementById("profile-codeagent-login-status").onclick();
+
+globalThis.__resolveCodeAgentOAuthStart({
+    auth_session_id: "auth-session-1",
+    authorization_url: "https://example.test/codeagent-sso",
+});
+
+await loginPromise;
+
+console.log(JSON.stringify({
+    startCalls: globalThis.__codeAgentOAuthStartCalls,
+    sessionChecks: globalThis.__codeAgentOAuthSessionChecks,
+    disabledWhileStarting,
+    disabledAfterCompletion: document.getElementById("profile-codeagent-login-status").disabled,
+    authStatus: document.getElementById("profile-codeagent-login-status-message").textContent,
+    windowOpens: globalThis.__windowOpens,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {};
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42 };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: ["codeagent-chat"] };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function startCodeAgentOAuth() {
+    globalThis.__codeAgentOAuthStartCalls = (globalThis.__codeAgentOAuthStartCalls || 0) + 1;
+    return new Promise(resolve => {
+        globalThis.__resolveCodeAgentOAuthStart = resolve;
+    });
+}
+
+export async function fetchCodeAgentOAuthSession(authSessionId) {
+    globalThis.__codeAgentOAuthSessionChecks = globalThis.__codeAgentOAuthSessionChecks || [];
+    globalThis.__codeAgentOAuthSessionChecks.push(authSessionId);
+    return { completed: true };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+    )
+
+    assert payload["startCalls"] == 1
+    assert payload["sessionChecks"] == ["auth-session-1"]
+    assert payload["disabledWhileStarting"] is True
+    assert payload["disabledAfterCompletion"] is False
+    assert payload["authStatus"] == "Signed in"
+    assert payload["windowOpens"] == [
+        [
+            "https://example.test/codeagent-sso",
+            "_blank",
+            "noopener,noreferrer",
+        ]
+    ]
+
+
 def test_saving_maas_profile_sends_maas_auth_payload(tmp_path: Path) -> None:
     payload = _run_model_profiles_script(
         tmp_path=tmp_path,
@@ -3445,6 +3565,26 @@ def _run_model_profiles_script(
             "    return fetchModelCatalog();\n"
             "}\n"
         )
+    if "startCodeAgentOAuth" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function startCodeAgentOAuth() {\n"
+            "    globalThis.__codeAgentOAuthStartCalls = (globalThis.__codeAgentOAuthStartCalls || 0) + 1;\n"
+            "    return {\n"
+            "        auth_session_id: 'mock-auth-session',\n"
+            "        authorization_url: 'https://example.test/codeagent-sso',\n"
+            "    };\n"
+            "}\n"
+        )
+    if "fetchCodeAgentOAuthSession" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function fetchCodeAgentOAuthSession(authSessionId) {\n"
+            "    globalThis.__codeAgentOAuthSessionChecks = globalThis.__codeAgentOAuthSessionChecks || [];\n"
+            "    globalThis.__codeAgentOAuthSessionChecks.push(authSessionId);\n"
+            "    return { completed: true };\n"
+            "}\n"
+        )
     mock_api_path.write_text(resolved_mock_api_source, encoding="utf-8")
     mock_logger_path.write_text(
         """
@@ -3527,6 +3667,12 @@ const translations = {
     "settings.model.image_capability_follow": "Follow detection",
     "settings.model.image_capability_supported": "Supports image input",
     "settings.model.image_capability_unsupported": "Text only",
+    "settings.model.codeagent_sign_in_sso": "Sign in with SSO",
+    "settings.model.codeagent_sso_starting": "Starting SSO login",
+    "settings.model.codeagent_sso_waiting": "Waiting for SSO callback",
+    "settings.model.codeagent_sso_signed_in": "Signed in",
+    "settings.model.codeagent_sso_timed_out": "SSO login timed out",
+    "settings.model.codeagent_sso_failed": "SSO failed: {error}",
     "settings.model.show_api_key": "Show API key",
     "settings.model.hide_api_key": "Hide API key",
     "settings.model.show_password": "Show password",
@@ -3648,6 +3794,7 @@ function createElement(initialDisplay = "block", id = "") {{
         onblur: null,
         onkeydown: null,
         focused: false,
+        attributes: {{}},
         appendChild(child) {{
             if (child.parentElement) {{
                 child.parentElement.children = child.parentElement.children.filter(candidate => candidate !== child);
@@ -3658,6 +3805,15 @@ function createElement(initialDisplay = "block", id = "") {{
         }},
         focus() {{
             this.focused = true;
+        }},
+        setAttribute(name, value) {{
+            this.attributes[name] = value;
+            if (name === "aria-label") {{
+                this.ariaLabel = value;
+            }}
+        }},
+        closest(selector) {{
+            return this.closestElements?.[selector] || null;
         }},
         querySelectorAll(selector) {{
             if (this.innerHTML !== lastQuerySource) {{
@@ -3673,6 +3829,7 @@ function createElement(initialDisplay = "block", id = "") {{
 }}
 
 function createElements() {{
+        const baseUrlGroup = createElement("block", "profile-base-url-group");
         const entries = [
             ["profiles-list", createElement("block", "profiles-list")],
             ["profile-editor", createElement("none", "profile-editor")],
@@ -3716,6 +3873,10 @@ function createElements() {{
             ["toggle-profile-api-key-btn", createElement("none", "toggle-profile-api-key-btn")],
             ["profile-maas-auth-fields", createElement("none", "profile-maas-auth-fields")],
             ["profile-maas-model-slot", createElement("block", "profile-maas-model-slot")],
+            ["profile-codeagent-auth-fields", createElement("none", "profile-codeagent-auth-fields")],
+            ["profile-codeagent-model-slot", createElement("block", "profile-codeagent-model-slot")],
+            ["profile-codeagent-login-status", createElement("block", "profile-codeagent-login-status")],
+            ["profile-codeagent-login-status-message", createElement("none", "profile-codeagent-login-status-message")],
             ["profile-maas-username", createElement("block", "profile-maas-username")],
             ["profile-maas-password", createElement("block", "profile-maas-password")],
             ["toggle-profile-maas-password-btn", createElement("none", "toggle-profile-maas-password-btn")],
@@ -3745,6 +3906,10 @@ function createElements() {{
         elements.get("profile-primary-credentials-row")?.appendChild(elements.get("profile-api-key-group"));
         elements.get("profile-model-field-home")?.appendChild(elements.get("profile-model-group"));
         elements.get("profile-maas-auth-fields")?.appendChild(elements.get("profile-maas-model-slot"));
+        elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-model-slot"));
+        elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-login-status"));
+        elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-login-status-message"));
+        elements.get("profile-base-url").closestElements = {{ ".form-group": baseUrlGroup }};
         return elements;
     }}
 
@@ -3833,9 +3998,16 @@ function installGlobals(elements, notifications) {{
             this.type = type;
         }}
     }};
+    globalThis.window = {{
+        open(...args) {{
+            globalThis.__windowOpens.push(args);
+            return null;
+        }},
+    }};
     globalThis.__feedbackNotifications = notifications;
     globalThis.__feedbackConfirms = [];
     globalThis.__dispatchedEvents = [];
+    globalThis.__windowOpens = [];
 }}
 
 {runner_source}
@@ -3848,6 +4020,7 @@ function installGlobals(elements, notifications) {{
         capture_output=True,
         check=False,
         cwd=str(repo_root),
+        encoding="utf-8",
         text=True,
         timeout=30,
     )
