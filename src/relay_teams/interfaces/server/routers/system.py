@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from relay_teams.env.clawhub_config_models import ClawHubConfig
@@ -996,7 +996,7 @@ async def get_hooks_runtime_view(
 
 @router.put("/configs/hooks")
 async def save_hooks_config(
-    req: HooksConfig,
+    req: object = Body(...),
     service: HookService = Depends(get_hook_service),
 ) -> HooksConfig:
     try:
@@ -1007,7 +1007,7 @@ async def save_hooks_config(
 
 @router.post("/configs/hooks:validate")
 async def validate_hooks_config(
-    req: HooksConfig,
+    req: object = Body(...),
     service: HookService = Depends(get_hook_service),
 ) -> dict[str, str]:
     try:

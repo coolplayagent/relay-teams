@@ -5,9 +5,15 @@ from pathlib import Path
 
 import pytest
 
+from relay_teams.hooks.hook_models import HookEventName
+from relay_teams.hooks.hook_models import HooksConfig
 from relay_teams.builtin import get_builtin_roles_dir
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
-from relay_teams.roles.role_registry import RoleLoader, RoleRegistry
+from relay_teams.roles.role_registry import (
+    RoleLoader,
+    RoleRegistry,
+    _parse_frontmatter_hooks,
+)
 
 
 def test_role_loader_loads_markdown_role() -> None:
@@ -104,6 +110,98 @@ def test_role_loader_tolerates_invalid_frontmatter_hooks(tmp_path: Path) -> None
     role = RoleLoader().load_one(role_file)
 
     assert role.role_id == "writer"
+    assert role.hooks.hooks == {}
+
+
+def test_role_loader_preserves_valid_frontmatter_hooks_when_one_group_is_empty(
+    tmp_path: Path,
+) -> None:
+    role_file = tmp_path / "writer.md"
+    role_file.write_text(
+        "---\n"
+        "role_id: writer\n"
+        "name: Writer\n"
+        "description: Drafts content\n"
+        "version: 1.0.0\n"
+        "tools: []\n"
+        "hooks:\n"
+        "  PreToolUse:\n"
+        "    - hooks: []\n"
+        "    - matcher: Read\n"
+        "      hooks:\n"
+        "        - type: command\n"
+        "          command: echo ok\n"
+        "---\n"
+        "Write clearly.\n",
+        encoding="utf-8",
+    )
+
+    role = RoleLoader().load_one(role_file)
+
+    groups = role.hooks.hooks[HookEventName.PRE_TOOL_USE]
+    assert len(groups) == 2
+    assert groups[0].hooks == ()
+    assert groups[1].matcher == "Read"
+    assert groups[1].hooks[0].command == "echo ok"
+
+
+def test_role_loader_normalizes_legacy_frontmatter_hook_fields(
+    tmp_path: Path,
+) -> None:
+    role_file = tmp_path / "writer.md"
+    role_file.write_text(
+        "---\n"
+        "role_id: writer\n"
+        "name: Writer\n"
+        "description: Drafts content\n"
+        "version: 1.0.0\n"
+        "tools: []\n"
+        "hooks:\n"
+        "  PreToolUse:\n"
+        "    - matcher: '*'\n"
+        "      if_condition: Bash(git *)\n"
+        "      tool_names:\n"
+        "        - Read\n"
+        "        - Write\n"
+        "      hooks:\n"
+        "        - type: command\n"
+        "          command: echo ok\n"
+        "---\n"
+        "Write clearly.\n",
+        encoding="utf-8",
+    )
+
+    role = RoleLoader().load_one(role_file)
+
+    groups = role.hooks.hooks[HookEventName.PRE_TOOL_USE]
+    assert [group.matcher for group in groups] == ["Read", "Write"]
+    assert all(group.hooks[0].if_rule == "Bash(git *)" for group in groups)
+
+
+def test_role_loader_ignores_unsupported_frontmatter_matcher_for_stop_hooks(
+    tmp_path: Path,
+) -> None:
+    role_file = tmp_path / "writer.md"
+    role_file.write_text(
+        "---\n"
+        "role_id: writer\n"
+        "name: Writer\n"
+        "description: Drafts content\n"
+        "version: 1.0.0\n"
+        "tools: []\n"
+        "hooks:\n"
+        "  Stop:\n"
+        "    - matcher: manual\n"
+        "      hooks:\n"
+        "        - type: command\n"
+        "          command: echo stop\n"
+        "---\n"
+        "Write clearly.\n",
+        encoding="utf-8",
+    )
+
+    role = RoleLoader().load_one(role_file)
+
     assert role.hooks.hooks == {}
 
 
@@ -345,3 +443,21 @@ def test_role_registry_resolves_subagent_only_role_for_subagent_use() -> None:
     )
 
     assert registry.resolve_subagent_role_id("Crafter") == "Crafter"
+
+
+def test_parse_frontmatter_hooks_tolerates_parser_failure() -> None:
+    original = _parse_frontmatter_hooks.__globals__["parse_tolerant_hooks_payload"]
+
+    def _raise(_: object) -> None:
+        raise RuntimeError("boom")
+
+    _parse_frontmatter_hooks.__globals__["parse_tolerant_hooks_payload"] = _raise
+    try:
+        hooks = _parse_frontmatter_hooks(
+            {"hooks": {"Stop": []}},
+            source_name="writer.md",
+        )
+    finally:
+        _parse_frontmatter_hooks.__globals__["parse_tolerant_hooks_payload"] = original
+
+    assert hooks == HooksConfig()

@@ -2,8 +2,16 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    model_validator,
+)
 
 
 class HookEventName(str, Enum):
@@ -58,6 +66,16 @@ class HookSourceScope(str, Enum):
     SKILL = "skill"
 
 
+class HookOnError(str, Enum):
+    IGNORE = "ignore"
+    FAIL = "fail"
+
+
+class HookShell(str, Enum):
+    BASH = "bash"
+    POWERSHELL = "powershell"
+
+
 class HookSourceInfo(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -77,27 +95,64 @@ class HookDecision(BaseModel):
 
 
 class HookHandlerConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     type: HookHandlerType
     name: str = ""
-    timeout_seconds: float = Field(default=5.0, gt=0.0, le=60.0)
-    run_async: bool = False
-    on_error: str = "ignore"
+    if_rule: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("if", "if_rule"),
+        serialization_alias="if",
+    )
+    timeout_seconds: float = Field(
+        default=5.0,
+        gt=0.0,
+        le=600.0,
+        validation_alias=AliasChoices("timeout_seconds", "timeout"),
+        serialization_alias="timeout",
+    )
+    run_async: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("run_async", "async"),
+        serialization_alias="async",
+    )
+    on_error: HookOnError = HookOnError.IGNORE
     command: str | None = None
+    shell: HookShell | None = None
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
+    allowed_env_vars: tuple[str, ...] = ()
     prompt: str | None = None
     model: str | None = None
     role_id: str | None = None
+    async_rewake: bool = False
+    status_message: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_type_specific_fields(self) -> "HookHandlerConfig":
+        if self.type == HookHandlerType.COMMAND:
+            if not str(self.command or "").strip():
+                raise ValueError("command hook requires command")
+            return self
+        if self.type == HookHandlerType.HTTP:
+            if not str(self.url or "").strip():
+                raise ValueError("http hook requires url")
+            return self
+        if self.type == HookHandlerType.PROMPT:
+            if not str(self.prompt or "").strip():
+                raise ValueError("prompt hook requires prompt")
+            return self
+        if not str(self.role_id or "").strip():
+            raise ValueError("agent hook requires role_id")
+        if not str(self.prompt or "").strip():
+            raise ValueError("agent hook requires prompt")
+        return self
 
 
 class HookMatcherGroup(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     matcher: str = "*"
-    if_condition: str | None = None
-    tool_names: tuple[str, ...] = ()
     role_ids: tuple[str, ...] = ()
     session_modes: tuple[str, ...] = ()
     run_kinds: tuple[str, ...] = ()
@@ -136,14 +191,13 @@ class LoadedHookRuntimeView(BaseModel):
     handler_type: HookHandlerType
     event_name: HookEventName
     matcher: str = "*"
-    if_condition: str | None = None
-    tool_names: tuple[str, ...] = ()
+    if_rule: str | None = Field(default=None, serialization_alias="if")
     role_ids: tuple[str, ...] = ()
     session_modes: tuple[str, ...] = ()
     run_kinds: tuple[str, ...] = ()
     timeout_seconds: float = 5.0
     run_async: bool = False
-    on_error: str = "ignore"
+    on_error: HookOnError = HookOnError.IGNORE
     source: HookSourceInfo
 
 

@@ -207,7 +207,10 @@ async def test_prompt_executor_requires_prompt() -> None:
 
     with pytest.raises(ValueError, match="requires a prompt"):
         await executor.execute(
-            handler=HookHandlerConfig(type=HookHandlerType.PROMPT),
+            handler=HookHandlerConfig.model_construct(
+                type=HookHandlerType.PROMPT,
+                prompt=None,
+            ),
             event_input=_event_input(),
         )
 

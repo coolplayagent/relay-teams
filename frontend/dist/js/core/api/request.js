@@ -17,9 +17,7 @@ export async function requestJson(url, options, errorMessage) {
             let detail = errorMessage;
             try {
                 const payload = await res.json();
-                if (typeof payload?.detail === 'string' && payload.detail) {
-                    detail = payload.detail;
-                }
+                detail = extractApiErrorDetail(payload, errorMessage);
             } catch (_) {
                 // keep fallback message
             }
@@ -56,4 +54,67 @@ export async function requestJson(url, options, errorMessage) {
         );
         throw error;
     }
+}
+
+function extractApiErrorDetail(payload, fallbackMessage) {
+    const directDetail = formatApiErrorValue(payload?.detail);
+    if (directDetail) {
+        return directDetail;
+    }
+    const message = formatApiErrorValue(payload?.message);
+    if (message) {
+        return message;
+    }
+    const error = formatApiErrorValue(payload?.error);
+    if (error) {
+        return error;
+    }
+    return fallbackMessage;
+}
+
+function formatApiErrorValue(value) {
+    if (typeof value === 'string') {
+        return value.trim();
+    }
+    if (Array.isArray(value)) {
+        const parts = value.map(formatApiErrorEntry).filter(Boolean);
+        return parts.join('; ');
+    }
+    if (value && typeof value === 'object') {
+        const nestedDetail = formatApiErrorValue(value.detail);
+        if (nestedDetail) {
+            return nestedDetail;
+        }
+        const nestedMessage = formatApiErrorValue(value.message);
+        if (nestedMessage) {
+            return nestedMessage;
+        }
+        const nestedError = formatApiErrorValue(value.error);
+        if (nestedError) {
+            return nestedError;
+        }
+    }
+    return '';
+}
+
+function formatApiErrorEntry(entry) {
+    if (typeof entry === 'string') {
+        return entry.trim();
+    }
+    if (!entry || typeof entry !== 'object') {
+        return '';
+    }
+    const location = Array.isArray(entry.loc)
+        ? entry.loc.map(part => String(part ?? '').trim()).filter(Boolean).join('.')
+        : '';
+    const message = typeof entry.msg === 'string'
+        ? entry.msg.trim()
+        : (typeof entry.message === 'string' ? entry.message.trim() : '');
+    if (location && message) {
+        return `${location}: ${message}`;
+    }
+    if (message) {
+        return message;
+    }
+    return '';
 }

@@ -6,6 +6,9 @@ from pathlib import Path
 import yaml
 
 from relay_teams.computer import ExecutionSurface
+from relay_teams.hooks import (
+    parse_tolerant_hooks_payload,
+)
 from relay_teams.hooks.hook_models import HooksConfig
 from relay_teams.logger import get_logger
 from relay_teams.roles.default_role_tools import (
@@ -366,9 +369,9 @@ def _parse_frontmatter_hooks(
 ) -> HooksConfig:
     try:
         if isinstance(value, dict) and "hooks" in value:
-            return HooksConfig.model_validate(value)
+            return parse_tolerant_hooks_payload(value)
         if isinstance(value, dict):
-            return HooksConfig.model_validate({"hooks": value})
+            return parse_tolerant_hooks_payload({"hooks": value})
     except Exception as exc:
         LOGGER.warning(
             "Ignoring invalid role frontmatter hooks",

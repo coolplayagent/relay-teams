@@ -57,6 +57,7 @@ export {
     fetchExternalAgents,
     fetchUiLanguageSettings,
     fetchEnvironmentVariables,
+    fetchHooksConfig,
     fetchHookRuntimeView,
     fetchMcpServerTools,
     fetchModelConfig,
@@ -97,11 +98,13 @@ export {
     saveProxyConfig,
     saveSshProfile,
     saveGitHubConfig,
+    saveHooksConfig,
     saveWebConfig,
     saveUiLanguageSettings,
     startGitHubWebhookTunnel,
     stopGitHubWebhookTunnel,
     testExternalAgent,
+    validateHooksConfig,
     deleteSshProfile,
 } from './system.js';
 

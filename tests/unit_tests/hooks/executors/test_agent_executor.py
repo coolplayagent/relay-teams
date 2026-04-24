@@ -96,7 +96,7 @@ async def test_agent_executor_requires_role_id() -> None:
 
     with pytest.raises(ValueError, match="role_id"):
         await executor.execute(
-            handler=HookHandlerConfig(
+            handler=HookHandlerConfig.model_construct(
                 type=HookHandlerType.AGENT,
                 prompt="Review: $ARGUMENTS",
             ),
@@ -118,7 +118,7 @@ async def test_agent_executor_requires_prompt() -> None:
 
     with pytest.raises(ValueError, match="prompt"):
         await executor.execute(
-            handler=HookHandlerConfig(
+            handler=HookHandlerConfig.model_construct(
                 type=HookHandlerType.AGENT,
                 role_id="Verifier",
             ),

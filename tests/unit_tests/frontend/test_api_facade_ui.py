@@ -844,3 +844,73 @@ export function logError() {
         "headers": {"Content-Type": "application/json"},
         "body": "{}",
     }
+
+
+def test_request_json_formats_structured_detail_arrays(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = repo_root / "frontend" / "dist" / "js" / "core" / "api" / "request.js"
+    module_under_test_path = tmp_path / "request.mjs"
+    (tmp_path / "mockBackendStatus.mjs").write_text(
+        """
+export function markBackendOffline() {}
+export function markBackendOnline() {}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockLogger.mjs").write_text(
+        """
+export function errorToPayload(error, extra = {}) {
+    return { message: error?.message || '', ...extra };
+}
+
+export function logError() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    source_text = (
+        source_path.read_text(encoding="utf-8")
+        .replace("../../utils/backendStatus.js", "./mockBackendStatus.mjs")
+        .replace("../../utils/logger.js", "./mockLogger.mjs")
+    )
+    module_under_test_path.write_text(source_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "globalThis.fetch = async () => ({ "
+                "ok: false, "
+                "status: 400, "
+                "async json() { return { detail: [{ loc: ['hooks', 'PreToolUse', 0, 'hooks', 0, 'command'], msg: 'Field required' }] }; } "
+                "}); "
+                "try { "
+                "await mod.requestJson('/api/system/configs/hooks:validate', { method: 'POST' }, 'validate failed'); "
+                "} catch (error) { "
+                "console.log(JSON.stringify({ message: error.message, detail: error.detail })); "
+                "}"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload == {
+        "message": "hooks.PreToolUse.0.hooks.0.command: Field required",
+        "detail": "hooks.PreToolUse.0.hooks.0.command: Field required",
+    }

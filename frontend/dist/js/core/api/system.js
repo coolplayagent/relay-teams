@@ -90,6 +90,38 @@ export async function fetchHookRuntimeView() {
     );
 }
 
+export async function fetchHooksConfig() {
+    return requestJson(
+        '/api/system/configs/hooks',
+        undefined,
+        'Failed to fetch hooks config',
+    );
+}
+
+export async function saveHooksConfig(payload) {
+    return requestJson(
+        '/api/system/configs/hooks',
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to save hooks config',
+    );
+}
+
+export async function validateHooksConfig(payload) {
+    return requestJson(
+        '/api/system/configs/hooks:validate',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to validate hooks config',
+    );
+}
+
 export async function saveEnvironmentVariable(scope, key, payload) {
     return requestJson(
         `/api/system/configs/environment-variables/${encodeURIComponent(scope)}/${encodeURIComponent(key)}`,

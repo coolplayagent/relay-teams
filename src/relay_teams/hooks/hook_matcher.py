@@ -1,9 +1,62 @@
 from __future__ import annotations
 
 import fnmatch
+from typing import Optional
 
-from relay_teams.hooks.hook_event_models import HookEventInput
-from relay_teams.hooks.hook_models import HookMatcherGroup
+from relay_teams.hooks.hook_event_models import (
+    HookEventInput,
+    PostCompactInput,
+    PreCompactInput,
+    SessionEndInput,
+    SessionStartInput,
+    StopFailureInput,
+    SubagentStartInput,
+    SubagentStopInput,
+)
+from relay_teams.hooks.hook_models import HookEventName, HookMatcherGroup
+
+MATCHER_UNSUPPORTED_EVENTS = {
+    HookEventName.USER_PROMPT_SUBMIT,
+    HookEventName.STOP,
+    HookEventName.TASK_CREATED,
+    HookEventName.TASK_COMPLETED,
+}
+
+
+def get_matcher_target(
+    event_input: HookEventInput,
+    *,
+    tool_name: str = "",
+) -> Optional[str]:
+    if event_input.event_name in {
+        HookEventName.PRE_TOOL_USE,
+        HookEventName.PERMISSION_REQUEST,
+        HookEventName.POST_TOOL_USE,
+        HookEventName.POST_TOOL_USE_FAILURE,
+    }:
+        return tool_name or None
+    if event_input.event_name == HookEventName.SESSION_START:
+        typed = SessionStartInput.model_validate(event_input.model_dump())
+        return typed.start_reason or event_input.event_name.value
+    if event_input.event_name == HookEventName.SESSION_END:
+        typed = SessionEndInput.model_validate(event_input.model_dump())
+        return typed.end_reason or typed.completion_reason or None
+    if event_input.event_name == HookEventName.STOP_FAILURE:
+        typed = StopFailureInput.model_validate(event_input.model_dump())
+        return typed.error_code or None
+    if event_input.event_name == HookEventName.SUBAGENT_START:
+        typed = SubagentStartInput.model_validate(event_input.model_dump())
+        return typed.subagent_type or typed.subagent_role_id or None
+    if event_input.event_name == HookEventName.SUBAGENT_STOP:
+        typed = SubagentStopInput.model_validate(event_input.model_dump())
+        return typed.subagent_type or typed.subagent_role_id or None
+    if event_input.event_name == HookEventName.PRE_COMPACT:
+        typed = PreCompactInput.model_validate(event_input.model_dump())
+        return typed.compact_trigger or event_input.event_name.value
+    if event_input.event_name == HookEventName.POST_COMPACT:
+        typed = PostCompactInput.model_validate(event_input.model_dump())
+        return typed.compact_trigger or event_input.event_name.value
+    return None
 
 
 def hook_matches_event(
@@ -18,12 +71,12 @@ def hook_matches_event(
         return False
     if group.run_kinds and event_input.run_kind not in group.run_kinds:
         return False
-    if group.tool_names and tool_name not in group.tool_names:
-        return False
     matcher = group.matcher.strip() or "*"
+    if event_input.event_name in MATCHER_UNSUPPORTED_EVENTS:
+        return matcher == "*"
+    matcher_target = get_matcher_target(event_input, tool_name=tool_name)
     if matcher == "*":
         return True
-    candidate = (
-        tool_name or str(event_input.role_id or "") or event_input.event_name.value
-    )
-    return fnmatch.fnmatchcase(candidate, matcher)
+    if not matcher_target:
+        return False
+    return fnmatch.fnmatchcase(matcher_target, matcher)

@@ -21,10 +21,12 @@ class HookEventInput(BaseModel):
 
 class SessionStartInput(HookEventInput):
     workspace_id: str = ""
+    start_reason: str = ""
 
 
 class SessionEndInput(HookEventInput):
     status: str = ""
+    end_reason: str = ""
     completion_reason: str = ""
     output_text: str = ""
 
@@ -78,6 +80,7 @@ class SubagentStartInput(HookEventInput):
     subagent_task_id: str
     subagent_instance_id: str
     subagent_role_id: str
+    subagent_type: str = ""
     title: str = ""
     prompt: str = ""
 
@@ -88,6 +91,7 @@ class SubagentStopInput(HookEventInput):
     subagent_task_id: str
     subagent_instance_id: str
     subagent_role_id: str
+    subagent_type: str = ""
     title: str = ""
     status: str = ""
     output_text: str = ""
@@ -110,6 +114,7 @@ class TaskCompletedInput(HookEventInput):
 
 class PreCompactInput(HookEventInput):
     conversation_id: str
+    compact_trigger: str = ""
     message_count_before: int = 0
     estimated_tokens_before: int = 0
     estimated_tokens_after_microcompact: int = 0
@@ -119,6 +124,7 @@ class PreCompactInput(HookEventInput):
 
 class PostCompactInput(HookEventInput):
     conversation_id: str
+    compact_trigger: str = ""
     message_count_before: int = 0
     message_count_after: int = 0
     estimated_tokens_before: int = 0
