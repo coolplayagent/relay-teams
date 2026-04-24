@@ -16,6 +16,7 @@ from relay_teams.hooks import HookService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 
+from relay_teams.agents.instances.enums import InstanceLifecycle
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.event_stream import RunEventHub
@@ -414,13 +415,13 @@ async def test_dispatch_task_reuses_session_role_instance_across_tasks(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_task_rejects_same_role_while_other_task_is_in_progress(
+async def test_dispatch_task_clones_same_role_while_reusable_instance_is_busy(
     tmp_path: Path,
 ) -> None:
     (
         service,
         task_repo,
-        _agent_repo,
+        agent_repo,
         _message_repo,
         _execution_service,
     ) = _build_service(tmp_path / "task_orchestration_role_busy.db")
@@ -463,16 +464,26 @@ async def test_dispatch_task_rejects_same_role_while_other_task_is_in_progress(
         assigned_instance_id=instance_id,
     )
 
-    with pytest.raises(ValueError, match="Role spec_coder is busy with task"):
-        await service.dispatch_task(
-            run_id="run-1",
-            task_id=second.envelope.task_id,
-            role_id="spec_coder",
-        )
+    second_dispatch = await service.dispatch_task(
+        run_id="run-1",
+        task_id=second.envelope.task_id,
+        role_id="spec_coder",
+    )
 
     second_record = task_repo.get(second.envelope.task_id)
-    assert second_record.assigned_instance_id == instance_id
-    assert second_record.status == TaskStatus.ASSIGNED
+    second_task = cast(dict[str, JsonValue], second_dispatch["task"])
+    clone_instance_id = str(second_task["assigned_instance_id"])
+    assert clone_instance_id != instance_id
+    assert second_record.assigned_instance_id == clone_instance_id
+    assert second_record.status == TaskStatus.COMPLETED
+
+    clone = agent_repo.get_instance(clone_instance_id)
+    assert clone.lifecycle == InstanceLifecycle.EPHEMERAL
+    assert clone.parent_instance_id == instance_id
+    session_agents = agent_repo.list_session_role_instances("session-1")
+    assert len(session_agents) == 1
+    assert session_agents[0].instance_id == instance_id
+    assert session_agents[0].lifecycle == InstanceLifecycle.REUSABLE
 
 
 @pytest.mark.asyncio

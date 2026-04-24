@@ -1,21 +1,19 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
+
 from pydantic import JsonValue
 
-from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.instances.models import create_subagent_instance
 from relay_teams.agents.orchestration.task_contracts import (
     TaskDraft,
     TaskExecutionServiceLike,
     TaskUpdate,
 )
-from relay_teams.roles.role_registry import RoleRegistry
-from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
-from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.sessions.session_repository import SessionRepository
-from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.ids import new_task_id
 from relay_teams.agents.tasks.models import (
@@ -23,8 +21,14 @@ from relay_teams.agents.tasks.models import (
     TaskRecord,
     VerificationPlan,
 )
+from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.hooks import HookEventName, HookService, TaskCreatedInput
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.session_repository import SessionRepository
+
+MAX_PARALLEL_DELEGATED_TASKS = 4
 
 
 class TaskOrchestrationService:
@@ -50,6 +54,9 @@ class TaskOrchestrationService:
         self._runtime_role_resolver = runtime_role_resolver
         self._hook_service = hook_service
         self._run_event_hub = run_event_hub
+        self._execution_semaphore = asyncio.Semaphore(MAX_PARALLEL_DELEGATED_TASKS)
+        self._assignment_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._assignment_locks_guard = asyncio.Lock()
 
     async def create_tasks(
         self,
@@ -199,28 +206,40 @@ class TaskOrchestrationService:
         instance_id = record.assigned_instance_id or ""
 
         if record.status == TaskStatus.CREATED:
-            if bound_role_id and bound_role_id != normalized_role_id:
-                raise ValueError(
-                    f"Task is already bound to role {bound_role_id}; create a replacement task to change roles."
-                )
-            if not bound_role_id:
-                record = self._task_repo.update_envelope(
-                    task_id,
-                    record.envelope.model_copy(update={"role_id": normalized_role_id}),
-                )
-                bound_role_id = normalized_role_id
-            bound_instance_id = self._ensure_role_instance(
+            assignment_lock = await self._role_assignment_lock(
                 session_id=record.envelope.session_id,
-                run_id=resolved_run_id,
-                role_id=bound_role_id,
+                role_id=normalized_role_id,
             )
-            instance_id = bound_instance_id
-            self._task_repo.update_status(
-                task_id=task_id,
-                status=TaskStatus.ASSIGNED,
-                assigned_instance_id=instance_id,
-            )
-            record = self._task_repo.get(task_id)
+            async with assignment_lock:
+                record = self._task_repo.get(task_id)
+                bound_role_id = str(record.envelope.role_id or "").strip()
+                if record.status == TaskStatus.CREATED:
+                    if bound_role_id and bound_role_id != normalized_role_id:
+                        raise ValueError(
+                            f"Task is already bound to role {bound_role_id}; create a replacement task to change roles."
+                        )
+                    if not bound_role_id:
+                        record = self._task_repo.update_envelope(
+                            task_id,
+                            record.envelope.model_copy(
+                                update={"role_id": normalized_role_id}
+                            ),
+                        )
+                        bound_role_id = normalized_role_id
+                    instance_id = self._ensure_execution_instance(
+                        session_id=record.envelope.session_id,
+                        run_id=resolved_run_id,
+                        role_id=bound_role_id,
+                        task_id=task_id,
+                    )
+                    self._task_repo.update_status(
+                        task_id=task_id,
+                        status=TaskStatus.ASSIGNED,
+                        assigned_instance_id=instance_id,
+                    )
+                    record = self._task_repo.get(task_id)
+                else:
+                    instance_id = record.assigned_instance_id or instance_id
         else:
             if not bound_role_id:
                 raise ValueError(
@@ -255,26 +274,54 @@ class TaskOrchestrationService:
             or "Execute this task contract and return the requested result."
         )
 
-        await self._task_execution_service.execute(
-            instance_id=instance_id,
-            role_id=bound_role_id,
-            task=record.envelope,
-            user_prompt_override=effective_prompt,
-        )
+        async with self._execution_semaphore:
+            await self._task_execution_service.execute(
+                instance_id=instance_id,
+                role_id=bound_role_id,
+                task=record.envelope,
+                user_prompt_override=effective_prompt,
+            )
         refreshed = self._task_repo.get(task_id)
         return {
             "task": _task_projection(refreshed),
         }
 
-    def _ensure_role_instance(
+    async def _role_assignment_lock(
+        self,
+        *,
+        session_id: str,
+        role_id: str,
+    ) -> asyncio.Lock:
+        key = (session_id, role_id)
+        async with self._assignment_locks_guard:
+            lock = self._assignment_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._assignment_locks[key] = lock
+            return lock
+
+    def _ensure_execution_instance(
         self,
         *,
         session_id: str,
         run_id: str,
         role_id: str,
+        task_id: str,
     ) -> str:
         existing = self._agent_repo.get_session_role_instance(session_id, role_id)
         if existing is not None:
+            if self._instance_has_blocking_task(
+                session_id=session_id,
+                instance_id=existing.instance_id,
+                task_id=task_id,
+            ):
+                return self._create_ephemeral_role_clone(
+                    session_id=session_id,
+                    run_id=run_id,
+                    role_id=role_id,
+                    workspace_id=existing.workspace_id,
+                    parent_instance_id=existing.instance_id,
+                )
             self._agent_repo.upsert_instance(
                 run_id=run_id,
                 trace_id=run_id,
@@ -284,6 +331,7 @@ class TaskOrchestrationService:
                 workspace_id=existing.workspace_id,
                 conversation_id=existing.conversation_id,
                 status=existing.status,
+                lifecycle=InstanceLifecycle.REUSABLE,
             )
             return existing.instance_id
 
@@ -306,8 +354,58 @@ class TaskOrchestrationService:
             workspace_id=instance.workspace_id,
             conversation_id=instance.conversation_id,
             status=InstanceStatus.IDLE,
+            lifecycle=InstanceLifecycle.REUSABLE,
         )
         return instance.instance_id
+
+    def _create_ephemeral_role_clone(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        role_id: str,
+        workspace_id: str,
+        parent_instance_id: str,
+    ) -> str:
+        instance = create_subagent_instance(
+            role_id,
+            session_id=session_id,
+            workspace_id=workspace_id,
+        )
+        self._agent_repo.upsert_instance(
+            run_id=run_id,
+            trace_id=run_id,
+            session_id=session_id,
+            instance_id=instance.instance_id,
+            role_id=instance.role_id,
+            workspace_id=instance.workspace_id,
+            conversation_id=instance.conversation_id,
+            status=InstanceStatus.IDLE,
+            lifecycle=InstanceLifecycle.EPHEMERAL,
+            parent_instance_id=parent_instance_id,
+        )
+        return instance.instance_id
+
+    def _instance_has_blocking_task(
+        self,
+        *,
+        session_id: str,
+        instance_id: str,
+        task_id: str,
+    ) -> bool:
+        blocking_statuses = {
+            TaskStatus.ASSIGNED,
+            TaskStatus.RUNNING,
+            TaskStatus.STOPPED,
+        }
+        for candidate in self._task_repo.list_by_session(session_id):
+            if candidate.envelope.task_id == task_id:
+                continue
+            if candidate.assigned_instance_id != instance_id:
+                continue
+            if candidate.status in blocking_statuses:
+                return True
+        return False
 
     def _assert_instance_available(self, *, task: TaskRecord, instance_id: str) -> None:
         blocking_statuses = {

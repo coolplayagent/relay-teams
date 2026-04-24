@@ -89,16 +89,23 @@ def stream_chat_completions(
     _sleep_ms(response_spec.get("delay_before_ms"))
 
     response_kind = str(response_spec.get("kind") or "")
-    if response_kind in {"tool_call", "invalid_tool_call"}:
-        tool_name = str(response_spec.get("tool_name") or "")
-        tool_call_id = str(response_spec.get("tool_call_id") or "")
-        if response_kind == "invalid_tool_call":
-            arguments = str(response_spec.get("arguments_text") or "")
-        else:
-            arguments = json.dumps(
-                response_spec.get("arguments") or {},
-                ensure_ascii=False,
-                separators=(",", ":"),
+    if response_kind in {"tool_call", "invalid_tool_call", "tool_calls"}:
+        tool_calls: list[dict[str, object]] = []
+        for index, call_spec in enumerate(_response_tool_call_specs(response_spec)):
+            tool_calls.append(
+                {
+                    "index": index,
+                    "id": str(call_spec.get("tool_call_id") or ""),
+                    "type": "function",
+                    "function": {
+                        "name": str(call_spec.get("tool_name") or ""),
+                        "arguments": _response_tool_call_arguments(
+                            response_kind=response_kind,
+                            response_spec=response_spec,
+                            call_spec=call_spec,
+                        ),
+                    },
+                }
             )
         chunk = {
             "id": completion_id,
@@ -110,17 +117,7 @@ def stream_chat_completions(
                     "index": 0,
                     "delta": {
                         "role": "assistant",
-                        "tool_calls": [
-                            {
-                                "index": 0,
-                                "id": tool_call_id,
-                                "type": "function",
-                                "function": {
-                                    "name": tool_name,
-                                    "arguments": arguments,
-                                },
-                            }
-                        ],
+                        "tool_calls": tool_calls,
                     },
                     "finish_reason": None,
                 }
@@ -178,28 +175,25 @@ def build_chat_completion_response(
     message: dict[str, object]
     finish_reason = "stop"
     response_kind = str(response_spec.get("kind") or "")
-    if response_kind in {"tool_call", "invalid_tool_call"}:
+    if response_kind in {"tool_call", "invalid_tool_call", "tool_calls"}:
         finish_reason = "tool_calls"
-        if response_kind == "invalid_tool_call":
-            arguments = str(response_spec.get("arguments_text") or "")
-        else:
-            arguments = json.dumps(
-                response_spec.get("arguments") or {},
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
         message = {
             "role": "assistant",
             "content": None,
             "tool_calls": [
                 {
-                    "id": str(response_spec.get("tool_call_id") or ""),
+                    "id": str(call_spec.get("tool_call_id") or ""),
                     "type": "function",
                     "function": {
-                        "name": str(response_spec.get("tool_name") or ""),
-                        "arguments": arguments,
+                        "name": str(call_spec.get("tool_name") or ""),
+                        "arguments": _response_tool_call_arguments(
+                            response_kind=response_kind,
+                            response_spec=response_spec,
+                            call_spec=call_spec,
+                        ),
                     },
                 }
+                for call_spec in _response_tool_call_specs(response_spec)
             ],
         }
     else:
@@ -227,12 +221,46 @@ def build_chat_completion_response(
     }
 
 
+def _response_tool_call_specs(
+    response_spec: dict[str, object],
+) -> list[dict[str, object]]:
+    if str(response_spec.get("kind") or "") != "tool_calls":
+        return [response_spec]
+    raw_calls = response_spec.get("tool_calls")
+    if not isinstance(raw_calls, list):
+        return []
+    calls: list[dict[str, object]] = []
+    for raw_call in raw_calls:
+        if isinstance(raw_call, dict):
+            calls.append(raw_call)
+    return calls
+
+
+def _response_tool_call_arguments(
+    *,
+    response_kind: str,
+    response_spec: dict[str, object],
+    call_spec: dict[str, object],
+) -> str:
+    if response_kind == "invalid_tool_call":
+        return str(response_spec.get("arguments_text") or "")
+    return json.dumps(
+        call_spec.get("arguments") or {},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 def plan_fake_response(payload: object) -> dict[str, object]:
     if not isinstance(payload, dict):
         return {"kind": "text", "content": "fake-response"}
     messages = payload.get("messages")
     if not isinstance(messages, list):
         return {"kind": "text", "content": "fake-response"}
+    if _orch_clone_worker_mode(messages):
+        return _plan_orch_clone_worker_response(messages)
+    if _orch_clone_benchmark_mode(messages):
+        return _plan_orch_clone_benchmark_response(messages)
     if _rolling_summary_compaction_mode(messages):
         return _plan_rolling_summary_compaction_response(messages)
     if _rolling_summary_phase_mode(messages):
@@ -279,6 +307,128 @@ def plan_fake_response(payload: object) -> dict[str, object]:
         if response_spec is not None:
             return response_spec
     return {"kind": "text", "content": build_fake_response_text(payload)}
+
+
+def _orch_clone_benchmark_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[orch-clone-bench")
+
+
+def _plan_orch_clone_benchmark_response(messages: list[object]) -> dict[str, object]:
+    config = _extract_orch_clone_config(messages)
+    task_ids = _extract_task_ids_from_tool_result(
+        messages,
+        tool_call_id="call-orch-clone-create",
+    )
+    dispatched_call_ids = _extract_tool_call_ids(
+        messages,
+        prefix="call-orch-clone-dispatch-",
+    )
+    if not task_ids:
+        return {
+            "kind": "tool_call",
+            "tool_name": "orch_create_tasks",
+            "tool_call_id": "call-orch-clone-create",
+            "arguments": {
+                "tasks": [
+                    {
+                        "title": f"clone worker {index + 1}",
+                        "objective": (
+                            f"[orch-clone-worker delay={config.delay_ms}] "
+                            f"complete worker task {index + 1}."
+                        ),
+                    }
+                    for index in range(config.task_count)
+                ]
+            },
+        }
+    if len(dispatched_call_ids) >= len(task_ids):
+        return {
+            "kind": "text",
+            "content": (
+                "[fake-llm] orchestration clone benchmark completed "
+                f"{len(task_ids)} tasks."
+            ),
+        }
+    next_index = len(dispatched_call_ids)
+    if config.parallel:
+        return {
+            "kind": "tool_calls",
+            "tool_calls": [
+                _orch_clone_dispatch_call(
+                    task_id=task_id,
+                    index=index,
+                    delay_ms=config.delay_ms,
+                )
+                for index, task_id in enumerate(task_ids)
+            ],
+        }
+    return {
+        "kind": "tool_call",
+        **_orch_clone_dispatch_call(
+            task_id=task_ids[next_index],
+            index=next_index,
+            delay_ms=config.delay_ms,
+        ),
+    }
+
+
+class _OrchCloneConfig:
+    def __init__(self, *, parallel: bool, task_count: int, delay_ms: int) -> None:
+        self.parallel = parallel
+        self.task_count = task_count
+        self.delay_ms = delay_ms
+
+
+def _extract_orch_clone_config(messages: list[object]) -> _OrchCloneConfig:
+    user_text = _extract_last_user_text(messages)
+    match = re.search(
+        r"\[orch-clone-bench\s+(parallel|serial)\s+count=(\d+)\s+delay=(\d+)\]",
+        user_text,
+    )
+    if match is None:
+        return _OrchCloneConfig(parallel=True, task_count=4, delay_ms=100)
+    task_count = max(1, min(12, int(match.group(2))))
+    delay_ms = max(0, min(2_000, int(match.group(3))))
+    return _OrchCloneConfig(
+        parallel=match.group(1) == "parallel",
+        task_count=task_count,
+        delay_ms=delay_ms,
+    )
+
+
+def _orch_clone_dispatch_call(
+    *,
+    task_id: str,
+    index: int,
+    delay_ms: int,
+) -> dict[str, object]:
+    return {
+        "tool_name": "orch_dispatch_task",
+        "tool_call_id": f"call-orch-clone-dispatch-{index + 1}",
+        "arguments": {
+            "task_id": task_id,
+            "role_id": "Explorer",
+            "prompt": (
+                f"[orch-clone-worker delay={delay_ms}] "
+                f"complete dispatched worker task {index + 1}."
+            ),
+        },
+    }
+
+
+def _orch_clone_worker_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[orch-clone-worker")
+
+
+def _plan_orch_clone_worker_response(messages: list[object]) -> dict[str, object]:
+    user_text = _extract_last_user_text(messages)
+    match = re.search(r"\[orch-clone-worker\s+delay=(\d+)\]", user_text)
+    delay_ms = int(match.group(1)) if match is not None else 0
+    return {
+        "kind": "text",
+        "delay_before_ms": max(0, min(2_000, delay_ms)),
+        "content": "[fake-llm] clone worker completed",
+    }
 
 
 def _rolling_summary_compaction_mode(messages: list[object]) -> bool:
@@ -1214,6 +1364,89 @@ def _extract_last_tool_call_id(messages: list[object]) -> str | None:
         if isinstance(tool_call_id, str) and tool_call_id.strip():
             return tool_call_id.strip()
     return None
+
+
+def _extract_tool_call_ids(messages: list[object], *, prefix: str) -> list[str]:
+    tool_call_ids: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "") != "tool":
+            continue
+        tool_call_id = message.get("tool_call_id")
+        if not isinstance(tool_call_id, str):
+            continue
+        normalized = tool_call_id.strip()
+        if normalized.startswith(prefix):
+            tool_call_ids.append(normalized)
+    return tool_call_ids
+
+
+def _extract_task_ids_from_tool_result(
+    messages: list[object],
+    *,
+    tool_call_id: str,
+) -> list[str]:
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "") != "tool":
+            continue
+        if str(message.get("tool_call_id") or "").strip() != tool_call_id:
+            continue
+        decoded = _decode_tool_result_content(message.get("content"))
+        task_ids: list[str] = []
+        _collect_task_ids(decoded, task_ids)
+        return _dedupe_strings(task_ids)
+    return []
+
+
+def _decode_tool_result_content(content: object) -> object:
+    if isinstance(content, str):
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            return content
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if isinstance(text, str):
+                text_parts.append(text)
+        joined = "\n".join(text_parts)
+        if not joined:
+            return content
+        try:
+            return json.loads(joined)
+        except json.JSONDecodeError:
+            return joined
+    return content
+
+
+def _collect_task_ids(value: object, task_ids: list[str]) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "task_id" and isinstance(item, str) and item.strip():
+                task_ids.append(item.strip())
+                continue
+            _collect_task_ids(item, task_ids)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _collect_task_ids(item, task_ids)
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
 
 
 def _extract_last_user_text(messages: list[object]) -> str:

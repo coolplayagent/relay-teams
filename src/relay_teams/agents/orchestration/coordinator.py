@@ -10,7 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import ModelResponse, TextPart
 
 from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.agents.instances.models import create_subagent_instance
+from relay_teams.agents.instances.models import (
+    AgentRuntimeRecord,
+    create_subagent_instance,
+)
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.orchestration.verification import verify_task
@@ -53,6 +56,7 @@ from relay_teams.sessions.session_models import SessionMode
 from relay_teams.hooks import HookEventName, HookService, TaskCreatedInput
 
 MAX_ORCHESTRATION_CYCLES = 8
+MAX_PARALLEL_DELEGATED_TASKS = 4
 LOGGER = get_logger(__name__)
 
 
@@ -427,7 +431,8 @@ class CoordinatorGraph(BaseModel):
         root_task_id: str,
     ) -> bool:
         records = self.task_repo.list_by_trace(trace_id)
-        ran_any = False
+        lanes: dict[str, list[TaskRecord]] = {}
+        instances: dict[str, AgentRuntimeRecord] = {}
         for record in records:
             task = record.envelope
             if task.task_id == root_task_id:
@@ -469,21 +474,38 @@ class CoordinatorGraph(BaseModel):
                     )
                 )
                 continue
-            try:
-                _ = await self._task_executor(
-                    instance_id=instance.instance_id,
-                    role_id=instance.role_id,
-                    task=task,
-                )
-            except asyncio.CancelledError:
-                if self.run_control_manager.is_subagent_stop_requested(
-                    run_id=trace_id,
-                    instance_id=instance.instance_id,
-                ):
-                    continue
-                raise
-            ran_any = True
-        return ran_any
+            lanes.setdefault(instance.instance_id, []).append(record)
+            instances[instance.instance_id] = instance
+        if not lanes:
+            return False
+
+        semaphore = asyncio.Semaphore(MAX_PARALLEL_DELEGATED_TASKS)
+
+        async def run_lane(instance_id: str, lane_records: list[TaskRecord]) -> None:
+            instance = instances[instance_id]
+            async with semaphore:
+                for lane_record in lane_records:
+                    try:
+                        _ = await self._task_executor(
+                            instance_id=instance.instance_id,
+                            role_id=instance.role_id,
+                            task=lane_record.envelope,
+                        )
+                    except asyncio.CancelledError:
+                        if self.run_control_manager.is_subagent_stop_requested(
+                            run_id=trace_id,
+                            instance_id=instance.instance_id,
+                        ):
+                            continue
+                        raise
+
+        await asyncio.gather(
+            *(
+                run_lane(instance_id, lane_records)
+                for instance_id, lane_records in lanes.items()
+            )
+        )
+        return True
 
     def _get_root_task_by_trace(self, trace_id: str) -> TaskRecord:
         for record in self.task_repo.list_by_trace(trace_id):

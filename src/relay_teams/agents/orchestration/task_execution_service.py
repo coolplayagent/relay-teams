@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Union, cast
 
@@ -41,7 +42,7 @@ from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.logger import get_logger, log_event
 from relay_teams.media import MediaAssetService, merge_user_prompt_content
 from relay_teams.mcp.mcp_registry import McpRegistry
-from relay_teams.persistence.scope_models import ScopeRef, ScopeType
+from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.reminders import (
     CompletionAttemptObservation,
@@ -90,6 +91,7 @@ from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
 
 LOGGER = get_logger(__name__)
 ProviderUserPromptContent = str | tuple[UserContent, ...]
+TASK_MEMORY_RESULT_EXCERPT_CHARS = 2000
 
 
 class TaskExecutionService(BaseModel):
@@ -330,6 +332,8 @@ class TaskExecutionService(BaseModel):
                 workspace_id=workspace.ref.workspace_id,
                 task=task,
                 conversation_id=workspace.ref.conversation_id,
+                instance_id=instance_id,
+                lifecycle=instance_record.lifecycle.value,
                 result=result,
             )
             log_event(
@@ -1000,10 +1004,32 @@ class TaskExecutionService(BaseModel):
         workspace_id: str,
         task: TaskEnvelope,
         conversation_id: str,
+        instance_id: str,
+        lifecycle: str,
         result: str,
     ) -> None:
-        del role_id, workspace_id, task, conversation_id, result
-        return
+        payload: dict[str, JsonValue] = {
+            "task_id": task.task_id,
+            "title": task.title or "",
+            "objective": task.objective[:500],
+            "role_id": role_id,
+            "workspace_id": workspace_id,
+            "conversation_id": conversation_id,
+            "instance_id": instance_id,
+            "lifecycle": lifecycle,
+            "result_excerpt": _truncate_task_memory_result(result),
+            "completed_at": datetime.now(tz=timezone.utc).isoformat(),
+        }
+        self.shared_store.manage_state(
+            StateMutation(
+                scope=ScopeRef(
+                    scope_type=ScopeType.ROLE,
+                    scope_id=f"{task.session_id}:{role_id}",
+                ),
+                key=f"task_result:{task.task_id}",
+                value_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            )
+        )
 
     def _shared_state_snapshot(
         self,
@@ -1182,6 +1208,13 @@ class TaskExecutionService(BaseModel):
         if prompt_override:
             return prompt_override
         return task.objective.strip()
+
+
+def _truncate_task_memory_result(result: str) -> str:
+    normalized = " ".join(result.strip().split())
+    if len(normalized) <= TASK_MEMORY_RESULT_EXCERPT_CHARS:
+        return normalized
+    return normalized[:TASK_MEMORY_RESULT_EXCERPT_CHARS].rstrip() + "..."
 
 
 class PreparedRuntimeSnapshot(BaseModel):

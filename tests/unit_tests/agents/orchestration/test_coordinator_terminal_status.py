@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import cast
 
@@ -10,6 +11,7 @@ from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.models import create_subagent_instance
 from relay_teams.agents.orchestration.coordinator import CoordinatorGraph
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
+from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition
@@ -54,6 +56,37 @@ class _RecordingTaskExecutionService:
     ) -> TaskExecutionResult:
         _ = role_id
         self.calls.append(task.task_id)
+        result = f"{task.task_id} done"
+        self._task_repo.update_status(
+            task.task_id,
+            TaskStatus.COMPLETED,
+            assigned_instance_id=instance_id,
+            result=result,
+        )
+        return TaskExecutionResult(output=result)
+
+
+class _SlowRecordingTaskExecutionService:
+    def __init__(self, task_repo: TaskRepository) -> None:
+        self._task_repo = task_repo
+        self.calls: list[str] = []
+        self.spans: dict[str, tuple[float, float]] = {}
+        self.active_count = 0
+        self.max_active_count = 0
+
+    async def execute(
+        self, *, instance_id: str, role_id: str, task: TaskEnvelope
+    ) -> TaskExecutionResult:
+        _ = role_id
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        self.calls.append(task.task_id)
+        self.active_count += 1
+        self.max_active_count = max(self.max_active_count, self.active_count)
+        await asyncio.sleep(0.03)
+        self.active_count -= 1
+        ended_at = loop.time()
+        self.spans[task.task_id] = (started_at, ended_at)
         result = f"{task.task_id} done"
         self._task_repo.update_status(
             task.task_id,
@@ -326,6 +359,116 @@ async def test_resume_reactivates_stopped_delegated_task_before_verification(
         agent_repo.get_instance(child_instance.instance_id).status
         == InstanceStatus.IDLE
     )
+
+
+@pytest.mark.asyncio
+async def test_pending_delegated_tasks_run_parallel_by_instance_lane(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, _ = _build_coordinator(
+        tmp_path
+    )
+    slow_execution_service = _SlowRecordingTaskExecutionService(task_repo)
+    coordinator.task_execution_service = cast(
+        TaskExecutionService,
+        slow_execution_service,
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="do work",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    first_lane_task = TaskEnvelope(
+        task_id="task-child-1",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="query first time",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    second_lane_task = TaskEnvelope(
+        task_id="task-child-2",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="query second time",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    first_lane_followup = TaskEnvelope(
+        task_id="task-child-3",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="query third time",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    for task in (root_task, first_lane_task, second_lane_task, first_lane_followup):
+        _ = task_repo.create(task)
+
+    first_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-time-1",
+    )
+    second_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-time-2",
+    )
+    for instance in (first_instance, second_instance):
+        agent_repo.upsert_instance(
+            run_id="run-1",
+            trace_id="run-1",
+            session_id="session-1",
+            instance_id=instance.instance_id,
+            role_id="time",
+            workspace_id=instance.workspace_id,
+            conversation_id=instance.conversation_id,
+            status=InstanceStatus.IDLE,
+        )
+    task_repo.update_status(
+        first_lane_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=first_instance.instance_id,
+    )
+    task_repo.update_status(
+        second_lane_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=second_instance.instance_id,
+    )
+    task_repo.update_status(
+        first_lane_followup.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=first_instance.instance_id,
+    )
+
+    ran_any = await coordinator._run_pending_delegated_tasks(
+        trace_id="run-1",
+        root_task_id=root_task.task_id,
+    )
+
+    assert ran_any is True
+    assert slow_execution_service.max_active_count == 2
+    assert set(slow_execution_service.calls) == {
+        first_lane_task.task_id,
+        second_lane_task.task_id,
+        first_lane_followup.task_id,
+    }
+    first_start, first_end = slow_execution_service.spans[first_lane_task.task_id]
+    followup_start, _followup_end = slow_execution_service.spans[
+        first_lane_followup.task_id
+    ]
+    second_start, second_end = slow_execution_service.spans[second_lane_task.task_id]
+    assert followup_start >= first_end
+    assert second_start < first_end
+    assert first_start < second_end
 
 
 def test_prepare_recovery_preserves_paused_subagent_followup_state(

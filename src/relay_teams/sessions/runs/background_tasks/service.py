@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
-from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
 from relay_teams.agents.instances.models import (
     SubAgentInstance,
     create_subagent_instance,
@@ -129,6 +129,8 @@ class _BackgroundTaskAgentRepository(Protocol):
         workspace_id: str,
         conversation_id: str | None = None,
         status: InstanceStatus,
+        lifecycle: InstanceLifecycle = InstanceLifecycle.REUSABLE,
+        parent_instance_id: str | None = None,
     ) -> None: ...
 
 
@@ -1082,6 +1084,7 @@ class BackgroundTaskService:
             workspace_id=workspace_id,
             conversation_id=subagent_instance.conversation_id,
             status=InstanceStatus.IDLE,
+            lifecycle=InstanceLifecycle.EPHEMERAL,
         )
         task_repo.create(subagent_task)
         self._record_subagent_task_created(
