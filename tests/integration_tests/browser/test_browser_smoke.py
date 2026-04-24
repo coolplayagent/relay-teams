@@ -363,9 +363,12 @@ def test_browser_shell_settings_and_session_management(
             == f"{integration_env.api_base_url}/api/sessions/{session_id}"
         )
     ):
-        page.locator(f'.session-rename-btn[data-session-id="{session_id}"]').click(
-            force=True
+        page.locator(f'.session-item[data-session-id="{session_id}"]').hover()
+        rename_button = page.locator(
+            f'.session-rename-btn[data-session-id="{session_id}"]'
         )
+        expect(rename_button).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+        rename_button.click()
         expect(page.locator(".feedback-dialog-input")).to_be_visible(
             timeout=_WAIT_TIMEOUT_MS
         )
