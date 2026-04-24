@@ -1192,6 +1192,75 @@ def test_execute_tool_reuses_duplicate_tool_return_content() -> None:
     assert len(_tool_result_payloads(deps)) == 1
 
 
+def test_execute_tool_returns_error_when_duplicate_hydration_fails() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+
+    class _FakeMediaAssetService:
+        def to_provider_user_prompt_content(self, *, parts: object) -> object:
+            _ = parts
+            return ("attached image",)
+
+        def hydrate_user_prompt_content(self, *, content: object) -> object:
+            _ = content
+            return "hydrated image"
+
+    deps.media_asset_service = _FakeMediaAssetService()
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-read-image-duplicate-hydration-error"
+    call_count = 0
+    media_part = MediaRefContentPart(
+        asset_id="asset-1",
+        session_id=deps.session_id,
+        modality=MediaModality.IMAGE,
+        mime_type="image/png",
+        url="/api/sessions/session-1/media/asset-1/file",
+        name="relay_teams.png",
+    )
+
+    def action() -> ToolResultProjection:
+        nonlocal call_count
+        call_count += 1
+        return ToolResultProjection(
+            visible_data={"type": "image", "count": call_count},
+            tool_content_parts=(media_part,),
+        )
+
+    first = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "docs/relay_teams.png"},
+            action=action,
+            allow_tool_return=True,
+        )
+    )
+    deps.media_asset_service = None
+    second = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "docs/relay_teams.png"},
+            action=action,
+            allow_tool_return=True,
+        )
+    )
+
+    assert call_count == 1
+    assert isinstance(first, ToolReturn)
+    assert isinstance(second, dict)
+    assert second["ok"] is False
+    error = cast(dict[str, JsonValue], second["error"])
+    meta = cast(dict[str, JsonValue], second["meta"])
+    assert error["message"] == (
+        "Tool read returned media content without media asset support."
+    )
+    assert meta["reused_tool_call"] is True
+    assert len(_tool_result_payloads(deps)) == 1
+
+
 def test_execute_tool_hydrates_local_media_tool_return_content() -> None:
     deps = _FakeDeps(
         manager=_FakeApprovalManager(wait_result=("approve", "")),

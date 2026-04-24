@@ -615,13 +615,21 @@ def _reusable_tool_result(
             record.visible_result.model_dump(mode="json")
         )
         if record.tool_content_parts and allow_tool_return:
-            return ToolReturn(
-                return_value=visible_result,
-                content=_tool_return_content(
+            try:
+                tool_return_content = _tool_return_content(
                     ctx=ctx,
                     tool_name=tool_name,
                     tool_content_parts=tuple(record.tool_content_parts),
-                ),
+                )
+            except Exception as exc:
+                return _visible_envelope(
+                    ok=False,
+                    error=_error_payload(exc),
+                    meta={"reused_tool_call": True},
+                )
+            return ToolReturn(
+                return_value=visible_result,
+                content=tool_return_content,
             )
         return visible_result
     visible_result = result_envelope.get("visible_result")
