@@ -1373,10 +1373,8 @@ def _reported_failure_message(data: dict[str, JsonValue]) -> str:
 
     command = data.get("command")
     exit_code = data.get("exit_code")
-    if isinstance(command, str) and command.strip():
-        if type(exit_code) is int:
-            return f"Command failed with exit code {exit_code}: {command}"
-        return f"Command reported failed status: {command}"
+    if isinstance(command, str) and command.strip() and type(exit_code) is int:
+        return f"Command failed with exit code {exit_code}: {command}"
     return "The tool result reported failed status."
 
 

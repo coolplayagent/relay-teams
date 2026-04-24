@@ -257,6 +257,83 @@ async def test_prepare_prompt_context_protects_precommitted_current_prompt_from_
 
 
 @pytest.mark.asyncio
+async def test_prepare_prompt_context_leaves_history_when_no_current_prompt_key() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    base_history: list[ModelRequest | ModelResponse] = [ModelResponse(parts=[])]
+    session._config = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        context_window=600,
+    )
+    session._message_repo = cast(MessageRepository, _FakeMessageRepo(base_history))
+    session._conversation_microcompact_service = None
+    session._conversation_compaction_service = None
+    session._estimated_mcp_context_tokens = _zero_mcp_context_tokens
+    session._estimated_tool_context_tokens = lambda **_kwargs: 120
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Continue without a prompt key."),
+    )
+
+    prepared = await AgentLlmSession._prepare_prompt_context(
+        session,
+        request=_build_request(user_prompt=None),
+        conversation_id="conv-1",
+        system_prompt="System prompt",
+        reserve_user_prompt_tokens=True,
+        allowed_tools=("shell",),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+
+    assert len(prepared.history) == 2
+    assert isinstance(prepared.history[0], ModelRequest)
+    assert prepared.history[1] == base_history[0]
+
+
+@pytest.mark.asyncio
+async def test_prepare_prompt_context_leaves_non_tail_current_prompt_in_history() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    base_history = [
+        ModelRequest(parts=[UserPromptPart(content="Current prompt")]),
+        ModelResponse(parts=[]),
+    ]
+    session._config = ModelEndpointConfig(
+        model="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        context_window=600,
+    )
+    session._message_repo = cast(MessageRepository, _FakeMessageRepo(base_history))
+    session._conversation_microcompact_service = None
+    session._conversation_compaction_service = None
+    session._estimated_mcp_context_tokens = _zero_mcp_context_tokens
+    session._estimated_tool_context_tokens = lambda **_kwargs: 120
+    session._run_intent_repo = cast(
+        RunIntentRepository,
+        _FakeRunIntentRepo("Current prompt"),
+    )
+
+    prepared = await AgentLlmSession._prepare_prompt_context(
+        session,
+        request=_build_request(user_prompt=None),
+        conversation_id="conv-1",
+        system_prompt="System prompt",
+        reserve_user_prompt_tokens=True,
+        allowed_tools=("shell",),
+        allowed_mcp_servers=(),
+        allowed_skills=(),
+    )
+
+    assert list(prepared.history) == base_history
+
+
+@pytest.mark.asyncio
 async def test_maybe_compact_history_emits_pre_and_post_compact_hooks() -> None:
     session = object.__new__(AgentLlmSession)
     history = [

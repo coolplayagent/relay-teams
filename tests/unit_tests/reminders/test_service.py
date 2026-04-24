@@ -6,7 +6,9 @@ from typing import cast
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.reminders import (
     CompletionAttemptObservation,
+    ContextPressureObservation,
     IncompleteTodoItem,
+    ReminderKind,
     ReminderPolicyConfig,
     ReminderStateRepository,
     SystemReminderPolicy,
@@ -92,6 +94,34 @@ def test_service_appends_completion_retry_reminder(tmp_path: Path) -> None:
     assert len(sink.appended) == 1
     assert sink.enqueued == []
     assert "finish tests" in sink.appended[0]
+
+
+def test_service_enqueues_context_pressure_reminder(tmp_path: Path) -> None:
+    sink = _CapturingSink()
+    service = _service(tmp_path, sink)
+
+    decision = service.observe_context_pressure(
+        ContextPressureObservation(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-1",
+            instance_id="inst-1",
+            role_id="role-1",
+            conversation_id="conversation-1",
+            kind=ReminderKind.POST_COMPACTION,
+            message_count_before=20,
+            message_count_after=8,
+            estimated_tokens_before=1000,
+            estimated_tokens_after=400,
+            threshold_tokens=800,
+            target_tokens=300,
+        )
+    )
+
+    assert decision.issue is True
+    assert len(sink.enqueued) == 1
+    assert "Conversation history was compacted" in sink.enqueued[0]
 
 
 def _service(

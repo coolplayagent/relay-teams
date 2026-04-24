@@ -988,6 +988,76 @@ def test_execute_tool_ignores_domain_failed_status_for_successful_tools() -> Non
     assert observation.error_message == ""
 
 
+def test_reported_failure_helper_scopes_to_shell_failure_projections() -> None:
+    assert (
+        execution_module._reported_failure_from_success_envelope(
+            tool_name="shell",
+            envelope={"ok": False},
+        )
+        is None
+    )
+    assert (
+        execution_module._reported_failure_from_success_envelope(
+            tool_name="wait_background_task",
+            envelope={"ok": True, "data": {"status": "failed", "exit_code": 1}},
+        )
+        is None
+    )
+    assert (
+        execution_module._reported_failure_from_success_envelope(
+            tool_name="shell",
+            envelope={"ok": True, "data": "failed"},
+        )
+        is None
+    )
+    assert (
+        execution_module._reported_failure_from_success_envelope(
+            tool_name="shell",
+            envelope={"ok": True, "data": {"status": "completed", "exit_code": 1}},
+        )
+        is None
+    )
+    assert (
+        execution_module._reported_failure_from_success_envelope(
+            tool_name="shell",
+            envelope={"ok": True, "data": {"status": "failed", "exit_code": 0}},
+        )
+        is None
+    )
+    assert execution_module._reported_failure_from_success_envelope(
+        tool_name="shell",
+        envelope={
+            "ok": True,
+            "data": {
+                "status": "failed",
+                "exit_code": 2,
+                "recent_output": ["line one", "line two"],
+            },
+        },
+    ) == ("reported_failed_status", "line one\nline two")
+    assert execution_module._reported_failure_from_success_envelope(
+        tool_name="shell",
+        envelope={
+            "ok": True,
+            "data": {
+                "status": "failed",
+                "exit_code": 3,
+                "command": "cat missing.txt",
+            },
+        },
+    ) == ("reported_failed_status", "Command failed with exit code 3: cat missing.txt")
+    assert execution_module._reported_failure_from_success_envelope(
+        tool_name="shell",
+        envelope={
+            "ok": True,
+            "data": {
+                "status": "failed",
+                "exit_code": 1,
+            },
+        },
+    ) == ("reported_failed_status", "The tool result reported failed status.")
+
+
 def test_execute_tool_returns_tool_return_for_tool_content_parts() -> None:
     deps = _FakeDeps(
         manager=_FakeApprovalManager(wait_result=("approve", "")),
