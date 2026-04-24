@@ -1,0 +1,157 @@
+/* New session draft composer emphasis. */
+
+#input-container #send-btn .send-btn-label {
+    display: none;
+}
+
+#input-container.is-new-session-draft-composer {
+    position: relative;
+    z-index: 4;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 16px 20px 14px;
+    border-color: #e2e7eb;
+    border-radius: 10px;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.07);
+    overflow: visible;
+}
+
+#input-container.is-new-session-draft-composer .input-wrapper {
+    position: relative;
+    min-height: clamp(148px, 20vh, 230px);
+    border-color: #d9e0e5;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+#input-container.is-new-session-draft-composer #prompt-input {
+    min-height: clamp(148px, 20vh, 230px);
+    padding: 22px 180px 64px 22px;
+    font-size: clamp(15px, 0.9vw, 18px);
+    line-height: 1.55;
+}
+
+#input-container.is-new-session-draft-composer #prompt-input::placeholder {
+    color: #7e8794;
+}
+
+#input-container.is-new-session-draft-composer #send-btn {
+    right: 18px;
+    bottom: 22px;
+    width: auto;
+    min-width: 126px;
+    height: 46px;
+    gap: 9px;
+    padding: 0 18px;
+}
+
+#input-container.is-new-session-draft-composer #send-btn svg {
+    width: 19px;
+    height: 19px;
+}
+
+#input-container.is-new-session-draft-composer #send-btn .send-btn-label {
+    display: inline;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0;
+    white-space: nowrap;
+}
+
+#input-container.is-new-session-draft-composer .input-controls {
+    margin-top: 12px;
+    gap: 16px;
+    height: 36px;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: "topology yolo thinking";
+}
+
+#input-container.is-new-session-draft-composer .composer-topology-label::before {
+    content: "模式:";
+}
+
+#input-container.is-new-session-draft-composer .composer-segmented-btn {
+    min-width: 86px;
+}
+
+#input-container.is-new-session-draft-composer .composer-preset-select {
+    width: clamp(132px, 12vw, 220px);
+}
+
+@media (min-width: 1800px) {
+    #input-container.is-new-session-draft-composer .input-wrapper,
+    #input-container.is-new-session-draft-composer #prompt-input {
+        min-height: clamp(170px, 24vh, 270px);
+    }
+}
+
+@media (max-width: 1320px) {
+    #input-container.is-new-session-draft-composer .input-wrapper,
+    #input-container.is-new-session-draft-composer #prompt-input {
+        min-height: clamp(132px, 18vh, 190px);
+    }
+}
+
+@media (max-height: 760px) {
+    #input-container.is-new-session-draft-composer {
+        padding: 14px 18px 12px;
+    }
+
+    #input-container.is-new-session-draft-composer .input-wrapper,
+    #input-container.is-new-session-draft-composer #prompt-input {
+        min-height: clamp(126px, 17vh, 150px);
+    }
+
+    #input-container.is-new-session-draft-composer #prompt-input {
+        padding-top: 18px;
+        padding-bottom: 58px;
+    }
+
+    #input-container.is-new-session-draft-composer .input-controls {
+        margin-top: 10px;
+    }
+}
+
+@media (max-height: 640px) {
+    #input-container.is-new-session-draft-composer {
+        padding: 12px 14px;
+        box-shadow: none;
+    }
+
+    #input-container.is-new-session-draft-composer .input-wrapper,
+    #input-container.is-new-session-draft-composer #prompt-input {
+        min-height: 112px;
+    }
+
+    #input-container.is-new-session-draft-composer .input-controls {
+        margin-top: 8px;
+    }
+}
+
+@media (max-width: 720px) {
+    #input-container.is-new-session-draft-composer {
+        padding: 14px 16px;
+    }
+
+    #input-container.is-new-session-draft-composer .input-wrapper,
+    #input-container.is-new-session-draft-composer #prompt-input {
+        min-height: 120px;
+    }
+
+    #input-container.is-new-session-draft-composer #prompt-input {
+        padding: 18px 76px 58px 18px;
+        font-size: 15px;
+    }
+
+    #input-container.is-new-session-draft-composer #send-btn {
+        min-width: 40px;
+        width: 40px;
+        height: 40px;
+        padding: 0;
+    }
+
+    #input-container.is-new-session-draft-composer #send-btn .send-btn-label {
+        display: none;
+    }
+}
