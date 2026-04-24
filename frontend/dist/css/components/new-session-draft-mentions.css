@@ -1,0 +1,101 @@
+/* New session draft mention hints. */
+
+.new-session-draft-mention-hint {
+    position: absolute;
+    left: 16px;
+    bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: calc(100% - 200px);
+    overflow: hidden;
+    pointer-events: none;
+    color: #697381;
+    font-size: 12.5px;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.new-session-draft-mention-hint.is-hidden {
+    display: none;
+}
+
+.new-session-mention-chip,
+.new-session-collab-chip {
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 0 10px;
+    border: 1px solid #dfe5e9;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #697381;
+    font-weight: 560;
+}
+
+.new-session-mention-chip {
+    gap: 6px;
+    max-width: min(100%, 360px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.new-session-collab-chip {
+    max-width: 210px;
+    color: #596472;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.new-session-mention-action {
+    display: inline-flex;
+    align-items: center;
+    height: 22px;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--draft-green);
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.new-session-draft-mention-hint .new-session-mention-action {
+    color: inherit;
+    background: transparent;
+    cursor: default;
+}
+
+.new-session-mention-action:hover,
+.new-session-mention-action.is-selected {
+    background: #edf6f1;
+}
+
+.new-session-mention-separator {
+    color: #98a2ad;
+}
+
+body:not(.light-theme) .new-session-draft-mention-hint {
+    color: var(--text-secondary);
+}
+
+body:not(.light-theme) .new-session-mention-chip,
+body:not(.light-theme) .new-session-collab-chip {
+    background: var(--bg-surface);
+    border-color: var(--border-color);
+}
+
+body:not(.light-theme) .new-session-mention-action:hover,
+body:not(.light-theme) .new-session-mention-action.is-selected {
+    border-color: var(--border-color);
+    background: color-mix(in srgb, var(--primary) 12%, var(--bg-surface));
+}
+
+@media (max-width: 720px) {
+    .new-session-draft-mention-hint .new-session-collab-chip {
+        display: none;
+    }
+}

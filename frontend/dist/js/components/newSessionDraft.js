@@ -19,6 +19,7 @@ import { clearAllStreamState } from './messageRenderer.js';
 import { clearSessionTimeline } from './rounds/timeline.js';
 import { clearSessionTokenUsage } from './sessionTokenUsage.js';
 import { clearActiveSubagentSession } from './subagentSessions.js';
+import { renderNewSessionDraftView as renderNewSessionDraftMarkup } from './newSessionDraftView.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
 import { showTextInputDialog } from '../utils/feedback.js';
@@ -33,39 +34,6 @@ let draftWorkspaceError = '';
 let draftWorkspaceBusy = false;
 let draftWorkspaceMenuOpen = false;
 let mentionHintInput = null;
-
-const QUICK_START_ITEMS = [
-    {
-        key: 'code_review',
-        icon: 'code',
-        promptKey: 'new_session_draft.quick.code_review_prompt',
-    },
-    {
-        key: 'pr_summary',
-        icon: 'branch',
-        promptKey: 'new_session_draft.quick.pr_summary_prompt',
-    },
-    {
-        key: 'requirements',
-        icon: 'flow',
-        promptKey: 'new_session_draft.quick.requirements_prompt',
-    },
-    {
-        key: 'tests',
-        icon: 'flask',
-        promptKey: 'new_session_draft.quick.tests_prompt',
-    },
-    {
-        key: 'debug',
-        icon: 'warning',
-        promptKey: 'new_session_draft.quick.debug_prompt',
-    },
-    {
-        key: 'automation',
-        icon: 'bot',
-        promptKey: 'new_session_draft.quick.automation_prompt',
-    },
-];
 
 export function isNewSessionDraftActive() {
     return state.pendingNewSessionActive === true;
@@ -115,7 +83,7 @@ export function openNewSessionDraft(workspaceId) {
         els.chatContainer.classList.add('is-new-session-draft');
     }
     if (els.chatMessages) {
-        els.chatMessages.innerHTML = renderNewSessionDraftView();
+        els.chatMessages.innerHTML = renderNewSessionDraftMarkup(resolveRecentSession());
     }
     moveComposerIntoDraft();
     if (els.promptInput) {
@@ -232,7 +200,7 @@ function bindLanguageRefresh() {
         if (!isNewSessionDraftActive() || !els.chatMessages) {
             return;
         }
-        els.chatMessages.innerHTML = renderNewSessionDraftView();
+        els.chatMessages.innerHTML = renderNewSessionDraftMarkup(resolveRecentSession());
         moveComposerIntoDraft();
         bindNewSessionDraftInteractions();
         void refreshDraftWorkspaces({
@@ -502,78 +470,6 @@ function setDraftPrompt(prompt) {
     els.promptInput.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-function renderNewSessionDraftView() {
-    return `
-        <section class="new-session-draft-page" aria-label="${escapeHtml(t('new_session_draft.title'))}">
-            <div class="new-session-draft-main">
-                <div class="new-session-draft-hero">
-                    <div class="new-session-draft-spark" aria-hidden="true">
-                        ${renderIcon('spark')}
-                    </div>
-                    <h1>${escapeHtml(t('new_session_draft.hero_title'))}</h1>
-                    <p>${escapeHtml(t('new_session_draft.hero_copy'))}</p>
-                </div>
-                <div id="new-session-draft-composer-slot" class="new-session-draft-composer-slot"></div>
-                <div class="new-session-section-head">
-                    <h2>${escapeHtml(t('new_session_draft.quick_title'))}</h2>
-                </div>
-                <div class="new-session-quick-grid">
-                    ${QUICK_START_ITEMS.map(renderQuickStartItem).join('')}
-                </div>
-                <div class="new-session-section-head new-session-section-head-recent">
-                    <h2>${escapeHtml(t('new_session_draft.recent_title'))}</h2>
-                </div>
-                <div class="new-session-recent-grid">
-                    ${renderRecentCards()}
-                </div>
-            </div>
-            <aside class="new-session-draft-aside" aria-label="${escapeHtml(t('new_session_draft.suggestion_title'))}">
-                ${renderSuggestionPanel()}
-                ${renderTipsPanel()}
-            </aside>
-        </section>
-    `;
-}
-
-function renderQuickStartItem(item) {
-    const title = t(`new_session_draft.quick.${item.key}.title`);
-    const copy = t(`new_session_draft.quick.${item.key}.copy`);
-    const prompt = t(item.promptKey);
-    return `
-        <button class="new-session-quick-card new-session-quick-card-${escapeHtml(item.key)}" type="button" data-draft-prompt="${escapeHtml(prompt)}">
-            <span class="new-session-card-icon" aria-hidden="true">${renderIcon(item.icon)}</span>
-            <span class="new-session-card-copy">
-                <strong>${escapeHtml(title)}</strong>
-                <span>${escapeHtml(copy)}</span>
-            </span>
-            <span class="new-session-card-arrow" aria-hidden="true">→</span>
-        </button>
-    `;
-}
-
-function renderRecentCards() {
-    const recentSession = resolveRecentSession();
-    return `
-        ${renderContinueSessionCard(recentSession)}
-        <button class="new-session-recent-card" type="button" data-draft-prompt="${escapeHtml(t('new_session_draft.recent.schedule_prompt'))}">
-            <span class="new-session-card-icon new-session-card-icon-schedule" aria-hidden="true">${renderIcon('calendar')}</span>
-            <span class="new-session-card-copy">
-                <strong>${escapeHtml(t('new_session_draft.recent.schedule_title'))}</strong>
-                <span>${escapeHtml(t('new_session_draft.recent.schedule_copy'))}</span>
-            </span>
-            <span class="new-session-card-arrow" aria-hidden="true">›</span>
-        </button>
-        <button class="new-session-recent-card" type="button" data-draft-open-gateway>
-            <span class="new-session-card-icon new-session-card-icon-chat" aria-hidden="true">${renderIcon('chat')}</span>
-            <span class="new-session-card-copy">
-                <strong>${escapeHtml(t('new_session_draft.recent.im_title'))}</strong>
-                <span>${escapeHtml(t('new_session_draft.recent.im_copy'))}</span>
-            </span>
-            <span class="new-session-card-arrow" aria-hidden="true">›</span>
-        </button>
-    `;
-}
-
 function ensureDraftComposerActionRow() {
     if (!els.inputContainer) {
         return;
@@ -774,31 +670,6 @@ function formatWorkspaceDescription(workspace) {
     return rootPath || workspaceId || t('new_session_draft.workspace.selected');
 }
 
-function renderContinueSessionCard(session) {
-    if (!session) {
-        return `
-            <button class="new-session-recent-card" type="button" data-draft-prompt="${escapeHtml(t('new_session_draft.recent.continue_prompt'))}">
-                <span class="new-session-card-icon new-session-card-icon-clock" aria-hidden="true">${renderIcon('clock')}</span>
-                <span class="new-session-card-copy">
-                    <strong>${escapeHtml(t('new_session_draft.recent.continue_title'))}</strong>
-                    <span>${escapeHtml(t('new_session_draft.recent.continue_empty'))}</span>
-                </span>
-                <span class="new-session-card-arrow" aria-hidden="true">›</span>
-            </button>
-        `;
-    }
-    return `
-        <button class="new-session-recent-card" type="button" data-draft-select-session data-session-id="${escapeHtml(session.sessionId)}">
-            <span class="new-session-card-icon new-session-card-icon-clock" aria-hidden="true">${renderIcon('clock')}</span>
-            <span class="new-session-card-copy">
-                <strong>${escapeHtml(t('new_session_draft.recent.continue_title'))}</strong>
-                <span>${escapeHtml(session.label || session.sessionId)}</span>
-            </span>
-            <span class="new-session-card-arrow" aria-hidden="true">›</span>
-        </button>
-    `;
-}
-
 function resolveRecentSession() {
     const sessionItems = Array.from(document.querySelectorAll('.session-item[data-session-id]'));
     for (const item of sessionItems) {
@@ -813,70 +684,6 @@ function resolveRecentSession() {
         };
     }
     return null;
-}
-
-function renderSuggestionPanel() {
-    const rows = [
-        ['1', t('new_session_draft.suggestion.workspace_title'), t('new_session_draft.suggestion.workspace_copy')],
-        ['2', t('new_session_draft.suggestion.mode_title'), t('new_session_draft.suggestion.mode_copy')],
-        ['3', t('new_session_draft.suggestion.role_title'), t('new_session_draft.suggestion.role_copy')],
-        ['4', t('new_session_draft.suggestion.yolo_title'), t('new_session_draft.suggestion.yolo_copy')],
-        ['5', t('new_session_draft.suggestion.input_title'), t('new_session_draft.suggestion.input_copy')],
-    ];
-    return `
-        <section class="new-session-side-panel new-session-suggestion-panel">
-            <h2>
-                <span aria-hidden="true">${renderIcon('bulb')}</span>
-                ${escapeHtml(t('new_session_draft.suggestion_title'))}
-            </h2>
-            <ol class="new-session-suggestion-list">
-                ${rows.map(([number, title, copy]) => `
-                    <li>
-                        <span class="new-session-suggestion-number">${escapeHtml(number)}</span>
-                        <span class="new-session-suggestion-copy">
-                            <strong>${escapeHtml(title)}</strong>
-                            <span>${escapeHtml(copy)}</span>
-                        </span>
-                    </li>
-                `).join('')}
-            </ol>
-        </section>
-    `;
-}
-
-function renderTipsPanel() {
-    return `
-        <section class="new-session-side-panel new-session-tips-panel">
-            <h2>
-                <span aria-hidden="true">${renderIcon('book')}</span>
-                ${escapeHtml(t('new_session_draft.tips_title'))}
-            </h2>
-            <ul>
-                <li>${escapeHtml(t('new_session_draft.tip.complex'))}</li>
-                <li>${escapeHtml(t('new_session_draft.tip.orchestration'))}</li>
-                <li>${escapeHtml(t('new_session_draft.tip.mention'))}</li>
-                <li>${escapeHtml(t('new_session_draft.tip.subagents'))}</li>
-            </ul>
-        </section>
-    `;
-}
-
-function renderIcon(name) {
-    const icons = {
-        spark: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 3.5l1.6 4.7 4.9 1.8-4.9 1.8L12 16.5l-1.6-4.7-4.9-1.8 4.9-1.8L12 3.5ZM18.5 15.5l.8 2.1 2.2.9-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.9.8-2.1Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>',
-        code: '<svg viewBox="0 0 24 24" fill="none"><path d="M8.5 8l-4 4 4 4M15.5 8l4 4-4 4M13 6.5l-2 11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-        branch: '<svg viewBox="0 0 24 24" fill="none"><path d="M7 5v14M7 7.5h4.5a4 4 0 0 1 4 4V16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="7" cy="5" r="2" stroke="currentColor" stroke-width="1.7"/><circle cx="7" cy="19" r="2" stroke="currentColor" stroke-width="1.7"/><circle cx="15.5" cy="18" r="2" stroke="currentColor" stroke-width="1.7"/></svg>',
-        flow: '<svg viewBox="0 0 24 24" fill="none"><rect x="9" y="3.5" width="6" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.7"/><rect x="4" y="16" width="6" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.7"/><rect x="14" y="16" width="6" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.7"/><path d="M12 8v4.5M7 16v-3.5h10V16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
-        flask: '<svg viewBox="0 0 24 24" fill="none"><path d="M9 4h6M10 4v5.4l-4.1 7.2A2.2 2.2 0 0 0 7.8 20h8.4a2.2 2.2 0 0 0 1.9-3.4L14 9.4V4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.4 15h7.2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
-        warning: '<svg viewBox="0 0 24 24" fill="none"><path d="M10.5 4.9L3.8 17a2 2 0 0 0 1.8 3h12.8a2 2 0 0 0 1.8-3L13.5 4.9a1.7 1.7 0 0 0-3 0Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M12 9v4M12 16.8v.1" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
-        bot: '<svg viewBox="0 0 24 24" fill="none"><rect x="5" y="8" width="14" height="10" rx="3" stroke="currentColor" stroke-width="1.7"/><path d="M12 8V4.5M8.7 12.5h.1M15.2 12.5h.1M9.5 16h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M3.5 12.5v2M20.5 12.5v2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
-        clock: '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="7.5" stroke="currentColor" stroke-width="1.7"/><path d="M12 8v4.4l2.8 1.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
-        calendar: '<svg viewBox="0 0 24 24" fill="none"><path d="M6.5 5.5h11A2.5 2.5 0 0 1 20 8v9.5a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5V8a2.5 2.5 0 0 1 2.5-2.5Z" stroke="currentColor" stroke-width="1.7"/><path d="M8 3.5v4M16 3.5v4M4.5 10h15M8 14h2.5M13.5 14H16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
-        chat: '<svg viewBox="0 0 24 24" fill="none"><path d="M5 6.5h14a2 2 0 0 1 2 2V15a2 2 0 0 1-2 2h-6.5l-4 2.8V17H5a2 2 0 0 1-2-2V8.5a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M7.5 10h9M7.5 13h5.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
-        bulb: '<svg viewBox="0 0 24 24" fill="none"><path d="M9.5 18h5M10 21h4M8 13.5a6 6 0 1 1 8 0c-.9.75-1.4 1.75-1.55 3h-4.9c-.15-1.25-.65-2.25-1.55-3Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-        book: '<svg viewBox="0 0 24 24" fill="none"><path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H20v16H7.5A2.5 2.5 0 0 0 5 21.5v-16Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M5 18.5A2.5 2.5 0 0 1 7.5 16H20M9 7h7M9 10h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
-    };
-    return icons[name] || icons.spark;
 }
 
 function escapeHtml(value) {
