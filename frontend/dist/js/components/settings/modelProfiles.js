@@ -1351,6 +1351,7 @@ async function handleCodeAgentLogin() {
     if (!isCodeAgentProvider(provider) || draftCodeAgentAuthState.loginInProgress) {
         return;
     }
+    const authPopup = window.open('', '_blank', 'noopener,noreferrer');
     draftCodeAgentAuthState.loginInProgress = true;
     draftCodeAgentAuthState.statusMessage = 'Starting SSO login';
     renderDraftCodeAgentAuthState();
@@ -1361,10 +1362,21 @@ async function handleCodeAgentLogin() {
         draftCodeAgentAuthState.statusMessage = 'Waiting for SSO callback';
         renderDraftCodeAgentAuthState();
         if (result.authorization_url) {
-            window.open(result.authorization_url, '_blank', 'noopener,noreferrer');
+            if (authPopup && authPopup.location) {
+                if (typeof authPopup.location.replace === 'function') {
+                    authPopup.location.replace(result.authorization_url);
+                } else {
+                    authPopup.location.href = result.authorization_url;
+                }
+            } else {
+                window.open(result.authorization_url, '_blank', 'noopener,noreferrer');
+            }
         }
         await pollCodeAgentOAuthSession(result.auth_session_id);
     } catch (e) {
+        if (authPopup && typeof authPopup.close === 'function') {
+            authPopup.close();
+        }
         draftCodeAgentAuthState.statusMessage = `SSO failed: ${e.message}`;
         renderDraftCodeAgentAuthState();
     } finally {
@@ -1376,7 +1388,13 @@ async function handleCodeAgentLogin() {
 async function pollCodeAgentOAuthSession(authSessionId) {
     for (let attempt = 0; attempt < 900; attempt += 1) {
         await new Promise(resolve => setTimeout(resolve, 2000));
+        if (draftCodeAgentAuthState.authSessionId !== authSessionId) {
+            return;
+        }
         const result = await fetchCodeAgentOAuthSession(authSessionId);
+        if (draftCodeAgentAuthState.authSessionId !== authSessionId) {
+            return;
+        }
         if (!result.completed) {
             continue;
         }
@@ -2432,8 +2450,11 @@ function readDraftMaasAuth() {
 }
 
 function readDraftCodeAgentAuth() {
+    const completedSessionId = draftCodeAgentAuthState.completed
+        ? draftCodeAgentAuthState.authSessionId || null
+        : null;
     return {
-        oauth_session_id: draftCodeAgentAuthState.authSessionId || null,
+        oauth_session_id: completedSessionId,
         has_access_token: draftCodeAgentAuthState.completed || draftCodeAgentAuthState.hasPersistedAccessToken,
         has_refresh_token: draftCodeAgentAuthState.completed || draftCodeAgentAuthState.hasPersistedRefreshToken,
     };

@@ -581,7 +581,10 @@ def _resolve_profile_codeagent_auth(
         normalized_payload["has_access_token"] = True
     if payload.get("has_refresh_token") is True:
         normalized_payload["has_refresh_token"] = True
-    return CodeAgentAuthConfig.model_validate(normalized_payload)
+    return CodeAgentAuthConfig.model_validate(normalized_payload).with_secret_owner(
+        config_dir=config_dir,
+        owner_id=profile_name,
+    )
 
 
 def _resolve_profile_codeagent_token(

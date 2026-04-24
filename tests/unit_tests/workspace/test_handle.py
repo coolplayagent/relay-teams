@@ -146,6 +146,51 @@ def test_resolve_workdir_rejects_outside_path(
         workspace.resolve_workdir("../outside")
 
 
+def test_resolve_workdir_rejects_non_local_mount(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    scope_root = tmp_path / "scope"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    scope_root.mkdir(parents=True, exist_ok=True)
+    tmp_root = workspace_root / "tmp"
+    workspace = WorkspaceHandle(
+        ref=WorkspaceRef(
+            workspace_id="workspace",
+            session_id="session",
+            role_id="role",
+            conversation_id="conversation",
+            default_mount_name="remote",
+            mount_names=("remote",),
+        ),
+        mounts=(
+            WorkspaceMountRecord(
+                mount_name="remote",
+                provider=WorkspaceMountProvider.SSH,
+                provider_config=WorkspaceSshMountConfig(
+                    ssh_profile_id="ssh-profile",
+                    remote_root="/srv/project",
+                ),
+            ),
+        ),
+        locations=WorkspaceLocations(
+            workspace_dir=workspace_root,
+            mount_name="remote",
+            provider=WorkspaceMountProvider.SSH,
+            scope_root=scope_root,
+            execution_root=scope_root,
+            tmp_root=tmp_root,
+            readable_roots=(scope_root, tmp_root),
+            writable_roots=(scope_root, tmp_root),
+        ),
+    )
+
+    with pytest.raises(
+        ValueError, match="Workspace workdir resolves to non-local mount: remote"
+    ):
+        workspace.resolve_workdir("app")
+
+
 def test_resolve_path_rejects_write_outside_workspace_with_allowed_roots(
     tmp_path: Path,
 ) -> None:
@@ -220,6 +265,20 @@ def test_resolve_workdir_routes_tmp_prefix_to_managed_tmp_root(tmp_path: Path) -
     )
 
     assert workspace.resolve_workdir("tmp") == (workspace_dir / "tmp").resolve()
+
+
+def test_resolve_workdir_caches_resolved_local_path(tmp_path: Path) -> None:
+    scope_root = tmp_path / "project"
+    workspace_dir = tmp_path / ".agent-teams" / "workspaces" / "project"
+    workspace = _build_workspace_handle(
+        workspace_dir=workspace_dir,
+        scope_root=scope_root,
+    )
+    first = workspace.resolve_workdir("tmp")
+    second = workspace.resolve_workdir("tmp")
+
+    assert first == second
+    assert workspace._resolved_workdirs["tmp"] == first
 
 
 def test_resolve_ssh_mount_path_uses_materialized_local_root(tmp_path: Path) -> None:

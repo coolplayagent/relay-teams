@@ -3251,6 +3251,7 @@ document.getElementById("profile-provider").onchange();
 
 const loginPromise = document.getElementById("profile-codeagent-login-status").onclick();
 const disabledWhileStarting = document.getElementById("profile-codeagent-login-status").disabled;
+const windowOpensBeforeResolve = globalThis.__windowOpens.slice();
 
 document.getElementById("profile-codeagent-login-status").onclick();
 
@@ -3267,7 +3268,9 @@ console.log(JSON.stringify({
     disabledWhileStarting,
     disabledAfterCompletion: document.getElementById("profile-codeagent-login-status").disabled,
     authStatus: document.getElementById("profile-codeagent-login-status-message").textContent,
+    windowOpensBeforeResolve,
     windowOpens: globalThis.__windowOpens,
+    windowOpenNavigations: globalThis.__windowOpenNavigations,
 }));
 """.strip(),
         mock_api_source="""
@@ -3321,13 +3324,198 @@ export async function deleteModelProfile(name) {
     assert payload["disabledWhileStarting"] is True
     assert payload["disabledAfterCompletion"] is False
     assert payload["authStatus"] == "Signed in"
+    assert payload["windowOpensBeforeResolve"] == [
+        ["", "_blank", "noopener,noreferrer"]
+    ]
     assert payload["windowOpens"] == [
         [
-            "https://example.test/codeagent-sso",
+            "",
             "_blank",
             "noopener,noreferrer",
         ]
     ]
+    assert payload["windowOpenNavigations"] == ["https://example.test/codeagent-sso"]
+
+
+def test_failed_codeagent_sso_does_not_send_incomplete_oauth_session_id(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+globalThis.setTimeout = callback => {
+    callback();
+    return 0;
+};
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+await loadModelProfilesPanel();
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "codeagent-profile").onclick();
+
+await document.getElementById("profile-codeagent-login-status").onclick();
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    savedProfile: globalThis.__savedProfile,
+    authStatus: document.getElementById("profile-codeagent-login-status-message").textContent,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        "codeagent-profile": {
+            provider: "codeagent",
+            model: "codeagent-chat",
+            base_url: "https://codeagentcli.rnd.huawei.com/codeAgentPro",
+            codeagent_auth: {
+                has_access_token: true,
+                has_refresh_token: true,
+            },
+            is_default: false,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42 };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: ["codeagent-chat"] };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function startCodeAgentOAuth() {
+    return {
+        auth_session_id: "failed-auth-session",
+        authorization_url: "https://example.test/codeagent-sso",
+    };
+}
+
+export async function fetchCodeAgentOAuthSession(authSessionId) {
+    throw new Error(`poll failed for ${authSessionId}`);
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    codeagent_auth = cast(dict[str, JsonValue], saved_profile_body["codeagent_auth"])
+
+    assert saved_profile["name"] == "codeagent-profile"
+    assert "oauth_session_id" not in codeagent_auth
+    assert codeagent_auth["has_refresh_token"] is True
+    assert payload["authStatus"] == "SSO failed: poll failed for failed-auth-session"
+
+
+def test_codeagent_sso_polling_stops_when_auth_session_changes(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+globalThis.setTimeout = callback => {
+    callback();
+    return 0;
+};
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider").value = "codeagent";
+document.getElementById("profile-provider").onchange();
+await document.getElementById("profile-codeagent-login-status").onclick();
+
+console.log(JSON.stringify({
+    sessionChecks: globalThis.__codeAgentOAuthSessionChecks,
+    loginButtonText: document.getElementById("profile-codeagent-login-status").textContent,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {};
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42 };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: ["codeagent-chat"] };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function startCodeAgentOAuth() {
+    return {
+        auth_session_id: "stale-auth-session",
+        authorization_url: "https://example.test/codeagent-sso",
+    };
+}
+
+export async function fetchCodeAgentOAuthSession(authSessionId) {
+    globalThis.__codeAgentOAuthSessionChecks = globalThis.__codeAgentOAuthSessionChecks || [];
+    globalThis.__codeAgentOAuthSessionChecks.push(authSessionId);
+    if (globalThis.__codeAgentOAuthSessionChecks.length === 1) {
+        document.getElementById("cancel-profile-btn").onclick();
+        return { completed: false };
+    }
+    throw new Error("unexpected extra poll");
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+    )
+
+    assert payload["sessionChecks"] == ["stale-auth-session"]
+    assert payload["loginButtonText"] == "Sign in with SSO"
 
 
 def test_saving_maas_profile_sends_maas_auth_payload(tmp_path: Path) -> None:
@@ -4001,13 +4189,26 @@ function installGlobals(elements, notifications) {{
     globalThis.window = {{
         open(...args) {{
             globalThis.__windowOpens.push(args);
-            return null;
+            return {{
+                location: {{
+                    replace(value) {{
+                        globalThis.__windowOpenNavigations.push(value);
+                    }},
+                    set href(value) {{
+                        globalThis.__windowOpenNavigations.push(value);
+                    }},
+                }},
+                close() {{
+                    globalThis.__windowClosed = true;
+                }},
+            }};
         }},
     }};
     globalThis.__feedbackNotifications = notifications;
     globalThis.__feedbackConfirms = [];
     globalThis.__dispatchedEvents = [];
     globalThis.__windowOpens = [];
+    globalThis.__windowOpenNavigations = [];
 }}
 
 {runner_source}

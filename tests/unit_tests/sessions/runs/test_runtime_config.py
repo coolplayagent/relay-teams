@@ -566,6 +566,100 @@ def test_load_llm_configs_resolves_codeagent_tokens_from_secret_store(
         profiles["codeagent-profile"].codeagent_auth.refresh_token
         == "codeagent-refresh-token"
     )
+    assert profiles["codeagent-profile"].codeagent_auth._secret_config_dir == tmp_path
+    assert profiles["codeagent-profile"].codeagent_auth._secret_owner_id == (
+        "codeagent-profile"
+    )
+
+
+def test_load_llm_configs_rejects_codeagent_profile_without_completed_auth(
+    tmp_path: Path,
+) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "codeagent-profile": {
+                    "provider": "codeagent",
+                    "model": "codeagent-chat",
+                    "base_url": "https://codeagent.example/codeAgentPro",
+                    "codeagent_auth": {
+                        "has_refresh_token": True,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="CodeAgent profiles require codeagent_auth from completed SSO login.",
+    ):
+        runtime_config.load_llm_configs(tmp_path, {})
+
+
+def test_load_llm_configs_rejects_non_object_codeagent_auth(tmp_path: Path) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "codeagent-profile": {
+                    "provider": "codeagent",
+                    "model": "codeagent-chat",
+                    "base_url": "https://codeagent.example/codeAgentPro",
+                    "codeagent_auth": "invalid",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="codeagent_auth must be an object.",
+    ):
+        runtime_config.load_llm_configs(tmp_path, {})
+
+
+def test_load_llm_configs_resolves_codeagent_tokens_from_env_placeholders(
+    tmp_path: Path,
+) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "codeagent-profile": {
+                    "provider": "codeagent",
+                    "model": "codeagent-chat",
+                    "base_url": "https://codeagent.example/codeAgentPro",
+                    "codeagent_auth": {
+                        "access_token": "${CODEAGENT_ACCESS_TOKEN}",
+                        "refresh_token": "${CODEAGENT_REFRESH_TOKEN}",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = runtime_config.load_llm_configs(
+        tmp_path,
+        {
+            "CODEAGENT_ACCESS_TOKEN": "env-codeagent-access-token",
+            "CODEAGENT_REFRESH_TOKEN": "env-codeagent-refresh-token",
+        },
+    )
+
+    assert profiles["codeagent-profile"].codeagent_auth is not None
+    assert (
+        profiles["codeagent-profile"].codeagent_auth.access_token
+        == "env-codeagent-access-token"
+    )
+    assert (
+        profiles["codeagent-profile"].codeagent_auth.refresh_token
+        == "env-codeagent-refresh-token"
+    )
 
 
 def test_load_llm_configs_accepts_legacy_maas_auth_fields(tmp_path: Path) -> None:

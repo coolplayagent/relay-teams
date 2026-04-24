@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from pathlib import Path
 from typing import Optional
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     RootModel,
     field_validator,
     model_validator,
@@ -69,6 +71,9 @@ DEFAULT_CODEAGENT_SCOPE_RESOURCE = "devuc"
 class CodeAgentAuthConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    _secret_config_dir: Path | None = PrivateAttr(default=None)
+    _secret_owner_id: str | None = PrivateAttr(default=None)
+
     client_id: str = Field(default=DEFAULT_CODEAGENT_CLIENT_ID, min_length=1)
     scope: str = Field(default=DEFAULT_CODEAGENT_SCOPE, min_length=1)
     scope_resource: str = Field(
@@ -107,6 +112,17 @@ class CodeAgentAuthConfig(BaseModel):
         if self.refresh_token is not None:
             self.has_refresh_token = True
         return self
+
+    def with_secret_owner(
+        self,
+        *,
+        config_dir: Path,
+        owner_id: str,
+    ) -> "CodeAgentAuthConfig":
+        copied = self.model_copy()
+        copied._secret_config_dir = config_dir
+        copied._secret_owner_id = owner_id
+        return copied
 
 
 class MaaSAuthConfig(BaseModel):

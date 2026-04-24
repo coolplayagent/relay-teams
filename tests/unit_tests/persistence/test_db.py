@@ -91,6 +91,70 @@ def test_is_retryable_sqlite_error_matches_lock_contention() -> None:
     assert not is_retryable_sqlite_error(sqlite3.OperationalError("no such table"))
 
 
+def test_resolved_db_path_key_caches_absolute_paths(tmp_path: Path) -> None:
+    db_path = (tmp_path / "relay_teams.db").resolve()
+    db_module._RESOLVED_DB_PATH_KEYS.clear()
+
+    first = db_module._resolved_db_path_key(db_path)
+    second = db_module._resolved_db_path_key(db_path)
+
+    assert first == str(db_path)
+    assert second == first
+    assert db_module._RESOLVED_DB_PATH_KEYS[str(db_path)] == str(db_path)
+
+
+def test_resolved_db_path_key_resolves_relative_paths_from_cwd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_module._RESOLVED_DB_PATH_KEYS.clear()
+    monkeypatch.chdir(tmp_path)
+
+    resolved = db_module._resolved_db_path_key(Path("relative.db"))
+
+    assert resolved == str((tmp_path / "relative.db").resolve())
+
+
+def test_resolved_db_path_key_returns_existing_cached_value_after_resolve(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = (tmp_path / "relay_teams.db").resolve()
+    db_module._RESOLVED_DB_PATH_KEYS.clear()
+    real_resolve = Path.resolve
+    resolve_calls = 0
+
+    def fake_resolve(self: Path, *, strict: bool = False) -> Path:
+        nonlocal resolve_calls
+        resolved = real_resolve(self, strict=strict)
+        if resolved == db_path:
+            resolve_calls += 1
+            if resolve_calls == 1:
+                db_module._RESOLVED_DB_PATH_KEYS[str(db_path)] = "cached-after-resolve"
+        return resolved
+
+    monkeypatch.setattr(db_module.Path, "resolve", fake_resolve)
+
+    resolved = db_module._resolved_db_path_key(db_path)
+
+    assert resolved == "cached-after-resolve"
+
+
+def test_write_coordinators_reuse_same_lock_for_same_path(tmp_path: Path) -> None:
+    db_path = tmp_path / "relay_teams.db"
+    db_module._WRITE_COORDINATORS.clear()
+    db_module._ASYNC_WRITE_COORDINATORS.clear()
+    db_module._RESOLVED_DB_PATH_KEYS.clear()
+
+    sync_first = db_module._write_coordinator_for(db_path)
+    sync_second = db_module._write_coordinator_for(db_path)
+    async_first = db_module._async_write_coordinator_for(db_path)
+    async_second = db_module._async_write_coordinator_for(db_path)
+
+    assert sync_first is sync_second
+    assert async_first is async_second
+
+
 def test_run_sqlite_write_with_retry_retries_transient_lock_errors(
     tmp_path: Path,
 ) -> None:

@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 from collections.abc import AsyncGenerator, Generator, Mapping
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from secrets import token_hex, token_urlsafe
 from threading import Lock
 from urllib.parse import urlencode
@@ -19,6 +20,7 @@ from relay_teams.providers.model_config import (
     CodeAgentAuthConfig,
     DEFAULT_CODEAGENT_SSO_BASE_URL,
 )
+from relay_teams.secrets import get_secret_store
 
 __all__ = [
     "CODEAGENT_ACCESS_TOKEN_SECRET_FIELD",
@@ -50,6 +52,7 @@ CODEAGENT_REFRESH_TOKEN_SECRET_FIELD = "codeagent_refresh_token"
 _CODEAGENT_TOKEN_TTL = timedelta(hours=1)
 _CODEAGENT_REFRESH_SKEW = timedelta(minutes=5)
 _CODEAGENT_OAUTH_SESSION_TTL = timedelta(minutes=30)
+_MODEL_PROFILE_SECRET_NAMESPACE = "model_profile"
 
 
 class CodeAgentOAuthTokenResult(BaseModel):
@@ -352,12 +355,24 @@ class CodeAgentTokenService:
         self._tokens[cache_key] = _CodeAgentTokenRecord(token_result=token_result)
         oauth_session_id = auth_config.oauth_session_id
         if oauth_session_id is None:
+            _persist_codeagent_profile_tokens(
+                auth_config=auth_config,
+                token_result=token_result,
+            )
             return
         session = get_codeagent_oauth_session(oauth_session_id)
         if session is None:
+            _persist_codeagent_profile_tokens(
+                auth_config=auth_config,
+                token_result=token_result,
+            )
             return
         save_codeagent_oauth_tokens_for_session(
             auth_session_id=oauth_session_id,
+            token_result=token_result,
+        )
+        _persist_codeagent_profile_tokens(
+            auth_config=auth_config,
             token_result=token_result,
         )
 
@@ -840,6 +855,13 @@ def _build_polled_token_result(
     response: httpx.Response,
 ) -> CodeAgentOAuthTokenResult | None:
     payload = _response_json(response)
+    if response.status_code >= 400:
+        raise CodeAgentOAuthError(
+            _extract_error_message(payload)
+            or response.text
+            or "CodeAgent OAuth token polling failed.",
+            status_code=response.status_code,
+        )
     if response.status_code != 200:
         return None
     access_token = _extract_str(payload, ("access_token", "accessToken", "token"))
@@ -942,6 +964,45 @@ def _extract_error_message(payload: object) -> str | None:
         if isinstance(error, str) and error.strip():
             return error.strip()
     return None
+
+
+def _persist_codeagent_profile_tokens(
+    *,
+    auth_config: CodeAgentAuthConfig,
+    token_result: CodeAgentOAuthTokenResult,
+) -> None:
+    config_dir = auth_config._secret_config_dir
+    owner_id = auth_config._secret_owner_id
+    if config_dir is None or owner_id is None:
+        return
+    _set_model_profile_secret(
+        config_dir=config_dir,
+        owner_id=owner_id,
+        field_name=CODEAGENT_ACCESS_TOKEN_SECRET_FIELD,
+        value=token_result.access_token,
+    )
+    _set_model_profile_secret(
+        config_dir=config_dir,
+        owner_id=owner_id,
+        field_name=CODEAGENT_REFRESH_TOKEN_SECRET_FIELD,
+        value=token_result.refresh_token,
+    )
+
+
+def _set_model_profile_secret(
+    *,
+    config_dir: Path,
+    owner_id: str,
+    field_name: str,
+    value: str,
+) -> None:
+    get_secret_store().set_secret(
+        config_dir,
+        namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+        owner_id=owner_id,
+        field_name=field_name,
+        value=value,
+    )
 
 
 _DEFAULT_CODEAGENT_TOKEN_SERVICE = CodeAgentTokenService()

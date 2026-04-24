@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from typing import NoReturn
 
+import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -514,8 +515,18 @@ def get_codeagent_oauth_session_status(
                 )
         except CodeAgentOAuthError as exc:
             raise HTTPException(
-                status_code=400,
+                status_code=exc.status_code or 400,
                 detail=str(exc) or "CodeAgent OAuth token polling failed.",
+            ) from exc
+        except httpx.TimeoutException as exc:
+            raise HTTPException(
+                status_code=504,
+                detail=str(exc) or "CodeAgent OAuth token polling timed out.",
+            ) from exc
+        except httpx.RequestError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=str(exc) or "CodeAgent OAuth token polling request failed.",
             ) from exc
     codeagent_auth = (
         CodeAgentAuthConfig(

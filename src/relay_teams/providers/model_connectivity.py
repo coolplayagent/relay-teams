@@ -567,7 +567,25 @@ class ModelConnectivityProbeService:
             return base_codeagent_auth
         if base_codeagent_auth is None:
             return override_codeagent_auth
-        return CodeAgentAuthConfig(
+        if override_codeagent_auth.oauth_session_id is not None:
+            merged_auth = CodeAgentAuthConfig(
+                client_id=override_codeagent_auth.client_id
+                or base_codeagent_auth.client_id,
+                scope=override_codeagent_auth.scope or base_codeagent_auth.scope,
+                scope_resource=override_codeagent_auth.scope_resource
+                or base_codeagent_auth.scope_resource,
+                access_token=override_codeagent_auth.access_token,
+                refresh_token=override_codeagent_auth.refresh_token,
+                has_access_token=override_codeagent_auth.has_access_token,
+                has_refresh_token=override_codeagent_auth.has_refresh_token,
+                oauth_session_id=override_codeagent_auth.oauth_session_id,
+            )
+            return self._with_codeagent_secret_owner(
+                merged_auth,
+                preferred=override_codeagent_auth,
+                fallback=base_codeagent_auth,
+            )
+        merged_auth = CodeAgentAuthConfig(
             client_id=override_codeagent_auth.client_id
             or base_codeagent_auth.client_id,
             scope=override_codeagent_auth.scope or base_codeagent_auth.scope,
@@ -587,6 +605,27 @@ class ModelConnectivityProbeService:
             ),
             oauth_session_id=override_codeagent_auth.oauth_session_id
             or base_codeagent_auth.oauth_session_id,
+        )
+        return self._with_codeagent_secret_owner(
+            merged_auth,
+            preferred=override_codeagent_auth,
+            fallback=base_codeagent_auth,
+        )
+
+    def _with_codeagent_secret_owner(
+        self,
+        auth_config: CodeAgentAuthConfig,
+        *,
+        preferred: CodeAgentAuthConfig,
+        fallback: CodeAgentAuthConfig,
+    ) -> CodeAgentAuthConfig:
+        config_dir = preferred._secret_config_dir or fallback._secret_config_dir
+        owner_id = preferred._secret_owner_id or fallback._secret_owner_id
+        if config_dir is None or owner_id is None:
+            return auth_config
+        return auth_config.with_secret_owner(
+            config_dir=config_dir,
+            owner_id=owner_id,
         )
 
     def _resolve_timeout_ms(
@@ -1592,6 +1631,26 @@ class ModelConnectivityProbeService:
         self,
         auth_config: CodeAgentAuthConfig,
     ) -> CodeAgentAuthConfig:
+        if auth_config.oauth_session_id is not None:
+            token_result = get_codeagent_oauth_tokens(auth_config.oauth_session_id)
+            if token_result is not None:
+                resolved_auth = CodeAgentAuthConfig(
+                    client_id=auth_config.client_id,
+                    scope=auth_config.scope,
+                    scope_resource=auth_config.scope_resource,
+                    access_token=token_result.access_token,
+                    refresh_token=token_result.refresh_token,
+                    oauth_session_id=auth_config.oauth_session_id,
+                )
+                if (
+                    auth_config._secret_config_dir is None
+                    or auth_config._secret_owner_id is None
+                ):
+                    return resolved_auth
+                return resolved_auth.with_secret_owner(
+                    config_dir=auth_config._secret_config_dir,
+                    owner_id=auth_config._secret_owner_id,
+                )
         if auth_config.refresh_token is not None:
             return auth_config
         if auth_config.oauth_session_id is None:
@@ -1599,19 +1658,9 @@ class ModelConnectivityProbeService:
                 "CodeAgent refresh token is not configured.",
                 status_code=None,
             )
-        token_result = get_codeagent_oauth_tokens(auth_config.oauth_session_id)
-        if token_result is None:
-            raise CodeAgentOAuthError(
-                "CodeAgent OAuth session is missing, expired, or already consumed.",
-                status_code=400,
-            )
-        return CodeAgentAuthConfig(
-            client_id=auth_config.client_id,
-            scope=auth_config.scope,
-            scope_resource=auth_config.scope_resource,
-            access_token=token_result.access_token,
-            refresh_token=token_result.refresh_token,
-            oauth_session_id=auth_config.oauth_session_id,
+        raise CodeAgentOAuthError(
+            "CodeAgent OAuth session is missing, expired, or already consumed.",
+            status_code=400,
         )
 
     def _build_codeagent_oauth_error_result(

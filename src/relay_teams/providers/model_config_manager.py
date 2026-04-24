@@ -547,7 +547,10 @@ class ModelConfigManager:
             resolved_payload["has_access_token"] = True
         if raw_codeagent_auth.get("has_refresh_token") is True:
             resolved_payload["has_refresh_token"] = True
-        return CodeAgentAuthConfig.model_validate(resolved_payload)
+        return CodeAgentAuthConfig.model_validate(resolved_payload).with_secret_owner(
+            config_dir=self._config_dir,
+            owner_id=profile_name,
+        )
 
     def _resolve_codeagent_auth_token(
         self,
@@ -576,6 +579,13 @@ class ModelConfigManager:
         source_name: str | None,
     ) -> dict[str, JsonValue]:
         merged_profile = dict(next_profile)
+        provider_raw = merged_profile.get(
+            "provider",
+            ProviderType.OPENAI_COMPATIBLE.value,
+        )
+        if provider_raw == ProviderType.CODEAGENT.value:
+            merged_profile["headers"] = cast(JsonValue, [])
+            return merged_profile
         if "headers" not in merged_profile:
             if isinstance(existing_profile, dict) and "headers" in existing_profile:
                 merged_profile["headers"] = existing_profile["headers"]
@@ -876,7 +886,7 @@ class ModelConfigManager:
                 merged_profile,
                 None,
                 None,
-                not _profile_uses_codeagent(existing_profile),
+                False,
             )
         if "codeagent_auth" not in merged_profile:
             if (
