@@ -212,6 +212,7 @@ function handleEditSshProfile(sshProfileId) {
 async function handleSaveSshProfile() {
     const sshProfileId = String(readInputValue('workspace-ssh-profile-id')).trim();
     const host = String(readInputValue('workspace-ssh-profile-host')).trim();
+    const username = String(readInputValue('workspace-ssh-profile-username')).trim();
     if (!sshProfileId) {
         showToast({
             title: t('settings.workspace.validation_failed_title'),
@@ -228,6 +229,14 @@ async function handleSaveSshProfile() {
         });
         return;
     }
+    if (!username) {
+        showToast({
+            title: t('settings.workspace.validation_failed_title'),
+            message: t('settings.workspace.username_required'),
+            tone: 'danger',
+        });
+        return;
+    }
 
     try {
         const password = readWorkspacePasswordValue();
@@ -235,7 +244,7 @@ async function handleSaveSshProfile() {
         const privateKeyName = normalizeOptionalText(readInputValue('workspace-ssh-profile-private-key-name'));
         const payload = {
             host,
-            username: normalizeOptionalText(readInputValue('workspace-ssh-profile-username')),
+            username,
             port: parseOptionalInteger(readInputValue('workspace-ssh-profile-port')),
             remote_shell: normalizeOptionalText(readInputValue('workspace-ssh-profile-shell')),
             connect_timeout_seconds: parseOptionalInteger(readInputValue('workspace-ssh-profile-timeout')),
@@ -381,10 +390,19 @@ async function handleTestDraftSshProfile() {
 function buildDraftSshProfileProbePayload() {
     const savedSshProfileId = String(editingSshProfileId || '').trim();
     const host = String(readInputValue('workspace-ssh-profile-host')).trim();
+    const username = String(readInputValue('workspace-ssh-profile-username')).trim();
     if (!host) {
         showToast({
             title: t('settings.workspace.validation_failed_title'),
             message: t('settings.workspace.host_required'),
+            tone: 'danger',
+        });
+        return null;
+    }
+    if (!username) {
+        showToast({
+            title: t('settings.workspace.validation_failed_title'),
+            message: t('settings.workspace.username_required'),
             tone: 'danger',
         });
         return null;
@@ -396,7 +414,7 @@ function buildDraftSshProfileProbePayload() {
     const connectTimeoutSeconds = parseOptionalInteger(readInputValue('workspace-ssh-profile-timeout')) || 15;
     const override = {
         host,
-        username: normalizeOptionalText(readInputValue('workspace-ssh-profile-username')),
+        username,
         port: parseOptionalInteger(readInputValue('workspace-ssh-profile-port')),
         remote_shell: normalizeOptionalText(readInputValue('workspace-ssh-profile-shell')),
         connect_timeout_seconds: parseOptionalInteger(readInputValue('workspace-ssh-profile-timeout')),

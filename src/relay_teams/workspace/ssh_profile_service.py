@@ -37,6 +37,10 @@ _DEFAULT_CONNECT_TIMEOUT_SECONDS = 15
 _DEFAULT_COMMAND_TIMEOUT_SECONDS = 30
 _MAX_CONNECT_TIMEOUT_SECONDS = 300
 _SSH_PROBE_COMMAND = "echo relay-teams-ssh-probe"
+_SSH_USERNAME_REQUIRED_MESSAGE = (
+    "SSH profile username is required. Edit the SSH profile and set the "
+    "remote login username before using it."
+)
 
 
 class _ResolvedSshProbeConfig(BaseModel):
@@ -54,7 +58,7 @@ class _SshFilesystemMountSignature(BaseModel):
     version: int = 1
     ssh_profile_id: str
     host: str
-    username: str | None = None
+    username: str
     port: int | None = None
     remote_root: str
 
@@ -497,6 +501,7 @@ class SshProfileService:
         if request.ssh_profile_id is None:
             if request.override is None:
                 raise ValueError("override is required when ssh_profile_id is omitted")
+            _ = _require_ssh_username(request.override.username)
             return _ResolvedSshProbeConfig(
                 ssh_profile_id=None,
                 config=request.override,
@@ -506,9 +511,14 @@ class SshProfileService:
 
         record = self._repository.get(request.ssh_profile_id)
         override = request.override
+        username = (
+            _require_ssh_username(override.username)
+            if override is not None
+            else _require_ssh_username(record.username)
+        )
         config = SshProfileConfig(
             host=override.host if override is not None else record.host,
-            username=override.username if override is not None else record.username,
+            username=username,
             password=override.password if override is not None else None,
             port=override.port if override is not None else record.port,
             remote_shell=(
@@ -669,8 +679,7 @@ class SshProfileService:
             command.extend(["-i", str(private_key_path), "-o", "IdentitiesOnly=yes"])
         if config.port is not None:
             command.extend(["-p", str(config.port)])
-        if config.username is not None:
-            command.extend(["-l", config.username])
+        command.extend(["-l", config.username])
         command.extend(["--", config.host, remote_command])
         return tuple(command)
 
@@ -707,9 +716,7 @@ class SshProfileService:
         private_key_path: Path | None,
         uses_password: bool,
     ) -> tuple[str, ...]:
-        remote_target = config.host
-        if config.username is not None:
-            remote_target = f"{config.username}@{config.host}"
+        remote_target = f"{config.username}@{config.host}"
         command = [
             sshfs_path,
             f"{remote_target}:{remote_root}",
@@ -844,6 +851,15 @@ class SshProfileService:
 def _combined_process_output(completed: subprocess.CompletedProcess[str]) -> str:
     parts = [completed.stderr or "", completed.stdout or ""]
     return "\n".join(part.strip() for part in parts if part.strip())[:2000]
+
+
+def _require_ssh_username(username: str | None) -> str:
+    if username is None:
+        raise ValueError(_SSH_USERNAME_REQUIRED_MESSAGE)
+    normalized = username.strip()
+    if not normalized:
+        raise ValueError(_SSH_USERNAME_REQUIRED_MESSAGE)
+    return normalized
 
 
 def _classify_ssh_failure(

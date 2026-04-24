@@ -114,7 +114,7 @@ class WorkspaceSshProfilePromptMetadata(BaseModel):
 
     ssh_profile_id: str = Field(min_length=1)
     host: str = Field(min_length=1)
-    username: str | None = None
+    username: str = Field(min_length=1)
     port: int | None = Field(default=None, ge=1, le=65535)
     remote_shell: str | None = None
 
@@ -275,11 +275,25 @@ def build_workspace_ssh_profile_prompt_metadata(
                 },
             )
             continue
+        username = str(record.username or "").strip()
+        if not username:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="workspace.ssh_profile_prompt_metadata_missing_username",
+                message="Workspace SSH profile metadata was missing a login username",
+                payload={
+                    "consumer": consumer,
+                    "workspace_id": workspace.ref.workspace_id,
+                    "ssh_profile_id": ssh_profile_id,
+                },
+            )
+            continue
         metadata.append(
             WorkspaceSshProfilePromptMetadata(
                 ssh_profile_id=record.ssh_profile_id,
                 host=record.host,
-                username=record.username,
+                username=username,
                 port=record.port,
                 remote_shell=record.remote_shell,
             )
@@ -355,11 +369,24 @@ def _build_ssh_mount_environment_lines(
         lines.extend(
             [
                 f"- SSH Host: {metadata.host}",
-                "- SSH Username: " + _format_optional_text(metadata.username),
+                f"- SSH Username: {metadata.username}",
                 "- SSH Port: " + _format_optional_number(metadata.port),
                 "- SSH Remote Shell: " + _format_optional_text(metadata.remote_shell),
             ]
         )
+    lines.extend(
+        [
+            (
+                "- SSH Login User Rule: use the SSH Username shown above as the "
+                "remote login user. Do not substitute the local operating-system "
+                "user or write explicit ssh login scripts."
+            ),
+            (
+                "- SSH Path Rule: the materialized local root below is a local "
+                "backend mount path, not the remote user's home directory."
+            ),
+        ]
+    )
     remote_mount_root = _remote_mount_root_for(
         workspace=workspace,
         mount_name=mount_name,

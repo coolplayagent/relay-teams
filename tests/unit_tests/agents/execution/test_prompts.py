@@ -39,6 +39,7 @@ from relay_teams.workspace import (
     SshProfileRepository,
     SshProfileSecretStore,
     SshProfileService,
+    SshProfileStoredConfig,
     WorkspaceHandle,
     WorkspaceLocations,
     WorkspaceMountProvider,
@@ -482,6 +483,11 @@ def test_runtime_system_prompt_includes_workspace_environments(
     assert "- SSH Username: deploy" in result.workspace_context
     assert "- SSH Port: 2222" in result.workspace_context
     assert "- SSH Remote Shell: zsh" in result.workspace_context
+    assert "use the SSH Username shown above" in result.workspace_context
+    assert (
+        "Do not substitute the local operating-system user" in result.workspace_context
+    )
+    assert "not the remote user's home directory" in result.workspace_context
     assert "- Remote Root: /srv/app" in result.workspace_context
     assert "Materialized Local Root:" in result.workspace_context
 
@@ -527,6 +533,41 @@ def test_workspace_ssh_profile_prompt_metadata_excludes_secret_fields(
     assert "private_key" not in prompt.casefold()
     assert "private key" not in prompt.casefold()
     assert "has_private_key" not in prompt.casefold()
+
+
+def test_workspace_ssh_profile_prompt_metadata_skips_profiles_without_username(
+    tmp_path: Path,
+) -> None:
+    workspace = _mixed_workspace_handle(tmp_path)
+    repository = SshProfileRepository(tmp_path / "ssh_profiles.db")
+    service = SshProfileService(
+        repository=repository,
+        config_dir=tmp_path,
+        secret_store=SshProfileSecretStore(secret_store=_FileOnlySecretStore()),
+    )
+    _ = repository.save(
+        ssh_profile_id="prod-profile",
+        config=SshProfileStoredConfig(
+            host="prod.example.com",
+            port=2222,
+            remote_shell="zsh",
+        ),
+    )
+
+    metadata = build_workspace_ssh_profile_prompt_metadata(
+        workspace=workspace,
+        ssh_profile_service=service,
+        consumer="tests.unit_tests.agents.execution.test_prompts",
+    )
+    prompt = system_prompts.build_workspace_environments_prompt(
+        workspace=workspace,
+        ssh_profile_metadata=metadata,
+    )
+
+    assert metadata == ()
+    assert "- SSH Metadata: unavailable" in prompt
+    assert "- SSH Username: none" not in prompt
+    assert "local operating-system user" in prompt
 
 
 def test_runtime_system_prompt_keeps_stable_prefix_across_workspaces(

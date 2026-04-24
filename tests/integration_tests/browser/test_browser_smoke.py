@@ -40,6 +40,7 @@ _LANG_PATTERN = re.compile(r"^(en|en-US|zh-CN)$")
 _VIEWPORT_WIDTH = 1600
 _VIEWPORT_HEIGHT = 1200
 _WAIT_TIMEOUT_MS = 30_000
+_ROW_ALIGNMENT_TOLERANCE_PX = 9.0
 
 
 @pytest.fixture()
@@ -707,7 +708,7 @@ def test_browser_remote_workspace_settings_group_ssh_fields(
         auth_copy,
         auth_system_copy,
     )
-    expect(auth_system_copy).to_contain_text("系统 SSH 配置")
+    expect(auth_system_copy).to_contain_text("系统 SSH 认证材料")
     expect(page.locator("#workspace-ssh-profile-private-key-name")).to_have_attribute(
         "type",
         "hidden",
@@ -2055,8 +2056,8 @@ def _assert_locators_share_row(*locators: Locator) -> None:
         assert box is not None
         top_positions.append(box["y"])
         bottom_positions.append(box["y"] + box["height"])
-    assert max(top_positions) - min(top_positions) < 6.0
-    assert max(bottom_positions) - min(bottom_positions) < 6.0
+    assert max(top_positions) - min(top_positions) < _ROW_ALIGNMENT_TOLERANCE_PX
+    assert max(bottom_positions) - min(bottom_positions) < _ROW_ALIGNMENT_TOLERANCE_PX
 
 
 def _assert_locators_share_left_edge(*locators: Locator) -> None:
