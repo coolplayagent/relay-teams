@@ -1090,6 +1090,66 @@ async def test_execute_marks_subagent_stop_as_awaiting_followup(
 
 
 @pytest.mark.asyncio
+async def test_execute_keeps_run_running_when_parallel_subagent_is_stopped(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        task_repo,
+        agent_repo,
+        message_repo,
+        run_runtime_repo,
+        run_control_manager,
+    ) = _build_service_with_control(
+        tmp_path / "task_execution_service_subagent_stop_parallel.db",
+        _InterruptingProvider(),
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+    running_task = TaskEnvelope(
+        task_id="task-2",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        role_id="time",
+        objective="query time in parallel",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(running_task)
+    task_repo.update_status(
+        running_task.task_id,
+        TaskStatus.RUNNING,
+        assigned_instance_id="inst-running",
+    )
+    _ = run_control_manager.request_subagent_stop(
+        run_id="run-1",
+        instance_id=instance_id,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await service.execute(
+            instance_id=instance_id,
+            role_id="time",
+            task=task,
+        )
+
+    runtime = run_runtime_repo.get("run-1")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.RUNNING
+    assert runtime.phase == RunRuntimePhase.SUBAGENT_RUNNING
+    assert runtime.active_task_id == running_task.task_id
+    assert runtime.active_role_id == "time"
+    assert runtime.active_subagent_instance_id == "inst-running"
+    assert runtime.last_error == "Task stopped by user"
+    record = task_repo.get(task.task_id)
+    assert record.status == TaskStatus.STOPPED
+    assert record.error_message == "Task stopped by user"
+
+
+@pytest.mark.asyncio
 async def test_execute_marks_recoverable_pause_as_awaiting_recovery(
     tmp_path: Path,
 ) -> None:

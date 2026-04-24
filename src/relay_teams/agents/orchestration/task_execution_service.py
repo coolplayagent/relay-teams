@@ -384,16 +384,21 @@ class TaskExecutionService(BaseModel):
                 )
             last_error = "Task stopped by user" if stopped else "Task cancelled"
             if paused_subagent:
-                self.run_runtime_repo.update(
-                    task.trace_id,
-                    status=RunRuntimeStatus.STOPPED,
-                    phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
-                    active_instance_id=None,
-                    active_task_id=task.task_id,
-                    active_role_id=role_id,
-                    active_subagent_instance_id=instance_id,
+                if not self._promote_running_runtime_lane(
+                    run_id=task.trace_id,
+                    terminal_task_id=task.task_id,
                     last_error=last_error,
-                )
+                ):
+                    self.run_runtime_repo.update(
+                        task.trace_id,
+                        status=RunRuntimeStatus.STOPPED,
+                        phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
+                        active_instance_id=None,
+                        active_task_id=task.task_id,
+                        active_role_id=role_id,
+                        active_subagent_instance_id=instance_id,
+                        last_error=last_error,
+                    )
             else:
                 self._mark_runtime_after_terminal_task_update(
                     run_id=task.trace_id,
