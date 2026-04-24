@@ -301,15 +301,9 @@ class TaskExecutionService(BaseModel):
                 task.task_id, TaskStatus.COMPLETED, result=result
             )
             _ = self.agent_repo.mark_status(instance_id, InstanceStatus.COMPLETED)
-            self.run_runtime_repo.update(
-                task.trace_id,
-                status=RunRuntimeStatus.RUNNING,
-                phase=RunRuntimePhase.IDLE,
-                active_instance_id=None,
-                active_task_id=None,
-                active_role_id=None,
-                active_subagent_instance_id=None,
-                last_error=None,
+            self._mark_runtime_idle_after_success(
+                run_id=task.trace_id,
+                completed_task_id=task.task_id,
             )
             self.event_bus.emit(
                 EventEnvelope(
@@ -1041,6 +1035,55 @@ class TaskExecutionService(BaseModel):
                 },
                 exc_info=True,
             )
+
+    def _mark_runtime_idle_after_success(
+        self,
+        *,
+        run_id: str,
+        completed_task_id: str,
+    ) -> None:
+        current = self.run_runtime_repo.get(run_id)
+        if current is not None and current.active_task_id not in {
+            None,
+            completed_task_id,
+        }:
+            return
+        for record in self.task_repo.list_by_trace(run_id):
+            task = record.envelope
+            if task.task_id == completed_task_id:
+                continue
+            if record.status != TaskStatus.RUNNING:
+                continue
+            if not record.assigned_instance_id:
+                continue
+            is_coordinator = task.parent_task_id is None
+            self.run_runtime_repo.update(
+                run_id,
+                status=RunRuntimeStatus.RUNNING,
+                phase=(
+                    RunRuntimePhase.COORDINATOR_RUNNING
+                    if is_coordinator
+                    else RunRuntimePhase.SUBAGENT_RUNNING
+                ),
+                active_instance_id=record.assigned_instance_id,
+                active_task_id=task.task_id,
+                active_role_id=task.role_id,
+                active_subagent_instance_id=(
+                    None if is_coordinator else record.assigned_instance_id
+                ),
+                last_error=None,
+            )
+            return
+        self.run_runtime_repo.update(
+            run_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.IDLE,
+            active_instance_id=None,
+            active_task_id=None,
+            active_role_id=None,
+            active_subagent_instance_id=None,
+            last_error=None,
+        )
 
     def _shared_state_snapshot(
         self,

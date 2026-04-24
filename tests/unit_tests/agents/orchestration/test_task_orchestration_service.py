@@ -610,6 +610,53 @@ async def test_dispatch_task_uses_assignment_done_by_parallel_dispatch(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_task_revalidates_role_after_parallel_assignment(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_parallel_assignment_role.db"
+    )
+    created = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title="Implement endpoint",
+            objective="Implement the endpoint",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    assignment_lock = await service._role_assignment_lock(
+        session_id="session-1",
+        role_id="spec_coder",
+    )
+    await assignment_lock.acquire()
+    dispatch_task = asyncio.create_task(
+        service.dispatch_task(
+            run_id="run-1",
+            task_id=created.envelope.task_id,
+            role_id="spec_coder",
+        )
+    )
+    await asyncio.sleep(0)
+    _ = task_repo.update_envelope(
+        created.envelope.task_id,
+        created.envelope.model_copy(update={"role_id": "reviewer"}),
+    )
+    task_repo.update_status(
+        created.envelope.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id="inst-reviewer",
+    )
+    assignment_lock.release()
+
+    with pytest.raises(ValueError, match="already bound to role reviewer"):
+        await dispatch_task
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("status", "prompt", "match"),
     [

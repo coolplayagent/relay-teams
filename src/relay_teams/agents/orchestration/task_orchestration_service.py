@@ -239,6 +239,14 @@ class TaskOrchestrationService:
                     )
                     record = self._task_repo.get(task_id)
                 else:
+                    if not bound_role_id:
+                        raise ValueError(
+                            "task must be bound to a role before it can be dispatched"
+                        )
+                    if bound_role_id != normalized_role_id:
+                        raise ValueError(
+                            f"Task is already bound to role {bound_role_id}; create a replacement task to change roles."
+                        )
                     instance_id = record.assigned_instance_id or instance_id
         else:
             if not bound_role_id:
