@@ -74,6 +74,112 @@ def test_request_subagent_stop_marks_paused_context() -> None:
     asyncio.run(_case())
 
 
+def test_request_subagent_stop_tracks_multiple_pauses_per_session() -> None:
+    async def _case() -> None:
+        mgr = RunControlManager()
+
+        async def _subagent() -> str:
+            await asyncio.sleep(10)
+            return "x"
+
+        first_task = asyncio.create_task(_subagent())
+        second_task = asyncio.create_task(_subagent())
+        mgr.register_instance_task(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="generalist",
+            task_id="task-1",
+            task=first_task,
+        )
+        mgr.register_instance_task(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-2",
+            role_id="reviewer",
+            task_id="task-2",
+            task=second_task,
+        )
+
+        first_paused = mgr.request_subagent_stop(run_id="run-1", instance_id="inst-1")
+        second_paused = mgr.request_subagent_stop(run_id="run-1", instance_id="inst-2")
+        await asyncio.sleep(0)
+
+        assert first_paused is not None
+        assert second_paused is not None
+        assert first_task.cancelled()
+        assert second_task.cancelled()
+        assert (
+            mgr.is_subagent_paused(session_id="session-1", instance_id="inst-1") is True
+        )
+        assert (
+            mgr.is_subagent_paused(session_id="session-1", instance_id="inst-2") is True
+        )
+        assert (
+            mgr.release_paused_subagent(session_id="session-1", instance_id="missing")
+            is None
+        )
+
+        released = mgr.release_paused_subagent(
+            session_id="session-1", instance_id="inst-1"
+        )
+
+        assert released is not None
+        assert released.instance_id == "inst-1"
+        assert (
+            mgr.is_subagent_stop_requested(run_id="run-1", instance_id="inst-1")
+            is False
+        )
+        assert (
+            mgr.is_subagent_stop_requested(run_id="run-1", instance_id="inst-2") is True
+        )
+        assert (
+            mgr.is_subagent_paused(session_id="session-1", instance_id="inst-1")
+            is False
+        )
+        assert (
+            mgr.is_subagent_paused(session_id="session-1", instance_id="inst-2") is True
+        )
+        latest_released = mgr.release_paused_subagent(session_id="session-1")
+        assert latest_released is not None
+        assert latest_released.instance_id == "inst-2"
+        assert (
+            mgr.is_subagent_stop_requested(run_id="run-1", instance_id="inst-2")
+            is False
+        )
+        assert mgr.get_paused_subagent("session-1") is None
+        await asyncio.gather(first_task, second_task, return_exceptions=True)
+
+    asyncio.run(_case())
+
+
+def test_clear_paused_subagent_for_run_keeps_other_run_pauses() -> None:
+    mgr = RunControlManager()
+    mgr.pause_subagent(
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-1",
+        role_id="generalist",
+        task_id="task-1",
+    )
+    mgr.pause_subagent(
+        session_id="session-1",
+        run_id="run-2",
+        instance_id="inst-2",
+        role_id="reviewer",
+        task_id="task-2",
+    )
+
+    mgr.clear_paused_subagent_for_run("run-1")
+
+    assert mgr.is_subagent_paused(session_id="session-1", instance_id="inst-1") is False
+    assert mgr.is_subagent_paused(session_id="session-1", instance_id="inst-2") is True
+
+    mgr.clear_paused_subagent_for_run("run-2")
+
+    assert mgr.get_paused_subagent("session-1") is None
+
+
 def test_release_paused_subagent_clears_blocking() -> None:
     mgr = RunControlManager()
     mgr.pause_subagent(
@@ -357,3 +463,43 @@ def test_resume_subagent_with_message_uses_same_instance_after_restart(
     assert runtime is not None
     assert runtime.phase == RunRuntimePhase.SUBAGENT_RUNNING
     assert runtime.active_subagent_instance_id == "inst-1"
+
+
+def test_resume_subagent_with_message_blocks_unpaused_target_when_other_paused(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_control_resume_other_paused.db"
+    mgr = RunControlManager()
+    agent_repo = AgentInstanceRepository(db_path)
+    mgr.bind_runtime(
+        run_event_hub=RunEventHub(),
+        injection_manager=RunInjectionManager(),
+        agent_repo=agent_repo,
+        task_repo=TaskRepository(db_path),
+        message_repo=MessageRepository(db_path),
+        event_bus=EventLog(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+    )
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-2",
+        role_id="reviewer",
+        workspace_id="default",
+        status=InstanceStatus.IDLE,
+    )
+    mgr.pause_subagent(
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-1",
+        role_id="generalist",
+        task_id="task-1",
+    )
+
+    with pytest.raises(RuntimeError, match="inst-1"):
+        mgr.resume_subagent_with_message(
+            run_id="run-1",
+            instance_id="inst-2",
+            content="continue",
+        )

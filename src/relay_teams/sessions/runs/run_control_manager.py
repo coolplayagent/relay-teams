@@ -145,7 +145,7 @@ class _RunTaskRegistry:
 class _SubagentPauseRegistry:
     def __init__(self) -> None:
         self._lock = Lock()
-        self._paused_by_session: dict[str, PausedSubagent] = {}
+        self._paused_by_session: dict[str, dict[str, PausedSubagent]] = {}
 
     def pause(
         self,
@@ -167,17 +167,20 @@ class _SubagentPauseRegistry:
             paused_at=datetime.now(tz=timezone.utc),
         )
         with self._lock:
-            self._paused_by_session[session_id] = paused
+            paused_for_session = self._paused_by_session.setdefault(session_id, {})
+            paused_for_session[instance_id] = paused
         return paused
 
-    def get(self, session_id: str) -> PausedSubagent | None:
+    def get(
+        self, session_id: str, instance_id: str | None = None
+    ) -> PausedSubagent | None:
         with self._lock:
-            return self._paused_by_session.get(session_id)
-
-    def is_paused(self, *, session_id: str, instance_id: str) -> bool:
-        with self._lock:
-            paused = self._paused_by_session.get(session_id)
-            return paused is not None and paused.instance_id == instance_id
+            paused_for_session = self._paused_by_session.get(session_id)
+            if not paused_for_session:
+                return None
+            if instance_id is not None:
+                return paused_for_session.get(instance_id)
+            return max(paused_for_session.values(), key=lambda paused: paused.paused_at)
 
     def release(
         self,
@@ -186,21 +189,33 @@ class _SubagentPauseRegistry:
         instance_id: str | None = None,
     ) -> PausedSubagent | None:
         with self._lock:
-            paused = self._paused_by_session.get(session_id)
-            if paused is None:
+            paused_for_session = self._paused_by_session.get(session_id)
+            if not paused_for_session:
                 return None
-            if instance_id is not None and paused.instance_id != instance_id:
-                return None
-            self._paused_by_session.pop(session_id, None)
+            if instance_id is None:
+                paused = max(
+                    paused_for_session.values(), key=lambda item: item.paused_at
+                )
+            else:
+                paused = paused_for_session.get(instance_id)
+                if paused is None:
+                    return None
+            paused_for_session.pop(paused.instance_id, None)
+            if not paused_for_session:
+                self._paused_by_session.pop(session_id, None)
             return paused
 
     def clear_for_run(self, run_id: str) -> tuple[PausedSubagent, ...]:
         with self._lock:
             removed: list[PausedSubagent] = []
-            for session_id, paused in list(self._paused_by_session.items()):
-                if paused.run_id == run_id:
-                    self._paused_by_session.pop(session_id, None)
+            for session_id, paused_for_session in list(self._paused_by_session.items()):
+                for instance_id, paused in list(paused_for_session.items()):
+                    if paused.run_id != run_id:
+                        continue
+                    paused_for_session.pop(instance_id, None)
                     removed.append(paused)
+                if not paused_for_session:
+                    self._paused_by_session.pop(session_id, None)
             return tuple(removed)
 
 
@@ -417,7 +432,9 @@ class RunControlManager:
         if record.run_id != run_id:
             raise KeyError(f"Instance {instance_id} does not belong to run {run_id}")
 
-        paused = self.get_paused_subagent(record.session_id)
+        paused = self.get_paused_subagent(record.session_id, instance_id=instance_id)
+        if paused is None:
+            paused = self.get_paused_subagent(record.session_id)
         if paused is not None and paused.instance_id != instance_id:
             raise RuntimeError(
                 f"Subagent {paused.role_id} ({paused.instance_id}) is paused. "
@@ -588,8 +605,7 @@ class RunControlManager:
         )
 
     def is_subagent_paused(self, *, session_id: str, instance_id: str) -> bool:
-        paused = self.get_paused_subagent(session_id)
-        return paused is not None and paused.instance_id == instance_id
+        return self.get_paused_subagent(session_id, instance_id=instance_id) is not None
 
     def release_paused_subagent(
         self,
@@ -633,11 +649,13 @@ class RunControlManager:
             coordinator_role_id,
         )
 
-    def get_paused_subagent(self, session_id: str) -> PausedSubagent | None:
-        paused = self._paused.get(session_id)
+    def get_paused_subagent(
+        self, session_id: str, instance_id: str | None = None
+    ) -> PausedSubagent | None:
+        paused = self._paused.get(session_id, instance_id=instance_id)
         if paused is not None:
             return paused
-        return self._paused_from_runtime(session_id=session_id)
+        return self._paused_from_runtime(session_id=session_id, instance_id=instance_id)
 
     def _is_coordinator_role_for_run(self, *, run_id: str, role_id: str) -> bool:
         coordinator_role_id = self._root_role_id_for_run(run_id)
