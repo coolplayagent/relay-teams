@@ -800,12 +800,55 @@ def _render_transcript(
     *,
     max_chars: int,
 ) -> str:
+    rendered_messages = [
+        rendered for message in history if (rendered := _render_message(message))
+    ]
+    full_transcript = "\n\n".join(rendered_messages).strip()
+    if not full_transcript:
+        return ""
+    if len(full_transcript) <= max_chars:
+        return full_transcript
+    if len(rendered_messages) <= 1:
+        clipped, _ = _clip_rendered_message(full_transcript, max_chars=max_chars)
+        return clipped.strip()
+    marker = "[... transcript middle clipped; newest compacted turns preserved ...]"
+    separator_budget = len(marker) + 4
+    if max_chars <= separator_budget:
+        return _render_transcript_prefix(
+            rendered_messages,
+            max_chars=max_chars,
+        )
+    content_budget = max_chars - separator_budget
+    if content_budget < 80:
+        return _render_transcript_prefix(
+            rendered_messages,
+            max_chars=max_chars,
+        )
+    prefix_budget = max(1, content_budget // 2)
+    suffix_budget = max(1, content_budget - prefix_budget)
+    prefix = _render_transcript_prefix(
+        rendered_messages,
+        max_chars=prefix_budget,
+    )
+    suffix = _render_transcript_suffix(
+        rendered_messages,
+        max_chars=suffix_budget,
+    )
+    if not prefix:
+        return suffix.strip()
+    if not suffix:
+        return prefix.strip()
+    return f"{prefix}\n\n{marker}\n\n{suffix}".strip()
+
+
+def _render_transcript_prefix(
+    rendered_messages: Sequence[str],
+    *,
+    max_chars: int,
+) -> str:
     remaining = max_chars
     lines: list[str] = []
-    for message in history:
-        rendered = _render_message(message)
-        if not rendered:
-            continue
+    for rendered in rendered_messages:
         clipped, truncated = _clip_rendered_message(rendered, max_chars=remaining)
         if clipped:
             lines.append(clipped)
@@ -813,6 +856,26 @@ def _render_transcript(
         if truncated or remaining <= 0:
             break
     return "\n\n".join(lines).strip()
+
+
+def _render_transcript_suffix(
+    rendered_messages: Sequence[str],
+    *,
+    max_chars: int,
+) -> str:
+    selected: list[str] = []
+    for rendered in reversed(rendered_messages):
+        candidate_parts = [rendered, *selected]
+        candidate = "\n\n".join(candidate_parts).strip()
+        if len(candidate) <= max_chars:
+            selected.insert(0, rendered)
+            continue
+        if not selected:
+            clipped = _clip_rendered_message_suffix(rendered, max_chars=max_chars)
+            if clipped:
+                selected.insert(0, clipped)
+        break
+    return "\n\n".join(selected).strip()
 
 
 def _clip_rendered_message(text: str, *, max_chars: int) -> tuple[str, bool]:
@@ -846,6 +909,20 @@ def _clip_prefix_to_safe_boundary(prefix: str, *, minimum_index: int) -> str:
         if candidate:
             return candidate
     return prefix
+
+
+def _clip_rendered_message_suffix(text: str, *, max_chars: int) -> str:
+    stripped = text.strip()
+    if not stripped or max_chars <= 0:
+        return ""
+    if len(stripped) <= max_chars:
+        return stripped
+    suffix = stripped[-max_chars:].lstrip()
+    first_newline = suffix.find("\n")
+    if first_newline < 0:
+        return suffix
+    candidate = suffix[first_newline + 1 :].lstrip()
+    return candidate or suffix
 
 
 def _render_message(message: ModelRequest | ModelResponse) -> str:

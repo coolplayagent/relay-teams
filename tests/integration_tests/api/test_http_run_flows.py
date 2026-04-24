@@ -124,8 +124,8 @@ def test_ai_run_persists_todo_snapshot_and_projects_it(
     assert isinstance(items, list)
     assert items == [
         {"content": "Inspect issue 399 requirements", "status": "completed"},
-        {"content": "Implement run todo persistence", "status": "in_progress"},
-        {"content": "Verify API and CLI output", "status": "pending"},
+        {"content": "Implement run todo persistence", "status": "completed"},
+        {"content": "Verify API and CLI output", "status": "completed"},
     ]
 
     round_response = api_client.get(f"/api/sessions/{session_id}/rounds/{run_id}")

@@ -54,6 +54,7 @@ from relay_teams.providers.model_fallback import (
     LlmFallbackMiddleware,
 )
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
+from relay_teams.reminders import SystemReminderService
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
@@ -139,6 +140,7 @@ class AgentLlmSession(
         computer_runtime: ComputerRuntime | None = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
         hook_service: HookService | None = None,
+        reminder_service: SystemReminderService | None = None,
     ) -> None:
         self._config = config
         self._profile_name = (
@@ -192,6 +194,7 @@ class AgentLlmSession(
         self._computer_runtime = computer_runtime
         self._shell_approval_repo = shell_approval_repo
         self._hook_service = hook_service
+        self._reminder_service = reminder_service
         self._mcp_tool_context_token_cache: dict[str, int] = {}
 
 

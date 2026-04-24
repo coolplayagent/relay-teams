@@ -50,6 +50,7 @@ from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.model_config import ModelEndpointConfig, ProviderType
 from relay_teams.providers.openai_support import build_model_request_headers
 from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
+from relay_teams.reminders import SystemReminderService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
@@ -174,6 +175,7 @@ class ExternalAcpSessionManager:
         metric_recorder: MetricRecorder | None = None,
         im_tool_service: ImToolService | None = None,
         computer_runtime: ComputerRuntime | None = None,
+        reminder_service: SystemReminderService | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._config_service = config_service
@@ -211,6 +213,7 @@ class ExternalAcpSessionManager:
         self._metric_recorder = metric_recorder
         self._im_tool_service = im_tool_service
         self._computer_runtime = computer_runtime
+        self._reminder_service = reminder_service
         self._conversations: dict[str, _ConversationHandle] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -972,6 +975,7 @@ class ExternalAcpSessionManager:
             metric_recorder=self._metric_recorder,
             im_tool_service=self._im_tool_service,
             computer_runtime=self._computer_runtime,
+            reminder_service=self._reminder_service,
         )
 
     def _resolve_transport_agent_config(

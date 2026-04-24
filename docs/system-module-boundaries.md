@@ -29,6 +29,9 @@ With the current layout, that means:
 - `monitors/*` owns the event-driven substrate itself: normalized envelopes,
   subscription persistence, deterministic matching, cooldown/dedupe, and action
   dispatch.
+- `reminders/*` owns built-in runtime reminder policy, reminder state, and
+  `<system-reminder>` rendering. It consumes typed observations from execution,
+  orchestration, and prompt maintenance boundaries.
 - `notifications/*` owns outbound notification delivery only.
 - `persistence/*` and module-local `repository.py` files own storage mechanics only;
   they should not perform orchestration decisions.
@@ -85,6 +88,8 @@ Boundary:
 
 ### Other Shared Infra
 
+- `sessions/runs/system_injection.py`: shared system-originated message delivery for
+  hooks, reminders, monitor follow-ups, and other runtime wake-up paths.
 - `logger/*`: structured logging and diagnostics.
 - `net/*`: proxy-aware HTTP client construction and transport policy.
 - `secrets/*`: secret persistence and masking.

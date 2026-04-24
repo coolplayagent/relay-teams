@@ -300,6 +300,94 @@ def test_render_transcript_does_not_clip_first_tool_line_mid_token() -> None:
     assert transcript.startswith("User/Tool\nTool result [shell]:")
 
 
+def test_render_transcript_handles_empty_and_tiny_budget_cases() -> None:
+    assert compaction_module._render_transcript([], max_chars=32) == ""
+
+    single = compaction_module._render_transcript(
+        [ModelRequest(parts=[UserPromptPart(content="x" * 120)])],
+        max_chars=24,
+    )
+    assert single.startswith("User/Tool\nUser:")
+
+    tiny_multi = compaction_module._render_transcript(
+        [
+            ModelRequest(parts=[UserPromptPart(content="first compacted turn")]),
+            ModelRequest(parts=[UserPromptPart(content="second compacted turn")]),
+        ],
+        max_chars=32,
+    )
+    assert "transcript middle clipped" not in tiny_multi
+    assert tiny_multi.startswith("User/Tool\nUser:")
+
+
+def test_render_transcript_preserves_newest_compacted_turns_when_budget_clips() -> None:
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="head objective")]),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="shell",
+                    tool_call_id="call-1",
+                    content="\n".join(f"middle filler {index}" for index in range(80)),
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=(
+                        "Preserve exact facts.\n"
+                        "- phase-5 anchor: nylon-orbit-508\n"
+                        "- phase-5 checksum: CHK-P5-ER8"
+                    )
+                )
+            ]
+        ),
+    ]
+
+    transcript = compaction_module._render_transcript(history, max_chars=600)
+
+    assert "head objective" in transcript
+    assert "phase-5 anchor: nylon-orbit-508" in transcript
+    assert "phase-5 checksum: CHK-P5-ER8" in transcript
+    assert "transcript middle clipped" in transcript
+
+
+def test_render_transcript_preserves_single_line_suffix_when_clipped() -> None:
+    transcript = compaction_module._render_transcript(
+        [
+            ModelRequest(parts=[UserPromptPart(content="head objective")]),
+            ModelRequest(parts=[UserPromptPart(content="x" * 1000)]),
+        ],
+        max_chars=600,
+    )
+
+    assert "head objective" in transcript
+    assert "transcript middle clipped" in transcript
+    assert "x" * 20 in transcript
+
+
+def test_clip_rendered_message_suffix_uses_complete_tail_lines() -> None:
+    assert compaction_module._clip_rendered_message_suffix("", max_chars=8) == ""
+    assert compaction_module._clip_rendered_message_suffix("abcdef", max_chars=8) == (
+        "abcdef"
+    )
+    assert (
+        compaction_module._clip_rendered_message_suffix(
+            "abcdef",
+            max_chars=3,
+        )
+        == "def"
+    )
+    assert (
+        compaction_module._clip_rendered_message_suffix(
+            "header\nline one\nline two",
+            max_chars=12,
+        )
+        == "line two"
+    )
+
+
 @pytest.mark.asyncio
 async def test_conversation_compaction_service_hides_messages_and_creates_marker(
     monkeypatch: pytest.MonkeyPatch,

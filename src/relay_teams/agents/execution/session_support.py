@@ -66,6 +66,14 @@ class _NullPromptHistoryMessageRepo:
         _ = conversation_id
         return []
 
+    def get_history_for_conversation_task(
+        self,
+        conversation_id: str,
+        task_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        _ = (conversation_id, task_id)
+        return []
+
     def prune_conversation_history_to_safe_boundary(
         self,
         conversation_id: str,
@@ -1080,6 +1088,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             mcp_tool_context_token_cache=mcp_tool_context_token_cache,
             media_asset_service=getattr(self, "_media_asset_service", None),
             hook_service=getattr(self, "_hook_service", None),
+            reminder_service=getattr(self, "_reminder_service", None),
             run_event_hub=getattr(self, "_run_event_hub", None),
             load_safe_history_for_conversation=getattr(
                 self,

@@ -185,8 +185,10 @@ from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
 from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
 from relay_teams.sessions.runs.todo_repository import TodoRepository
 from relay_teams.sessions.runs.todo_service import TodoService
+from relay_teams.sessions.runs.system_injection import SystemInjectionSink
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.reminders import ReminderStateRepository, SystemReminderService
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
@@ -532,6 +534,16 @@ class ServerContainer:
             repository=self.todo_repository,
             run_event_hub=self.run_event_hub,
         )
+        self.system_injection_sink = SystemInjectionSink(
+            injection_manager=self.injection_manager,
+            run_event_hub=self.run_event_hub,
+            message_repo=self.message_repo,
+        )
+        self.reminder_state_repository = ReminderStateRepository(self.shared_store)
+        self.reminder_service = SystemReminderService(
+            state_repository=self.reminder_state_repository,
+            injection_sink=self.system_injection_sink,
+        )
         self.feishu_client = FeishuClient()
         self.xiaoluban_account_repository = XiaolubanAccountRepository(
             runtime.paths.db_path
@@ -610,6 +622,7 @@ class ServerContainer:
             run_intent_repo=self.run_intent_repo,
             background_task_service=self.background_task_service,
             todo_service=self.todo_service,
+            reminder_service=self.reminder_service,
             monitor_service=self.monitor_service,
             role_memory_service=self.role_memory_service,
             tool_registry=self.tool_registry,
@@ -991,6 +1004,7 @@ class ServerContainer:
             external_agent_session_manager=self.external_acp_session_manager,
             session_model_profile_lookup=self._session_model_profile_lookup,
             hook_service=self.hook_service,
+            reminder_service=self.reminder_service,
         )
         self.task_execution_service = create_task_execution_service(
             role_registry=self.role_registry,
@@ -1017,6 +1031,8 @@ class ServerContainer:
             role_memory_service=self.role_memory_service,
             runtime_role_resolver=self.runtime_role_resolver,
             hook_service=self.hook_service,
+            todo_service=self.todo_service,
+            reminder_service=self.reminder_service,
         )
         self.task_service = TaskOrchestrationService(
             task_repo=self.task_repo,

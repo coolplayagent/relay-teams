@@ -4,7 +4,21 @@ from pathlib import Path
 
 import pytest
 
+from relay_teams.secrets import AppSecretStore
+
 _UNIT_TESTS_ROOT = Path(__file__).resolve().parent
+
+
+class _UnitTestSecretStore(AppSecretStore):
+    def has_usable_keyring_backend(self) -> bool:
+        return False
+
+
+@pytest.fixture(autouse=True)
+def _disable_system_keyring_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    import relay_teams.secrets.secret_store as secret_store
+
+    monkeypatch.setattr(secret_store, "_SECRET_STORE", _UnitTestSecretStore())
 
 
 def pytest_collection_modifyitems(

@@ -24,7 +24,9 @@ from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.reminders import SystemReminderService
 from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.tools.registry import ToolRegistry
@@ -58,6 +60,8 @@ def create_task_execution_service(
     role_memory_service: RoleMemoryService | None = None,
     runtime_role_resolver: RuntimeRoleResolver | None = None,
     hook_service: HookService | None = None,
+    todo_service: TodoService | None = None,
+    reminder_service: SystemReminderService | None = None,
 ) -> TaskExecutionService:
     return TaskExecutionService(
         role_registry=role_registry,
@@ -91,4 +95,6 @@ def create_task_execution_service(
         run_intent_repo=run_intent_repo,
         media_asset_service=media_asset_service,
         hook_service=hook_service,
+        todo_service=todo_service,
+        reminder_service=reminder_service,
     )

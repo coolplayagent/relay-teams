@@ -19,10 +19,12 @@ import relay_teams.tools.runtime.execution as execution_module
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.notifications import NotificationService, default_notification_config
+from relay_teams.reminders import ToolResultObservation
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventName
+from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.media import (
     MediaModality,
@@ -76,6 +78,12 @@ class _FakeInjectionRecord:
         self.source = source
         self.content = content
 
+    def model_dump_json(self) -> str:
+        return json.dumps(
+            {"source": self.source.value, "content": self.content},
+            ensure_ascii=False,
+        )
+
 
 class _FakeInjectionManager:
     def __init__(self) -> None:
@@ -97,6 +105,15 @@ class _FakeInjectionManager:
         record = _FakeInjectionRecord(source=source, content=content)
         self.records.append(record)
         return record
+
+
+class _FakeReminderService:
+    def __init__(self) -> None:
+        self.observations: list[ToolResultObservation] = []
+
+    def observe_tool_result(self, observation: ToolResultObservation) -> object:
+        self.observations.append(observation)
+        return None
 
 
 class _FakeApprovalManager:
@@ -167,9 +184,11 @@ class _FakeDeps:
         self.tool_approval_policy = policy
         self.notification_service = _build_notification_service(self.run_event_hub)
         self.hook_service: object | None = None
+        self.reminder_service: object | None = None
         self.hook_runtime_env: dict[str, str] = {}
         self.injection_manager = _FakeInjectionManager()
         self.media_asset_service: object | None = None
+        self.message_repo = MessageRepository(db_path)
         self.approval_ticket_repo = ApprovalTicketRepository(db_path)
         self.run_runtime_repo = RunRuntimeRepository(db_path)
         self.shared_store = SharedStateRepository(Path(mkdtemp()) / "state.db")
@@ -891,6 +910,152 @@ def test_execute_tool_supports_projection_with_separate_visible_and_internal_dat
         cast(dict[str, JsonValue], state.result_envelope)["internal_data"],
     )
     assert internal_data["stdout"] == "/tmp\n"
+
+
+def test_execute_tool_reports_failed_status_projection_to_reminders() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    reminder_service = _FakeReminderService()
+    deps.reminder_service = reminder_service
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-shell-failed-status"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="shell",
+            args_summary={"command": "cat missing.txt"},
+            action=lambda: ToolResultProjection(
+                visible_data={
+                    "status": "failed",
+                    "command": "cat missing.txt",
+                    "exit_code": 1,
+                    "output_excerpt": "cat: missing.txt: No such file or directory",
+                },
+                internal_data={
+                    "status": "failed",
+                    "command": "cat missing.txt",
+                    "exit_code": 1,
+                },
+            ),
+        )
+    )
+
+    assert result["ok"] is True
+    assert len(reminder_service.observations) == 1
+    observation = reminder_service.observations[0]
+    assert observation.ok is False
+    assert observation.error_type == "reported_failed_status"
+    assert observation.error_message == "cat: missing.txt: No such file or directory"
+
+
+def test_execute_tool_ignores_domain_failed_status_for_successful_tools() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    reminder_service = _FakeReminderService()
+    deps.reminder_service = reminder_service
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-background-status"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="wait_background_task",
+            args_summary={"background_task_id": "bg-1"},
+            action=lambda: ToolResultProjection(
+                visible_data={
+                    "status": "failed",
+                    "background_task_id": "bg-1",
+                    "output": "background task failed after the wait completed",
+                },
+                internal_data={
+                    "status": "failed",
+                    "background_task_id": "bg-1",
+                },
+            ),
+        )
+    )
+
+    assert result["ok"] is True
+    assert len(reminder_service.observations) == 1
+    observation = reminder_service.observations[0]
+    assert observation.ok is True
+    assert observation.error_type == ""
+    assert observation.error_message == ""
+
+
+def test_reported_failure_helper_scopes_to_shell_failure_projections() -> None:
+    assert (
+        execution_module._reported_failure_from_success_envelope(
+            tool_name="shell",
+            envelope={"ok": False},
+        )
+        is None
+    )
+    assert (
+        execution_module._reported_failure_from_success_envelope(
+            tool_name="wait_background_task",
+            envelope={"ok": True, "data": {"status": "failed", "exit_code": 1}},
+        )
+        is None
+    )
+    assert (
+        execution_module._reported_failure_from_success_envelope(
+            tool_name="shell",
+            envelope={"ok": True, "data": "failed"},
+        )
+        is None
+    )
+    assert (
+        execution_module._reported_failure_from_success_envelope(
+            tool_name="shell",
+            envelope={"ok": True, "data": {"status": "completed", "exit_code": 1}},
+        )
+        is None
+    )
+    assert (
+        execution_module._reported_failure_from_success_envelope(
+            tool_name="shell",
+            envelope={"ok": True, "data": {"status": "failed", "exit_code": 0}},
+        )
+        is None
+    )
+    assert execution_module._reported_failure_from_success_envelope(
+        tool_name="shell",
+        envelope={
+            "ok": True,
+            "data": {
+                "status": "failed",
+                "exit_code": 2,
+                "recent_output": ["line one", "line two"],
+            },
+        },
+    ) == ("reported_failed_status", "line one\nline two")
+    assert execution_module._reported_failure_from_success_envelope(
+        tool_name="shell",
+        envelope={
+            "ok": True,
+            "data": {
+                "status": "failed",
+                "exit_code": 3,
+                "command": "cat missing.txt",
+            },
+        },
+    ) == ("reported_failed_status", "Command failed with exit code 3: cat missing.txt")
+    assert execution_module._reported_failure_from_success_envelope(
+        tool_name="shell",
+        envelope={
+            "ok": True,
+            "data": {
+                "status": "failed",
+                "exit_code": 1,
+            },
+        },
+    ) == ("reported_failed_status", "The tool result reported failed status.")
 
 
 def test_execute_tool_returns_tool_return_for_tool_content_parts() -> None:

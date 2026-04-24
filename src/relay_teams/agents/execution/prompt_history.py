@@ -68,6 +68,11 @@ from relay_teams.media import (
 )
 from relay_teams.providers.model_config import ModelEndpointConfig
 from relay_teams.providers.provider_contracts import LLMRequest
+from relay_teams.reminders import (
+    ContextPressureObservation,
+    ReminderKind,
+    SystemReminderService,
+)
 from relay_teams.sessions.runs.assistant_errors import (
     AssistantRunError,
     AssistantRunErrorPayload,
@@ -115,6 +120,12 @@ class PromptHistoryMessageRepository(Protocol):
     def get_history_for_conversation(
         self,
         conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]: ...
+
+    def get_history_for_conversation_task(
+        self,
+        conversation_id: str,
+        task_id: str,
     ) -> list[ModelRequest | ModelResponse]: ...
 
     def prune_conversation_history_to_safe_boundary(
@@ -201,6 +212,7 @@ class PromptHistoryService:
         mcp_tool_context_token_cache: dict[str, int],
         media_asset_service: object | None,
         hook_service: object | None,
+        reminder_service: SystemReminderService | None,
         run_event_hub: object,
         load_safe_history_for_conversation: Callable[
             [str], list[ModelRequest | ModelResponse]
@@ -215,6 +227,7 @@ class PromptHistoryService:
         self._mcp_tool_context_token_cache = mcp_tool_context_token_cache
         self._media_asset_service = media_asset_service
         self._hook_service = hook_service
+        self._reminder_service = reminder_service
         self._run_event_hub = run_event_hub
         self._load_safe_history_for_conversation = load_safe_history_for_conversation
 
@@ -237,14 +250,24 @@ class PromptHistoryService:
         allowed_skills: tuple[str, ...],
     ) -> PreparedPromptContext:
         history = self._load_safe_history_for_conversation(conversation_id)
+        history, protected_current_prompt = self._split_protected_current_prompt(
+            request=request,
+            conversation_id=conversation_id,
+            history=history,
+            reserve_user_prompt_tokens=reserve_user_prompt_tokens,
+        )
         source_history = list(history)
         provisional_system_prompt = self.inject_compaction_summary(
             session_id=request.session_id,
             conversation_id=conversation_id,
             system_prompt=system_prompt,
         )
-        budget = await self.estimate_compaction_budget(
+        compaction_budget_request = self._request_with_protected_prompt_for_budget(
             request=request,
+            protected_prompt=protected_current_prompt,
+        )
+        budget = await self.estimate_compaction_budget(
+            request=compaction_budget_request,
             history=history,
             system_prompt=provisional_system_prompt,
             reserve_user_prompt_tokens=reserve_user_prompt_tokens,
@@ -281,6 +304,8 @@ class PromptHistoryService:
             request=request,
             history=history,
         )
+        if protected_current_prompt is not None:
+            history.append(protected_current_prompt)
         final_system_prompt = self.inject_compaction_summary(
             session_id=request.session_id,
             conversation_id=conversation_id,
@@ -304,6 +329,72 @@ class PromptHistoryService:
             microcompact_compacted_message_count=compacted_message_count,
             microcompact_compacted_part_count=compacted_part_count,
         )
+
+    def _split_protected_current_prompt(
+        self,
+        *,
+        request: LLMRequest,
+        conversation_id: str,
+        history: Sequence[ModelRequest | ModelResponse],
+        reserve_user_prompt_tokens: bool,
+    ) -> tuple[list[ModelRequest | ModelResponse], ModelRequest | None]:
+        candidate_history = list(history)
+        if not reserve_user_prompt_tokens:
+            return candidate_history, None
+        current_keys = self._current_request_prompt_keys(
+            request=request,
+            conversation_id=conversation_id,
+        )
+        if not current_keys:
+            return candidate_history, None
+        if not any(
+            history_ends_with_user_prompt(candidate_history, current_key)
+            for current_key in current_keys
+        ):
+            return candidate_history, None
+        protected_prompt = candidate_history.pop()
+        if not isinstance(protected_prompt, ModelRequest):
+            return candidate_history, None
+        return candidate_history, protected_prompt
+
+    def _current_request_prompt_keys(
+        self,
+        *,
+        request: LLMRequest,
+        conversation_id: str,
+    ) -> tuple[str, ...]:
+        keys: list[str] = []
+        current_content = self.current_request_prompt_content(request)
+        if current_content is not None:
+            current_key = user_prompt_content_key(current_content)
+            if current_key and current_key not in keys:
+                keys.append(current_key)
+        task_history = self._message_repo.get_history_for_conversation_task(
+            conversation_id,
+            request.task_id,
+        )
+        for message in reversed(task_history):
+            if not isinstance(message, ModelRequest):
+                continue
+            current_key = user_prompt_parts_key(parts=message.parts)
+            if current_key:
+                if current_key not in keys:
+                    keys.append(current_key)
+                break
+        return tuple(keys)
+
+    def _request_with_protected_prompt_for_budget(
+        self,
+        *,
+        request: LLMRequest,
+        protected_prompt: ModelRequest | None,
+    ) -> LLMRequest:
+        if protected_prompt is None or request.prompt_text.strip():
+            return request
+        prompt_text = extract_user_prompt_text(protected_prompt)
+        if prompt_text is None:
+            return request
+        return request.model_copy(update={"user_prompt": prompt_text, "input": ()})
 
     def coerce_history_to_provider_safe_sequence(
         self,
@@ -603,6 +694,27 @@ class PromptHistoryService:
                     ),
                 ),
                 run_event_hub=self._run_event_hub,
+            )
+        if compacted_result.applied and self._reminder_service is not None:
+            _ = self._reminder_service.observe_context_pressure(
+                ContextPressureObservation(
+                    session_id=request.session_id,
+                    run_id=request.run_id,
+                    trace_id=request.trace_id,
+                    task_id=request.task_id,
+                    instance_id=request.instance_id,
+                    role_id=request.role_id,
+                    conversation_id=conversation_id,
+                    kind=ReminderKind.POST_COMPACTION,
+                    message_count_before=len(history),
+                    message_count_after=len(compacted_history),
+                    estimated_tokens_before=estimated_tokens_before_microcompact or 0,
+                    estimated_tokens_after=ConversationTokenEstimator().estimate_history_tokens(
+                        compacted_history
+                    ),
+                    threshold_tokens=plan.threshold_tokens,
+                    target_tokens=plan.target_tokens,
+                )
             )
         return compacted_history
 

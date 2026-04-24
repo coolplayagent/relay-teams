@@ -376,6 +376,39 @@ def _plan_todo_validation_response(
             "content": "[fake-llm] todo_write is not available for this role.",
         }
     attempt = _next_scenario_attempt(messages, marker="[todo-validation]")
+    if _messages_contain_user_text(
+        messages,
+        "run-scoped todos are still incomplete",
+    ):
+        last_tool_call_id = _extract_last_tool_call_id(messages)
+        if isinstance(last_tool_call_id, str) and last_tool_call_id.startswith(
+            "call-todo-validation-reminder"
+        ):
+            return {
+                "kind": "text",
+                "content": "todo validation completed",
+            }
+        return {
+            "kind": "tool_call",
+            "tool_name": "todo_write",
+            "tool_call_id": f"call-todo-validation-reminder-{attempt}",
+            "arguments": {
+                "items": [
+                    {
+                        "content": "Inspect issue 399 requirements",
+                        "status": "completed",
+                    },
+                    {
+                        "content": "Implement run todo persistence",
+                        "status": "completed",
+                    },
+                    {
+                        "content": "Verify API and CLI output",
+                        "status": "completed",
+                    },
+                ]
+            },
+        }
     if attempt == 1:
         return {
             "kind": "tool_call",
@@ -1191,6 +1224,8 @@ def _extract_last_user_text(messages: list[object]) -> str:
             continue
         content = message.get("content")
         if isinstance(content, str):
+            if _is_system_reminder_text(content):
+                continue
             return content
         if isinstance(content, list):
             parts: list[str] = []
@@ -1201,8 +1236,18 @@ def _extract_last_user_text(messages: list[object]) -> str:
                 if isinstance(text, str) and text:
                     parts.append(text)
             if parts:
-                return " ".join(parts)
+                combined = " ".join(parts)
+                if _is_system_reminder_text(combined):
+                    continue
+                return combined
     return ""
+
+
+def _is_system_reminder_text(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.startswith("<system-reminder>") and stripped.endswith(
+        "</system-reminder>"
+    )
 
 
 def _messages_contain_user_text(messages: list[object], snippet: str) -> bool:

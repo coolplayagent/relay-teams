@@ -28,6 +28,7 @@ from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
+from relay_teams.sessions.runs.system_injection import SystemInjectionSink
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.sessions.runs.event_log import EventLog
@@ -35,6 +36,9 @@ from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from relay_teams.sessions.runs.todo_models import TodoItem, TodoStatus
+from relay_teams.sessions.runs.todo_repository import TodoRepository
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.sessions.runs.recoverable_pause import (
     RecoverableRunPauseError,
     RecoverableRunPausePayload,
@@ -45,6 +49,7 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.reminders import ReminderStateRepository, SystemReminderService
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
@@ -83,6 +88,23 @@ class _CapturingProvider:
         self.thinking_enabled.append(getattr(thinking, "enabled", False) is True)
         self.thinking_efforts.append(getattr(thinking, "effort", None))
         return "ok"
+
+
+class _TodoCompletingProvider:
+    def __init__(self, todo_service: TodoService) -> None:
+        self.calls = 0
+        self._todo_service = todo_service
+
+    async def generate(self, request: object) -> str:
+        self.calls += 1
+        if self.calls == 2:
+            self._todo_service.clear_for_run(
+                run_id=str(getattr(request, "run_id")),
+                session_id=str(getattr(request, "session_id")),
+                updated_by_role_id=str(getattr(request, "role_id")),
+                updated_by_instance_id=str(getattr(request, "instance_id")),
+            )
+        return f"ok-{self.calls}"
 
 
 class _InterruptingProvider:
@@ -388,6 +410,71 @@ async def test_execute_omits_objective_when_task_history_exists(
 
     assert result.output == "ok"
     assert provider.prompts == [None]
+
+
+@pytest.mark.asyncio
+async def test_execute_retries_root_completion_when_todos_are_incomplete(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "task_execution_service_reminders.db"
+    todo_service = TodoService(repository=TodoRepository(db_path))
+    provider = _TodoCompletingProvider(todo_service)
+    service, task_repo, agent_repo, message_repo = _build_service(db_path, provider)
+    service.todo_service = todo_service
+    service.reminder_service = SystemReminderService(
+        state_repository=ReminderStateRepository(service.shared_store),
+        injection_sink=SystemInjectionSink(
+            injection_manager=RunInjectionManager(),
+            run_event_hub=RunEventHub(),
+            message_repo=message_repo,
+        ),
+    )
+    workspace_id = "default"
+    conversation_id = build_conversation_id("session-1", "time")
+    instance = create_subagent_instance(
+        "time",
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        objective="query time",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="time",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+    todo_service.replace_for_run(
+        run_id="run-1",
+        session_id="session-1",
+        items=(TodoItem(content="finish verification", status=TodoStatus.PENDING),),
+    )
+
+    result = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="time",
+        task=task,
+    )
+
+    refreshed = task_repo.get("task-1")
+    messages = message_repo.get_messages_for_instance("session-1", instance.instance_id)
+    serialized_messages = json.dumps(messages, ensure_ascii=False)
+    assert provider.calls == 2
+    assert result.output == "ok-2"
+    assert refreshed.status == TaskStatus.COMPLETED
+    assert "<system-reminder>" in serialized_messages
+    assert "finish verification" in serialized_messages
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ from enum import Enum
 from json import dumps
 from typing import (
     Literal,
+    Optional,
     Protocol,
     cast,
     get_args,
@@ -32,8 +33,10 @@ from relay_teams.persistence import is_retryable_sqlite_error
 from relay_teams.agents.tasks.task_status_sanitizer import (
     sanitize_task_status_payload,
 )
+from relay_teams.reminders import ToolResultObservation
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.sessions.runs.system_injection import SystemInjectionSink
 
 from relay_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRecord,
@@ -229,6 +232,12 @@ async def execute_tool(
                 error=approval_error,
                 meta=meta,
             )
+            _observe_tool_result_reminders(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                envelope=envelope,
+            )
             _persist_tool_record(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
@@ -330,6 +339,12 @@ async def execute_tool(
                 args_summary=args_summary,
                 envelope=envelope,
             )
+            _observe_tool_result_reminders(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                envelope=envelope,
+            )
             _persist_tool_record(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
@@ -401,6 +416,12 @@ async def execute_tool(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
                 args_summary=args_summary,
+                envelope=envelope,
+            )
+            _observe_tool_result_reminders(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
                 envelope=envelope,
             )
             _persist_tool_record(
@@ -1182,9 +1203,13 @@ def _apply_post_hook_bundle_to_envelope(
     runtime_meta = cast(dict[str, JsonValue], meta) if isinstance(meta, dict) else {}
     if bundle.additional_context:
         runtime_meta["hook_additional_context"] = list(bundle.additional_context)
-        _enqueue_additional_context_followup(
+        _enqueue_system_followup(
             ctx=ctx,
-            contexts=bundle.additional_context,
+            content="\n\n".join(
+                str(context).strip()
+                for context in bundle.additional_context
+                if str(context).strip()
+            ),
         )
     if bundle.deferred_action:
         runtime_meta["hook_deferred_action"] = bundle.deferred_action
@@ -1199,27 +1224,24 @@ def _apply_post_hook_bundle_to_envelope(
     return envelope
 
 
-def _enqueue_additional_context_followup(
+def _enqueue_system_followup(
     *,
     ctx: ToolContext,
-    contexts: tuple[str, ...],
-) -> None:
-    injection_manager = getattr(ctx.deps, "injection_manager", None)
-    if injection_manager is None:
-        return
-    if not injection_manager.is_active(ctx.deps.run_id):
-        return
-    content = "\n\n".join(
-        str(context).strip() for context in contexts if str(context).strip()
-    )
+    content: str,
+) -> bool:
     if not content:
-        return
-    _ = injection_manager.enqueue(
-        ctx.deps.run_id,
-        ctx.deps.instance_id,
-        source=InjectionSource.SYSTEM,
+        return False
+    result = _system_injection_sink(ctx).enqueue_only(
+        session_id=ctx.deps.session_id,
+        run_id=ctx.deps.run_id,
+        trace_id=ctx.deps.trace_id,
+        task_id=ctx.deps.task_id,
+        instance_id=ctx.deps.instance_id,
+        role_id=ctx.deps.role_id,
         content=content,
+        source=InjectionSource.SYSTEM,
     )
+    return result.enqueued
 
 
 def _enqueue_deferred_followup(
@@ -1230,18 +1252,8 @@ def _enqueue_deferred_followup(
     tool_call_id: str,
     deferred_action: str,
 ) -> None:
-    injection_manager = getattr(ctx.deps, "injection_manager", None)
-    if injection_manager is None:
+    if not _enqueue_system_followup(ctx=ctx, content=deferred_action):
         return
-    if not injection_manager.is_active(ctx.deps.run_id):
-        return
-    record = injection_manager.enqueue(
-        ctx.deps.run_id,
-        ctx.deps.instance_id,
-        source=InjectionSource.SYSTEM,
-        content=deferred_action,
-    )
-    _ = record
     ctx.deps.run_event_hub.publish(
         RunEvent(
             session_id=ctx.deps.session_id,
@@ -1262,6 +1274,110 @@ def _enqueue_deferred_followup(
             ),
         )
     )
+
+
+def _system_injection_sink(ctx: ToolContext) -> SystemInjectionSink:
+    return SystemInjectionSink(
+        injection_manager=ctx.deps.injection_manager,
+        run_event_hub=ctx.deps.run_event_hub,
+        message_repo=ctx.deps.message_repo,
+    )
+
+
+# noinspection PyTypeHints
+def _observe_tool_result_reminders(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    tool_call_id: str,
+    envelope: dict[str, JsonValue],
+) -> None:
+    reminder_service = getattr(ctx.deps, "reminder_service", None)
+    if reminder_service is None:
+        return
+    error_payload = envelope.get("error")
+    error = (
+        cast(dict[str, JsonValue], error_payload)
+        if isinstance(error_payload, dict)
+        else {}
+    )
+    meta_payload = envelope.get("meta")
+    meta = (
+        cast(dict[str, JsonValue], meta_payload)
+        if isinstance(meta_payload, dict)
+        else {}
+    )
+    reported_failure = _reported_failure_from_success_envelope(
+        tool_name=tool_name,
+        envelope=envelope,
+    )
+    observed_ok = bool(envelope.get("ok") is True)
+    error_type = str(error.get("type") or "")
+    error_message = str(error.get("message") or "")
+    if reported_failure is not None:
+        observed_ok = False
+        if not error_type:
+            error_type = reported_failure[0]
+        if not error_message:
+            error_message = reported_failure[1]
+    _ = reminder_service.observe_tool_result(
+        ToolResultObservation(
+            session_id=ctx.deps.session_id,
+            run_id=ctx.deps.run_id,
+            trace_id=ctx.deps.trace_id,
+            task_id=ctx.deps.task_id,
+            instance_id=ctx.deps.instance_id,
+            role_id=ctx.deps.role_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            ok=observed_ok,
+            error_type=error_type,
+            error_message=error_message,
+            retryable=bool(error.get("retryable") is True),
+            meta=meta,
+        )
+    )
+
+
+def _reported_failure_from_success_envelope(
+    *,
+    tool_name: str,
+    envelope: dict[str, JsonValue],
+) -> Optional[tuple[str, str]]:
+    if envelope.get("ok") is not True:
+        return None
+    if tool_name != "shell":
+        return None
+    data_payload = envelope.get("data")
+    if not isinstance(data_payload, dict):
+        return None
+    data = cast(dict[str, JsonValue], data_payload)
+    if data.get("status") != "failed":
+        return None
+    exit_code = data.get("exit_code")
+    if not isinstance(exit_code, int) or exit_code == 0:
+        return None
+
+    message = _reported_failure_message(data)
+    return "reported_failed_status", message
+
+
+def _reported_failure_message(data: dict[str, JsonValue]) -> str:
+    output_excerpt = data.get("output_excerpt")
+    if isinstance(output_excerpt, str) and output_excerpt.strip():
+        return output_excerpt.strip()
+
+    recent_output = data.get("recent_output")
+    if isinstance(recent_output, list):
+        lines = [line for line in recent_output if isinstance(line, str)]
+        if lines:
+            return "\n".join(lines).strip()
+
+    command = data.get("command")
+    exit_code = data.get("exit_code")
+    if isinstance(command, str) and command.strip() and type(exit_code) is int:
+        return f"Command failed with exit code {exit_code}: {command}"
+    return "The tool result reported failed status."
 
 
 async def _handle_tool_approval(
@@ -1763,11 +1879,12 @@ class _RequiresApprovalPolicy(Protocol):
     def requires_approval(self, tool_name: str) -> bool: ...
 
 
+# noinspection PyTypeHints
 def _internal_record(
     *,
     tool_name: str,
     visible_envelope: dict[str, JsonValue],
-    internal_data: JsonValue | None,
+    internal_data: Optional[JsonValue],
     runtime_meta: dict[str, JsonValue],
 ) -> dict[str, JsonValue]:
     record = ToolInternalRecord(
