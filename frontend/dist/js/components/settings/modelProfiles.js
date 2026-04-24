@@ -1348,12 +1348,10 @@ async function handleDiscoverDraftModels() {
 
 async function handleCodeAgentLogin() {
     const provider = getDraftProvider();
-    if (
-        !isCodeAgentProvider(provider)
-        || draftCodeAgentAuthState.statusMessage === 'Starting SSO login'
-    ) {
+    if (!isCodeAgentProvider(provider) || draftCodeAgentAuthState.loginInProgress) {
         return;
     }
+    draftCodeAgentAuthState.loginInProgress = true;
     draftCodeAgentAuthState.statusMessage = 'Starting SSO login';
     renderDraftCodeAgentAuthState();
     try {
@@ -1369,6 +1367,9 @@ async function handleCodeAgentLogin() {
     } catch (e) {
         draftCodeAgentAuthState.statusMessage = `SSO failed: ${e.message}`;
         renderDraftCodeAgentAuthState();
+    } finally {
+        draftCodeAgentAuthState.loginInProgress = false;
+        renderDraftCodeAgentAuthState();
     }
 }
 
@@ -1379,11 +1380,17 @@ async function pollCodeAgentOAuthSession(authSessionId) {
         if (!result.completed) {
             continue;
         }
+        if (draftCodeAgentAuthState.authSessionId !== authSessionId) {
+            return;
+        }
         draftCodeAgentAuthState.completed = true;
         draftCodeAgentAuthState.hasPersistedAccessToken = true;
         draftCodeAgentAuthState.hasPersistedRefreshToken = true;
         draftCodeAgentAuthState.statusMessage = 'Signed in';
         renderDraftCodeAgentAuthState();
+        return;
+    }
+    if (draftCodeAgentAuthState.authSessionId !== authSessionId) {
         return;
     }
     draftCodeAgentAuthState.statusMessage = 'SSO login timed out';
@@ -2452,7 +2459,7 @@ function renderDraftCodeAgentAuthState() {
         loginBtn.textContent = loginLabel;
         loginBtn.title = loginLabel;
         loginBtn.setAttribute('aria-label', loginLabel);
-        loginBtn.disabled = !isCodeAgent || statusMessage === 'Starting SSO login';
+        loginBtn.disabled = !isCodeAgent || draftCodeAgentAuthState.loginInProgress;
     }
     if (statusMessageEl) {
         statusMessageEl.textContent = showStatus ? localizeCodeAgentAuthStatusMessage(statusMessage) : '';
@@ -2644,6 +2651,7 @@ function createDraftCodeAgentAuthState() {
         completed: false,
         hasPersistedAccessToken: false,
         hasPersistedRefreshToken: false,
+        loginInProgress: false,
         statusMessage: 'Not signed in',
     };
 }

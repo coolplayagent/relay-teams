@@ -1751,6 +1751,25 @@ class ModelConnectivityProbeService:
                 status_code=response.status_code,
                 error_message=error_message or "Model connectivity check failed.",
             )
+        if config.provider == ProviderType.CODEAGENT and self._is_event_stream_response(
+            response
+        ):
+            token_usage = None
+            if isinstance(response_payload, dict):
+                token_usage = self._extract_token_usage(response_payload.get("usage"))
+            return ModelConnectivityProbeResult(
+                ok=True,
+                provider=config.provider,
+                model=config.model,
+                latency_ms=latency_ms,
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                token_usage=token_usage,
+            )
         if response_payload is _INVALID_RESPONSE_PAYLOAD:
             return ModelConnectivityProbeResult(
                 ok=False,
@@ -2225,6 +2244,10 @@ class ModelConnectivityProbeService:
             except ValueError:
                 continue
         return _INVALID_RESPONSE_PAYLOAD
+
+    def _is_event_stream_response(self, response: httpx.Response) -> bool:
+        content_type = response.headers.get("content-type", "")
+        return "text/event-stream" in content_type.casefold()
 
     def _http_error_code(self, status_code: int) -> str:
         if status_code in {401, 403}:
