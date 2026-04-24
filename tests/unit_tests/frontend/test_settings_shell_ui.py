@@ -304,24 +304,34 @@ console.log(JSON.stringify({
     assert 'id="profile-name"' in modal_html
     assert 'id="profile-provider"' in modal_html
     assert 'id="profile-is-default"' in modal_html
-    assert '<select id="profile-provider">' in modal_html
+    assert (
+        '<select id="profile-provider" aria-hidden="true" tabindex="-1">' in modal_html
+    )
     assert 'value="openai_compatible"' in modal_html
-    assert 'value="bigmodel"' in modal_html
-    assert 'value="minimax"' in modal_html
+    assert 'value="bigmodel"' not in modal_html
+    assert 'value="minimax"' not in modal_html
     assert 'value="maas"' in modal_html
     assert 'value="echo"' not in modal_html
+    assert 'id="profile-model"' in modal_html
     assert (
-        '<input type="text" id="profile-model" autocomplete="off" spellcheck="false">'
-        in modal_html
+        'data-i18n-placeholder="settings.model.custom_model_placeholder"' in modal_html
     )
     assert 'id="open-profile-model-menu-btn"' in modal_html
     assert 'id="profile-model-options"' not in modal_html
     assert 'id="profile-model-menu"' in modal_html
+    assert 'id="model-catalog-selected"' not in modal_html
+    assert 'class="model-catalog-search-field"' in modal_html
     assert 'id="fetch-profile-models-btn"' in modal_html
     assert 'title="Fetch Models"' in modal_html
     assert 'id="profile-primary-credentials-row"' in modal_html
+    assert 'id="profile-base-url-fields" style="display:none;"' in modal_html
+    assert 'id="profile-provider-custom-btn"' in modal_html
+    assert 'data-provider-mode="custom"' in modal_html
     assert 'id="profile-model-group"' in modal_html
+    assert 'id="profile-model-group" style="display:none;"' in modal_html
     assert 'id="toggle-profile-api-key-btn"' in modal_html
+    assert 'id="profile-probe-status"' not in modal_html
+    assert 'id="profile-probe-inline-status"' in modal_html
     assert (
         'id="profile-api-key" placeholder="sk-..." autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false"'
         in modal_html
@@ -359,8 +369,11 @@ console.log(JSON.stringify({
     assert 'id="edit-profile-name-btn"' not in modal_html
     assert 'id="edit-profile-name-input"' not in modal_html
     assert ">Fetch</button>" not in modal_html
-    assert modal_html.index('label for="profile-api-key"') < modal_html.index(
-        'label for="profile-model"'
+    assert modal_html.index('label for="profile-name"') < modal_html.index(
+        'data-profile-step="model"'
+    )
+    assert modal_html.index('label for="profile-model"') < modal_html.index(
+        'label for="profile-api-key"'
     )
     assert modal_html.index('id="profile-maas-password"') < modal_html.index(
         'id="profile-maas-model-slot"'
@@ -374,8 +387,8 @@ console.log(JSON.stringify({
     assert modal_html.index('id="profile-max-tokens"') < modal_html.index(
         'id="profile-context-window"'
     )
-    assert modal_html.index('id="profile-context-window"') < modal_html.index(
-        'id="profile-is-default"'
+    assert modal_html.index('id="profile-is-default"') < modal_html.index(
+        'id="profile-context-window"'
     )
     assert "Model Selection" not in modal_html
     assert (
@@ -409,6 +422,9 @@ def test_settings_action_button_order_keeps_cancel_on_far_right() -> None:
     assert "settings-panel-actions-group-start" in actions_html
     assert "settings-panel-actions-group-end" in actions_html
     assert actions_html.index('id="test-profile-btn"') < actions_html.index(
+        'id="profile-probe-inline-status"'
+    )
+    assert actions_html.index('id="profile-probe-inline-status"') < actions_html.index(
         'id="save-profile-btn"'
     )
     assert 'id="test-proxy-web-btn"' not in actions_html
@@ -461,6 +477,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
 
     mock_model_profiles_path = tmp_path / "mockModelProfiles.mjs"
     mock_commands_settings_path = tmp_path / "mockCommandsSettings.mjs"
+    model_profiles_template_path = tmp_path / "modelProfilesTemplate.mjs"
     mock_hooks_settings_path = tmp_path / "mockHooksSettings.mjs"
     mock_agents_settings_path = tmp_path / "mockAgentsSettings.mjs"
     mock_environment_path = tmp_path / "mockEnvironmentVariables.mjs"
@@ -503,6 +520,19 @@ export async function loadCommandsSettingsPanel() {
 
 export function syncCommandsSettingsActions() {}
 """.strip(),
+        encoding="utf-8",
+    )
+    model_profiles_template_path.write_text(
+        (
+            repo_root
+            / "frontend"
+            / "dist"
+            / "js"
+            / "components"
+            / "settings"
+            / "modelProfiles"
+            / "template.js"
+        ).read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     mock_environment_path.write_text(
@@ -731,6 +761,7 @@ export function translateDocument() {
         .replace("./agentsSettings.js", "./mockAgentsSettings.mjs")
         .replace("./commandsSettings.js", "./mockCommandsSettings.mjs")
         .replace("./hooksSettings.js", "./mockHooksSettings.mjs")
+        .replace("./modelProfiles/template.js", "./modelProfilesTemplate.mjs")
         .replace("./modelProfiles.js", "./mockModelProfiles.mjs")
         .replace("./environmentVariables.js", "./mockEnvironmentVariables.mjs")
         .replace("./notifications.js", "./mockNotifications.mjs")

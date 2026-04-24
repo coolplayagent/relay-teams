@@ -601,7 +601,7 @@ def test_browser_shell_settings_and_session_management(
     assert _wait_for_session_ids_snapshot(page) == baseline_session_ids
 
 
-def test_browser_model_profile_switching_to_bigmodel_prefills_base_url(
+def test_browser_model_profile_custom_provider_keeps_manual_base_url(
     browser_page: Page,
     integration_env: IntegrationEnvironment,
 ) -> None:
@@ -626,11 +626,13 @@ def test_browser_model_profile_switching_to_bigmodel_prefills_base_url(
         integration_env.fake_llm_v1_base_url,
         timeout=_WAIT_TIMEOUT_MS,
     )
+    expect(page.locator("#profile-provider")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
+    expect(page.locator('#profile-provider option[value="bigmodel"]')).to_have_count(0)
 
-    page.locator("#profile-provider").select_option("bigmodel")
+    page.locator("#profile-provider-custom-btn").click()
 
     expect(page.locator("#profile-base-url")).to_have_value(
-        "https://open.bigmodel.cn/api/coding/paas/v4",
+        integration_env.fake_llm_v1_base_url,
         timeout=_WAIT_TIMEOUT_MS,
     )
 

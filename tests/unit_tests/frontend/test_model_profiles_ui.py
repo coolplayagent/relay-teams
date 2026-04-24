@@ -67,6 +67,43 @@ export async function fetchModelFallbackConfig() {
     };
 }
 
+export async function fetchModelCatalog() {
+    globalThis.__fetchModelCatalogCount = (globalThis.__fetchModelCatalogCount || 0) + 1;
+    return {
+        ok: true,
+        source_url: "https://models.dev/api.json",
+        cache_age_seconds: 0,
+        providers: [
+            {
+                id: "openai",
+                name: "OpenAI",
+                api: "https://api.openai.com/v1",
+                env: ["OPENAI_API_KEY"],
+                models: [
+                    {
+                        id: "gpt-4o",
+                        name: "GPT-4o",
+                        context_window: 128000,
+                        output_limit: 16384,
+                        reasoning: false,
+                        tool_call: true,
+                        capabilities: {
+                            input: { text: true, image: true, audio: false, video: false, pdf: false },
+                            output: { text: true, image: false, audio: false, video: false, pdf: false },
+                        },
+                        input_modalities: ["image"],
+                    },
+                ],
+            },
+        ],
+    };
+}
+
+export async function refreshModelCatalog() {
+    globalThis.__refreshModelCatalogCount = (globalThis.__refreshModelCatalogCount || 0) + 1;
+    return fetchModelCatalog();
+}
+
 export async function probeModelConnection(payload) {
     globalThis.__probePayload = payload;
     return {
@@ -205,6 +242,741 @@ console.log(JSON.stringify({
     assert "Image input" in rendered_html
     assert "Text only" in rendered_html
     assert "profile-card-chip-capability-image" in rendered_html
+
+
+def test_model_catalog_renders_provider_and_model_choices(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+const beforeAdd = {
+    fetchCount: globalThis.__fetchModelCatalogCount || 0,
+    panelDisplay: document.getElementById("model-catalog-panel").style.display,
+};
+
+document.getElementById("add-profile-btn").onclick();
+await Promise.resolve();
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    beforeAdd,
+    providerHtml: document.getElementById("model-catalog-provider-list").innerHTML,
+    modelHtml: document.getElementById("model-catalog-model-list").innerHTML,
+    providerListDisplay: document.getElementById("model-catalog-provider-list").style.display,
+    modelListDisplay: document.getElementById("model-catalog-model-list").style.display,
+    statusText: document.getElementById("model-catalog-status").textContent,
+    panelDisplay: document.getElementById("model-catalog-panel").style.display,
+    fetchCount: globalThis.__fetchModelCatalogCount || 0,
+}));
+""".strip(),
+    )
+
+    before_add = cast(dict[str, JsonValue], payload["beforeAdd"])
+    assert before_add == {"fetchCount": 0, "panelDisplay": "none"}
+    assert "OpenAI" in cast(str, payload["providerHtml"])
+    assert "Select a provider first" in cast(str, payload["modelHtml"])
+    assert payload["providerListDisplay"] == "none"
+    assert payload["modelListDisplay"] == "none"
+    assert "1 providers, 1 models" in cast(str, payload["statusText"])
+    assert payload["panelDisplay"] == "flex"
+    assert cast(int, payload["fetchCount"]) >= 1
+
+
+def test_model_catalog_search_inputs_open_provider_and_model_lists(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("add-profile-btn").onclick();
+await Promise.resolve();
+await Promise.resolve();
+document.getElementById("model-catalog-provider-search").onclick();
+const providerListDisplay = document.getElementById("model-catalog-provider-list").style.display;
+document.getElementById("model-catalog-model-search").onclick();
+const modelListDisplay = document.getElementById("model-catalog-model-list").style.display;
+
+console.log(JSON.stringify({
+    providerListDisplay,
+    modelListDisplay,
+    modelHtml: document.getElementById("model-catalog-model-list").innerHTML,
+    providerInputValue: document.getElementById("model-catalog-provider-search").value,
+    modelInputValue: document.getElementById("model-catalog-model-search").value,
+}));
+""".strip(),
+    )
+
+    assert payload["providerListDisplay"] == "block"
+    assert payload["modelListDisplay"] == "block"
+    assert "Select a provider first" in cast(str, payload["modelHtml"])
+    assert payload["providerInputValue"] == ""
+    assert payload["modelInputValue"] == ""
+
+
+def test_model_catalog_supports_keyboard_selection(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+function keyEvent(key) {
+    return {
+        key,
+        defaultPrevented: false,
+        preventDefault() {
+            this.defaultPrevented = true;
+        },
+    };
+}
+
+document.getElementById("add-profile-btn").onclick();
+await Promise.resolve();
+await Promise.resolve();
+document.getElementById("model-catalog-provider-search").onkeydown(keyEvent("ArrowDown"));
+const providerHtmlAfterArrow = document.getElementById("model-catalog-provider-list").innerHTML;
+document.getElementById("model-catalog-provider-search").onkeydown(keyEvent("Enter"));
+document.getElementById("model-catalog-model-search").onkeydown(keyEvent("ArrowDown"));
+document.getElementById("model-catalog-model-search").onkeydown(keyEvent("ArrowDown"));
+const modelHtmlAfterArrow = document.getElementById("model-catalog-model-list").innerHTML;
+document.getElementById("model-catalog-model-search").onkeydown(keyEvent("Enter"));
+
+console.log(JSON.stringify({
+    providerHtmlAfterArrow,
+    modelHtmlAfterArrow,
+    providerInputValue: document.getElementById("model-catalog-provider-search").value,
+    modelInputValue: document.getElementById("model-catalog-model-search").value,
+    modelValue: document.getElementById("profile-model").value,
+    summary: document.getElementById("profile-model-summary").textContent,
+}));
+""".strip(),
+    )
+
+    assert "is-keyboard-active" in cast(str, payload["providerHtmlAfterArrow"])
+    assert "is-keyboard-active" in cast(str, payload["modelHtmlAfterArrow"])
+    assert payload["providerInputValue"] == "OpenAI"
+    assert payload["modelInputValue"] == "GPT-4o"
+    assert payload["modelValue"] == "gpt-4o"
+    assert payload["summary"] == "Model Marketplace · OpenAI · GPT-4o"
+
+
+def test_catalog_model_selection_prefills_and_saves_metadata(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("add-profile-btn").onclick();
+await Promise.resolve();
+await Promise.resolve();
+document.getElementById("model-catalog-provider-list").querySelectorAll(".model-catalog-provider-btn")[0].onclick();
+document.getElementById("model-catalog-model-list").querySelectorAll(".model-catalog-model-btn")[0].onclick();
+document.getElementById("profile-api-key").value = "test-api-key";
+
+const draft = {
+    name: document.getElementById("profile-name").value,
+    provider: document.getElementById("profile-provider").value,
+    model: document.getElementById("profile-model").value,
+    baseUrl: document.getElementById("profile-base-url").value,
+    contextWindow: document.getElementById("profile-context-window").value,
+    maxTokens: document.getElementById("profile-max-tokens").value,
+    catalogDisplay: document.getElementById("model-catalog-panel").style.display,
+    summary: document.getElementById("profile-model-summary").textContent,
+};
+
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    draft,
+    savedProfile: globalThis.__savedProfile,
+}));
+""".strip(),
+    )
+
+    draft = cast(dict[str, JsonValue], payload["draft"])
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    assert draft == {
+        "name": "openai-gpt-4o",
+        "provider": "openai_compatible",
+        "model": "gpt-4o",
+        "baseUrl": "https://api.openai.com/v1",
+        "contextWindow": "128000",
+        "maxTokens": "16384",
+        "catalogDisplay": "flex",
+        "summary": "Model Marketplace · OpenAI · GPT-4o",
+    }
+    assert saved_profile["name"] == "openai-gpt-4o"
+    assert saved_profile_body["catalog_provider_id"] == "openai"
+    assert saved_profile_body["catalog_provider_name"] == "OpenAI"
+    assert saved_profile_body["catalog_model_name"] == "GPT-4o"
+    assert saved_profile_body["context_window"] == 128000
+    assert saved_profile_body["max_tokens"] == 16384
+    assert cast(dict[str, JsonValue], saved_profile_body["capabilities"])["input"] == {
+        "text": True,
+        "image": True,
+        "audio": False,
+        "video": False,
+        "pdf": False,
+    }
+
+
+def test_catalog_model_without_provider_api_keeps_base_url_editable(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("add-profile-btn").onclick();
+await Promise.resolve();
+await Promise.resolve();
+document.getElementById("model-catalog-provider-list").querySelectorAll(".model-catalog-provider-btn")[0].onclick();
+document.getElementById("model-catalog-model-list").querySelectorAll(".model-catalog-model-btn")[0].onclick();
+const baseUrlFieldsDisplay = document.getElementById("profile-base-url-fields").style.display;
+const baseUrlBeforeInput = document.getElementById("profile-base-url").value;
+document.getElementById("profile-base-url").value = "https://manual.example/v1";
+document.getElementById("profile-base-url").oninput();
+document.getElementById("profile-api-key").value = "test-api-key";
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    baseUrlFieldsDisplay,
+    baseUrlBeforeInput,
+    baseUrlFieldsDisplayAfterInput: document.getElementById("profile-base-url-fields").style.display,
+    savedProfile: globalThis.__savedProfile,
+}));
+""".strip(),
+        mock_api_source=DEFAULT_MOCK_API_SOURCE.replace(
+            'api: "https://api.openai.com/v1",',
+            'api: "",',
+            1,
+        ),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    assert payload["baseUrlFieldsDisplay"] == "block"
+    assert payload["baseUrlBeforeInput"] == ""
+    assert payload["baseUrlFieldsDisplayAfterInput"] == "block"
+    assert saved_profile_body["base_url"] == "https://manual.example/v1"
+
+
+def test_saving_after_leaving_catalog_clears_catalog_metadata(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(
+    button => button.dataset.name === "default",
+).onclick();
+await Promise.resolve();
+await Promise.resolve();
+document.getElementById("profile-provider-custom-btn").onclick();
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    savedProfile: globalThis.__savedProfile,
+}));
+""".strip(),
+        mock_api_source=DEFAULT_MOCK_API_SOURCE.replace(
+            'input_modalities: ["image"],\n        },',
+            (
+                'input_modalities: ["image"],\n'
+                '            catalog_provider_id: "openai",\n'
+                '            catalog_provider_name: "OpenAI",\n'
+                '            catalog_model_name: "Fake Chat",\n'
+                "        },"
+            ),
+            1,
+        ),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    assert saved_profile["name"] == "default"
+    assert saved_profile_body["catalog_provider_id"] is None
+    assert saved_profile_body["catalog_provider_name"] is None
+    assert saved_profile_body["catalog_model_name"] is None
+
+
+def test_catalog_custom_model_uses_simple_inline_input(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("add-profile-btn").onclick();
+await Promise.resolve();
+await Promise.resolve();
+document.getElementById("model-catalog-provider-list").querySelectorAll(".model-catalog-provider-btn")[0].onclick();
+document.getElementById("model-catalog-model-search").onclick();
+document.getElementById("model-catalog-model-list").querySelectorAll(".model-catalog-custom-model-btn")[0].onclick();
+
+console.log(JSON.stringify({
+    modelHtml: document.getElementById("model-catalog-model-list").innerHTML,
+    profileModelGroupDisplay: document.getElementById("profile-model-group").style.display,
+}));
+""".strip(),
+    )
+
+    model_html = cast(str, payload["modelHtml"])
+    assert 'id="model-catalog-custom-model-input"' in model_html
+    assert 'id="model-catalog-custom-model-apply-btn"' in model_html
+    assert 'id="open-profile-model-menu-btn"' not in model_html
+    assert 'id="fetch-profile-models-btn"' not in model_html
+    assert payload["profileModelGroupDisplay"] == "none"
+
+
+def test_catalog_custom_model_input_does_not_rerender_while_typing() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_text = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "settings"
+        / "modelProfiles.js"
+    ).read_text(encoding="utf-8")
+    function_start = source_text.index("function handleCatalogCustomModelInput")
+    function_end = source_text.index(
+        "function handleCatalogCustomModelKeydown", function_start
+    )
+    function_body = source_text[function_start:function_end]
+
+    assert "syncDraftModelValueWithoutRender(value)" in function_body
+    assert "setDraftModelValue(value)" not in function_body
+    assert "renderProfileEditorState()" not in function_body
+    assert "renderModelCatalog()" not in function_body
+
+
+def test_edit_profile_does_not_show_or_load_model_catalog(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+await Promise.resolve();
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    panelDisplay: document.getElementById("model-catalog-panel").style.display,
+    fetchCount: globalThis.__fetchModelCatalogCount || 0,
+}));
+""".strip(),
+    )
+
+    assert payload["panelDisplay"] == "none"
+    assert payload["fetchCount"] == 0
+
+
+def test_edit_profile_switching_to_marketplace_loads_model_catalog(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+await Promise.resolve();
+await Promise.resolve();
+const fetchCountBeforeSwitch = globalThis.__fetchModelCatalogCount || 0;
+document.getElementById("profile-provider-external-btn").onclick();
+await Promise.resolve();
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    fetchCountBeforeSwitch,
+    fetchCountAfterSwitch: globalThis.__fetchModelCatalogCount || 0,
+    panelDisplay: document.getElementById("model-catalog-panel").style.display,
+    providerInputValue: document.getElementById("model-catalog-provider-search").value,
+}));
+""".strip(),
+    )
+
+    assert payload["fetchCountBeforeSwitch"] == 0
+    assert cast(int, payload["fetchCountAfterSwitch"]) >= 1
+    assert payload["panelDisplay"] == "flex"
+    assert payload["providerInputValue"] == ""
+
+
+def test_editing_legacy_provider_uses_preserving_provider_setter() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_text = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "settings"
+        / "modelProfiles.js"
+    ).read_text(encoding="utf-8")
+    edit_start = source_text.index("function handleEditProfile")
+    edit_end = source_text.index("function handleCancelProfile", edit_start)
+    edit_body = source_text[edit_start:edit_end]
+    setter_start = source_text.index("function setDraftProviderValue")
+    setter_end = source_text.index("function readDraftMaasAuth", setter_start)
+    setter_body = source_text[setter_start:setter_end]
+
+    assert "setDraftProviderValue(profile.provider || 'openai_compatible')" in edit_body
+    assert "ensureProviderOption(providerInput, normalized)" in setter_body
+    assert "document.createElement('option')" in setter_body
+
+
+def test_edit_external_catalog_profile_shows_saved_market_choice(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+await Promise.resolve();
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    panelDisplay: document.getElementById("model-catalog-panel").style.display,
+    summary: document.getElementById("profile-model-summary").textContent,
+    providerInputValue: document.getElementById("model-catalog-provider-search").value,
+    modelInputValue: document.getElementById("model-catalog-model-search").value,
+    providerListDisplay: document.getElementById("model-catalog-provider-list").style.display,
+    modelListDisplay: document.getElementById("model-catalog-model-list").style.display,
+    fetchCount: globalThis.__fetchModelCatalogCount || 0,
+    providerHtml: document.getElementById("model-catalog-provider-list").innerHTML,
+    modelHtml: document.getElementById("model-catalog-model-list").innerHTML,
+}));
+""".strip(),
+        mock_api_source=DEFAULT_MOCK_API_SOURCE.replace(
+            'input_modalities: ["image"],',
+            'input_modalities: ["image"],\n            catalog_provider_id: "openai",\n            catalog_provider_name: "OpenAI",\n            catalog_model_name: "Fake Chat",',
+            1,
+        ),
+    )
+
+    assert payload["panelDisplay"] == "flex"
+    assert payload["summary"] == "Model Marketplace · OpenAI · Fake Chat"
+    assert payload["providerInputValue"] == "OpenAI"
+    assert payload["modelInputValue"] == "Fake Chat"
+    assert payload["providerListDisplay"] == "none"
+    assert payload["modelListDisplay"] == "none"
+    fetch_count = int(cast(float | int | str, payload["fetchCount"]))
+    assert fetch_count >= 1
+    assert "OpenAI" in cast(str, payload["providerHtml"])
+    assert "is-active" in cast(str, payload["providerHtml"])
+
+
+def test_edit_external_catalog_profile_can_open_saved_catalog_choice(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn")[0].onclick();
+await Promise.resolve();
+await Promise.resolve();
+document.getElementById("model-catalog-model-search").onclick();
+
+console.log(JSON.stringify({
+    panelDisplay: document.getElementById("model-catalog-panel").style.display,
+    modelListDisplay: document.getElementById("model-catalog-model-list").style.display,
+    providerHtml: document.getElementById("model-catalog-provider-list").innerHTML,
+    modelHtml: document.getElementById("model-catalog-model-list").innerHTML,
+}));
+""".strip(),
+        mock_api_source=DEFAULT_MOCK_API_SOURCE.replace(
+            'name: "GPT-4o",',
+            'name: "Fake Chat",',
+            1,
+        ).replace(
+            'input_modalities: ["image"],',
+            'input_modalities: ["image"],\n            catalog_provider_id: "openai",\n            catalog_provider_name: "OpenAI",\n            catalog_model_name: "Fake Chat",',
+            1,
+        ),
+    )
+
+    assert payload["panelDisplay"] == "flex"
+    assert payload["modelListDisplay"] == "block"
+    assert "is-active" in cast(str, payload["providerHtml"])
+    assert "Fake Chat" in cast(str, payload["modelHtml"])
+    assert "model-catalog-model-btn is-active" in cast(str, payload["modelHtml"])
+
+
+def test_add_profile_refreshes_model_catalog_in_background(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+document.getElementById("add-profile-btn").onclick();
+await Promise.resolve();
+await Promise.resolve();
+await Promise.resolve();
+document.getElementById("model-catalog-provider-list").querySelectorAll(".model-catalog-provider-btn")[0].onclick();
+
+console.log(JSON.stringify({
+    fetchCount: globalThis.__fetchModelCatalogCount || 0,
+    refreshCount: globalThis.__refreshModelCatalogCount || 0,
+    modelHtml: document.getElementById("model-catalog-model-list").innerHTML,
+}));
+""".strip(),
+    )
+
+    assert cast(int, payload["fetchCount"]) >= 2
+    assert payload["refreshCount"] == 1
+    assert "GPT-4o" in cast(str, payload["modelHtml"])
+
+
+def test_manual_refresh_button_is_only_available_in_add_profile_catalog(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+const listPanelDisplay = document.getElementById("model-catalog-panel").style.display;
+document.getElementById("add-profile-btn").onclick();
+await Promise.resolve();
+await Promise.resolve();
+const addPanelDisplay = document.getElementById("model-catalog-panel").style.display;
+await document.getElementById("refresh-model-catalog-btn").onclick();
+
+console.log(JSON.stringify({
+    listPanelDisplay,
+    addPanelDisplay,
+    refreshCount: globalThis.__refreshModelCatalogCount || 0,
+}));
+""".strip(),
+    )
+
+    assert payload["listPanelDisplay"] == "none"
+    assert payload["addPanelDisplay"] == "flex"
+    assert cast(int, payload["refreshCount"]) >= 2
+
+
+def test_catalog_provider_mapping_only_special_cases_maas(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+document.getElementById("add-profile-btn").onclick();
+await Promise.resolve();
+await Promise.resolve();
+
+document.getElementById("model-catalog-provider-list").querySelectorAll(".model-catalog-provider-btn")[0].onclick();
+document.getElementById("model-catalog-model-list").querySelectorAll(".model-catalog-model-btn")[0].onclick();
+const minimaxProvider = document.getElementById("profile-provider").value;
+
+document.getElementById("model-catalog-provider-list").querySelectorAll(".model-catalog-provider-btn")[1].onclick();
+document.getElementById("model-catalog-model-list").querySelectorAll(".model-catalog-model-btn")[0].onclick();
+const maasProvider = document.getElementById("profile-provider").value;
+const maasAuthDisplay = document.getElementById("profile-maas-auth-fields").style.display;
+const apiKeyDisplay = document.getElementById("profile-api-key-group").style.display;
+const modelGroupDisplay = document.getElementById("profile-model-group").style.display;
+const catalogPanelDisplay = document.getElementById("model-catalog-panel").style.display;
+
+console.log(JSON.stringify({
+    minimaxProvider,
+    maasProvider,
+    maasAuthDisplay,
+    apiKeyDisplay,
+    modelGroupDisplay,
+    catalogPanelDisplay,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {};
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function fetchModelCatalog() {
+    return {
+        ok: true,
+        source_url: "https://models.dev/api.json",
+        providers: [
+            {
+                id: "minimax",
+                name: "MiniMax",
+                api: "https://api.minimaxi.com/v1",
+                env: ["MINIMAX_API_KEY"],
+                models: [
+                    {
+                        id: "minimax-text-01",
+                        name: "MiniMax Text 01",
+                        capabilities: {
+                            input: { text: true, image: false, audio: false, video: false, pdf: false },
+                            output: { text: true, image: false, audio: false, video: false, pdf: false },
+                        },
+                        input_modalities: [],
+                    },
+                ],
+            },
+            {
+                id: "maas",
+                name: "MAAS",
+                api: "http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/",
+                env: [],
+                models: [
+                    {
+                        id: "maas-chat",
+                        name: "MAAS Chat",
+                        capabilities: {
+                            input: { text: true, image: false, audio: false, video: false, pdf: false },
+                            output: { text: true, image: false, audio: false, video: false, pdf: false },
+                        },
+                        input_modalities: [],
+                    },
+                ],
+            },
+        ],
+    };
+}
+
+export async function refreshModelCatalog() {
+    return fetchModelCatalog();
+}
+
+export async function probeModelConnection() {
+    return { ok: true, latency_ms: 1 };
+}
+
+export async function discoverModelCatalog() {
+    return { ok: true, latency_ms: 1, models: [] };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+    )
+
+    assert payload["minimaxProvider"] == "openai_compatible"
+    assert payload["maasProvider"] == "maas"
+    assert payload["maasAuthDisplay"] == "grid"
+    assert payload["apiKeyDisplay"] == "none"
+    assert payload["modelGroupDisplay"] == "block"
+    assert payload["catalogPanelDisplay"] == "none"
 
 
 def test_saving_model_profile_includes_fallback_settings(tmp_path: Path) -> None:
@@ -492,6 +1264,44 @@ export function t(key) {
     assert payload["titleText"] == "Edit Profile ALT"
     assert "Disabled ALT" in cast(str, payload["fallbackOptionsHtml"])
     assert payload["fallbackValue"] == "other_provider_only"
+
+
+def test_model_profile_list_can_set_default_profile(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+const defaultButtons = document.getElementById("profiles-list").querySelectorAll(".set-default-profile-btn");
+await defaultButtons.find(button => button.dataset.name === "ui-regression-profile").onclick();
+
+console.log(JSON.stringify({
+    savedProfile: globalThis.__savedProfile,
+    reloadCalled: globalThis.__reloadCalled === true,
+    notifications,
+}));
+""".strip(),
+    )
+
+    saved_profile = cast(dict[str, object], payload["savedProfile"])
+    saved_body = cast(dict[str, object], saved_profile["profile"])
+
+    assert saved_profile["name"] == "ui-regression-profile"
+    assert saved_body["is_default"] is True
+    assert saved_body["model"] == "fake-chat-model"
+    assert payload["reloadCalled"] is True
+    assert cast(list[object], payload["notifications"])[0] == {
+        "title": "Default Model Updated",
+        "message": "ui-regression-profile is now the default model.",
+        "tone": "success",
+    }
 
 
 def test_model_profiles_localize_builtin_fallback_policy_summary_labels(
@@ -826,8 +1636,9 @@ await document.getElementById("test-profile-btn").onclick();
 console.log(JSON.stringify({
     notifications,
     testButtonText: document.getElementById("test-profile-btn").textContent,
-    probeStatusText: document.getElementById("profile-probe-status").textContent,
-    probeStatusDisplay: document.getElementById("profile-probe-status").style.display,
+    probeStatusText: document.getElementById("profile-probe-inline-status").textContent,
+    probeStatusDisplay: document.getElementById("profile-probe-inline-status").style.display,
+    probeStatusClass: document.getElementById("profile-probe-inline-status").className,
     probePayload: globalThis.__probePayload,
 }));
 """.strip(),
@@ -838,7 +1649,10 @@ console.log(JSON.stringify({
     probe_status_text = cast(str, payload["probeStatusText"])
     assert payload["notifications"] == []
     assert payload["testButtonText"] == "Test"
-    assert payload["probeStatusDisplay"] == "block"
+    assert payload["probeStatusDisplay"] == "inline-flex"
+    assert "profile-probe-inline-status-success" in cast(
+        str, payload["probeStatusClass"]
+    )
     assert "Connected in 42ms" in probe_status_text
     assert "9 tokens" in probe_status_text
     assert probe_payload["timeout_ms"] == 15000
@@ -1123,7 +1937,7 @@ console.log(JSON.stringify({
     assert saved_profile_body["provider"] == "bigmodel"
 
 
-def test_selecting_bigmodel_prefills_default_base_url(tmp_path: Path) -> None:
+def test_selecting_bigmodel_does_not_prefill_default_base_url(tmp_path: Path) -> None:
     payload = _run_model_profiles_script(
         tmp_path=tmp_path,
         runner_source="""
@@ -1147,7 +1961,7 @@ console.log(JSON.stringify({
     )
 
     assert payload["providerValue"] == "bigmodel"
-    assert payload["baseUrlValue"] == "https://open.bigmodel.cn/api/coding/paas/v4"
+    assert payload["baseUrlValue"] == ""
 
 
 def test_selecting_bigmodel_does_not_override_existing_base_url(tmp_path: Path) -> None:
@@ -1206,10 +2020,10 @@ console.log(JSON.stringify({
     )
 
     assert payload["providerValue"] == "bigmodel"
-    assert payload["baseUrlValue"] == "https://open.bigmodel.cn/api/coding/paas/v4"
+    assert payload["baseUrlValue"] == ""
 
 
-def test_edit_profile_switching_to_bigmodel_prefills_default_base_url(
+def test_edit_profile_switching_to_bigmodel_keeps_existing_base_url(
     tmp_path: Path,
 ) -> None:
     payload = _run_model_profiles_script(
@@ -1236,7 +2050,7 @@ console.log(JSON.stringify({
     )
 
     assert payload["providerValue"] == "bigmodel"
-    assert payload["baseUrlValue"] == "https://open.bigmodel.cn/api/coding/paas/v4"
+    assert payload["baseUrlValue"] == "http://127.0.0.1:8001/v1"
 
 
 def test_edit_profile_switching_through_provider_without_default_uses_new_default_base_url(
@@ -1314,7 +2128,7 @@ export async function deleteModelProfile(name) {
     )
 
     assert payload["providerValue"] == "bigmodel"
-    assert payload["baseUrlValue"] == "https://open.bigmodel.cn/api/coding/paas/v4"
+    assert payload["baseUrlValue"] == "https://api.minimaxi.com/v1"
 
 
 def test_edit_profile_switching_provider_keeps_manually_changed_base_url(
@@ -1423,7 +2237,7 @@ export async function deleteModelProfile(name) {
     assert payload["baseUrlValue"] == "https://custom.bigmodel.example/v4"
 
 
-def test_selecting_minimax_prefills_default_base_url(tmp_path: Path) -> None:
+def test_selecting_minimax_does_not_prefill_default_base_url(tmp_path: Path) -> None:
     payload = _run_model_profiles_script(
         tmp_path=tmp_path,
         runner_source="""
@@ -1447,7 +2261,7 @@ console.log(JSON.stringify({
     )
 
     assert payload["providerValue"] == "minimax"
-    assert payload["baseUrlValue"] == "https://api.minimaxi.com/v1"
+    assert payload["baseUrlValue"] == ""
 
 
 def test_selecting_minimax_does_not_override_existing_base_url(tmp_path: Path) -> None:
@@ -1539,7 +2353,9 @@ console.log(JSON.stringify({
     assert payload["baseUrlDisabled"] is False
 
 
-def test_switching_to_maas_moves_model_group_below_credentials(tmp_path: Path) -> None:
+def test_switching_to_maas_keeps_model_step_and_toggles_credentials(
+    tmp_path: Path,
+) -> None:
     payload = _run_model_profiles_script(
         tmp_path=tmp_path,
         runner_source="""
@@ -1556,21 +2372,24 @@ const initialParentId = document.getElementById("profile-model-group").parentEle
 document.getElementById("profile-provider").value = "maas";
 document.getElementById("profile-provider").onchange();
 const maasParentId = document.getElementById("profile-model-group").parentElement?.id || null;
+const maasPrimaryRowDisplay = document.getElementById("profile-primary-credentials-row").style.display;
 document.getElementById("profile-provider").value = "openai_compatible";
 document.getElementById("profile-provider").onchange();
 
 console.log(JSON.stringify({
     initialParentId,
     maasParentId,
+    maasPrimaryRowDisplay,
     finalParentId: document.getElementById("profile-model-group").parentElement?.id || null,
     primaryRowDisplay: document.getElementById("profile-primary-credentials-row").style.display,
 }));
 """.strip(),
     )
 
-    assert payload["initialParentId"] == "profile-primary-credentials-row"
-    assert payload["maasParentId"] == "profile-maas-model-slot"
-    assert payload["finalParentId"] == "profile-primary-credentials-row"
+    assert payload["initialParentId"] == "profile-model-field-home"
+    assert payload["maasParentId"] == "profile-model-field-home"
+    assert payload["maasPrimaryRowDisplay"] == "none"
+    assert payload["finalParentId"] == "profile-model-field-home"
     assert payload["primaryRowDisplay"] == "grid"
 
 
@@ -2615,6 +3434,17 @@ def _run_model_profiles_script(
             "    return { policies: [] };\n"
             "}\n"
         )
+    if "fetchModelCatalog" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function fetchModelCatalog() {\n"
+            "    return { ok: true, providers: [] };\n"
+            "}\n\n"
+            "export async function refreshModelCatalog() {\n"
+            "    globalThis.__refreshModelCatalogCount = (globalThis.__refreshModelCatalogCount || 0) + 1;\n"
+            "    return fetchModelCatalog();\n"
+            "}\n"
+        )
     mock_api_path.write_text(resolved_mock_api_source, encoding="utf-8")
     mock_logger_path.write_text(
         """
@@ -2677,6 +3507,21 @@ const translations = {
     "settings.model.context_window_compact": "{count} ctx",
     "settings.model.show_models": "Show Models",
     "settings.model.no_models_loaded": "No Models Loaded",
+    "settings.model.catalog_title": "Model Catalog",
+    "settings.model.catalog_refresh": "Refresh",
+    "settings.model.catalog_provider_search": "Search providers",
+    "settings.model.catalog_model_search": "Search models",
+    "settings.model.catalog_loading": "Loading model catalog...",
+    "settings.model.catalog_refreshing": "Refreshing model catalog...",
+    "settings.model.catalog_failed": "Catalog unavailable: {error}",
+    "settings.model.catalog_empty": "No providers match the search.",
+    "settings.model.catalog_no_models": "No models match the search.",
+    "settings.model.catalog_select_provider_first": "Select a provider first.",
+    "settings.model.catalog_loaded": "{providers} providers, {models} models · {age}",
+    "settings.model.catalog_cache_current": "just updated",
+    "settings.model.catalog_cache_age": "{seconds}s old",
+    "settings.model.catalog_reasoning": "reasoning",
+    "settings.model.catalog_tools": "tools",
     "settings.model.capability_section": "Capabilities",
     "settings.model.image_capability": "Image Input",
     "settings.model.image_capability_follow": "Follow detection",
@@ -2687,6 +3532,21 @@ const translations = {
     "settings.model.show_password": "Show password",
     "settings.model.hide_password": "Hide password",
     "settings.model.default_badge": "Default",
+    "settings.model.default_model_action": "Set as default model",
+    "settings.model.default_model_action_short": "Set default",
+    "settings.model.default_saved_title": "Default Model Updated",
+    "settings.model.default_saved_message": "{name} is now the default model.",
+    "settings.model.provider_external": "Model Marketplace",
+    "settings.model.provider_maas": "MaaS Model",
+    "settings.model.provider_custom": "Custom Model",
+    "settings.model.custom_model": "Custom model",
+    "settings.model.custom_model_catalog_hint": "Enter a model name manually",
+    "settings.model.use_custom_model": "Use",
+    "settings.model.credentials_configured": "Credentials configured",
+    "settings.model.credentials_missing": "Credentials missing",
+    "settings.model.advanced_summary": "Temperature {temperature} · Top P {top_p}",
+    "settings.model.catalog_selected": "Selected Model",
+    "settings.model.catalog_selected_empty": "Choose a model from the catalog.",
     "settings.model.capability_image_input": "Image input",
     "settings.model.capability_text_only": "Text only",
     "settings.model.capability_unknown": "Capability unknown",
@@ -2730,21 +3590,36 @@ function createElement(initialDisplay = "block", id = "") {{
         const selectorToClass = new Map([
             [".edit-profile-btn", "edit-profile-btn"],
             [".delete-profile-btn", "delete-profile-btn"],
+            [".set-default-profile-btn", "set-default-profile-btn"],
             [".profile-card-test-btn", "profile-card-test-btn"],
             [".profile-model-menu-item", "profile-model-menu-item"],
+            [".model-catalog-provider-btn", "model-catalog-provider-btn"],
+            [".model-catalog-model-btn", "model-catalog-model-btn"],
+            [".model-catalog-custom-model-btn", "model-catalog-custom-model-btn"],
         ]);
         const className = selectorToClass.get(selector);
         if (!className) {{
             return [];
         }}
-        const dataAttribute = className === "profile-model-menu-item" ? "data-model-name" : "data-name";
-        const datasetKey = className === "profile-model-menu-item" ? "modelName" : "name";
-        const pattern = new RegExp(`class="[^"]*${{className}}[^"]*"[^>]*${{dataAttribute}}="([^"]+)"`, "g");
+        const datasetSpecs = new Map([
+            ["profile-model-menu-item", [["data-model-name", "modelName"]]],
+            ["model-catalog-provider-btn", [["data-provider-id", "providerId"]]],
+            ["model-catalog-model-btn", [["data-provider-id", "providerId"], ["data-model-id", "modelId"]]],
+            ["model-catalog-custom-model-btn", []],
+        ]);
+        const specs = datasetSpecs.get(className) || [["data-name", "name"]];
+        const pattern = new RegExp(`class="[^"]*${{className}}[^"]*"[^>]*>`, "g");
         const matches = [];
         let match = pattern.exec(source);
         while (match) {{
+            const tag = match[0];
+            const dataset = {{}};
+            specs.forEach(([attributeName, datasetKey]) => {{
+                const attributeMatch = new RegExp(`${{attributeName}}="([^"]*)"`).exec(tag);
+                dataset[datasetKey] = attributeMatch ? attributeMatch[1] : "";
+            }});
             matches.push({{
-                dataset: {{ [datasetKey]: match[1] }},
+                dataset,
                 onclick: null,
             }});
             match = pattern.exec(source);
@@ -2801,18 +3676,35 @@ function createElements() {{
         const entries = [
             ["profiles-list", createElement("block", "profiles-list")],
             ["profile-editor", createElement("none", "profile-editor")],
+            ["profile-model-step", createElement("block", "profile-model-step")],
+            ["profile-model-step-toggle", createElement("block", "profile-model-step-toggle")],
+            ["profile-model-summary", createElement("block", "profile-model-summary")],
+            ["model-catalog-panel", createElement("none", "model-catalog-panel")],
+            ["refresh-model-catalog-btn", createElement("block", "refresh-model-catalog-btn")],
+            ["model-catalog-provider-search", createElement("block", "model-catalog-provider-search")],
+            ["model-catalog-model-search", createElement("block", "model-catalog-model-search")],
+            ["model-catalog-status", createElement("block", "model-catalog-status")],
+            ["model-catalog-provider-list", createElement("block", "model-catalog-provider-list")],
+            ["model-catalog-model-list", createElement("block", "model-catalog-model-list")],
+            ["profile-base-url-toggle-row", createElement("block", "profile-base-url-toggle-row")],
+            ["toggle-profile-base-url-btn", createElement("block", "toggle-profile-base-url-btn")],
+            ["profile-base-url-fields", createElement("none", "profile-base-url-fields")],
+            ["profile-model-field-home", createElement("block", "profile-model-field-home")],
             ["add-profile-btn", createElement("block", "add-profile-btn")],
             ["save-profile-btn", createElement("block", "save-profile-btn")],
             ["test-profile-btn", createElement("block", "test-profile-btn")],
             ["fetch-profile-models-btn", createElement("block", "fetch-profile-models-btn")],
             ["open-profile-model-menu-btn", createElement("block", "open-profile-model-menu-btn")],
             ["cancel-profile-btn", createElement("block", "cancel-profile-btn")],
-            ["profile-probe-status", createElement("none", "profile-probe-status")],
+            ["profile-probe-inline-status", createElement("none", "profile-probe-inline-status")],
             ["profile-model-discovery-status", createElement("none", "profile-model-discovery-status")],
             ["profile-editor-title", createElement("block", "profile-editor-title")],
             ["profile-name", createElement("block", "profile-name")],
             ["profile-provider", createElement("block", "profile-provider")],
             ["profile-provider-options", createElement("block", "profile-provider-options")],
+            ["profile-provider-external-btn", createElement("block", "profile-provider-external-btn")],
+            ["profile-provider-maas-btn", createElement("block", "profile-provider-maas-btn")],
+            ["profile-provider-custom-btn", createElement("block", "profile-provider-custom-btn")],
             ["profile-is-default", createElement("block", "profile-is-default")],
             ["profile-model", createElement("block", "profile-model")],
             ["profile-model-menu", createElement("none", "profile-model-menu")],
@@ -2838,8 +3730,20 @@ function createElements() {{
             ["profile-fallback-priority", createElement("block", "profile-fallback-priority")],
         ];
         const elements = new Map(entries);
+        const modelStep = elements.get("profile-model-step");
+        if (modelStep) {{
+            modelStep.className = "model-profile-step is-open";
+            modelStep.dataset.profileStep = "model";
+        }}
+        const modelStepToggle = elements.get("profile-model-step-toggle");
+        if (modelStepToggle) {{
+            modelStepToggle.dataset.profileStepToggle = "model";
+        }}
+        elements.get("profile-provider-external-btn").dataset.providerMode = "external";
+        elements.get("profile-provider-maas-btn").dataset.providerMode = "maas";
+        elements.get("profile-provider-custom-btn").dataset.providerMode = "custom";
         elements.get("profile-primary-credentials-row")?.appendChild(elements.get("profile-api-key-group"));
-        elements.get("profile-primary-credentials-row")?.appendChild(elements.get("profile-model-group"));
+        elements.get("profile-model-field-home")?.appendChild(elements.get("profile-model-group"));
         elements.get("profile-maas-auth-fields")?.appendChild(elements.get("profile-maas-model-slot"));
         return elements;
     }}
@@ -2848,6 +3752,19 @@ function installGlobals(elements, notifications) {{
     const documentListeners = new Map();
 
     function collectDocumentMatches(selector) {{
+        if (selector === "[data-provider-value]") {{
+            return [
+                elements.get("profile-provider-external-btn"),
+                elements.get("profile-provider-maas-btn"),
+                elements.get("profile-provider-custom-btn"),
+            ].filter(Boolean);
+        }}
+        if (selector === "[data-profile-step-toggle]") {{
+            return [elements.get("profile-model-step-toggle")].filter(Boolean);
+        }}
+        if (selector === "[data-profile-step]") {{
+            return [elements.get("profile-model-step")].filter(Boolean);
+        }}
         if (selector !== ".profile-card") {{
             return [];
         }}

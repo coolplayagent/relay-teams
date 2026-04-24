@@ -19,6 +19,12 @@ from relay_teams.providers.model_config import (
     SamplingConfig,
     default_model_fallback_config,
 )
+from relay_teams.providers.model_catalog import (
+    ModelCatalogModel,
+    ModelCatalogProvider,
+    ModelCatalogResult,
+    ModelCatalogService,
+)
 
 from relay_teams.providers.provider_contracts import (
     EchoProvider,
@@ -40,6 +46,10 @@ __all__ = [
     "LlmRetryConfig",
     "MaaSAuthConfig",
     "ModelCapabilities",
+    "ModelCatalogModel",
+    "ModelCatalogProvider",
+    "ModelCatalogResult",
+    "ModelCatalogService",
     "ModelConfigPayload",
     "ModelFallbackConfig",
     "ModelFallbackPolicy",

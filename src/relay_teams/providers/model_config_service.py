@@ -12,6 +12,7 @@ from relay_teams.providers.model_config import (
     ProviderModelInfo,
     ProviderType,
 )
+from relay_teams.providers.model_catalog import ModelCatalogResult, ModelCatalogService
 from relay_teams.providers.model_connectivity import (
     ModelConnectivityProbeRequest,
     ModelConnectivityProbeResult,
@@ -36,6 +37,7 @@ class ModelConfigService:
         db_path: Path,
         model_config_manager: ModelConfigManager,
         model_fallback_config_manager: ModelFallbackConfigManager,
+        model_catalog_service: ModelCatalogService,
         get_runtime: Callable[[], RuntimeConfig],
         on_runtime_reloaded: Callable[[RuntimeConfig], None],
     ) -> None:
@@ -44,6 +46,7 @@ class ModelConfigService:
         self._db_path: Path = db_path
         self._model_config_manager: ModelConfigManager = model_config_manager
         self._model_fallback_config_manager = model_fallback_config_manager
+        self._model_catalog_service = model_catalog_service
         self._get_runtime: Callable[[], RuntimeConfig] = get_runtime
         self._on_runtime_reloaded: Callable[[RuntimeConfig], None] = on_runtime_reloaded
         self._model_connectivity_probe_service = ModelConnectivityProbeService(
@@ -62,6 +65,9 @@ class ModelConfigService:
 
     def get_model_fallback_config(self) -> ModelFallbackConfig:
         return self._model_fallback_config_manager.get_model_fallback_config()
+
+    def get_model_catalog(self, *, refresh: bool = False) -> ModelCatalogResult:
+        return self._model_catalog_service.get_catalog(refresh=refresh)
 
     def get_provider_models(
         self,

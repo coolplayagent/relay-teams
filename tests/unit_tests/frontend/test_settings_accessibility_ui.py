@@ -9,18 +9,29 @@ def test_settings_markup_links_labels_to_controls_and_wraps_api_key_in_form() ->
     settings_source = (
         repo_root / "frontend" / "dist" / "js" / "components" / "settings" / "index.js"
     ).read_text(encoding="utf-8")
+    model_template_source = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "settings"
+        / "modelProfiles"
+        / "template.js"
+    ).read_text(encoding="utf-8")
+    combined_source = f"{settings_source}\n{model_template_source}"
 
-    assert 'id="profile-editor-form"' in settings_source
-    assert 'for="profile-name"' in settings_source
-    assert 'for="profile-model"' in settings_source
-    assert 'for="profile-base-url"' in settings_source
-    assert 'for="profile-api-key"' in settings_source
-    assert 'for="profile-image-capability"' in settings_source
-    assert 'for="profile-temperature"' in settings_source
-    assert 'for="profile-top-p"' in settings_source
-    assert 'for="profile-max-tokens"' in settings_source
-    assert 'for="profile-context-window"' in settings_source
-    assert 'for="profile-connect-timeout"' in settings_source
+    assert 'id="profile-editor-form"' in combined_source
+    assert 'for="profile-name"' in combined_source
+    assert 'for="profile-model"' in combined_source
+    assert 'for="profile-base-url"' in combined_source
+    assert 'for="profile-api-key"' in combined_source
+    assert 'for="profile-image-capability"' in combined_source
+    assert 'for="profile-temperature"' in combined_source
+    assert 'for="profile-top-p"' in combined_source
+    assert 'for="profile-max-tokens"' in combined_source
+    assert 'for="profile-context-window"' in combined_source
+    assert 'for="profile-connect-timeout"' in combined_source
     assert 'for="proxy-http-proxy"' in settings_source
     assert 'for="proxy-https-proxy"' in settings_source
     assert 'for="proxy-all-proxy"' in settings_source

@@ -98,6 +98,11 @@ class ModelConfigManager:
                 "context_window": normalized_profile.get("context_window"),
                 "fallback_policy_id": normalized_profile.get("fallback_policy_id"),
                 "fallback_priority": normalized_profile.get("fallback_priority", 0),
+                "catalog_provider_id": normalized_profile.get("catalog_provider_id"),
+                "catalog_provider_name": normalized_profile.get(
+                    "catalog_provider_name"
+                ),
+                "catalog_model_name": normalized_profile.get("catalog_model_name"),
                 "is_default": name == default_profile_name,
                 "connect_timeout_seconds": normalized_profile.get(
                     "connect_timeout_seconds",

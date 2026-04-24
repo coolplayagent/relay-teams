@@ -182,8 +182,34 @@ The response body is a root object whose keys are profile ids and whose values u
 
 Returns normalized model profiles.
 Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `headers[]` for additional request headers, `is_default` to mark the runtime default profile, optional `context_window` for next-send context preview UI, optional `fallback_policy_id` to bind that profile to a fallback policy, `fallback_priority` to rank it as a fallback candidate, structured `capabilities.input/output.*`, and a derived `input_modalities[]` compatibility field so the UI can label profiles that accept direct media input.
+Profiles created from the shared model directory may also include optional `catalog_provider_id`, `catalog_provider_name`, and `catalog_model_name` metadata. These fields are descriptive and do not change provider transport selection.
 `provider` currently supports `openai_compatible`, `bigmodel`, `minimax`, `maas`, and the internal/testing-only `echo`. MAAS profiles also return `maas_auth` with `username` and `has_password` so the web UI can preserve the stored password without echoing it back. The MAAS login endpoint and `app-id` are fixed by the backend.
 When no profile is explicitly marked default, the backend resolves the default in this order: a profile named `default`, the only configured profile, then the first profile by name.
+
+### `GET /system/configs/model/catalog`
+
+Returns the shared provider/model directory used by the settings UI to prefill model profiles.
+The backend fetches `https://models.dev/api.json`, normalizes provider entries and model metadata, and caches the result in the app config directory.
+When a cache exists, the default `GET` path returns it immediately, even after the five-minute freshness window. The settings UI uses this cache-first path only from the add-profile editor, then starts a background refresh. The add-profile catalog also exposes a manual refresh button that calls the forced refresh endpoint.
+Query field:
+- `refresh`: optional boolean. When `true`, bypasses the cache-first path and attempts to fetch the remote directory.
+
+Response fields:
+- `ok`: `true` when the returned directory came from cache or a successful fetch.
+- `source_url`: directory source URL.
+- `fetched_at`: timestamp for the cached directory, when available.
+- `cache_age_seconds`: age of the cached directory, when available.
+- `stale`: `true` when the returned cache is older than the freshness window, or when the backend returned stale cache after a refresh/fetch failure.
+- `providers[]`: normalized providers. Each provider includes `id`, `name`, optional `api`, optional `doc`, `env[]`, and `models[]`.
+- `error_code` and `error_message`: populated when `ok` is `false`.
+
+Model entries include `id`, `name`, optional family/date/limit fields, capability flags, normalized `capabilities`, and `input_modalities[]`.
+
+### `POST /system/configs/model/catalog:refresh`
+
+Forces a refresh of the shared provider/model directory and returns the same response shape as `GET /system/configs/model/catalog`.
+If the remote source is unavailable and a previous cache exists, the backend returns the stale cache with `ok = false` and `stale = true`.
+Selecting a catalog model in the UI only pre-fills the add-profile editor; persisting the profile still uses `PUT /system/configs/model/profiles/{name}`.
 
 ### `PUT /system/configs/model/profiles/{name}`
 
@@ -195,6 +221,7 @@ Profiles may also include optional `ssl_verify` to override the global outbound 
 Profiles may include `is_default` to promote that profile to the runtime default; saving one default clears the flag from all others.
 Profiles may include optional `context_window` to declare the total model context limit separately from `max_tokens`, which remains the output-token cap when explicitly set. If `max_tokens` is omitted, the backend preserves that unset state and lets the provider decide the default output cap for primary LLM requests.
 Profiles may include optional `fallback_policy_id` to enable quota/rate-limit fallback for that profile. The referenced policy id must exist in `model-fallback.json`. Profiles may also include `fallback_priority`; higher values are preferred when the profile is selected as a fallback candidate.
+Profiles may include optional `catalog_provider_id`, `catalog_provider_name`, and `catalog_model_name` metadata when the UI prefilled the draft from `GET /system/configs/model/catalog`.
 Profiles may include `headers[]`, where each item has `name`, optional `value`, optional `secret`, and optional `configured`.
 Profiles must provide at least one auth source: `api_key`, one configured header, or `maas_auth` for `provider = "maas"`.
 When `provider = "maas"`, `maas_auth` must include `username`; `password` is accepted on write but persisted only in the unified secret store. The backend always authenticates against `http://rnd-idea-api.huawei.com/ideaclientservice/login/v4/secureLogin`, always sends `app-id: RelayTeams`, and always uses `http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/` as the MAAS inference base URL. When `context_window` is omitted and the backend recognizes the provider/model pair, it may auto-fill a known context limit during save and runtime load.

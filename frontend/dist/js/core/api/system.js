@@ -347,6 +347,25 @@ export async function fetchModelFallbackConfig() {
     );
 }
 
+export async function fetchModelCatalog(options = {}) {
+    const refresh = options.refresh === true ? '?refresh=true' : '';
+    return requestJson(
+        `/api/system/configs/model/catalog${refresh}`,
+        {
+            signal: options.signal,
+        },
+        'Failed to fetch model catalog',
+    );
+}
+
+export async function refreshModelCatalog() {
+    return requestJson(
+        '/api/system/configs/model/catalog:refresh',
+        { method: 'POST' },
+        'Failed to refresh model catalog',
+    );
+}
+
 export async function probeModelConnection(payload) {
     return requestJson(
         '/api/system/configs/model:probe',

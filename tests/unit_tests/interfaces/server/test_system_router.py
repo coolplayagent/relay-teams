@@ -93,6 +93,7 @@ from relay_teams.providers.model_config import (
     ProviderModelInfo,
     ProviderType,
 )
+from relay_teams.providers.model_catalog import ModelCatalogResult
 from relay_teams.skills.clawhub_models import (
     ClawHubSkillDetail,
     ClawHubSkillSummary,
@@ -253,6 +254,14 @@ class _FakeSystemService:
                     strategy=(ModelFallbackStrategy.SAME_PROVIDER_THEN_OTHER_PROVIDER),
                 ),
             )
+        )
+
+    def get_model_catalog(self, *, refresh: bool = False) -> ModelCatalogResult:
+        return ModelCatalogResult(
+            ok=True,
+            source_url="https://models.dev/api.json",
+            stale=refresh,
+            providers=(),
         )
 
     def save_model_profile(
@@ -1101,6 +1110,7 @@ def test_sync_system_read_routes_run_service_calls_in_threadpool(monkeypatch) ->
         client.get("/api/system/configs/model"),
         client.get("/api/system/configs/model/profiles"),
         client.get("/api/system/configs/model-fallback"),
+        client.get("/api/system/configs/model/catalog"),
         client.get("/api/system/configs/model/providers/models"),
         client.get("/api/system/configs/notifications"),
         client.get("/api/system/configs/proxy"),
@@ -1125,6 +1135,7 @@ def test_sync_system_read_routes_run_service_calls_in_threadpool(monkeypatch) ->
         "get_model_config",
         "get_model_profiles",
         "get_model_fallback_config",
+        "get_model_catalog",
         "get_provider_models",
         "get_notification_config",
         "get_saved_proxy_config",
@@ -1294,6 +1305,7 @@ def test_sync_system_write_routes_run_service_calls_in_threadpool(monkeypatch) -
             },
         ),
         client.post("/api/system/configs/model:reload"),
+        client.post("/api/system/configs/model/catalog:refresh"),
         client.post("/api/system/configs/proxy:reload"),
         client.post("/api/system/configs/mcp:reload"),
         client.post("/api/system/configs/skills:reload"),
@@ -1319,6 +1331,7 @@ def test_sync_system_write_routes_run_service_calls_in_threadpool(monkeypatch) -
         "delete_skill",
         "save_orchestration_config",
         "reload_model_config",
+        "get_model_catalog",
         "reload_proxy_config",
         "reload_mcp_config",
         "reload_skills_config",
