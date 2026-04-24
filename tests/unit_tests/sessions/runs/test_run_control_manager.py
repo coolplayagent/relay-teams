@@ -375,6 +375,108 @@ def test_session_guard_uses_runtime_fallback_when_process_restarted(
         mgr.assert_session_allows_main_input("session-1")
 
 
+def test_session_guard_recovers_each_paused_subagent_from_stopped_tasks(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_control_stopped_task_fallback.db"
+    mgr = RunControlManager()
+    agent_repo = AgentInstanceRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+    event_log = EventLog(db_path)
+    mgr.bind_runtime(
+        run_event_hub=RunEventHub(
+            event_log=event_log,
+            run_state_repo=RunStateRepository(db_path),
+        ),
+        injection_manager=RunInjectionManager(),
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        message_repo=MessageRepository(db_path),
+        event_bus=event_log,
+        run_runtime_repo=run_runtime_repo,
+    )
+    first_task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        role_id="generalist",
+        objective="draft section",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    second_task = TaskEnvelope(
+        task_id="task-2",
+        session_id="session-1",
+        parent_task_id="task-root",
+        trace_id="run-1",
+        role_id="reviewer",
+        objective="review section",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(first_task)
+    _ = task_repo.create(second_task)
+    task_repo.update_status(
+        "task-1",
+        TaskStatus.STOPPED,
+        assigned_instance_id="inst-1",
+        error_message="Task stopped by user",
+    )
+    task_repo.update_status(
+        "task-2",
+        TaskStatus.STOPPED,
+        assigned_instance_id="inst-2",
+        error_message="Task stopped by user",
+    )
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="generalist",
+        workspace_id="default",
+        status=InstanceStatus.STOPPED,
+    )
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-2",
+        role_id="reviewer",
+        workspace_id="default",
+        status=InstanceStatus.STOPPED,
+    )
+    run_runtime_repo.ensure(
+        run_id="run-1",
+        session_id="session-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.SUBAGENT_RUNNING,
+    )
+    run_runtime_repo.update(
+        "run-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.SUBAGENT_RUNNING,
+        active_instance_id="inst-running",
+        active_task_id="task-running",
+        active_role_id="writer",
+        active_subagent_instance_id="inst-running",
+    )
+
+    first_paused = mgr.get_paused_subagent("session-1", instance_id="inst-1")
+    second_paused = mgr.get_paused_subagent("session-1", instance_id="inst-2")
+
+    assert first_paused is not None
+    assert first_paused.task_id == "task-1"
+    assert first_paused.role_id == "generalist"
+    assert second_paused is not None
+    assert second_paused.task_id == "task-2"
+    assert second_paused.role_id == "reviewer"
+    assert mgr.is_subagent_paused(session_id="session-1", instance_id="inst-1") is True
+    assert mgr.is_subagent_paused(session_id="session-1", instance_id="inst-2") is True
+    with pytest.raises(RuntimeError, match="Subagent"):
+        mgr.assert_session_allows_main_input("session-1")
+
+
 def test_resume_subagent_with_message_uses_same_instance_after_restart(
     tmp_path: Path,
 ) -> None:

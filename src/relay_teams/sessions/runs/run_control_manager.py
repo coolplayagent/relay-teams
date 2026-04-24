@@ -15,6 +15,7 @@ from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
+    RunRuntimeRecord,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
@@ -655,6 +656,11 @@ class RunControlManager:
         paused = self._paused.get(session_id, instance_id=instance_id)
         if paused is not None:
             return paused
+        paused = self._paused_from_stopped_task(
+            session_id=session_id, instance_id=instance_id
+        )
+        if paused is not None:
+            return paused
         return self._paused_from_runtime(session_id=session_id, instance_id=instance_id)
 
     def _is_coordinator_role_for_run(self, *, run_id: str, role_id: str) -> bool:
@@ -740,6 +746,62 @@ class RunControlManager:
                 paused_at=runtime.updated_at,
             )
         return None
+
+    def _paused_from_stopped_task(
+        self,
+        *,
+        session_id: str,
+        instance_id: str | None = None,
+    ) -> PausedSubagent | None:
+        if self._run_runtime_repo is None or self._task_repo is None:
+            return None
+        candidates: list[PausedSubagent] = []
+        for runtime in self._run_runtime_repo.list_by_session(session_id):
+            if not self._runtime_can_have_paused_subagent(runtime):
+                continue
+            for record in self._task_repo.list_by_trace(runtime.run_id):
+                task = record.envelope
+                paused_instance_id = record.assigned_instance_id
+                if task.session_id != session_id:
+                    continue
+                if task.parent_task_id is None:
+                    continue
+                if record.status != TaskStatus.STOPPED:
+                    continue
+                if not paused_instance_id:
+                    continue
+                if instance_id is not None and paused_instance_id != instance_id:
+                    continue
+                role_id = task.role_id or paused_instance_id
+                if self._agent_repo is not None:
+                    try:
+                        agent = self._agent_repo.get_instance(paused_instance_id)
+                    except KeyError:
+                        agent = None
+                    if agent is not None:
+                        role_id = agent.role_id
+                candidates.append(
+                    PausedSubagent(
+                        session_id=session_id,
+                        run_id=runtime.run_id,
+                        instance_id=paused_instance_id,
+                        role_id=role_id,
+                        task_id=task.task_id,
+                        reason=record.error_message
+                        or runtime.last_error
+                        or "stopped_by_user",
+                        paused_at=record.updated_at,
+                    )
+                )
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item.paused_at)
+
+    def _runtime_can_have_paused_subagent(self, runtime: RunRuntimeRecord) -> bool:
+        return (
+            runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
+            or runtime.status == RunRuntimeStatus.RUNNING
+        )
 
     def _require_run_event_hub(self) -> RunEventHub:
         if self._run_event_hub is None:
