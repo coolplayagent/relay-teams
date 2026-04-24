@@ -67,6 +67,8 @@
 - workspace 路径语法
 - SSH mount 的非敏感连接元数据
 
+SSH mount 的 `username` 是必需的远端登录身份。`## Workspace Environments` 可以展示该 username 和登录用户规则，但不得要求模型写 `ssh` 登录脚本，也不得把本机操作系统用户当作远端登录用户。缺少 username 的历史 profile 不进入 prompt metadata；后端运行时会在发起 subprocess 前返回明确错误。
+
 SSH mount 不得披露：
 
 - password
@@ -76,4 +78,4 @@ SSH mount 不得披露：
 - askpass 环境变量
 - probe latency 或临时认证诊断
 
-LLM 通过 workspace tools 使用这些环境。认证由后端 `SshProfileService` 和 secret store 在工具运行时透明完成。
+LLM 通过 workspace tools 使用这些环境。认证由后端 `SshProfileService` 和 secret store 在工具运行时透明完成；系统 `ssh`、`ssh-agent` 和 `~/.ssh/config` 只可提供认证材料，不能替代 profile username。

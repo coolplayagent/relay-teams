@@ -90,7 +90,7 @@ def test_workspace_service_requires_existing_ssh_profile(tmp_path: Path) -> None
 
     _ = ssh_profile_service.save_profile(
         ssh_profile_id="prod",
-        config=SshProfileConfig(host="prod-alias"),
+        config=SshProfileConfig(host="prod-alias", username="deploy"),
     )
 
     remote_default = workspace_service.create_workspace(

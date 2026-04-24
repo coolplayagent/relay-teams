@@ -189,7 +189,7 @@ def test_workspace_manager_materializes_default_ssh_mount(
     )
     _ = ssh_profile_service.save_profile(
         ssh_profile_id="prod",
-        config=SshProfileConfig(host="prod-alias"),
+        config=SshProfileConfig(host="prod-alias", username="deploy"),
     )
     service = WorkspaceService(repository=WorkspaceRepository(db_path))
     _ = service.create_workspace(
@@ -229,7 +229,7 @@ def test_workspace_manager_materializes_default_ssh_mount(
         / "prod"
     ).resolve()
     assert captured_commands[0][0] == "/usr/bin/sshfs"
-    assert captured_commands[0][1] == "prod-alias:/srv/app"
+    assert captured_commands[0][1] == "deploy@prod-alias:/srv/app"
     assert captured_commands[0][2] == str(expected_local_root)
     assert handle.locations.provider == WorkspaceMountProvider.SSH
     assert handle.locations.scope_root == expected_local_root

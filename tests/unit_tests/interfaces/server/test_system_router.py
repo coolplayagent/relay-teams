@@ -816,6 +816,7 @@ class _FakeSystemService:
                 else SshProfileRecord(
                     ssh_profile_id=ssh_profile_id,
                     host=config.host,
+                    username=config.username,
                 ).created_at
             ),
         )
@@ -1373,6 +1374,23 @@ def test_save_ui_language_settings() -> None:
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
     assert service.saved_ui_language_settings == {"language": "en-US"}
+
+
+def test_save_ssh_profile_requires_username() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/workspace/ssh-profiles/staging",
+        json={
+            "config": {
+                "host": "staging-alias",
+            }
+        },
+    )
+
+    assert response.status_code == 422
+    assert "username" in response.text
 
 
 def test_save_model_profile_includes_connect_timeout_seconds() -> None:

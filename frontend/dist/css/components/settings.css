@@ -1441,6 +1441,7 @@
 .workspace-auth-grid .form-group label {
     display: flex;
     align-items: flex-end;
+    height: 3.5em;
     min-height: 3.5em;
     line-height: 1.2;
 }
@@ -2672,6 +2673,7 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 
     .workspace-profile-grid .form-group label,
     .workspace-auth-grid .form-group label {
+        height: auto;
         min-height: auto;
     }
 

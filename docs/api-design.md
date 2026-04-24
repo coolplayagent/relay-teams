@@ -543,7 +543,7 @@ Returns the saved SSH profile list used by workspace mounts.
 Each item includes:
 - `ssh_profile_id`
 - `host`
-- optional `username`
+- `username` for profiles created or updated through the API
 - optional `port`
 - optional `remote_shell`
 - optional `connect_timeout_seconds`
@@ -554,6 +554,7 @@ Each item includes:
 - `updated_at`
 
 Passwords and private key bodies are not echoed by list/get/upsert responses.
+Legacy rows that predate the username requirement may return `username: null`; they must be edited before probe, mount, or remote command execution.
 
 ### `GET /system/configs/workspace/ssh-profiles/{ssh_profile_id}`
 
@@ -605,8 +606,9 @@ Request body for unsaved editor values or a saved profile with draft overrides:
 
 Rules:
 - Either `ssh_profile_id` or `override` is required.
+- `username` is required for draft overrides and saved profiles used by the probe.
 - When `ssh_profile_id` is supplied and `override.password` or `override.private_key` is omitted, the probe reuses the stored secret for that field.
-- When no password or private key is available, the probe falls back to the host system SSH configuration.
+- When no password or private key is available, the probe may use host system SSH authentication material such as `ssh-agent`, default identities, and SSH config. The login username still comes from the SSH profile or draft override.
 - The server shells out to `ssh`, writes any draft private key to a temporary 0600 identity file, and removes temporary files after the probe.
 
 Response body:
@@ -657,6 +659,7 @@ Request body:
 
 Rules:
 - `host` is required and whitespace-only values are rejected.
+- `username` is required and whitespace-only values are rejected.
 - `password` is optional.
 - `private_key` is optional and may be pasted or imported from the settings UI.
 - `password` and `private_key` are stored through the unified secret store, not in the SQLite row.

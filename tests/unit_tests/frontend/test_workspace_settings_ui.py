@@ -316,6 +316,56 @@ console.log(JSON.stringify({
     assert payload["draftStatusText"] == "Connected in 42ms"
 
 
+def test_workspace_settings_panel_requires_username_for_save_and_draft_probe(
+    tmp_path: Path,
+) -> None:
+    payload = _run_workspace_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    bindWorkspaceSettingsHandlers,
+    loadWorkspaceSettingsPanel,
+} from "./workspaceSettings.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+globalThis.__mockProfiles = [];
+
+bindWorkspaceSettingsHandlers();
+await loadWorkspaceSettingsPanel();
+
+document.getElementById("add-ssh-profile-btn").onclick();
+document.getElementById("workspace-ssh-profile-id").value = "prod";
+document.getElementById("workspace-ssh-profile-host").value = "prod-alias";
+
+await document.getElementById("save-ssh-profile-btn").onclick();
+await document.getElementById("test-ssh-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    notifications,
+    savePayload: globalThis.__saveSshProfilePayload || null,
+    probePayload: globalThis.__probeSshProfilePayload || null,
+}));
+""".strip(),
+    )
+
+    assert payload["savePayload"] is None
+    assert payload["probePayload"] is None
+    assert payload["notifications"] == [
+        {
+            "title": "Validation Failed",
+            "message": "Username is required.",
+            "tone": "danger",
+        },
+        {
+            "title": "Validation Failed",
+            "message": "Username is required.",
+            "tone": "danger",
+        },
+    ]
+
+
 def test_workspace_password_toggle_reveals_saved_password_and_preserves_on_save(
     tmp_path: Path,
 ) -> None:
@@ -547,7 +597,7 @@ const translations = {
     "settings.workspace.auth_state_private_key_named": "Stored private key \\"{name}\\" will be kept unless you paste or import a new one.",
     "settings.workspace.auth_state_new_password": "A new password will be saved when you click Save.",
     "settings.workspace.auth_state_new_private_key": "Private key \\"{name}\\" will replace the stored key when you click Save.",
-    "settings.workspace.auth_state_system": "If password and private key are empty, Agent Teams falls back to your system SSH configuration.",
+    "settings.workspace.auth_state_system": "If password and private key are empty, Agent Teams can use your system SSH authentication for this username.",
     "settings.workspace.saved_title": "SSH Profile Saved",
     "settings.workspace.saved_detail": "Saved profile {ssh_profile_id}.",
     "settings.workspace.save_failed_title": "Save Failed",
@@ -563,6 +613,7 @@ const translations = {
     "settings.workspace.validation_failed_title": "Validation Failed",
     "settings.workspace.profile_id_required": "Profile ID is required.",
     "settings.workspace.host_required": "Host is required.",
+    "settings.workspace.username_required": "Username is required.",
     "settings.workspace.testing": "Testing connection...",
     "settings.workspace.probe_success": "Connected in {latency_ms}ms",
     "settings.workspace.connection_failed": "Connection failed: {reason}",

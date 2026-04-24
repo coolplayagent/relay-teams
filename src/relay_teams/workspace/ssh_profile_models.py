@@ -13,7 +13,7 @@ class SshProfileConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     host: str = Field(min_length=1)
-    username: str | None = None
+    username: str = Field(min_length=1)
     password: str | None = Field(default=None, min_length=1)
     port: int | None = Field(default=None, ge=1, le=65535)
     remote_shell: str | None = Field(default=None, min_length=1)
@@ -29,7 +29,15 @@ class SshProfileConfig(BaseModel):
             raise ValueError("host must not be empty")
         return normalized
 
-    @field_validator("username", "password", "remote_shell", "private_key_name")
+    @field_validator("username")
+    @classmethod
+    def _normalize_username(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("username must not be empty")
+        return normalized
+
+    @field_validator("password", "remote_shell", "private_key_name")
     @classmethod
     def _normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -121,7 +129,7 @@ class SshProfileConnectivityProbeResult(BaseModel):
     ssh_profile_id: str | None = None
     host: str = Field(min_length=1)
     port: int | None = Field(default=None, ge=1, le=65535)
-    username: str | None = None
+    username: str = Field(min_length=1)
     latency_ms: int = Field(ge=0)
     checked_at: datetime
     diagnostics: SshProfileConnectivityDiagnostics

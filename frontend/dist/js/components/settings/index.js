@@ -800,7 +800,7 @@ function createModal() {
                                 <div class="profile-editor" id="workspace-ssh-profile-editor" style="display:none;">
                                     <div class="profile-editor-header">
                                         <h4 id="workspace-ssh-profile-editor-title" data-i18n="settings.workspace.add_profile">Add SSH Profile</h4>
-                                        <p data-i18n="settings.workspace.editor_copy">Reusable SSH profiles are referenced by remote workspace mounts. You can save a username, an optional password, or import a private key.</p>
+                                        <p data-i18n="settings.workspace.editor_copy">Reusable SSH profiles are referenced by remote workspace mounts. The login username is required; password and private key are optional authentication material.</p>
                                     </div>
                                     <form class="profile-editor-form" id="workspace-ssh-profile-form" autocomplete="off">
                                         <div class="profile-editor-grid workspace-profile-grid">
@@ -828,13 +828,13 @@ function createModal() {
                                         <div class="profile-editor-subsection">
                                             <div class="profile-editor-subsection-header">
                                                 <h5 data-i18n="settings.workspace.auth_title">Authentication</h5>
-                                                <p data-i18n="settings.workspace.auth_copy">Set a username, optionally save a password, or import a private key.</p>
-                                                <p data-i18n="settings.workspace.auth_system_copy">If password and private key are empty, Agent Teams falls back to your system SSH configuration.</p>
+                                                <p data-i18n="settings.workspace.auth_copy">Set the remote login username, then optionally save a password or import a private key.</p>
+                                                <p data-i18n="settings.workspace.auth_system_copy">If password and private key are empty, Agent Teams can use your system SSH authentication, but the login username still comes from this profile.</p>
                                             </div>
                                             <div class="profile-editor-grid workspace-auth-grid">
                                                 <div class="form-group workspace-auth-field">
                                                     <label for="workspace-ssh-profile-username" data-i18n="settings.workspace.username">Username</label>
-                                                    <input type="text" id="workspace-ssh-profile-username" placeholder="Optional username" data-i18n-placeholder="settings.workspace.username_placeholder" autocomplete="username">
+                                                    <input type="text" id="workspace-ssh-profile-username" placeholder="Remote login username" data-i18n-placeholder="settings.workspace.username_placeholder" autocomplete="username" required>
                                                 </div>
                                                 <div class="form-group workspace-auth-field">
                                                     <label for="workspace-ssh-profile-password" data-i18n="settings.workspace.password">Password</label>

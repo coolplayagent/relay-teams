@@ -17,6 +17,7 @@ from relay_teams.workspace import (
     SshProfileRepository,
     SshProfileSecretStore,
     SshProfileService,
+    SshProfileStoredConfig,
 )
 
 
@@ -75,6 +76,7 @@ def test_ssh_profile_service_preserves_existing_secrets_and_deletes_them(
         ssh_profile_id="prod",
         config=SshProfileConfig(
             host="prod-alias",
+            username="deploy",
             password="secret",
             private_key="-----BEGIN KEY-----\ncontent\n-----END KEY-----",
             private_key_name="id_rsa",
@@ -106,7 +108,12 @@ def test_ssh_profile_service_preserves_existing_secrets_and_deletes_them(
 
 def test_ssh_profile_config_rejects_whitespace_only_host() -> None:
     with pytest.raises(ValueError, match="host"):
-        _ = SshProfileConfig(host="   ")
+        _ = SshProfileConfig(host="   ", username="deploy")
+
+
+def test_ssh_profile_config_requires_username() -> None:
+    with pytest.raises(ValueError, match="username"):
+        _ = SshProfileConfig(host="prod-alias", username="   ")
 
 
 def test_ssh_profile_service_probes_saved_profile_with_secrets(
@@ -274,7 +281,13 @@ def test_ssh_profile_service_runs_saved_profile_remote_command(
     assert result.exit_code == 0
     assert result.stdout == "ok\n"
     assert captured_env[0]["RELAY_TEAMS_SSH_PASSWORD"] == "secret"
-    assert captured_command[0][-3:] == ("--", "prod-alias", "printf ok")
+    assert captured_command[0][-5:] == (
+        "-l",
+        "deploy",
+        "--",
+        "prod-alias",
+        "printf ok",
+    )
     assert "-p" in captured_command[0]
     assert "2222" in captured_command[0]
     assert "BatchMode=no" in captured_command[0]
@@ -434,7 +447,7 @@ def test_ssh_profile_service_prepares_remote_process_command(
 
     assert prepared.argv[:2] == ("/usr/bin/ssh", "-o")
     assert "-tt" in prepared.argv
-    assert prepared.argv[-3:-1] == ("--", "prod-alias")
+    assert prepared.argv[-5:-1] == ("-l", "deploy", "--", "prod-alias")
     assert "cd /srv/app && env AGENT_TEAMS_CURRENT_ROLE_ID=writer" in prepared.argv[-1]
     assert "/bin/bash -lc" in prepared.argv[-1]
     assert "1INVALID" not in prepared.argv[-1]
@@ -486,7 +499,9 @@ def test_ssh_profile_service_probe_reports_auth_failure(
     )
 
     result = service.probe_connectivity(
-        SshProfileConnectivityProbeRequest(override=SshProfileConfig(host="prod-alias"))
+        SshProfileConnectivityProbeRequest(
+            override=SshProfileConfig(host="prod-alias", username="deploy")
+        )
     )
 
     assert result.ok is False
@@ -494,3 +509,39 @@ def test_ssh_profile_service_probe_reports_auth_failure(
     assert result.retryable is False
     assert result.diagnostics.host_reachable is True
     assert result.diagnostics.used_system_config is True
+
+
+def test_ssh_profile_service_rejects_saved_profile_without_username_before_subprocess(
+    tmp_path: Path,
+) -> None:
+    captured_command: list[tuple[str, ...]] = []
+
+    def run_command(
+        command: Sequence[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        captured_command.append(tuple(command))
+        return subprocess.CompletedProcess(args=tuple(command), returncode=0)
+
+    repository = SshProfileRepository(tmp_path / "workspace.db")
+    _ = repository.save(
+        ssh_profile_id="legacy",
+        config=SshProfileStoredConfig(
+            host="prod-alias",
+        ),
+    )
+    service = SshProfileService(
+        repository=repository,
+        config_dir=tmp_path,
+        secret_store=SshProfileSecretStore(secret_store=_FileOnlySecretStore()),
+        ssh_path_lookup=lambda _name: "/usr/bin/ssh",
+        process_runner=run_command,
+    )
+
+    with pytest.raises(ValueError, match="username is required"):
+        _ = service.run_remote_command(
+            ssh_profile_id="legacy",
+            command="pwd",
+        )
+
+    assert captured_command == []

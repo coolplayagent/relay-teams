@@ -146,7 +146,7 @@ provider 配置使用判别联合：
 - `created_at`
 - `updated_at`
 
-密码和私钥正文通过 unified secret store 持久化，不写入 `ssh_profiles` 表；`password` 为可选字段，私钥支持从设置页导入或粘贴录入。
+`username` 是必填远端登录身份。密码和私钥正文通过 unified secret store 持久化，不写入 `ssh_profiles` 表；`password` 为可选字段，私钥支持从设置页导入或粘贴录入。
 
 ## 6. 持久化与迁移
 
@@ -325,8 +325,8 @@ SSH provider 的设置分成两层：
 
 - 列出所有 SSH profile
 - 新增、编辑、删除 SSH profile
-- 支持保存用户名、可选密码、私钥导入
-- 未配置密码或私钥时，仍可回退到系统 `ssh`、`ssh-agent` 和 `~/.ssh/config`
+- 必须保存远端登录用户名，支持可选密码和私钥导入
+- 未配置密码或私钥时，可使用系统 `ssh`、`ssh-agent` 和 `~/.ssh/config` 中的认证材料；登录用户名仍然来自 SSH profile，不回退到本机用户
 
 workspace 详情页保留 mount 作为主要操作入口：
 
@@ -442,6 +442,8 @@ workspace mount 只能引用已存在的 `ssh_profile_id`。
 - mounts 清单
 - provider 类型
 - 每个 mount 的关键能力说明
+
+SSH mount 的提示词只展示非敏感 profile metadata 和 workspace 路径语法。`username` 是必需登录身份；模型不得自行编写 `ssh` 登录脚本，也不得使用本机操作系统用户替代 profile username。
 
 首版只在本地 mount 上保留本地指令文件发现逻辑，例如：
 
