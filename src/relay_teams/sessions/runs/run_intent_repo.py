@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import TypeAdapter
 
@@ -27,6 +28,7 @@ from relay_teams.validation import normalize_persisted_text
 
 type _ThinkingEffort = Literal["minimal", "low", "medium", "high"] | None
 _MediaGenerationConfigAdapter = TypeAdapter(MediaGenerationConfig)
+_SkillsAdapter = TypeAdapter(tuple[str, ...])
 
 
 class RunIntentRepository(SharedSqliteRepository):
@@ -43,6 +45,7 @@ class RunIntentRepository(SharedSqliteRepository):
                     session_id     TEXT NOT NULL,
                     intent         TEXT NOT NULL,
                     input_json     TEXT,
+                    display_input_json TEXT,
                     run_kind       TEXT NOT NULL DEFAULT 'conversation',
                     generation_config_json TEXT,
                     execution_mode TEXT NOT NULL,
@@ -51,6 +54,7 @@ class RunIntentRepository(SharedSqliteRepository):
                     thinking_enabled TEXT NOT NULL DEFAULT 'false',
                     thinking_effort TEXT,
                     target_role_id TEXT,
+                    skills_json TEXT,
                     session_mode TEXT NOT NULL DEFAULT 'normal',
                     topology_json TEXT,
                     conversation_context_json TEXT,
@@ -81,6 +85,10 @@ class RunIntentRepository(SharedSqliteRepository):
                 )
             if "input_json" not in columns:
                 self._conn.execute("ALTER TABLE run_intents ADD COLUMN input_json TEXT")
+            if "display_input_json" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_intents ADD COLUMN display_input_json TEXT"
+                )
             if "run_kind" not in columns:
                 self._conn.execute(
                     "ALTER TABLE run_intents ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'conversation'"
@@ -100,6 +108,10 @@ class RunIntentRepository(SharedSqliteRepository):
             if "target_role_id" not in columns:
                 self._conn.execute(
                     "ALTER TABLE run_intents ADD COLUMN target_role_id TEXT"
+                )
+            if "skills_json" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE run_intents ADD COLUMN skills_json TEXT"
                 )
             if "topology_json" not in columns:
                 self._conn.execute(
@@ -126,6 +138,7 @@ class RunIntentRepository(SharedSqliteRepository):
                     session_id,
                     intent,
                     input_json,
+                    display_input_json,
                     run_kind,
                     generation_config_json,
                     execution_mode,
@@ -134,18 +147,20 @@ class RunIntentRepository(SharedSqliteRepository):
                     thinking_enabled,
                     thinking_effort,
                     target_role_id,
+                    skills_json,
                     session_mode,
                     topology_json,
                     conversation_context_json,
                     created_at,
                     updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id)
                 DO UPDATE SET
                     session_id=excluded.session_id,
                     intent=excluded.intent,
                     input_json=excluded.input_json,
+                    display_input_json=excluded.display_input_json,
                     run_kind=excluded.run_kind,
                     generation_config_json=excluded.generation_config_json,
                     execution_mode=excluded.execution_mode,
@@ -154,6 +169,7 @@ class RunIntentRepository(SharedSqliteRepository):
                     thinking_enabled=excluded.thinking_enabled,
                     thinking_effort=excluded.thinking_effort,
                     target_role_id=excluded.target_role_id,
+                    skills_json=excluded.skills_json,
                     session_mode=excluded.session_mode,
                     topology_json=excluded.topology_json,
                     conversation_context_json=excluded.conversation_context_json,
@@ -164,6 +180,13 @@ class RunIntentRepository(SharedSqliteRepository):
                     session_id,
                     intent.intent,
                     ContentPartsAdapter.dump_json(intent.input).decode("utf-8"),
+                    (
+                        ContentPartsAdapter.dump_json(intent.display_input).decode(
+                            "utf-8"
+                        )
+                        if intent.display_input
+                        else None
+                    ),
                     intent.run_kind.value,
                     (
                         intent.generation_config.model_dump_json()
@@ -176,6 +199,11 @@ class RunIntentRepository(SharedSqliteRepository):
                     "true" if intent.thinking.enabled else "false",
                     intent.thinking.effort,
                     intent.target_role_id,
+                    (
+                        json.dumps(tuple(intent.skills), ensure_ascii=False)
+                        if intent.skills is not None
+                        else None
+                    ),
                     intent.session_mode.value,
                     (
                         intent.topology.model_dump_json()
@@ -210,7 +238,7 @@ class RunIntentRepository(SharedSqliteRepository):
             self._conn.execute(
                 """
                 UPDATE run_intents
-                SET intent=?, input_json=?, updated_at=?
+                SET intent=?, input_json=?, display_input_json=NULL, updated_at=?
                 WHERE run_id=?
                 """,
                 (
@@ -236,6 +264,7 @@ class RunIntentRepository(SharedSqliteRepository):
                     session_id,
                     intent,
                     input_json,
+                    display_input_json,
                     run_kind,
                     generation_config_json,
                     execution_mode,
@@ -244,6 +273,7 @@ class RunIntentRepository(SharedSqliteRepository):
                     thinking_enabled,
                     thinking_effort,
                     target_role_id,
+                    skills_json,
                     session_mode,
                     topology_json,
                     conversation_context_json
@@ -264,6 +294,7 @@ class RunIntentRepository(SharedSqliteRepository):
         return IntentInput(
             session_id=session_id,
             input=_coerce_input_parts(row["input_json"], row["intent"]),
+            display_input=_coerce_input_parts(row["display_input_json"], ""),
             run_kind=RunKind(str(row["run_kind"] or RunKind.CONVERSATION.value)),
             generation_config=_coerce_generation_config(row["generation_config_json"]),
             execution_mode=ExecutionMode(str(row["execution_mode"])),
@@ -276,6 +307,7 @@ class RunIntentRepository(SharedSqliteRepository):
                 effort=_coerce_thinking_effort(row["thinking_effort"]),
             ),
             target_role_id=normalize_persisted_text(row["target_role_id"]),
+            skills=_coerce_skills(row["skills_json"]),
             session_mode=SessionMode(str(row["session_mode"] or "normal")),
             topology=_coerce_topology(row["topology_json"]),
             conversation_context=_coerce_conversation_context(
@@ -344,3 +376,12 @@ def _coerce_generation_config(value: object) -> MediaGenerationConfig | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return _MediaGenerationConfigAdapter.validate_json(value)
+
+
+def _coerce_skills(value: object) -> Optional[tuple[str, ...]]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    skills = tuple(
+        str(skill or "").strip() for skill in _SkillsAdapter.validate_json(value)
+    )
+    return tuple(skill for skill in skills if skill) or None

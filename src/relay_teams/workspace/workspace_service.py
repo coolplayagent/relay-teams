@@ -8,7 +8,10 @@ import re
 import shlex
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
+from typing import Optional
 
 from relay_teams.logger import get_logger, log_event
 from relay_teams.paths import (
@@ -34,6 +37,8 @@ from relay_teams.workspace.workspace_models import (
     WorkspaceLocalMountConfig,
     WorkspaceProfile,
     WorkspaceRecord,
+    WorkspaceSearchResponse,
+    WorkspaceSearchResult,
     WorkspaceSshMountConfig,
     WorkspaceSnapshot,
     WorkspaceTreeListing,
@@ -52,6 +57,28 @@ _BINARY_DIFF_MESSAGE = "Binary file changed"
 _SSH_TREE_LIST_TIMEOUT_SECONDS = 30.0
 _SSH_TREE_ENTRY_SEPARATOR = "\t"
 _SSH_TREE_NOT_DIRECTORY_MARKER = "relay-teams-error:not-directory"
+_SEARCH_MAX_VISITED = 3000
+_SEARCH_CACHE_TTL_SECONDS = 300.0
+_SEARCH_COLD_BUILD_TIMEOUT_SECONDS = 0.35
+_SEARCH_RIPGREP_TIMEOUT_SECONDS = 15.0
+_SEARCH_SKIP_DIRECTORY_NAMES = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        ".cache",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "venv",
+    }
+)
 _SSH_TREE_LIST_SCRIPT = """
 set -eu
 dir=$1
@@ -105,6 +132,21 @@ class _WorkspaceDiffCandidate:
         self.previous_path = previous_path
 
 
+class _WorkspaceSearchCacheEntry:
+    __slots__ = ("candidates", "indexed_at", "refreshing")
+
+    def __init__(
+        self,
+        *,
+        candidates: tuple[WorkspaceSearchResult, ...],
+        indexed_at: float,
+        refreshing: bool = False,
+    ) -> None:
+        self.candidates = candidates
+        self.indexed_at = indexed_at
+        self.refreshing = refreshing
+
+
 class WorkspaceService:
     def __init__(
         self,
@@ -116,6 +158,8 @@ class WorkspaceService:
         self._repository = repository
         self._git_worktree_client = git_worktree_client or GitWorktreeClient()
         self._ssh_profile_service = ssh_profile_service
+        self._search_cache: dict[str, _WorkspaceSearchCacheEntry] = {}
+        self._search_cache_lock = threading.RLock()
 
     def _mount_capabilities(
         self,
@@ -129,8 +173,8 @@ class WorkspaceService:
         workspace_id: str,
         root_path: Path | None = None,
         profile: WorkspaceProfile | None = None,
-        mounts: tuple[WorkspaceMountRecord, ...] | None = None,
-        default_mount_name: str | None = None,
+        mounts: Optional[tuple[WorkspaceMountRecord, ...]] = None,
+        default_mount_name: Optional[str] = None,
     ) -> WorkspaceRecord:
         if self._repository.exists(workspace_id):
             raise ValueError(f"Workspace already exists: {workspace_id}")
@@ -168,8 +212,8 @@ class WorkspaceService:
         *,
         root_path: Path | None = None,
         profile: WorkspaceProfile | None = None,
-        mounts: tuple[WorkspaceMountRecord, ...] | None = None,
-        default_mount_name: str | None = None,
+        mounts: Optional[tuple[WorkspaceMountRecord, ...]] = None,
+        default_mount_name: Optional[str] = None,
     ) -> tuple[tuple[WorkspaceMountRecord, ...], str]:
         if mounts is None:
             if root_path is None:
@@ -264,7 +308,7 @@ class WorkspaceService:
         self,
         workspace_id: str,
         *,
-        mount_name: str | None = None,
+        mount_name: Optional[str] = None,
     ) -> Path:
         record = self._repository.get(workspace_id)
         target_mount = (
@@ -337,7 +381,7 @@ class WorkspaceService:
         workspace_id: str,
         *,
         directory_path: str,
-        mount_name: str | None = None,
+        mount_name: Optional[str] = None,
     ) -> WorkspaceTreeListing:
         record = self._repository.get(workspace_id)
         mount = self._resolve_mount(record, mount_name)
@@ -374,6 +418,435 @@ class WorkspaceService:
             mount_name=mount.mount_name,
             directory_path=normalized_directory_path,
             children=children,
+        )
+
+    def search_workspace_paths(
+        self,
+        workspace_id: str,
+        *,
+        query: str = "",
+        limit: int = 40,
+        mount_name: Optional[str] = None,
+    ) -> WorkspaceSearchResponse:
+        record = self._repository.get(workspace_id)
+        mount = self._resolve_search_mount(record=record, mount_name=mount_name)
+        root_path = self._resolve_local_mount_root(mount)
+        normalized_query = str(query or "").strip().replace("\\", "/")
+        safe_query = normalized_query.casefold()
+        safe_limit = max(1, min(int(limit), 500))
+        candidates = self._get_search_candidates(
+            workspace_id=record.workspace_id,
+            mount=mount,
+            root_path=root_path,
+        )
+        results = self._rank_search_candidates(
+            candidates=candidates,
+            query=safe_query,
+            limit=safe_limit,
+        )
+        if safe_query.endswith("/") and not results:
+            results = self._search_directory_children(
+                record=record,
+                mount=mount,
+                directory_path=normalized_query,
+                limit=safe_limit,
+            )
+        return WorkspaceSearchResponse(
+            workspace_id=record.workspace_id,
+            query=str(query or "").strip(),
+            results=results,
+        )
+
+    def _search_directory_children(
+        self,
+        *,
+        record: WorkspaceRecord,
+        mount: WorkspaceMountRecord,
+        directory_path: str,
+        limit: int,
+    ) -> tuple[WorkspaceSearchResult, ...]:
+        try:
+            listing = self.get_workspace_tree_listing(
+                record.workspace_id,
+                directory_path=directory_path,
+                mount_name=mount.mount_name,
+            )
+        except (KeyError, ValueError, OSError):
+            return ()
+        return tuple(
+            WorkspaceSearchResult(
+                name=item.name,
+                path=item.path,
+                kind=item.kind,
+                mount_name=mount.mount_name,
+            )
+            for item in listing.children[:limit]
+        )
+
+    def _get_search_candidates(
+        self,
+        *,
+        workspace_id: str,
+        mount: WorkspaceMountRecord,
+        root_path: Path,
+    ) -> tuple[WorkspaceSearchResult, ...]:
+        cache_key = f"{workspace_id}\n{mount.mount_name}\n{root_path}"
+        now = time.monotonic()
+        with self._search_cache_lock:
+            cached = self._search_cache.get(cache_key)
+            if cached is not None:
+                if now - cached.indexed_at <= _SEARCH_CACHE_TTL_SECONDS:
+                    return cached.candidates
+                if not cached.refreshing:
+                    self._start_search_refresh_locked(
+                        cache_key=cache_key,
+                        root_path=root_path,
+                        mount=mount,
+                    )
+                return cached.candidates
+        try:
+            candidates = self._build_search_candidates(
+                root_path=root_path,
+                mount=mount,
+                timeout_seconds=_SEARCH_COLD_BUILD_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            candidates = self._build_shallow_search_candidates(
+                root_path=root_path,
+                mount=mount,
+            )
+            with self._search_cache_lock:
+                self._search_cache[cache_key] = _WorkspaceSearchCacheEntry(
+                    candidates=candidates,
+                    indexed_at=0.0,
+                    refreshing=True,
+                )
+                self._start_search_refresh_locked(
+                    cache_key=cache_key,
+                    root_path=root_path,
+                    mount=mount,
+                )
+            return candidates
+        with self._search_cache_lock:
+            self._store_search_cache_locked(
+                cache_key=cache_key,
+                candidates=candidates,
+            )
+        return candidates
+
+    def _build_search_candidates(
+        self,
+        *,
+        root_path: Path,
+        mount: WorkspaceMountRecord,
+        timeout_seconds: Optional[float] = None,
+    ) -> tuple[WorkspaceSearchResult, ...]:
+        ripgrep_candidates = self._build_ripgrep_search_candidates(
+            root_path=root_path,
+            mount=mount,
+            timeout_seconds=timeout_seconds,
+        )
+        if ripgrep_candidates is not None:
+            return ripgrep_candidates
+        if timeout_seconds is not None:
+            raise subprocess.TimeoutExpired(
+                cmd="workspace search index build",
+                timeout=timeout_seconds,
+            )
+        return self._build_walk_search_candidates(root_path=root_path, mount=mount)
+
+    def _build_ripgrep_search_candidates(
+        self,
+        *,
+        root_path: Path,
+        mount: WorkspaceMountRecord,
+        timeout_seconds: Optional[float],
+    ) -> Optional[tuple[WorkspaceSearchResult, ...]]:
+        ripgrep_binary = shutil.which("rg")
+        if ripgrep_binary is None:
+            return None
+        args = [
+            ripgrep_binary,
+            "--no-config",
+            "--files",
+            "--hidden",
+            "--glob=!.git/*",
+        ]
+        for ignored_name in sorted(_SEARCH_SKIP_DIRECTORY_NAMES):
+            args.append(f"--glob=!**/{ignored_name}/**")
+        args.append(".")
+        completed = subprocess.run(
+            args,
+            cwd=root_path,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            check=False,
+            timeout=timeout_seconds or _SEARCH_RIPGREP_TIMEOUT_SECONDS,
+        )
+        if completed.returncode not in {0, 1}:
+            return None
+        return self._search_candidates_from_file_paths(
+            paths=tuple(
+                line.strip().replace("\\", "/")
+                for line in completed.stdout.splitlines()
+                if line.strip()
+            ),
+            mount=mount,
+        )
+
+    @staticmethod
+    def _search_candidates_from_file_paths(
+        *,
+        paths: tuple[str, ...],
+        mount: WorkspaceMountRecord,
+    ) -> tuple[WorkspaceSearchResult, ...]:
+        results: list[WorkspaceSearchResult] = []
+        seen_files: set[str] = set()
+        seen_dirs: set[str] = set()
+        for raw_path in paths:
+            normalized_path = raw_path.strip().strip("/").replace("\\", "/")
+            if normalized_path.startswith("./"):
+                normalized_path = normalized_path[2:]
+            if not normalized_path or normalized_path.startswith("../"):
+                continue
+            parts = tuple(part for part in normalized_path.split("/") if part)
+            if not parts or any(part in _SEARCH_SKIP_DIRECTORY_NAMES for part in parts):
+                continue
+            current_parts: list[str] = []
+            for directory_part in parts[:-1]:
+                current_parts.append(directory_part)
+                directory_path = f"{'/'.join(current_parts)}/"
+                if directory_path in seen_dirs:
+                    continue
+                seen_dirs.add(directory_path)
+                results.append(
+                    WorkspaceSearchResult(
+                        name=directory_part,
+                        path=directory_path,
+                        kind=WorkspaceTreeNodeKind.DIRECTORY,
+                        mount_name=mount.mount_name,
+                    )
+                )
+            if normalized_path in seen_files:
+                continue
+            seen_files.add(normalized_path)
+            results.append(
+                WorkspaceSearchResult(
+                    name=parts[-1],
+                    path=normalized_path,
+                    kind=WorkspaceTreeNodeKind.FILE,
+                    mount_name=mount.mount_name,
+                )
+            )
+        return tuple(results)
+
+    def _build_walk_search_candidates(
+        self,
+        *,
+        root_path: Path,
+        mount: WorkspaceMountRecord,
+    ) -> tuple[WorkspaceSearchResult, ...]:
+        results: list[WorkspaceSearchResult] = []
+        visited = 0
+        pending = list(self._iter_tree_entries(root_path))
+        while pending and visited < _SEARCH_MAX_VISITED:
+            current_path = pending.pop(0)
+            visited += 1
+            is_directory = path_is_dir(current_path) and not current_path.is_symlink()
+            relative_path = current_path.relative_to(root_path).as_posix()
+            results.append(
+                WorkspaceSearchResult(
+                    name=current_path.name,
+                    path=f"{relative_path}/" if is_directory else relative_path,
+                    kind=(
+                        WorkspaceTreeNodeKind.DIRECTORY
+                        if is_directory
+                        else WorkspaceTreeNodeKind.FILE
+                    ),
+                    mount_name=mount.mount_name,
+                )
+            )
+            if is_directory and current_path.name not in _SEARCH_SKIP_DIRECTORY_NAMES:
+                pending.extend(self._iter_tree_entries(current_path))
+        return tuple(results)
+
+    def _build_shallow_search_candidates(
+        self,
+        *,
+        root_path: Path,
+        mount: WorkspaceMountRecord,
+    ) -> tuple[WorkspaceSearchResult, ...]:
+        results: list[WorkspaceSearchResult] = []
+        for current_path in self._iter_tree_entries(root_path):
+            is_directory = path_is_dir(current_path) and not current_path.is_symlink()
+            relative_path = current_path.relative_to(root_path).as_posix()
+            results.append(
+                WorkspaceSearchResult(
+                    name=current_path.name,
+                    path=f"{relative_path}/" if is_directory else relative_path,
+                    kind=(
+                        WorkspaceTreeNodeKind.DIRECTORY
+                        if is_directory
+                        else WorkspaceTreeNodeKind.FILE
+                    ),
+                    mount_name=mount.mount_name,
+                )
+            )
+        return tuple(results)
+
+    def _start_search_refresh_locked(
+        self,
+        *,
+        cache_key: str,
+        root_path: Path,
+        mount: WorkspaceMountRecord,
+    ) -> None:
+        cached = self._search_cache.get(cache_key)
+        if cached is not None:
+            cached.refreshing = True
+
+        def refresh() -> None:
+            try:
+                candidates = self._build_search_candidates(
+                    root_path=root_path,
+                    mount=mount,
+                    timeout_seconds=None,
+                )
+            except (OSError, subprocess.SubprocessError, ValueError) as exc:
+                log_event(
+                    _logger,
+                    30,
+                    event="workspace.search_index_refresh_failed",
+                    message="Failed to refresh workspace search index",
+                    payload={
+                        "mount_name": mount.mount_name,
+                        "root_path": str(root_path),
+                        "detail": str(exc),
+                    },
+                )
+                with self._search_cache_lock:
+                    failed = self._search_cache.get(cache_key)
+                    if failed is not None:
+                        failed.refreshing = False
+                return
+            with self._search_cache_lock:
+                self._store_search_cache_locked(
+                    cache_key=cache_key,
+                    candidates=candidates,
+                )
+
+        thread = threading.Thread(
+            target=refresh,
+            name="workspace-search-index-refresh",
+            daemon=True,
+        )
+        thread.start()
+
+    def _store_search_cache_locked(
+        self,
+        *,
+        cache_key: str,
+        candidates: tuple[WorkspaceSearchResult, ...],
+    ) -> None:
+        self._search_cache[cache_key] = _WorkspaceSearchCacheEntry(
+            candidates=candidates,
+            indexed_at=time.monotonic(),
+            refreshing=False,
+        )
+        if len(self._search_cache) > 16:
+            oldest_key = min(
+                self._search_cache,
+                key=lambda key: self._search_cache[key].indexed_at,
+            )
+            self._search_cache.pop(oldest_key, None)
+
+    def _rank_search_candidates(
+        self,
+        *,
+        candidates: tuple[WorkspaceSearchResult, ...],
+        query: str,
+        limit: int,
+    ) -> tuple[WorkspaceSearchResult, ...]:
+        prefer_hidden = query.startswith(".") or "/." in query
+        scored: list[tuple[tuple[int, int, int, int, str], WorkspaceSearchResult]] = []
+        for index, candidate in enumerate(candidates):
+            score = self._score_search_candidate(
+                candidate=candidate,
+                query=query,
+                index=index,
+                prefer_hidden=prefer_hidden,
+            )
+            if score is not None:
+                scored.append((score, candidate))
+        scored.sort(key=lambda item: item[0])
+        return tuple(candidate for _score, candidate in scored[:limit])
+
+    def _score_search_candidate(
+        self,
+        *,
+        candidate: WorkspaceSearchResult,
+        query: str,
+        index: int,
+        prefer_hidden: bool,
+    ) -> Optional[tuple[int, int, int, int, str]]:
+        candidate_path = candidate.path.casefold()
+        candidate_name = candidate.name.casefold()
+        hidden_rank = (
+            0 if prefer_hidden or not self._is_hidden_search_path(candidate.path) else 1
+        )
+        depth = candidate.path.count("/")
+        kind_rank = 0 if candidate.kind == WorkspaceTreeNodeKind.DIRECTORY else 1
+        if query.endswith("/"):
+            if candidate_path == query:
+                return None
+            if candidate_path.startswith(query):
+                child_path = candidate_path[len(query) :].strip("/")
+                if not child_path:
+                    return None
+                child_depth = child_path.count("/")
+                return hidden_rank, 0, child_depth, kind_rank, candidate_path
+        if not query:
+            return hidden_rank, kind_rank, depth, index, candidate_path
+        if candidate_path == query or candidate_name == query:
+            return hidden_rank, 0, depth, index, candidate_path
+        if candidate_path.startswith(query) or candidate_name.startswith(query):
+            return hidden_rank, 1, depth, index, candidate_path
+        if query in candidate_path or query in candidate_name:
+            return hidden_rank, 2, depth, index, candidate_path
+        fuzzy_score = self._fuzzy_subsequence_score(query=query, target=candidate_path)
+        if fuzzy_score is None:
+            return None
+        return hidden_rank, 3, fuzzy_score, depth, candidate_path
+
+    @staticmethod
+    def _fuzzy_subsequence_score(
+        *,
+        query: str,
+        target: str,
+    ) -> Optional[int]:
+        target_index = 0
+        score = 0
+        last_match = -1
+        for char in query:
+            found_index = target.find(char, target_index)
+            if found_index < 0:
+                return None
+            score += found_index - target_index
+            if last_match >= 0 and found_index == last_match + 1:
+                score -= 1
+            last_match = found_index
+            target_index = found_index + 1
+        return max(score, 0)
+
+    @staticmethod
+    def _is_hidden_search_path(path: str) -> bool:
+        return any(
+            part.startswith(".") and len(part) > 1
+            for part in path.strip("/").split("/")
         )
 
     def _get_ssh_workspace_tree_listing(
@@ -424,7 +897,7 @@ class WorkspaceService:
         self,
         workspace_id: str,
         *,
-        mount_name: str | None = None,
+        mount_name: Optional[str] = None,
     ) -> WorkspaceDiffListing:
         record = self._repository.get(workspace_id)
         mount = self._resolve_mount(record, mount_name)
@@ -513,7 +986,7 @@ class WorkspaceService:
         workspace_id: str,
         *,
         path: str,
-        mount_name: str | None = None,
+        mount_name: Optional[str] = None,
     ) -> WorkspaceDiffFile:
         record = self._repository.get(workspace_id)
         mount = self._resolve_mount(record, mount_name)
@@ -550,7 +1023,7 @@ class WorkspaceService:
         workspace_id: str,
         *,
         path: str,
-        mount_name: str | None = None,
+        mount_name: Optional[str] = None,
     ) -> tuple[Path, str]:
         record = self._repository.get(workspace_id)
         mount = self._resolve_mount(record, mount_name)
@@ -733,6 +1206,24 @@ class WorkspaceService:
         if mount_name is None:
             return record.default_mount
         return record.mount_by_name(mount_name)
+
+    def _resolve_search_mount(
+        self,
+        *,
+        record: WorkspaceRecord,
+        mount_name: str | None,
+    ) -> WorkspaceMountRecord:
+        requested_mount = self._resolve_mount(record, mount_name)
+        if requested_mount.provider == WorkspaceMountProvider.LOCAL:
+            return requested_mount
+        if mount_name is not None:
+            raise ValueError(
+                f"Workspace mount is not local: {requested_mount.mount_name}"
+            )
+        fallback_mount = record.first_local_mount()
+        if fallback_mount is None:
+            raise ValueError("Workspace path search requires a local workspace root")
+        return fallback_mount
 
     def _primary_local_mount(
         self, record: WorkspaceRecord

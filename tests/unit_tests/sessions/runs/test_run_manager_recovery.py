@@ -808,6 +808,8 @@ def test_create_run_updates_pending_run_yolo(tmp_path: Path) -> None:
     pending_intent = IntentInput(
         session_id="session-1",
         input=content_parts_from_text("initial"),
+        display_input=content_parts_from_text("/time initial"),
+        skills=("deepresearch",),
         yolo=False,
     )
     manager._pending_runs["run-existing"] = pending_intent
@@ -831,6 +833,7 @@ def test_create_run_updates_pending_run_yolo(tmp_path: Path) -> None:
         IntentInput(
             session_id="session-1",
             input=content_parts_from_text("follow up"),
+            skills=("time",),
             yolo=True,
         )
     )
@@ -838,7 +841,13 @@ def test_create_run_updates_pending_run_yolo(tmp_path: Path) -> None:
     persisted = RunIntentRepository(db_path).get("run-existing")
     assert run_id == "run-existing"
     assert pending_intent.yolo is True
+    assert pending_intent.display_input == ()
+    assert pending_intent.intent == "initial\n\nfollow up"
+    assert pending_intent.skills == ("deepresearch", "time")
     assert persisted.yolo is True
+    assert persisted.display_input == ()
+    assert persisted.display_intent == "initial\n\nfollow up"
+    assert persisted.skills == ("deepresearch", "time")
 
 
 def test_create_run_updates_recoverable_run_yolo(tmp_path: Path) -> None:

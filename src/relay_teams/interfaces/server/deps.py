@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from relay_teams.commands import CommandRegistry
 from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
@@ -208,6 +209,10 @@ def get_tool_registry(request: Request) -> ToolRegistry:
 
 def get_skill_registry(request: Request) -> SkillRegistry:
     return get_container(request).skill_registry
+
+
+def get_command_registry(request: Request) -> CommandRegistry:
+    return get_container(request).command_registry
 
 
 def get_skill_runtime_service(request: Request) -> SkillRuntimeService:

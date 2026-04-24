@@ -38,6 +38,7 @@ from relay_teams.builtin import (
     get_builtin_roles_dir,
     get_builtin_skills_dir,
 )
+from relay_teams.commands import CommandRegistry
 from relay_teams.computer import build_default_computer_runtime
 from relay_teams.agents.orchestration.meta_agent import MetaAgent
 from relay_teams.agents.orchestration.settings_config_manager import (
@@ -337,6 +338,9 @@ class ServerContainer:
         self.tool_registry: ToolRegistry = build_default_registry()
         self.mcp_registry: McpRegistry = self.mcp_config_manager.load_registry()
         self.mcp_service: McpService = McpService(registry=self.mcp_registry)
+        self.command_registry: CommandRegistry = CommandRegistry(
+            app_config_dir=app_config_dir
+        )
         self.skill_registry: SkillRegistry = SkillRegistry.from_config_dirs(
             app_config_dir=app_config_dir,
             project_start_dir=self._project_start_dir,

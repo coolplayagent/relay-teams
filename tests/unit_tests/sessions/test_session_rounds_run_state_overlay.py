@@ -5,6 +5,7 @@ from pathlib import Path
 from relay_teams.media import InlineMediaContentPart
 from relay_teams.media import MediaModality
 from relay_teams.media import TextContentPart
+from relay_teams.media import content_parts_from_text
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_models import IntentInput
@@ -132,3 +133,42 @@ def test_session_rounds_prefer_persisted_run_intent_parts(tmp_path: Path) -> Non
             "thumbnail_asset_id": None,
         },
     ]
+
+
+def test_session_rounds_prefer_display_input_parts(tmp_path: Path) -> None:
+    db_path = tmp_path / "round_state_overlay_display_input.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+
+    task_repo = TaskRepository(db_path)
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root-1",
+            session_id="session-1",
+            parent_task_id=None,
+            trace_id="run-1",
+            objective="expanded skill prompt",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    run_intent_repo = service._run_intent_repo
+    assert run_intent_repo is not None
+    run_intent_repo.upsert(
+        run_id="run-1",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("Use the time skill.\n\n现在几点了"),
+            display_input=content_parts_from_text("/time 现在几点了"),
+            skills=("time",),
+        ),
+    )
+
+    page = service.get_session_rounds("session-1", limit=8)
+    items = page.get("items")
+    assert isinstance(items, list)
+    assert len(items) == 1
+    first = items[0]
+    assert isinstance(first, dict)
+    assert first.get("intent") == "/time 现在几点了"
+    assert first.get("intent_parts") == [{"kind": "text", "text": "/time 现在几点了"}]

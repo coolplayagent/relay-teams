@@ -3,6 +3,11 @@
  * Settings modal shell and tab routing.
  */
 import { bindAgentSettingsHandlers, loadAgentSettingsPanel } from './agentsSettings.js';
+import {
+    bindCommandsSettingsHandlers,
+    loadCommandsSettingsPanel,
+    syncCommandsSettingsActions,
+} from './commandsSettings.js';
 import { bindHooksSettingsHandlers, loadHooksSettingsPanel } from './hooksSettings.js';
 import { bindModelProfileHandlers, loadModelProfilesPanel } from './modelProfiles.js';
 import {
@@ -39,6 +44,10 @@ const TAB_METADATA = {
     mcp: {
         titleKey: 'settings.panel.mcp.title',
         descriptionKey: 'settings.panel.mcp.description',
+    },
+    commands: {
+        titleKey: 'settings.panel.commands.title',
+        descriptionKey: 'settings.panel.commands.description',
     },
     hooks: {
         titleKey: 'settings.panel.hooks.title',
@@ -104,6 +113,9 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="mcp">
                         <span class="settings-tab-label" data-i18n="settings.tab.mcp">MCP</span>
+                    </button>
+                    <button class="settings-tab" data-tab="commands">
+                        <span class="settings-tab-label" data-i18n="settings.tab.commands">Commands</span>
                     </button>
                     <button class="settings-tab" data-tab="hooks">
                         <span class="settings-tab-label" data-i18n="settings.tab.hooks">Hooks</span>
@@ -374,6 +386,11 @@ function createModal() {
                     <div class="settings-panel" id="mcp-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack status-stack" id="mcp-status"></div>
+                        </div>
+                    </div>
+                    <div class="settings-panel" id="commands-panel" style="display:none;">
+                        <div class="settings-section">
+                            <div class="settings-content-stack status-stack" id="commands-status"></div>
                         </div>
                     </div>
                     <div class="settings-panel" id="hooks-panel" style="display:none;">
@@ -945,6 +962,7 @@ function createModal() {
                             <button class="secondary-btn section-action-btn settings-action" id="test-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.test">Test</button>
                             <button class="secondary-btn section-action-btn settings-action" id="test-agent-btn" type="button" style="display:none;" data-i18n="settings.action.test">Test</button>
                             <button class="secondary-btn section-action-btn settings-action" id="validate-role-btn" type="button" style="display:none;" data-i18n="settings.action.validate">Validate</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="cancel-command-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                         </div>
                         <div class="settings-panel-actions-group settings-panel-actions-group-end">
                             <button class="secondary-btn section-action-btn settings-action" id="add-hook-btn" type="button" style="display:none;" data-i18n="settings.hooks.add_group">Add Hook</button>
@@ -960,6 +978,9 @@ function createModal() {
                             <button class="primary-btn section-action-btn settings-action" id="save-agent-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="delete-agent-btn" type="button" style="display:none;" data-i18n="settings.action.delete">Delete</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-agent-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="add-command-btn" type="button" style="display:none;" data-i18n="settings.commands.add">Add Command</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="preview-command-btn" type="button" style="display:none;" data-i18n="settings.commands.preview">Preview</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-command-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-role-btn" type="button" style="display:none;" data-i18n="settings.action.add_role">Add Role</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-orchestration-preset-btn" type="button" style="display:none;" data-i18n="settings.action.add_orchestration">Add Orchestration</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-env-btn" type="button" style="display:none;" data-i18n="settings.action.add_variable">Add Variable</button>
@@ -1011,6 +1032,7 @@ function setupEventListeners() {
     });
 
     bindModelProfileHandlers();
+    bindCommandsSettingsHandlers();
     bindHooksSettingsHandlers();
     bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
@@ -1047,6 +1069,7 @@ async function showPanel(tab) {
     updatePanelHeading(tab);
     renderPanelActions(tab);
     bindModelProfileHandlers();
+    bindCommandsSettingsHandlers();
     bindHooksSettingsHandlers();
     bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
@@ -1079,6 +1102,8 @@ async function showPanel(tab) {
         await loadWorkspaceSettingsPanel();
     } else if (tab === 'mcp') {
         await loadMcpStatusPanel();
+    } else if (tab === 'commands') {
+        await loadCommandsSettingsPanel();
     } else if (tab === 'skills') {
         await loadSkillsStatusPanel();
     } else if (tab === 'appearance') {
@@ -1146,6 +1171,10 @@ function renderPanelActions(tab) {
     }
     if (tab === 'mcp') {
         document.getElementById('reload-mcp-btn').style.display = 'inline-flex';
+        return;
+    }
+    if (tab === 'commands') {
+        syncCommandsSettingsActions();
         return;
     }
     if (tab === 'appearance') {

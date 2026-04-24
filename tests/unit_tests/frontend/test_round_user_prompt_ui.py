@@ -71,11 +71,11 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
         "function renderRoundIntentStructuredContent(bodyEl, parts) {"
         in timeline_script
     )
+    assert "renderPromptTokenizedText(previewEl, normalized)" in timeline_script
     assert (
-        "renderPromptContentParts(bodyEl, parts, {\n"
-        "        enableWorkspaceImagePreview: false,\n"
-        "    });" in timeline_script
+        "renderPromptTokenizedText(textEl, String(part.text || ''))" in timeline_script
     )
+    assert "round-detail-intent-text" in timeline_script
     assert (
         "header.appendChild(buildRoundIntentBlock(round.intent, round.intent_parts));"
         in timeline_script

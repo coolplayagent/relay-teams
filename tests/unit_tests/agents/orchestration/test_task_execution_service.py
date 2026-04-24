@@ -34,7 +34,11 @@ from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
 from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
+from relay_teams.sessions.runs.run_models import (
+    IntentInput,
+    RuntimePromptConversationContext,
+    RunThinkingConfig,
+)
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.todo_models import TodoItem, TodoStatus
 from relay_teams.sessions.runs.todo_repository import TodoRepository
@@ -177,13 +181,16 @@ class _StaticSkillRegistry:
 
 
 class _StaticSkillRuntimeService:
+    def __init__(self) -> None:
+        self.skill_name_calls: list[tuple[str, ...] | None] = []
+
     def prepare_prompt(
         self,
         *,
         role: RoleDefinition,
         objective: str,
         shared_state_snapshot: tuple[tuple[str, str], ...],
-        conversation_context: object | None = None,
+        conversation_context: RuntimePromptConversationContext | None = None,
         orchestration_prompt: str = "",
         skill_names: tuple[str, ...] | None = None,
         consumer: str,
@@ -194,6 +201,7 @@ class _StaticSkillRuntimeService:
             orchestration_prompt,
             consumer,
         )
+        self.skill_name_calls.append(skill_names)
         visible_skills = role.skills if skill_names is None else skill_names
         appendix = "\n".join(f"- {name}: {name} helper" for name in visible_skills)
         return SkillPromptResult(
@@ -563,6 +571,55 @@ async def test_execute_does_not_emit_task_completed_hook_for_root_task(
     )
 
     assert hook_service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_passes_explicit_task_skills_to_skill_runtime(
+    tmp_path: Path,
+) -> None:
+    provider = _CapturingProvider()
+    service, task_repo, agent_repo, _message_repo = _build_service(
+        tmp_path / "task_execution_service_explicit_task_skills.db",
+        provider,
+    )
+    skill_runtime_service = _StaticSkillRuntimeService()
+    service.skill_runtime_service = cast(SkillRuntimeService, skill_runtime_service)
+    workspace_id = "default"
+    conversation_id = build_conversation_id("session-1", "time")
+    instance = create_subagent_instance(
+        "time",
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        objective="query time",
+        skills=("pdf",),
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=instance.instance_id,
+        role_id="time",
+        workspace_id=instance.workspace_id,
+        conversation_id=instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+
+    result = await service.execute(
+        instance_id=instance.instance_id,
+        role_id="time",
+        task=task,
+    )
+
+    assert result.output == "ok"
+    assert skill_runtime_service.skill_name_calls == [("pdf",)]
 
 
 @pytest.mark.asyncio

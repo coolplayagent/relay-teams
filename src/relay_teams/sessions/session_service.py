@@ -985,7 +985,7 @@ class SessionService:
             intent = self._run_intent_repo.get(run_id)
         except KeyError:
             return None
-        return intent.input
+        return intent.display_input or intent.input
 
     def get_session_rounds(
         self,

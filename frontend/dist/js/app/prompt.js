@@ -9,7 +9,10 @@ import { refreshVisibleContextIndicators } from "../components/contextIndicators
 import { clearAllStreamState } from "../components/messageRenderer.js";
 import {
   fetchRoleConfigOptions,
+  fetchCommands,
   fetchOrchestrationConfig,
+  resolveCommandPrompt,
+  searchWorkspacePaths,
   updateSessionTopology,
 } from "../core/api.js";
 import {
@@ -39,11 +42,21 @@ import { els } from "../utils/dom.js";
 import { showToast } from "../utils/feedback.js";
 import { formatMessage, t } from "../utils/i18n.js";
 import { sysLog } from "../utils/logger.js";
+import { renderPromptTokenChipsHtml } from "../utils/promptTokens.js";
 
 const YOLO_STORAGE_KEY = "agent_teams_yolo";
 const THINKING_MODE_STORAGE_KEY = "agent_teams_thinking_enabled";
 const THINKING_EFFORT_STORAGE_KEY = "agent_teams_thinking_effort";
 const DEFAULT_PROMPT_MENTION_TRIGGER = "@";
+const PROMPT_COMMAND_AUTOCOMPLETE_STATUS = Object.freeze({
+  IDLE: "idle",
+  LOADING: "loading",
+  READY: "ready",
+  EMPTY: "empty",
+  NO_MATCH: "no_match",
+  NO_WORKSPACE: "no_workspace",
+  ERROR: "error",
+});
 let orchestrationConfig = {
   default_orchestration_preset_id: "",
   presets: [],
@@ -58,6 +71,36 @@ let promptMentionRange = {
   start: 0,
   end: 0,
 };
+let promptMentionKind = null;
+let promptMentionSessionKey = "";
+let promptMentionPlacementSide = null;
+let promptMentionPreviewSnapshot = null;
+let promptMentionPreviewValue = "";
+let promptCommandOptions = [];
+let promptCommandWorkspaceId = "";
+let promptCommandLoadingWorkspaceId = "";
+let promptCommandLoadErrorWorkspaceId = "";
+let promptCommandLoadErrorMessage = "";
+let promptCommandAutocompleteStatus = PROMPT_COMMAND_AUTOCOMPLETE_STATUS.IDLE;
+let promptCommandRequestSequence = 0;
+let promptCommandActiveRequestToken = 0;
+let promptSkillOptions = [];
+let promptResourceOptions = [];
+let promptResourceWorkspaceId = "";
+let promptResourceQuery = "";
+let promptResourceLoadingKey = "";
+let promptResourceLoadErrorKey = "";
+let promptResourceLoadErrorMessage = "";
+let promptResourceRequestSequence = 0;
+let promptResourceActiveRequestToken = 0;
+let promptResourceCachedWorkspaceId = "";
+let promptResourceCachedOptions = [];
+const promptResourceQueryCache = new Map();
+let promptResourceDebounceTimer = null;
+const PROMPT_MENTION_MENU_MAX_HEIGHT = 420;
+const PROMPT_MENTION_MENU_SAFE_MARGIN = 16;
+const PROMPT_MENTION_MENU_GAP = 8;
+const PROMPT_RESOURCE_SEARCH_DEBOUNCE_MS = 80;
 let promptAttachments = [];
 let promptAttachmentSequence = 0;
 let promptComposerStatus = null;
@@ -196,12 +239,14 @@ export async function refreshRoleConfigOptions({ refreshControls = true } = {}) 
     setCoordinatorRoleOption(options?.coordinator_role || null);
     setMainAgentRoleOption(options?.main_agent_role || null);
     setNormalModeRoles(options?.normal_mode_roles || []);
+    promptSkillOptions = normalizePromptSkillOptions(options?.skills || []);
   } catch (error) {
     setCoordinatorRoleId("");
     setMainAgentRoleId("");
     setCoordinatorRoleOption(null);
     setMainAgentRoleOption(null);
     setNormalModeRoles([]);
+    promptSkillOptions = [];
     sysLog(error.message || t("composer.error.role_options_load_failed"), "log-error");
   }
   handlePromptComposerInput();
@@ -303,7 +348,13 @@ export async function handleSend() {
     return;
   }
   clearPromptComposerStatus();
-  const inputParts = buildPromptInputParts(text);
+  const resolvedPrompt = await resolvePromptCommandText(text);
+  if (resolvedPrompt === null) {
+    restorePromptComposerAfterSendAbort();
+    return;
+  }
+  const inputParts = buildPromptInputParts(resolvedPrompt.text);
+  const displayInputParts = buildPromptInputParts(text);
   const promptPreviewText = text || summarizePromptAttachments(promptAttachments);
 
   dismissPromptMentionAutocomplete();
@@ -332,16 +383,25 @@ export async function handleSend() {
       hydrateSessionView(sid, { includeRounds: true, quiet: true }),
     {
       inputParts,
+      displayInputParts,
+      skills: resolvedPrompt.skills,
       yolo: state.yolo,
       thinking: state.thinking,
       targetRoleId,
       onRunCreated: (run) => {
         state.currentSessionCanSwitchMode = false;
         refreshSessionTopologyControls();
-        createLiveRound(run.run_id, promptPreviewText, inputParts);
+        createLiveRound(run.run_id, promptPreviewText, displayInputParts);
       },
     },
   );
+}
+
+function restorePromptComposerAfterSendAbort() {
+  state.isGenerating = false;
+  if (els.sendBtn) els.sendBtn.disabled = false;
+  if (els.promptInput) els.promptInput.disabled = false;
+  refreshSessionTopologyControls();
 }
 
 export function initializePromptMentionAutocomplete() {
@@ -373,11 +433,31 @@ export function initializePromptMentionAutocomplete() {
       }
       dismissPromptMentionAutocomplete();
     });
+    document.addEventListener("agent-teams-commands-updated", () => {
+      invalidatePromptCommandsCache();
+    });
+    document.addEventListener("agent-teams-new-session-draft-opened", () => {
+      invalidatePromptResourceCache();
+      invalidatePromptCommandsCache();
+      refreshPromptMentionAutocomplete();
+    });
+    document.addEventListener("agent-teams-draft-workspace-added", () => {
+      invalidatePromptResourceCache();
+      invalidatePromptCommandsCache();
+      refreshPromptMentionAutocomplete();
+    });
+    document.addEventListener("agent-teams-draft-workspace-selected", () => {
+      invalidatePromptResourceCache();
+      invalidatePromptCommandsCache();
+      refreshPromptMentionAutocomplete();
+    });
   }
 }
 
 export function handlePromptComposerInput() {
+  acceptPromptMentionPreviewIfUserEdited();
   renderPromptAttachments();
+  renderPromptTokenPreview();
   refreshPromptMentionAutocomplete();
   refreshPromptComposerValidation();
 }
@@ -406,6 +486,15 @@ export function handlePromptComposerKeydown(event) {
   if (!isPromptMentionAutocompleteOpen()) {
     return false;
   }
+  if (promptMentionOptions.length === 0) {
+    if (event?.key === "Escape") {
+      preventPromptMentionDefault(event);
+      restorePromptMentionPreviewSnapshot();
+      dismissPromptMentionAutocomplete();
+      return true;
+    }
+    return false;
+  }
   if (event?.key === "ArrowDown") {
     preventPromptMentionDefault(event);
     movePromptMentionSelection(1);
@@ -422,6 +511,7 @@ export function handlePromptComposerKeydown(event) {
   }
   if (event?.key === "Escape") {
     preventPromptMentionDefault(event);
+    restorePromptMentionPreviewSnapshot();
     dismissPromptMentionAutocomplete();
     return true;
   }
@@ -468,6 +558,7 @@ function resetPromptComposer() {
   promptAttachments = [];
   clearPromptComposerStatus();
   renderPromptAttachments();
+  renderPromptTokenPreview();
 }
 
 function renderPromptAttachments() {
@@ -549,6 +640,36 @@ function renderPromptAttachments() {
         els.promptInput?.focus?.();
       });
     });
+}
+
+function renderPromptTokenPreview() {
+  const input = els.promptInput;
+  const wrapper = input?.parentElement || null;
+  if (!input || !wrapper || typeof wrapper.querySelector !== "function") {
+    return;
+  }
+  let host = wrapper.querySelector(".prompt-token-preview");
+  const html = renderPromptTokenChipsHtml(
+    String(input.value || ""),
+    getPromptTokenRenderOptions(),
+  );
+  if (!html) {
+    host?.remove?.();
+    return;
+  }
+  if (!host) {
+    host = document.createElement("div");
+    host.className = "prompt-token-preview";
+    wrapper.insertBefore(host, input);
+  }
+  host.innerHTML = html;
+}
+
+function getPromptTokenRenderOptions() {
+  return {
+    skills: promptSkillOptions.flatMap((option) => option.aliases || []),
+    commands: listPromptCommandOptions().flatMap((option) => option.aliases || []),
+  };
 }
 
 function refreshPromptComposerValidation() {
@@ -987,31 +1108,86 @@ function normalizeOrchestrationConfig(config) {
   };
 }
 
+function ensurePromptMentionSession(kind, context) {
+  const nextSessionKey = getPromptMentionSessionKey(kind, context);
+  if (promptMentionSessionKey === nextSessionKey) {
+    return;
+  }
+  promptMentionSessionKey = nextSessionKey;
+  promptMentionPlacementSide = null;
+  clearPromptMentionPreviewSnapshot();
+}
+
+function getPromptMentionSessionKey(kind, context) {
+  return [
+    kind,
+    context?.trigger || "",
+    Number(context?.start || 0),
+  ].join(":");
+}
+
 function refreshPromptMentionAutocomplete() {
+  const commandContext = getPromptCommandContext();
+  if (commandContext) {
+    ensurePromptMentionSession("action", commandContext);
+    void ensurePromptCommandsLoaded();
+    const workspaceId = String(state.currentWorkspaceId || "").trim();
+    const nextOptions = findPromptActionOptions(commandContext.query);
+    const previousKey =
+      getPromptOptionKey(promptMentionOptions[activePromptMentionIndex]) || "";
+    promptMentionOptions = nextOptions;
+    promptMentionQuery = commandContext.query;
+    promptMentionTrigger = "/";
+    promptMentionKind = "action";
+    promptMentionRange = {
+      start: commandContext.start,
+      end: commandContext.end,
+    };
+    promptCommandAutocompleteStatus = resolvePromptCommandAutocompleteStatus({
+      workspaceId,
+      query: commandContext.query,
+      optionCount: nextOptions.length,
+    });
+    const preservedIndex = promptMentionOptions.findIndex(
+      (option) => getPromptOptionKey(option) === previousKey,
+    );
+    activePromptMentionIndex = nextOptions.length > 0
+      ? preservedIndex >= 0 ? preservedIndex : 0
+      : -1;
+    renderPromptMentionAutocomplete();
+    return;
+  }
+
   const mentionContext = getPromptMentionContext();
   if (!mentionContext) {
     dismissPromptMentionAutocomplete();
     return;
   }
-  const nextOptions = findPromptMentionOptions(mentionContext.query);
-  if (nextOptions.length === 0) {
-    dismissPromptMentionAutocomplete();
-    return;
-  }
+  ensurePromptMentionSession("resource", mentionContext);
+  const mentionWorkspaceId = String(state.currentWorkspaceId || "").trim();
+  promptResourceOptions = getLocalPromptResourceOptions(
+    mentionWorkspaceId,
+    mentionContext.query,
+  );
+  schedulePromptResourcesLoaded(mentionContext.query);
+  const nextOptions = findPromptResourceOptions(mentionContext.query);
 
-  const previousRoleId =
-    promptMentionOptions[activePromptMentionIndex]?.roleId || "";
+  const previousKey =
+    getPromptOptionKey(promptMentionOptions[activePromptMentionIndex]) || "";
   promptMentionOptions = nextOptions;
   promptMentionQuery = mentionContext.query;
   promptMentionTrigger = mentionContext.trigger;
+  promptMentionKind = "resource";
   promptMentionRange = {
     start: mentionContext.start,
     end: mentionContext.end,
   };
   const preservedIndex = promptMentionOptions.findIndex(
-    (option) => option.roleId === previousRoleId,
+    (option) => getPromptOptionKey(option) === previousKey,
   );
-  activePromptMentionIndex = preservedIndex >= 0 ? preservedIndex : 0;
+  activePromptMentionIndex = nextOptions.length > 0
+    ? preservedIndex >= 0 ? preservedIndex : 0
+    : -1;
   renderPromptMentionAutocomplete();
 }
 
@@ -1039,7 +1215,7 @@ function parseLeadingRoleMention(text) {
     return {
       roleId: null,
       promptText: source,
-      error: t("composer.error.mention_not_found"),
+      error: "",
     };
   }
   matched.sort((left, right) => right.term.length - left.term.length);
@@ -1182,6 +1358,162 @@ function findPromptMentionOptions(query) {
     .map((item) => item.option);
 }
 
+function listPromptCommandOptions() {
+  if (
+    String(state.currentWorkspaceId || "").trim() !== promptCommandWorkspaceId
+  ) {
+    return [];
+  }
+  return promptCommandOptions.map((command) => {
+    const name = String(command?.name || "").trim();
+    const aliases = Array.isArray(command?.aliases)
+      ? command.aliases.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    const preferredName =
+      aliases.find((item) => item.includes(":")) || name;
+    const terms = [name, ...aliases].filter(Boolean);
+    return {
+      kind: "command",
+      commandName: name,
+      displayName: preferredName || name,
+      insertTerm: name,
+      description: String(command?.description || "").trim(),
+      argumentHint: String(command?.argument_hint || "").trim(),
+      source: normalizePromptCommandSource(command),
+      aliases: terms,
+    };
+  }).filter((option) => option.commandName && option.displayName);
+}
+
+function normalizePromptCommandSource(command) {
+  const explicitSource = String(command?.source || command?.discovery_source || "")
+    .trim()
+    .toLowerCase();
+  if (explicitSource.includes("mcp")) {
+    return "mcp";
+  }
+  if (explicitSource.includes("opencode")) {
+    return "opencode";
+  }
+  if (explicitSource.includes("codex")) {
+    return "codex";
+  }
+  if (explicitSource.includes("claude")) {
+    return "claude";
+  }
+  if (explicitSource.includes("relay")) {
+    return "relay";
+  }
+  const scope = String(command?.scope || "").trim().toLowerCase();
+  if (scope === "app") {
+    return "builtin";
+  }
+  return "custom";
+}
+
+function normalizePromptSkillOptions(skills) {
+  return (Array.isArray(skills) ? skills : [])
+    .map((skill) => {
+      const name = String(skill?.name || skill?.ref || "").trim();
+      const ref = String(skill?.ref || name).trim();
+      if (!name) {
+        return null;
+      }
+      const insertTerm = getSlashSafeSkillInsertTerm(name, ref);
+      return {
+        kind: "skill",
+        skillName: name,
+        displayName: name,
+        insertTerm,
+        description: String(skill?.description || "").trim(),
+        source: String(skill?.source || "").trim(),
+        aliases: Array.from(new Set([name, ref, insertTerm].filter(Boolean))),
+      };
+    })
+    .filter(Boolean);
+}
+
+function getSlashSafeSkillInsertTerm(name, ref) {
+  const safeRef = String(ref || "").trim();
+  if (safeRef && !/\s/.test(safeRef)) {
+    return safeRef;
+  }
+  const safeName = String(name || "").trim();
+  if (safeName && !/\s/.test(safeName)) {
+    return safeName;
+  }
+  return safeName.replace(/\s+/g, "-").toLowerCase();
+}
+
+function findPromptActionOptions(query) {
+  const safeQuery = String(query || "")
+    .trim()
+    .toLowerCase();
+  const commandOptions = listPromptCommandOptions();
+  const commandTerms = new Set(
+    commandOptions.flatMap((option) => option.aliases || [])
+      .map((term) => String(term || "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const skillOptions = promptSkillOptions.filter((option) =>
+    !option.aliases.some((alias) =>
+      commandTerms.has(String(alias || "").trim().toLowerCase())
+    )
+  );
+  return [...commandOptions, ...skillOptions]
+    .map((option, index) => ({
+      option,
+      index,
+      score: getPromptMentionOptionScore(option, safeQuery),
+    }))
+    .filter((item) => item.score < Number.POSITIVE_INFINITY)
+    .sort((left, right) => left.score - right.score || left.index - right.index)
+    .slice(0, 10)
+    .map((item) => item.option);
+}
+
+function findPromptResourceOptions(query) {
+  const roleOptions = findPromptMentionOptions(query).map((option) => ({
+    ...option,
+    kind: "agent",
+  }));
+  const fileOptions = promptResourceOptions
+    .map((option, index) => ({
+      option,
+      index,
+      score: getPromptMentionOptionScore(option, String(query || "").trim().toLowerCase()),
+    }))
+    .filter((item) => item.score < Number.POSITIVE_INFINITY)
+    .sort((left, right) => left.score - right.score || left.index - right.index)
+    .slice(0, 20)
+    .map((item) => item.option);
+  return [...roleOptions, ...fileOptions].slice(0, 20);
+}
+
+function normalizePromptResourceResponse(response) {
+  return (Array.isArray(response?.results) ? response.results : [])
+    .map((item) => {
+      const path = String(item?.path || "").trim();
+      const name = String(item?.name || path).trim();
+      const kind = String(item?.kind || "").trim() === "directory"
+        ? "directory"
+        : "file";
+      if (!path || !name) {
+        return null;
+      }
+      return {
+        kind,
+        displayName: name,
+        insertTerm: kind === "directory" && !path.endsWith("/") ? `${path}/` : path,
+        description: path,
+        path,
+        mountName: String(item?.mount_name || "").trim(),
+        aliases: [name, path],
+      };
+    })
+    .filter(Boolean);
+}
+
 function getPromptMentionOptionScore(option, query) {
   if (!query) {
     return 0;
@@ -1209,6 +1541,34 @@ function getPromptMentionOptionScore(option, query) {
   return best;
 }
 
+function getPromptCommandContext() {
+  const input = els.promptInput;
+  if (!input) {
+    return null;
+  }
+  const source = String(input.value || "");
+  const selectionStart = Number.isFinite(input.selectionStart)
+    ? Number(input.selectionStart)
+    : source.length;
+  const beforeCursor = source.slice(0, selectionStart);
+  const commandTokenMatch = beforeCursor.match(/(^|\s)\/([^\s]*)$/);
+  if (!commandTokenMatch) {
+    return null;
+  }
+  const separator = commandTokenMatch[1] || "";
+  const tokenText = commandTokenMatch[2] || "";
+  const start = beforeCursor.length - tokenText.length - 1;
+  const afterCursor = source.slice(selectionStart);
+  const tokenTail = afterCursor.match(/^[^\s]*/)?.[0] || "";
+  return {
+    start,
+    end: selectionStart + tokenTail.length,
+    trigger: "/",
+    query: tokenText.trim(),
+    separator,
+  };
+}
+
 function getPromptMentionContext() {
   const input = els.promptInput;
   if (!input) {
@@ -1218,33 +1578,21 @@ function getPromptMentionContext() {
   const selectionStart = Number.isFinite(input.selectionStart)
     ? Number(input.selectionStart)
     : source.length;
-  const leadingWhitespace = source.match(/^\s*/)?.[0] || "";
-  const mentionStart = leadingWhitespace.length;
-  if (selectionStart < mentionStart) {
-    return null;
-  }
-  const sourceAfterLeadingWhitespace = source.slice(mentionStart);
-  const trigger = getPromptMentionTrigger(sourceAfterLeadingWhitespace);
-  if (!trigger) {
-    return null;
-  }
-  const mentionTokenMatch = sourceAfterLeadingWhitespace.match(/^[@＠](\S*)/);
+  const beforeCursor = source.slice(0, selectionStart);
+  const mentionTokenMatch = beforeCursor.match(/(^|\s)([@＠])([^\s]*)$/);
   if (!mentionTokenMatch) {
     return null;
   }
-  const mentionEnd = mentionStart + mentionTokenMatch[0].length;
-  if (selectionStart > mentionEnd) {
-    return null;
-  }
-  const prefix = source.slice(mentionStart, selectionStart);
-  if (!startsWithPromptMention(prefix) || /\s/.test(prefix.slice(1))) {
-    return null;
-  }
+  const trigger = mentionTokenMatch[2];
+  const tokenText = mentionTokenMatch[3] || "";
+  const start = beforeCursor.length - tokenText.length - 1;
+  const afterCursor = source.slice(selectionStart);
+  const tokenTail = afterCursor.match(/^[^\s]*/)?.[0] || "";
   return {
-    start: mentionStart,
-    end: mentionEnd,
+    start,
+    end: selectionStart + tokenTail.length,
     trigger,
-    query: prefix.slice(1).trim(),
+    query: tokenText.trim(),
   };
 }
 
@@ -1253,69 +1601,266 @@ function renderPromptMentionAutocomplete() {
   if (!menu) {
     return;
   }
-  if (promptMentionOptions.length === 0 || activePromptMentionIndex < 0) {
-    menu.innerHTML = "";
-    menu.hidden = true;
-    menu.style.display = "none";
+  if (!promptMentionKind) {
+    hidePromptMentionMenu(menu);
+    return;
+  }
+  const shouldShowCommandStatus =
+    promptMentionKind === "action" &&
+    promptCommandAutocompleteStatus !== PROMPT_COMMAND_AUTOCOMPLETE_STATUS.IDLE;
+  const shouldShowResourceOptions =
+    promptMentionKind === "resource" &&
+    promptMentionOptions.length > 0 &&
+    activePromptMentionIndex >= 0;
+  if (promptMentionKind === "resource" && !shouldShowResourceOptions) {
+    hidePromptMentionMenu(menu);
+    return;
+  }
+  if (
+    (promptMentionOptions.length === 0 || activePromptMentionIndex < 0) &&
+    !shouldShowCommandStatus
+  ) {
+    hidePromptMentionMenu(menu);
     return;
   }
   menu.hidden = false;
   menu.style.display = "flex";
+  if (promptMentionKind === "action") {
+    renderPromptCommandAutocomplete(menu);
+    applyPromptMentionMenuPlacement(menu);
+    return;
+  }
+  renderPromptResourceAutocomplete(menu);
+  applyPromptMentionMenuPlacement(menu);
+}
+
+function renderPromptResourceAutocomplete(menu) {
   menu.innerHTML = `
         <div class="prompt-mention-menu-header">
-            <span class="prompt-mention-menu-title">@agent</span>
+            <span class="prompt-mention-menu-title">@ 引用</span>
             <span class="prompt-mention-menu-summary">${escapeHtml(
-              t("composer.mention_keys"),
+              `${promptMentionOptions.length}`,
             )}</span>
         </div>
         <div class="prompt-mention-menu-list">
-            ${promptMentionOptions
-              .map((option, index) => {
-                const isActive = index === activePromptMentionIndex;
-                const roleIdMeta =
-                  option.displayName.toLowerCase() === option.roleId.toLowerCase()
-                    ? ""
-                    : `<span class="prompt-mention-item-id">@${highlightPromptMentionText(option.roleId, promptMentionQuery)}</span>`;
-                const descriptionMeta = option.description
-                  ? `<span class="prompt-mention-item-description">${escapeHtml(
-                      option.description,
-                    )}</span>`
-                  : "";
-                return `
-                    <button
-                        type="button"
-                        class="prompt-mention-item${isActive ? " active" : ""}"
-                        data-index="${index}"
-                        data-role-id="${escapeHtml(option.roleId)}"
-                        role="option"
-                        aria-selected="${isActive ? "true" : "false"}"
-                    >
-                        <span class="prompt-mention-item-accent" aria-hidden="true">${escapeHtml(
-                          getPromptMentionMonogram(option.displayName),
-                        )}</span>
-                        <span class="prompt-mention-item-main">
-                            <span class="prompt-mention-item-row">
-                                <span class="prompt-mention-item-name">${highlightPromptMentionText(
-                                  option.displayName,
-                                  promptMentionQuery,
-                                )}</span>
-                                <span class="prompt-mention-item-enter" aria-hidden="true">${escapeHtml(t("composer.mention_action_enter"))}</span>
-                            </span>
-                            ${descriptionMeta}
-                            ${roleIdMeta}
-                        </span>
-                    </button>
-                `;
-              })
-              .join("")}
-        </div>
-        <div class="prompt-mention-menu-footer" aria-hidden="true">
-            <span class="prompt-mention-menu-key">↑↓</span>
-            <span class="prompt-mention-menu-key">Tab</span>
-            <span class="prompt-mention-menu-key">Esc</span>
+            ${renderPromptOptionSections(promptMentionOptions)}
         </div>
     `;
   syncPromptMentionActiveOptionIntoView(menu);
+}
+
+function hidePromptMentionMenu(menu) {
+  menu.innerHTML = "";
+  menu.hidden = true;
+  menu.style.display = "none";
+}
+
+function renderPromptCommandAutocomplete(menu) {
+  const hasOptions = promptMentionOptions.length > 0;
+  menu.innerHTML = `
+        <div class="prompt-mention-menu-header">
+            <span class="prompt-mention-menu-title">/ 命令</span>
+            <span class="prompt-mention-menu-summary">${escapeHtml(
+              hasOptions ? `${promptMentionOptions.length}` : "",
+            )}</span>
+        </div>
+        <div class="prompt-mention-menu-list">
+            ${
+              hasOptions
+                ? renderPromptOptionSections(promptMentionOptions)
+                : renderPromptCommandStatus()
+            }
+        </div>
+    `;
+  syncPromptMentionActiveOptionIntoView(menu);
+}
+
+function renderPromptOptionSections(options) {
+  const sections = [];
+  const pushSection = (title, items) => {
+    if (items.length === 0) {
+      return;
+    }
+    sections.push(`
+        <section class="prompt-mention-section">
+            <div class="prompt-mention-section-title">${escapeHtml(title)}</div>
+            <div class="prompt-mention-section-list">
+                ${items.map((item) => renderPromptOption(item.option, item.index)).join("")}
+            </div>
+        </section>
+    `);
+  };
+  pushSection(
+    "Agent",
+    options
+      .map((option, index) => ({ option, index }))
+      .filter((item) => item.option.kind === "agent"),
+  );
+  pushSection(
+    "Files",
+    options
+      .map((option, index) => ({ option, index }))
+      .filter((item) => item.option.kind === "file" || item.option.kind === "directory"),
+  );
+  pushSection(
+    "Commands",
+    options
+      .map((option, index) => ({ option, index }))
+      .filter((item) => item.option.kind === "command"),
+  );
+  pushSection(
+    "Skills",
+    options
+      .map((option, index) => ({ option, index }))
+      .filter((item) => item.option.kind === "skill"),
+  );
+  return sections.join("");
+}
+
+function renderPromptOption(option, index) {
+  const isActive = index === activePromptMentionIndex;
+  const optionType = getPromptOptionType(option);
+  const hintText = getPromptOptionHint(option);
+  const descriptionText = getPromptOptionDescription(option);
+  return `
+            <button
+            type="button"
+            class="prompt-mention-item prompt-mention-item-${escapeHtml(optionType)}${isActive ? " active" : ""}"
+            data-index="${index}"
+            data-kind="${escapeHtml(option.kind || "")}"
+            data-source="${escapeHtml(option.source || "")}"
+            role="option"
+            aria-selected="${isActive ? "true" : "false"}"
+        >
+            <span class="prompt-mention-item-accent prompt-mention-type-${escapeHtml(optionType)}" aria-hidden="true">${escapeHtml(
+              getPromptOptionIcon(option),
+            )}</span>
+            <span class="prompt-mention-item-main">
+                <span class="prompt-mention-item-row">
+                    <span class="prompt-mention-item-name">${renderPromptOptionName(option)}</span>
+                    ${descriptionText ? `<span class="prompt-mention-item-description">${escapeHtml(descriptionText)}</span>` : ""}
+                    ${hintText ? `<span class="prompt-mention-item-id">${escapeHtml(hintText)}</span>` : ""}
+                </span>
+            </span>
+        </button>
+    `;
+}
+
+function renderPromptCommandStatus() {
+  const status = resolvePromptCommandStatusCopy();
+  return `
+        <div class="prompt-mention-empty" role="status">
+            <span class="prompt-mention-empty-title">${escapeHtml(status.title)}</span>
+            <span class="prompt-mention-empty-copy">${escapeHtml(status.copy)}</span>
+        </div>
+    `;
+}
+
+function renderPromptResourceStatus() {
+  const status = resolvePromptResourceStatusCopy();
+  return `
+        <div class="prompt-mention-empty" role="status">
+            <span class="prompt-mention-empty-title">${escapeHtml(status.title)}</span>
+            <span class="prompt-mention-empty-copy">${escapeHtml(status.copy)}</span>
+        </div>
+    `;
+}
+
+function shouldRenderPromptResourceStatus() {
+  const workspaceId = String(state.currentWorkspaceId || "").trim();
+  if (!workspaceId) {
+    return true;
+  }
+  const cacheKey = `${workspaceId}\n${String(promptMentionQuery || "").trim()}`;
+  return (
+    promptResourceLoadingKey === cacheKey ||
+    promptResourceLoadErrorKey === cacheKey ||
+    promptMentionOptions.length === 0
+  );
+}
+
+function resolvePromptResourceStatusCopy() {
+  const workspaceId = String(state.currentWorkspaceId || "").trim();
+  const cacheKey = `${workspaceId}\n${String(promptMentionQuery || "").trim()}`;
+  if (!workspaceId) {
+    return {
+      title: "没有可搜索的 workspace",
+      copy: "先选择或创建 workspace 后再引用文件。",
+    };
+  }
+  if (promptResourceLoadingKey === cacheKey) {
+    return {
+      title: "正在搜索",
+      copy: "查找当前 workspace 的文件和目录。",
+    };
+  }
+  if (promptResourceLoadErrorKey === cacheKey) {
+    return {
+      title: "搜索失败",
+      copy: promptResourceLoadErrorMessage || "无法搜索当前 workspace。",
+    };
+  }
+  return {
+    title: "没有匹配项",
+    copy: "继续输入以搜索 agent、文件或目录。",
+  };
+}
+
+function resolvePromptCommandStatusCopy() {
+  if (promptCommandAutocompleteStatus === PROMPT_COMMAND_AUTOCOMPLETE_STATUS.LOADING) {
+    return {
+      title: t("composer.command_loading"),
+      copy: t("composer.command_loading_copy"),
+    };
+  }
+  if (promptCommandAutocompleteStatus === PROMPT_COMMAND_AUTOCOMPLETE_STATUS.NO_WORKSPACE) {
+    return {
+      title: t("composer.command_no_workspace"),
+      copy: t("composer.command_no_workspace_copy"),
+    };
+  }
+  if (promptCommandAutocompleteStatus === PROMPT_COMMAND_AUTOCOMPLETE_STATUS.ERROR) {
+    return {
+      title: t("composer.command_load_failed"),
+      copy: promptCommandLoadErrorMessage || t("composer.command_load_failed_copy"),
+    };
+  }
+  if (promptCommandAutocompleteStatus === PROMPT_COMMAND_AUTOCOMPLETE_STATUS.NO_MATCH) {
+    return {
+      title: t("composer.command_no_match"),
+      copy: t("composer.command_no_match_copy"),
+    };
+  }
+  return {
+    title: t("composer.command_empty"),
+    copy: t("composer.command_empty_copy"),
+  };
+}
+
+function resolvePromptCommandAutocompleteStatus({
+  workspaceId,
+  query,
+  optionCount,
+}) {
+  if (!workspaceId) {
+    return PROMPT_COMMAND_AUTOCOMPLETE_STATUS.NO_WORKSPACE;
+  }
+  if (
+    workspaceId === promptCommandLoadingWorkspaceId &&
+    workspaceId !== promptCommandWorkspaceId
+  ) {
+    return PROMPT_COMMAND_AUTOCOMPLETE_STATUS.LOADING;
+  }
+  if (workspaceId === promptCommandLoadErrorWorkspaceId) {
+    return PROMPT_COMMAND_AUTOCOMPLETE_STATUS.ERROR;
+  }
+  if (optionCount > 0) {
+    return PROMPT_COMMAND_AUTOCOMPLETE_STATUS.READY;
+  }
+  if (String(query || "").trim() && listPromptCommandOptions().length > 0) {
+    return PROMPT_COMMAND_AUTOCOMPLETE_STATUS.NO_MATCH;
+  }
+  return PROMPT_COMMAND_AUTOCOMPLETE_STATUS.EMPTY;
 }
 
 function movePromptMentionSelection(direction) {
@@ -1333,6 +1878,7 @@ function movePromptMentionSelection(direction) {
     activePromptMentionIndex =
       activePromptMentionIndex <= 0 ? maxIndex : activePromptMentionIndex - 1;
   }
+  previewPromptMentionOption(activePromptMentionIndex);
   renderPromptMentionAutocomplete();
 }
 
@@ -1341,39 +1887,77 @@ function selectPromptMentionOption(index) {
   if (!option || !els.promptInput) {
     return false;
   }
+  const keepMenuOpen =
+    promptMentionKind === "resource" && option.kind === "directory";
+  applyPromptMentionOptionToInput(option, { commit: true });
+  if (keepMenuOpen) {
+    setPromptMentionPreviewBaseline();
+    void ensurePromptResourcesLoaded(promptMentionQuery);
+    refreshPromptMentionAutocomplete();
+    return true;
+  }
+  dismissPromptMentionAutocomplete();
+  return true;
+}
+
+function previewPromptMentionOption(index) {
+  const option = promptMentionOptions[index];
+  if (!option || !els.promptInput) {
+    return;
+  }
+  ensurePromptMentionPreviewSnapshot();
+  applyPromptMentionOptionToInput(option, { commit: false });
+}
+
+function applyPromptMentionOptionToInput(option, { commit }) {
   const source = String(els.promptInput.value || "");
   const before = source.slice(0, promptMentionRange.start);
   const after = source.slice(promptMentionRange.end);
   const spacer = after.length === 0 || /^\s/.test(after) ? "" : " ";
-  const mentionTrigger =
-    getPromptMentionTrigger(source.slice(promptMentionRange.start))
-    || promptMentionTrigger;
+  const appendTrailingSpace = commit &&
+    !(promptMentionKind === "resource" && option.kind === "directory");
+  const mentionTrigger = promptMentionKind === "action"
+    ? "/"
+    : getPromptMentionTrigger(source.slice(promptMentionRange.start))
+      || promptMentionTrigger;
   const insertedMention = `${mentionTrigger}${option.insertTerm}`;
-  const nextValue = `${before}${insertedMention}${spacer}${after || " "}`;
+  const trailingText = after ? spacer : appendTrailingSpace ? " " : "";
+  const nextValue = `${before}${insertedMention}${trailingText}${after}`;
 
   els.promptInput.value = nextValue;
   const caretPosition =
-    before.length + insertedMention.length + (after ? spacer.length : 1);
+    before.length + insertedMention.length + trailingText.length;
   if ("selectionStart" in els.promptInput) {
     els.promptInput.selectionStart = caretPosition;
   }
   if ("selectionEnd" in els.promptInput) {
     els.promptInput.selectionEnd = caretPosition;
   }
+  promptMentionRange = {
+    start: before.length,
+    end: before.length + insertedMention.length,
+  };
+  promptMentionQuery = String(option.insertTerm || "");
+  promptMentionPreviewValue = nextValue;
   els.promptInput.style.height = "auto";
   if (Number.isFinite(els.promptInput.scrollHeight)) {
     els.promptInput.style.height = `${els.promptInput.scrollHeight}px`;
   }
   els.promptInput.focus?.();
-  dismissPromptMentionAutocomplete();
-  return true;
+  renderPromptTokenPreview();
 }
 
 function dismissPromptMentionAutocomplete() {
+  clearPromptResourceSearchTimer();
   promptMentionOptions = [];
   activePromptMentionIndex = -1;
   promptMentionQuery = "";
   promptMentionTrigger = DEFAULT_PROMPT_MENTION_TRIGGER;
+  promptMentionKind = null;
+  promptMentionSessionKey = "";
+  promptMentionPlacementSide = null;
+  clearPromptMentionPreviewSnapshot();
+  promptCommandAutocompleteStatus = PROMPT_COMMAND_AUTOCOMPLETE_STATUS.IDLE;
   promptMentionRange = {
     start: 0,
     end: 0,
@@ -1381,11 +1965,505 @@ function dismissPromptMentionAutocomplete() {
   renderPromptMentionAutocomplete();
 }
 
+function ensurePromptMentionPreviewSnapshot() {
+  if (promptMentionPreviewSnapshot || !els.promptInput) {
+    return;
+  }
+  promptMentionPreviewSnapshot = {
+    value: String(els.promptInput.value || ""),
+    selectionStart: Number.isFinite(els.promptInput.selectionStart)
+      ? Number(els.promptInput.selectionStart)
+      : String(els.promptInput.value || "").length,
+    selectionEnd: Number.isFinite(els.promptInput.selectionEnd)
+      ? Number(els.promptInput.selectionEnd)
+      : String(els.promptInput.value || "").length,
+  };
+}
+
+function setPromptMentionPreviewBaseline() {
+  clearPromptMentionPreviewSnapshot();
+  ensurePromptMentionPreviewSnapshot();
+  promptMentionPreviewValue = String(els.promptInput?.value || "");
+}
+
+function restorePromptMentionPreviewSnapshot() {
+  if (!promptMentionPreviewSnapshot || !els.promptInput) {
+    return;
+  }
+  els.promptInput.value = promptMentionPreviewSnapshot.value;
+  els.promptInput.selectionStart = promptMentionPreviewSnapshot.selectionStart;
+  els.promptInput.selectionEnd = promptMentionPreviewSnapshot.selectionEnd;
+  els.promptInput.style.height = "auto";
+  if (Number.isFinite(els.promptInput.scrollHeight)) {
+    els.promptInput.style.height = `${els.promptInput.scrollHeight}px`;
+  }
+}
+
+function clearPromptMentionPreviewSnapshot() {
+  promptMentionPreviewSnapshot = null;
+  promptMentionPreviewValue = "";
+}
+
+function acceptPromptMentionPreviewIfUserEdited() {
+  if (
+    !promptMentionPreviewSnapshot ||
+    !promptMentionPreviewValue ||
+    !els.promptInput
+  ) {
+    return;
+  }
+  if (String(els.promptInput.value || "") === promptMentionPreviewValue) {
+    return;
+  }
+  clearPromptMentionPreviewSnapshot();
+}
+
+async function ensurePromptCommandsLoaded() {
+  const workspaceId = String(state.currentWorkspaceId || "").trim();
+  if (!workspaceId || workspaceId === promptCommandWorkspaceId) {
+    return;
+  }
+  if (workspaceId === promptCommandLoadingWorkspaceId) {
+    return;
+  }
+  promptCommandLoadingWorkspaceId = workspaceId;
+  const requestToken = ++promptCommandRequestSequence;
+  promptCommandActiveRequestToken = requestToken;
+  try {
+    const commandResponse = await fetchCommands(workspaceId);
+    if (
+      requestToken !== promptCommandActiveRequestToken ||
+      workspaceId !== String(state.currentWorkspaceId || "").trim()
+    ) {
+      return;
+    }
+    promptCommandOptions = normalizePromptCommandResponse(commandResponse);
+    promptCommandWorkspaceId = workspaceId;
+    promptCommandLoadErrorWorkspaceId = "";
+    promptCommandLoadErrorMessage = "";
+    refreshPromptMentionAutocomplete();
+  } catch (error) {
+    if (
+      requestToken !== promptCommandActiveRequestToken ||
+      workspaceId !== String(state.currentWorkspaceId || "").trim()
+    ) {
+      return;
+    }
+    promptCommandOptions = [];
+    promptCommandWorkspaceId = "";
+    promptCommandLoadErrorWorkspaceId = workspaceId;
+    promptCommandLoadErrorMessage = error.message || t("composer.command_load_failed_copy");
+    sysLog(error.message || "Failed to load commands", "log-error");
+    if (promptCommandLoadingWorkspaceId === workspaceId) {
+      promptCommandLoadingWorkspaceId = "";
+    }
+    promptCommandAutocompleteStatus = PROMPT_COMMAND_AUTOCOMPLETE_STATUS.ERROR;
+    renderPromptMentionAutocomplete();
+  } finally {
+    if (
+      requestToken === promptCommandActiveRequestToken &&
+      promptCommandLoadingWorkspaceId === workspaceId
+    ) {
+      promptCommandLoadingWorkspaceId = "";
+    }
+  }
+}
+
+export function invalidatePromptCommandsCache() {
+  promptCommandOptions = [];
+  promptCommandWorkspaceId = "";
+  promptCommandLoadingWorkspaceId = "";
+  promptCommandLoadErrorWorkspaceId = "";
+  promptCommandLoadErrorMessage = "";
+  promptCommandAutocompleteStatus = PROMPT_COMMAND_AUTOCOMPLETE_STATUS.IDLE;
+  promptCommandActiveRequestToken = ++promptCommandRequestSequence;
+  if (promptMentionKind === "action") {
+    refreshPromptMentionAutocomplete();
+  }
+}
+
+function invalidatePromptResourceCache() {
+  clearPromptResourceSearchTimer();
+  promptResourceOptions = [];
+  promptResourceWorkspaceId = "";
+  promptResourceQuery = "";
+  promptResourceLoadingKey = "";
+  promptResourceLoadErrorKey = "";
+  promptResourceLoadErrorMessage = "";
+  promptResourceActiveRequestToken = ++promptResourceRequestSequence;
+  promptResourceCachedWorkspaceId = "";
+  promptResourceCachedOptions = [];
+  promptResourceQueryCache.clear();
+}
+
+function getPromptOptionKey(option) {
+  if (!option) {
+    return "";
+  }
+  if (option.kind === "agent") {
+    return `agent:${option.roleId || ""}`;
+  }
+  if (option.kind === "skill") {
+    return `skill:${option.skillName || ""}`;
+  }
+  if (option.kind === "command") {
+    return `command:${option.commandName || ""}`;
+  }
+  return `${option.kind || "resource"}:${option.path || option.displayName || ""}`;
+}
+
+function getPromptOptionIcon(option) {
+  if (option.kind === "agent") {
+    return "agent";
+  }
+  if (option.kind === "directory") {
+    return "dir";
+  }
+  if (option.kind === "file") {
+    return "file";
+  }
+  if (option.kind === "skill") {
+    return "skill";
+  }
+  const source = String(option.source || "custom").trim().toLowerCase();
+  if (source === "builtin") {
+    return "built";
+  }
+  if (source === "mcp") {
+    return "mcp";
+  }
+  return "cmd";
+}
+
+function getPromptOptionHint(option) {
+  if (option.kind === "agent") {
+    return option.roleId ? `@${option.roleId}` : "";
+  }
+  if (option.kind === "skill") {
+    return "";
+  }
+  if (option.kind === "directory" || option.kind === "file") {
+    return "";
+  }
+  return option.argumentHint || "";
+}
+
+function getPromptOptionType(option) {
+  if (option.kind === "command") {
+    const source = String(option.source || "custom").trim().toLowerCase();
+    if (source === "builtin") {
+      return "builtin";
+    }
+    if (source === "mcp") {
+      return "mcp";
+    }
+    return "command";
+  }
+  return String(option.kind || "command").trim().toLowerCase();
+}
+
+function getPromptOptionDescription(option) {
+  if (option.kind === "file" || option.kind === "directory") {
+    return option.path || "";
+  }
+  return option.description || "";
+}
+
+function renderPromptOptionName(option) {
+  if (option.kind === "file" || option.kind === "directory") {
+    const path = String(option.path || option.displayName || "");
+    const normalizedPath = option.kind === "directory" && !path.endsWith("/")
+      ? `${path}/`
+      : path;
+    const lastSlash = normalizedPath.lastIndexOf("/", normalizedPath.endsWith("/") ? normalizedPath.length - 2 : normalizedPath.length);
+    if (lastSlash >= 0) {
+      const directory = normalizedPath.slice(0, lastSlash + 1);
+      const name = normalizedPath.slice(lastSlash + 1);
+      return `<span class="prompt-mention-path-dir">${escapeHtml(directory)}</span><span class="prompt-mention-path-name">${highlightPromptMentionText(name, promptMentionQuery)}</span>`;
+    }
+  }
+  const prefix = option.kind === "command" || option.kind === "skill" ? "/" : option.kind === "agent" ? "@" : "";
+  return `${escapeHtml(prefix)}${highlightPromptMentionText(option.displayName, promptMentionQuery)}`;
+}
+
+async function ensurePromptResourcesLoaded(query) {
+  const workspaceId = String(state.currentWorkspaceId || "").trim();
+  const safeQuery = String(query || "").trim();
+  const cacheKey = `${workspaceId}\n${safeQuery}`;
+  if (!workspaceId) {
+    clearPromptResourceSearchTimer();
+    promptResourceOptions = [];
+    promptResourceWorkspaceId = "";
+    promptResourceQuery = "";
+    promptResourceLoadErrorKey = "";
+    promptResourceLoadErrorMessage = "";
+    return;
+  }
+  const cachedOptions = getCachedPromptResourceOptions(workspaceId, safeQuery);
+  if (cachedOptions) {
+    promptResourceOptions = cachedOptions;
+    promptResourceWorkspaceId = workspaceId;
+    promptResourceQuery = safeQuery;
+    promptResourceLoadErrorKey = "";
+    promptResourceLoadErrorMessage = "";
+    return;
+  }
+  if (
+    workspaceId === promptResourceWorkspaceId &&
+    safeQuery === promptResourceQuery
+  ) {
+    return;
+  }
+  if (cacheKey === promptResourceLoadingKey) {
+    return;
+  }
+  promptResourceLoadingKey = cacheKey;
+  const requestToken = ++promptResourceRequestSequence;
+  promptResourceActiveRequestToken = requestToken;
+  try {
+    const resourceResponse = await searchWorkspacePaths(workspaceId, safeQuery, 500);
+    if (
+      requestToken !== promptResourceActiveRequestToken ||
+      workspaceId !== String(state.currentWorkspaceId || "").trim()
+    ) {
+      return;
+    }
+    promptResourceOptions = normalizePromptResourceResponse(resourceResponse);
+    cachePromptResourceOptions(workspaceId, safeQuery, promptResourceOptions);
+    promptResourceWorkspaceId = workspaceId;
+    promptResourceQuery = safeQuery;
+    promptResourceLoadErrorKey = "";
+    promptResourceLoadErrorMessage = "";
+    refreshPromptMentionAutocomplete();
+  } catch (error) {
+    if (
+      requestToken !== promptResourceActiveRequestToken ||
+      workspaceId !== String(state.currentWorkspaceId || "").trim()
+    ) {
+      return;
+    }
+    promptResourceOptions = [];
+    promptResourceWorkspaceId = "";
+    promptResourceQuery = "";
+    promptResourceLoadErrorKey = cacheKey;
+    promptResourceLoadErrorMessage = error.message || "Failed to search workspace files.";
+    sysLog(promptResourceLoadErrorMessage, "log-error");
+    renderPromptMentionAutocomplete();
+  } finally {
+    if (
+      requestToken === promptResourceActiveRequestToken &&
+      promptResourceLoadingKey === cacheKey
+    ) {
+      promptResourceLoadingKey = "";
+    }
+  }
+}
+
+function schedulePromptResourcesLoaded(query) {
+  clearPromptResourceSearchTimer();
+  promptResourceDebounceTimer = globalThis.setTimeout?.(() => {
+    promptResourceDebounceTimer = null;
+    void ensurePromptResourcesLoaded(query);
+  }, PROMPT_RESOURCE_SEARCH_DEBOUNCE_MS) || null;
+}
+
+function clearPromptResourceSearchTimer() {
+  if (promptResourceDebounceTimer == null) {
+    return;
+  }
+  globalThis.clearTimeout?.(promptResourceDebounceTimer);
+  promptResourceDebounceTimer = null;
+}
+
+function normalizePromptCommandResponse(response) {
+  if (Array.isArray(response)) {
+    return response;
+  }
+  if (Array.isArray(response?.commands)) {
+    return response.commands;
+  }
+  return [];
+}
+
+function getPromptResourceCacheKey(workspaceId, query) {
+  return `${String(workspaceId || "").trim()}\n${String(query || "").trim()}`;
+}
+
+function getCachedPromptResourceOptions(workspaceId, query) {
+  const cacheKey = getPromptResourceCacheKey(workspaceId, query);
+  const cached = promptResourceQueryCache.get(cacheKey);
+  return Array.isArray(cached) ? cached : null;
+}
+
+function getLocalPromptResourceOptions(workspaceId, query) {
+  const safeWorkspaceId = String(workspaceId || "").trim();
+  if (!safeWorkspaceId) {
+    return [];
+  }
+  const cachedOptions = getCachedPromptResourceOptions(safeWorkspaceId, query);
+  if (cachedOptions) {
+    return cachedOptions;
+  }
+  if (
+    promptResourceCachedWorkspaceId === safeWorkspaceId &&
+    promptResourceCachedOptions.length > 0
+  ) {
+    return promptResourceCachedOptions;
+  }
+  if (
+    promptResourceWorkspaceId === safeWorkspaceId &&
+    Array.isArray(promptResourceOptions)
+  ) {
+    return promptResourceOptions;
+  }
+  return [];
+}
+
+function cachePromptResourceOptions(workspaceId, query, options) {
+  const safeWorkspaceId = String(workspaceId || "").trim();
+  if (!safeWorkspaceId) {
+    return;
+  }
+  const cacheKey = getPromptResourceCacheKey(safeWorkspaceId, query);
+  promptResourceQueryCache.set(cacheKey, Array.isArray(options) ? options : []);
+  if (safeWorkspaceId !== promptResourceCachedWorkspaceId) {
+    promptResourceCachedWorkspaceId = safeWorkspaceId;
+    promptResourceCachedOptions = [];
+  }
+  promptResourceCachedOptions = mergePromptResourceOptions(
+    promptResourceCachedOptions,
+    options,
+  );
+  if (promptResourceQueryCache.size > 160) {
+    const firstKey = promptResourceQueryCache.keys().next().value;
+    if (firstKey) {
+      promptResourceQueryCache.delete(firstKey);
+    }
+  }
+}
+
+function mergePromptResourceOptions(existingOptions, nextOptions) {
+  const byKey = new Map();
+  [...(existingOptions || []), ...(nextOptions || [])].forEach((option) => {
+    const key = getPromptOptionKey(option);
+    if (key) {
+      byKey.set(key, option);
+    }
+  });
+  return Array.from(byKey.values());
+}
+
+async function resolvePromptCommandText(text) {
+  const promptText = String(text || "").trim();
+  const invocation = extractPromptActionInvocation(promptText);
+  if (!invocation) {
+    return { text: promptText, skills: [] };
+  }
+  const workspaceId = String(state.currentWorkspaceId || "").trim();
+  if (workspaceId) {
+    try {
+      const result = await resolveCommandPrompt({
+        workspace_id: workspaceId,
+        raw_text: `/${invocation.name}${invocation.args ? ` ${invocation.args}` : ""}`,
+        mode: state.currentSessionMode || "normal",
+      });
+      if (result?.matched) {
+        const expandedPrompt = String(result.expanded_prompt || "").trim();
+        return {
+          text: combinePromptActionText(invocation.prefix, expandedPrompt || promptText),
+          skills: [],
+        };
+      }
+    } catch (error) {
+      const message = error.message || "Failed to resolve command.";
+      setPromptComposerStatus(message, { tone: "danger" });
+      showToast({
+        title: "Command blocked",
+        message,
+        tone: "warning",
+      });
+      sysLog(message, "log-error");
+      return null;
+    }
+  }
+  const skillMatch = matchPromptSkillInvocation(invocation.name);
+  if (skillMatch) {
+    const skillPromptText = invocation.args || `Use the ${skillMatch.skillName} skill.`;
+    return {
+      text: combinePromptActionText(invocation.prefix, skillPromptText),
+      skills: [skillMatch.skillName],
+    };
+  }
+  if (!workspaceId) {
+    const message = "Cannot resolve command without an active workspace.";
+    setPromptComposerStatus(message, { tone: "danger" });
+    sysLog(message, "log-error");
+    return null;
+  }
+  return { text: promptText, skills: [] };
+}
+
+function extractPromptActionInvocation(promptText) {
+  const source = String(promptText || "").trim();
+  const match = source.match(/^(\/(\S+)|([@＠]\S+(?:\s+[A-Z][A-Za-z0-9_-]*)?)\s+\/(\S+))/);
+  if (!match) {
+    return null;
+  }
+  const prefix = String(match[3] || "").trim();
+  const name = String(match[2] || match[4] || "").trim();
+  if (!name) {
+    return null;
+  }
+  const argsStart = String(match[1] || "").length;
+  return {
+    prefix,
+    name,
+    args: source.slice(argsStart).trim(),
+  };
+}
+
+function combinePromptActionText(prefix, resolvedText) {
+  const safePrefix = String(prefix || "").trim();
+  const safeText = String(resolvedText || "").trim();
+  if (!safePrefix) {
+    return safeText;
+  }
+  if (!safeText) {
+    return safePrefix;
+  }
+  return `${safePrefix}\n\n${safeText}`;
+}
+
+function matchPromptSkillInvocation(name) {
+  const token = String(name || "").trim().toLowerCase();
+  const skill = promptSkillOptions.find((option) =>
+    option.aliases.some((alias) => String(alias || "").trim().toLowerCase() === token)
+  );
+  if (!skill) {
+    return null;
+  }
+  return {
+    skillName: skill.skillName,
+  };
+}
+
 function isPromptMentionAutocompleteOpen() {
   return (
     !!els.promptMentionMenu &&
     els.promptMentionMenu.hidden !== true &&
-    promptMentionOptions.length > 0
+    (
+      promptMentionOptions.length > 0 ||
+      (
+        !!promptMentionKind &&
+        promptMentionKind === "action" &&
+        promptCommandAutocompleteStatus !== PROMPT_COMMAND_AUTOCOMPLETE_STATUS.IDLE
+      ) ||
+      (
+        !!promptMentionKind &&
+        promptMentionKind === "resource" &&
+        promptMentionOptions.length > 0
+      )
+    )
   );
 }
 
@@ -1411,12 +2489,127 @@ function syncPromptMentionActiveOptionIntoView(menu) {
     return;
   }
   const activeOption = menu.querySelector(".prompt-mention-item.active");
-  if (!activeOption || typeof activeOption.scrollIntoView !== "function") {
+  const list = menu.querySelector(".prompt-mention-menu-list");
+  if (
+    !activeOption ||
+    !list ||
+    !Number.isFinite(activeOption.offsetTop) ||
+    !Number.isFinite(activeOption.offsetHeight) ||
+    !Number.isFinite(list.scrollTop) ||
+    !Number.isFinite(list.clientHeight)
+  ) {
     return;
   }
-  activeOption.scrollIntoView({
-    block: "nearest",
-  });
+  const optionTop = activeOption.offsetTop;
+  const optionBottom = optionTop + activeOption.offsetHeight;
+  const visibleTop = list.scrollTop;
+  const visibleBottom = visibleTop + list.clientHeight;
+  if (optionTop < visibleTop) {
+    list.scrollTop = optionTop;
+    return;
+  }
+  if (optionBottom > visibleBottom) {
+    list.scrollTop = optionBottom - list.clientHeight;
+  }
+}
+
+function applyPromptMentionMenuPlacement(menu) {
+  const input = els.promptInput;
+  if (
+    !menu ||
+    !input ||
+    typeof input.getBoundingClientRect !== "function"
+  ) {
+    return;
+  }
+  const viewportHeight = Number(
+    globalThis.window?.innerHeight ||
+      globalThis.document?.documentElement?.clientHeight ||
+      0,
+  );
+  const viewportWidth = Number(
+    globalThis.window?.innerWidth ||
+      globalThis.document?.documentElement?.clientWidth ||
+      0,
+  );
+  if (!viewportHeight || !viewportWidth) {
+    return;
+  }
+  const inputRect = input.getBoundingClientRect();
+  const anchor = typeof input.closest === "function"
+    ? input.closest(".input-wrapper") || input
+    : input;
+  const anchorRect = typeof anchor?.getBoundingClientRect === "function"
+    ? anchor.getBoundingClientRect()
+    : inputRect;
+  const topBoundary = getPromptMentionTopBoundary();
+  const preferredHeight = Math.min(
+    Number(menu.scrollHeight || 0) || PROMPT_MENTION_MENU_MAX_HEIGHT,
+    PROMPT_MENTION_MENU_MAX_HEIGHT,
+  );
+  const spaceAbove = Math.max(
+    0,
+    anchorRect.top - topBoundary - PROMPT_MENTION_MENU_GAP,
+  );
+  const spaceBelow = Math.max(
+    0,
+    viewportHeight - anchorRect.bottom - PROMPT_MENTION_MENU_SAFE_MARGIN - PROMPT_MENTION_MENU_GAP,
+  );
+  if (!promptMentionPlacementSide) {
+    promptMentionPlacementSide =
+      spaceAbove >= preferredHeight || spaceAbove >= spaceBelow
+        ? "above"
+        : "below";
+  }
+  const placeAbove = promptMentionPlacementSide === "above";
+  const availableSpace = Math.floor(placeAbove ? spaceAbove : spaceBelow);
+  const availableHeight = Math.max(
+    0,
+    Math.min(PROMPT_MENTION_MENU_MAX_HEIGHT, availableSpace),
+  );
+  const list = menu.querySelector?.(".prompt-mention-menu-list");
+
+  menu.style.maxHeight = `${availableHeight}px`;
+  if (list?.style) {
+    list.style.maxHeight = `${Math.max(0, availableHeight - 46)}px`;
+  }
+  const anchorWidth = Math.max(240, Number(anchorRect.width || inputRect.width || 0));
+  const menuWidth = Math.min(
+    Math.max(240, anchorWidth - 24),
+    608,
+    Math.max(240, viewportWidth - PROMPT_MENTION_MENU_SAFE_MARGIN * 2),
+  );
+  const left = Math.min(
+    Math.max(PROMPT_MENTION_MENU_SAFE_MARGIN, anchorRect.left + 12),
+    Math.max(PROMPT_MENTION_MENU_SAFE_MARGIN, viewportWidth - menuWidth - PROMPT_MENTION_MENU_SAFE_MARGIN),
+  );
+  menu.style.position = "fixed";
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.width = `${Math.round(menuWidth)}px`;
+  if (placeAbove) {
+    menu.style.top = "auto";
+    menu.style.bottom = `${Math.max(
+      PROMPT_MENTION_MENU_SAFE_MARGIN,
+      viewportHeight - anchorRect.top + PROMPT_MENTION_MENU_GAP,
+    )}px`;
+    return;
+  }
+  menu.style.bottom = "auto";
+  menu.style.top = `${Math.max(
+    PROMPT_MENTION_MENU_SAFE_MARGIN,
+    anchorRect.bottom + PROMPT_MENTION_MENU_GAP,
+  )}px`;
+}
+
+function getPromptMentionTopBoundary() {
+  const topbar = globalThis.document?.querySelector?.(".topbar");
+  const topbarRect = typeof topbar?.getBoundingClientRect === "function"
+    ? topbar.getBoundingClientRect()
+    : null;
+  return Math.max(
+    PROMPT_MENTION_MENU_SAFE_MARGIN,
+    Number(topbarRect?.bottom || 0) + PROMPT_MENTION_MENU_SAFE_MARGIN,
+  );
 }
 
 function containsNode(node, target) {

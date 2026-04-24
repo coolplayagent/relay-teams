@@ -845,6 +845,7 @@ class TaskExecutionService(BaseModel):
             orchestration_prompt=(
                 "" if topology is None else topology.orchestration_prompt
             ),
+            skill_names=task.skills,
         )
         return PreparedRuntimeSnapshot(
             prompt_sections=prompt_sections,
@@ -890,8 +891,11 @@ class TaskExecutionService(BaseModel):
     ) -> RuntimeToolsSnapshot:
         skill_registry = cast(SkillRegistry, self.skill_registry)
         tool_registry = cast(ToolRegistry, self.tool_registry)
+        skill_names = role.skills
+        if task is not None and task.skills is not None:
+            skill_names = task.skills
         resolved_skills = skill_registry.resolve_known(
-            role.skills,
+            skill_names,
             strict=False,
             consumer="agents.orchestration.task_execution_service.build_runtime_tools_snapshot",
         )
@@ -1269,6 +1273,7 @@ class TaskExecutionService(BaseModel):
         shared_state_snapshot: tuple[tuple[str, str], ...],
         conversation_context: RuntimePromptConversationContext | None,
         orchestration_prompt: str,
+        skill_names: Optional[tuple[str, ...]] = None,
     ) -> tuple[str, tuple[PromptSkillInstruction, ...]]:
         resolved_objective = objective.strip()
         if self.skill_runtime_service is None:
@@ -1286,6 +1291,7 @@ class TaskExecutionService(BaseModel):
             shared_state_snapshot=shared_state_snapshot,
             conversation_context=conversation_context,
             orchestration_prompt=orchestration_prompt,
+            skill_names=skill_names,
             consumer="agents.orchestration.task_execution_service.prepare_prompt",
         )
         return (
