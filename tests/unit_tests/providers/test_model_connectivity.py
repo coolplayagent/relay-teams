@@ -538,6 +538,45 @@ def test_probe_supports_codeagent_provider_with_oauth_session(
     clear_codeagent_oauth_session_store()
 
 
+def test_probe_codeagent_accepts_event_stream_success_without_json(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(["session-access-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=b"data: pong\n\n",
+                ),
+            )
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.CODEAGENT,
+                model="codeagent-chat",
+                codeagent_auth=CodeAgentAuthConfig(
+                    refresh_token="session-refresh-token"
+                ),
+            )
+        )
+    )
+
+    assert result.ok is True
+    assert result.token_usage is None
+
+
 def test_probe_merges_saved_maas_password_when_override_omits_it(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(

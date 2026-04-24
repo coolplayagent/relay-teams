@@ -155,11 +155,18 @@ class CodeAgentTokenService:
                 return config_token_result
             result = self.refresh_token_sync(
                 base_url=base_url,
-                auth_config=auth_config,
+                auth_config=self._build_refresh_auth_config(
+                    auth_config=auth_config,
+                    cached=cached,
+                ),
                 ssl_verify=ssl_verify,
                 connect_timeout_seconds=connect_timeout_seconds,
             )
-            self._tokens[cache_key] = _CodeAgentTokenRecord(token_result=result)
+            self._store_token_result(
+                cache_key=cache_key,
+                auth_config=auth_config,
+                token_result=result,
+            )
             return result
 
     async def get_token(
@@ -215,11 +222,18 @@ class CodeAgentTokenService:
                 return config_token_result
             result = await self.refresh_token(
                 base_url=base_url,
-                auth_config=auth_config,
+                auth_config=self._build_refresh_auth_config(
+                    auth_config=auth_config,
+                    cached=cached,
+                ),
                 ssl_verify=ssl_verify,
                 connect_timeout_seconds=connect_timeout_seconds,
             )
-            self._tokens[cache_key] = _CodeAgentTokenRecord(token_result=result)
+            self._store_token_result(
+                cache_key=cache_key,
+                auth_config=auth_config,
+                token_result=result,
+            )
             return result
 
     def refresh_token_sync(
@@ -312,6 +326,40 @@ class CodeAgentTokenService:
 
     def _should_refresh(self, token_result: CodeAgentOAuthTokenResult) -> bool:
         return datetime.now(UTC) + _CODEAGENT_REFRESH_SKEW >= token_result.expires_at
+
+    def _build_refresh_auth_config(
+        self,
+        *,
+        auth_config: CodeAgentAuthConfig,
+        cached: _CodeAgentTokenRecord | None,
+    ) -> CodeAgentAuthConfig:
+        if cached is None:
+            return auth_config
+        return auth_config.model_copy(
+            update={
+                "access_token": cached.token_result.access_token,
+                "refresh_token": cached.token_result.refresh_token,
+            }
+        )
+
+    def _store_token_result(
+        self,
+        *,
+        cache_key: str,
+        auth_config: CodeAgentAuthConfig,
+        token_result: CodeAgentOAuthTokenResult,
+    ) -> None:
+        self._tokens[cache_key] = _CodeAgentTokenRecord(token_result=token_result)
+        oauth_session_id = auth_config.oauth_session_id
+        if oauth_session_id is None:
+            return
+        session = get_codeagent_oauth_session(oauth_session_id)
+        if session is None:
+            return
+        save_codeagent_oauth_tokens_for_session(
+            auth_session_id=oauth_session_id,
+            token_result=token_result,
+        )
 
     def _token_result_from_config(
         self,

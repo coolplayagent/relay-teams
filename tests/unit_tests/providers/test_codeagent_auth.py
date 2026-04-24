@@ -11,8 +11,12 @@ from relay_teams.providers.codeagent_auth import (
     CodeAgentTokenService,
     build_codeagent_request_headers,
     build_codeagent_authorization_url,
+    clear_codeagent_oauth_session_store,
+    clear_codeagent_token_service_cache,
     create_codeagent_oauth_session,
+    get_codeagent_oauth_tokens,
     is_codeagent_chat_completion_request,
+    save_codeagent_oauth_tokens,
 )
 from relay_teams.providers.model_config import (
     CodeAgentAuthConfig,
@@ -199,6 +203,105 @@ def test_codeagent_token_service_uses_configured_access_token_first(
     )
 
     assert token == "fresh-access-token"
+
+
+def test_codeagent_token_service_refreshes_with_rotated_refresh_token(
+    monkeypatch,
+) -> None:
+    clear_codeagent_oauth_session_store()
+    clear_codeagent_token_service_cache()
+    session = create_codeagent_oauth_session(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        client_id=DEFAULT_CODEAGENT_CLIENT_ID,
+        scope=DEFAULT_CODEAGENT_SCOPE,
+        scope_resource=DEFAULT_CODEAGENT_SCOPE_RESOURCE,
+    )
+    save_codeagent_oauth_tokens(
+        state=session.state,
+        token_result=CodeAgentOAuthTokenResult(
+            access_token="cached-access-token",
+            refresh_token="rotated-refresh-token",
+            expires_at=datetime.now(UTC) - timedelta(minutes=5),
+        ),
+    )
+    captured_refresh_tokens: list[str] = []
+    refresh_responses = iter(
+        (
+            {
+                "access_token": "refreshed-access-token",
+                "refresh_token": "newly-rotated-refresh-token",
+                "expires_in": "3600",
+            },
+            {
+                "access_token": "refreshed-access-token-2",
+                "refresh_token": "newly-rotated-refresh-token-2",
+                "expires_in": "3600",
+            },
+        )
+    )
+
+    class _FakeHttpClient:
+        def __enter__(self) -> "_FakeHttpClient":
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+        def post(
+            self,
+            url: str,
+            *,
+            json: object,
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            _ = (url, headers)
+            payload = json
+            assert isinstance(payload, dict)
+            refresh_token = payload.get("refresh_token")
+            assert isinstance(refresh_token, str)
+            captured_refresh_tokens.append(refresh_token)
+            return httpx.Response(200, json=next(refresh_responses))
+
+    monkeypatch.setattr(
+        "relay_teams.providers.codeagent_auth.create_sync_http_client",
+        lambda **kwargs: _FakeHttpClient(),
+    )
+
+    service = CodeAgentTokenService()
+    token_result = service.get_token_result_sync(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        auth_config=CodeAgentAuthConfig(
+            refresh_token="stale-refresh-token",
+            oauth_session_id=session.auth_session_id,
+        ),
+        ssl_verify=None,
+        connect_timeout_seconds=15.0,
+        force_refresh=True,
+    )
+    refreshed_again = service.get_token_result_sync(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        auth_config=CodeAgentAuthConfig(
+            refresh_token="stale-refresh-token",
+            oauth_session_id=session.auth_session_id,
+        ),
+        ssl_verify=None,
+        connect_timeout_seconds=15.0,
+        force_refresh=True,
+    )
+
+    assert captured_refresh_tokens == [
+        "stale-refresh-token",
+        "newly-rotated-refresh-token",
+    ]
+    assert token_result.access_token == "refreshed-access-token"
+    assert token_result.refresh_token == "newly-rotated-refresh-token"
+    assert refreshed_again.access_token == "refreshed-access-token-2"
+    assert refreshed_again.refresh_token == "newly-rotated-refresh-token-2"
+    session_tokens = get_codeagent_oauth_tokens(session.auth_session_id)
+    assert session_tokens is not None
+    assert session_tokens.refresh_token == "newly-rotated-refresh-token-2"
+    clear_codeagent_oauth_session_store()
+    clear_codeagent_token_service_cache()
 
 
 def test_codeagent_auth_config_forces_builtin_oauth_values() -> None:
