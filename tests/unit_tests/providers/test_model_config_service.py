@@ -8,6 +8,7 @@ from relay_teams.providers.model_config import (
     ModelConfigPayload,
     default_model_fallback_config,
 )
+from relay_teams.providers.model_catalog import ModelCatalogResult, ModelCatalogService
 from relay_teams.providers.model_config_manager import ModelConfigManager
 from relay_teams.providers.model_config_service import ModelConfigService
 from relay_teams.providers.model_fallback_config_manager import (
@@ -51,6 +52,16 @@ class _RecordingModelFallbackConfigManager:
         return None
 
 
+class _RecordingModelCatalogService:
+    def get_catalog(self, *, refresh: bool = False) -> ModelCatalogResult:
+        return ModelCatalogResult(
+            ok=True,
+            source_url="https://models.dev/api.json",
+            providers=(),
+            stale=refresh,
+        )
+
+
 def test_save_model_config_preserves_omitted_optional_fields() -> None:
     manager = _RecordingModelConfigManager()
     service = ModelConfigService(
@@ -61,6 +72,9 @@ def test_save_model_config_preserves_omitted_optional_fields() -> None:
         model_fallback_config_manager=cast(
             ModelFallbackConfigManager,
             _RecordingModelFallbackConfigManager(),
+        ),
+        model_catalog_service=cast(
+            ModelCatalogService, _RecordingModelCatalogService()
         ),
         get_runtime=lambda: RuntimeConfig.model_construct(),
         on_runtime_reloaded=lambda runtime: None,

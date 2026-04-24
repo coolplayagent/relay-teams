@@ -117,6 +117,7 @@ from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
 from relay_teams.providers.model_config_manager import ModelConfigManager
 from relay_teams.providers.model_config_service import ModelConfigService
 from relay_teams.providers.model_config import ModelEndpointConfig
+from relay_teams.providers.model_catalog import ModelCatalogService
 from relay_teams.providers.model_fallback_config_manager import (
     ModelFallbackConfigManager,
 )
@@ -275,6 +276,10 @@ class ServerContainer:
         self.proxy_config_service: ProxyConfigService = ProxyConfigService(
             config_dir=app_config_dir,
             on_proxy_reloaded=self._on_proxy_reloaded,
+        )
+        self.model_catalog_service = ModelCatalogService(
+            config_dir=app_config_dir,
+            get_proxy_config=self.proxy_config_service.get_proxy_config,
         )
         self.hook_service = HookService(
             loader=HookLoader(
@@ -923,6 +928,7 @@ class ServerContainer:
             db_path=self.runtime.paths.db_path,
             model_config_manager=self.model_config_manager,
             model_fallback_config_manager=self.model_fallback_config_manager,
+            model_catalog_service=self.model_catalog_service,
             get_runtime=lambda: self.runtime,
             on_runtime_reloaded=self._on_runtime_reloaded,
         )

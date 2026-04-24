@@ -5,9 +5,11 @@
 import {
     deleteModelProfile,
     discoverModelCatalog,
+    fetchModelCatalog,
     fetchModelFallbackConfig,
     fetchModelProfiles,
     probeModelConnection,
+    refreshModelCatalog,
     reloadModelConfig,
     saveModelProfile,
 } from '../../core/api.js';
@@ -24,20 +26,37 @@ let draftDiscoveredModels = [];
 let draftModelDiscoveryState = null;
 let draftApiKeyState = createDraftSecretState();
 let draftMaasPasswordState = createDraftSecretState();
+let draftCatalogSelection = null;
+let modelCatalogProviders = [];
+let selectedCatalogProviderId = '';
+let catalogProviderSearch = '';
+let catalogModelSearch = '';
+let catalogLoadState = null;
+let catalogPickerOpen = null;
+let catalogProviderSearchDirty = false;
+let catalogModelSearchDirty = false;
+let catalogProviderKeyboardIndex = -1;
+let catalogModelKeyboardIndex = -1;
 let isModelMenuOpen = false;
 let languageBound = false;
+let draftBaseUrlExpanded = false;
+let draftModelInputExpanded = false;
+let draftProviderMode = 'external';
 
 const DEFAULT_MAAS_BASE_URL = 'http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/';
 
 const PROVIDER_DEFAULT_BASE_URLS = {
-    bigmodel: 'https://open.bigmodel.cn/api/coding/paas/v4',
-    minimax: 'https://api.minimaxi.com/v1',
     maas: DEFAULT_MAAS_BASE_URL,
 };
 const IMAGE_CAPABILITY_MODES = {
     FOLLOW_DETECTION: 'follow_detection',
     SUPPORTED: 'supported',
     UNSUPPORTED: 'unsupported',
+};
+const PROVIDER_MODES = {
+    EXTERNAL: 'external',
+    MAAS: 'maas',
+    CUSTOM: 'custom',
 };
 const FALLBACK_POLICY_TRANSLATION_KEYS = {
     same_provider_then_other_provider: 'settings.model.fallback_policy_same_provider_then_other_provider',
@@ -83,6 +102,27 @@ export function bindModelProfileHandlers() {
         cancelProfileBtn.onclick = handleCancelProfile;
     }
 
+    const refreshCatalogBtn = document.getElementById('refresh-model-catalog-btn');
+    if (refreshCatalogBtn) {
+        refreshCatalogBtn.onclick = handleRefreshModelCatalog;
+    }
+
+    const catalogProviderSearchInput = document.getElementById('model-catalog-provider-search');
+    if (catalogProviderSearchInput) {
+        catalogProviderSearchInput.oninput = handleCatalogProviderSearch;
+        catalogProviderSearchInput.onfocus = () => openCatalogPicker('provider');
+        catalogProviderSearchInput.onclick = () => openCatalogPicker('provider');
+        catalogProviderSearchInput.onkeydown = event => handleCatalogPickerKeydown(event, 'provider');
+    }
+
+    const catalogModelSearchInput = document.getElementById('model-catalog-model-search');
+    if (catalogModelSearchInput) {
+        catalogModelSearchInput.oninput = handleCatalogModelSearch;
+        catalogModelSearchInput.onfocus = () => openCatalogPicker('model');
+        catalogModelSearchInput.onclick = () => openCatalogPicker('model');
+        catalogModelSearchInput.onkeydown = event => handleCatalogPickerKeydown(event, 'model');
+    }
+
     const baseUrlInput = document.getElementById('profile-base-url');
     if (baseUrlInput) {
         baseUrlInput.oninput = handleDraftBaseUrlInput;
@@ -93,6 +133,12 @@ export function bindModelProfileHandlers() {
         providerInput.oninput = handleDraftEndpointChanged;
         providerInput.onchange = handleDraftEndpointChanged;
     }
+    document.querySelectorAll('[data-provider-value]').forEach(button => {
+        button.onclick = () => handleProviderChoice(button.dataset.providerMode || button.dataset.providerValue);
+    });
+    document.querySelectorAll('[data-profile-step-toggle]').forEach(button => {
+        button.onclick = () => toggleProfileStep(button.dataset.profileStepToggle);
+    });
 
     const apiKeyInput = document.getElementById('profile-api-key');
     if (apiKeyInput) {
@@ -145,6 +191,11 @@ export function bindModelProfileHandlers() {
         modelInput.onchange = syncDraftModelSelection;
     }
 
+    const defaultInput = document.getElementById('profile-is-default');
+    if (defaultInput) {
+        defaultInput.onchange = renderProfileEditorState;
+    }
+
     const imageCapabilityInput = document.getElementById('profile-image-capability');
     if (imageCapabilityInput) {
         imageCapabilityInput.onchange = syncDraftImageCapabilityMode;
@@ -188,9 +239,612 @@ function handleModelProfileLanguageChanged() {
         renderDraftProbeState();
         renderDraftModelDiscoveryState();
         renderDiscoveredModels();
+        renderProfileEditorState();
+        setModelCatalogPanelVisible(draftProviderMode === PROVIDER_MODES.EXTERNAL);
+        renderModelCatalog();
         return;
     }
     renderProfiles();
+}
+
+async function loadModelCatalogForNewProfile() {
+    setModelCatalogPanelVisible(draftProviderMode === PROVIDER_MODES.EXTERNAL);
+    if (!catalogLoadState) {
+        catalogLoadState = {
+            status: 'probing',
+            message: t('settings.model.catalog_loading'),
+        };
+    }
+    renderModelCatalog();
+    try {
+        const result = await fetchModelCatalog();
+        applyModelCatalogResult(result);
+        renderModelCatalog();
+        void refreshModelCatalogInBackground();
+    } catch (e) {
+        catalogLoadState = {
+            status: 'failed',
+            message: formatMessage('settings.model.catalog_failed', { error: e.message }),
+        };
+    }
+    renderModelCatalog();
+}
+
+async function refreshModelCatalogInBackground() {
+    try {
+        const result = await refreshModelCatalog();
+        applyModelCatalogResult(result);
+    } catch (e) {
+        if (modelCatalogProviders.length === 0) {
+            catalogLoadState = {
+                status: 'failed',
+                message: formatMessage('settings.model.catalog_failed', { error: e.message }),
+            };
+        }
+    }
+    renderModelCatalog();
+}
+
+async function handleRefreshModelCatalog() {
+    catalogLoadState = {
+        status: 'probing',
+        message: t('settings.model.catalog_refreshing'),
+    };
+    renderModelCatalog();
+    try {
+        const result = await refreshModelCatalog();
+        applyModelCatalogResult(result);
+    } catch (e) {
+        catalogLoadState = {
+            status: 'failed',
+            message: formatMessage('settings.model.catalog_failed', { error: e.message }),
+        };
+    }
+    renderModelCatalog();
+}
+
+function handleCatalogProviderSearch(event) {
+    catalogPickerOpen = 'provider';
+    catalogProviderSearchDirty = true;
+    catalogProviderSearch = String(event?.target?.value || '');
+    catalogProviderKeyboardIndex = -1;
+    renderModelCatalog();
+}
+
+function handleCatalogModelSearch(event) {
+    catalogPickerOpen = 'model';
+    catalogModelSearchDirty = true;
+    catalogModelSearch = String(event?.target?.value || '');
+    catalogModelKeyboardIndex = -1;
+    renderModelCatalog();
+}
+
+function openCatalogPicker(kind) {
+    catalogPickerOpen = kind === 'provider' ? 'provider' : 'model';
+    if (catalogPickerOpen === 'provider') {
+        catalogProviderKeyboardIndex = -1;
+    } else {
+        catalogModelKeyboardIndex = -1;
+    }
+    renderModelCatalog();
+}
+
+function closeCatalogPicker() {
+    catalogPickerOpen = null;
+    catalogProviderSearchDirty = false;
+    catalogModelSearchDirty = false;
+    catalogProviderKeyboardIndex = -1;
+    catalogModelKeyboardIndex = -1;
+    renderModelCatalog();
+}
+
+function handleCatalogPickerKeydown(event, kind) {
+    if (!event) {
+        return;
+    }
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        closeCatalogPicker();
+        return;
+    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') {
+        return;
+    }
+    event.preventDefault();
+    if (kind === 'provider') {
+        handleCatalogProviderKeyboard(event.key);
+        return;
+    }
+    handleCatalogModelKeyboard(event.key);
+}
+
+function handleCatalogProviderKeyboard(key) {
+    const providers = filterCatalogProviders();
+    if (providers.length === 0) {
+        catalogProviderKeyboardIndex = -1;
+        renderModelCatalog();
+        return;
+    }
+    catalogPickerOpen = 'provider';
+    if (key === 'Enter') {
+        const index = catalogProviderKeyboardIndex >= 0 ? catalogProviderKeyboardIndex : 0;
+        selectCatalogProvider(providers[index]?.id || '');
+        return;
+    }
+    catalogProviderKeyboardIndex = getNextCatalogKeyboardIndex(
+        catalogProviderKeyboardIndex,
+        providers.length,
+        key === 'ArrowDown' ? 1 : -1,
+    );
+    renderModelCatalog();
+}
+
+function handleCatalogModelKeyboard(key) {
+    const provider = findCatalogProvider(selectedCatalogProviderId);
+    const models = filterCatalogModels(provider);
+    const itemCount = models.length + (provider ? 1 : 0);
+    if (itemCount === 0) {
+        catalogModelKeyboardIndex = -1;
+        renderModelCatalog();
+        return;
+    }
+    catalogPickerOpen = 'model';
+    if (key === 'Enter') {
+        const index = catalogModelKeyboardIndex >= 0 ? catalogModelKeyboardIndex : 0;
+        if (index === 0) {
+            toggleDraftModelInputFields();
+            return;
+        }
+        const model = models[index - 1];
+        handleCatalogModelPicked(provider?.id || '', model?.id || '');
+        return;
+    }
+    catalogModelKeyboardIndex = getNextCatalogKeyboardIndex(
+        catalogModelKeyboardIndex,
+        itemCount,
+        key === 'ArrowDown' ? 1 : -1,
+    );
+    renderModelCatalog();
+}
+
+function getNextCatalogKeyboardIndex(currentIndex, itemCount, delta) {
+    if (itemCount <= 0) {
+        return -1;
+    }
+    const startIndex = currentIndex < 0 ? (delta > 0 ? -1 : 0) : currentIndex;
+    return (startIndex + delta + itemCount) % itemCount;
+}
+
+function applyModelCatalogResult(result) {
+    modelCatalogProviders = Array.isArray(result?.providers)
+        ? result.providers.filter(provider => provider && Array.isArray(provider.models))
+        : [];
+    const preferredProviderId = draftProviderMode === PROVIDER_MODES.EXTERNAL
+        ? String(draftCatalogSelection?.providerId || '').trim()
+        : '';
+    if (preferredProviderId && findCatalogProvider(preferredProviderId)) {
+        selectedCatalogProviderId = preferredProviderId;
+    }
+    if (selectedCatalogProviderId && !findCatalogProvider(selectedCatalogProviderId)) {
+        selectedCatalogProviderId = '';
+    }
+    if (!result?.ok) {
+        const message = result?.error_message || result?.error_code || t('settings.model.unknown');
+        catalogLoadState = {
+            status: modelCatalogProviders.length > 0 ? 'failed' : 'failed',
+            message: formatMessage('settings.model.catalog_failed', { error: message }),
+        };
+        return;
+    }
+    catalogLoadState = {
+        status: 'success',
+        message: formatModelCatalogStatus(result),
+    };
+}
+
+function renderModelCatalog() {
+    const providerListEl = document.getElementById('model-catalog-provider-list');
+    const modelListEl = document.getElementById('model-catalog-model-list');
+    const selectedEl = getOptionalElement('model-catalog-selected');
+    const statusEl = document.getElementById('model-catalog-status');
+    const refreshBtn = document.getElementById('refresh-model-catalog-btn');
+    if (!providerListEl || !modelListEl || !statusEl || !refreshBtn) {
+        return;
+    }
+
+    const filteredProviders = filterCatalogProviders();
+    if (selectedCatalogProviderId && !findCatalogProvider(selectedCatalogProviderId)) {
+        selectedCatalogProviderId = '';
+    }
+    if (catalogProviderKeyboardIndex >= filteredProviders.length) {
+        catalogProviderKeyboardIndex = -1;
+    }
+
+    providerListEl.style.display = catalogPickerOpen === 'provider' ? 'block' : 'none';
+    modelListEl.style.display = catalogPickerOpen === 'model' ? 'block' : 'none';
+    providerListEl.innerHTML = filteredProviders.length === 0
+        ? `<div class="model-catalog-empty">${escapeHtml(t('settings.model.catalog_empty'))}</div>`
+        : filteredProviders.map(provider => renderCatalogProviderButton(provider)).join('');
+    providerListEl.querySelectorAll('.model-catalog-provider-btn').forEach(button => {
+        button.onclick = () => {
+            selectCatalogProvider(button.dataset.providerId || '');
+        };
+    });
+
+    const selectedProvider = findCatalogProvider(selectedCatalogProviderId);
+    const models = filterCatalogModels(selectedProvider);
+    const customModelButton = selectedProvider ? renderCatalogCustomModelButton() : '';
+    const modelEmptyText = selectedProvider
+        ? t('settings.model.catalog_no_models')
+        : t('settings.model.catalog_select_provider_first');
+    if (catalogModelKeyboardIndex >= models.length + (selectedProvider ? 1 : 0)) {
+        catalogModelKeyboardIndex = -1;
+    }
+    modelListEl.innerHTML = models.length === 0
+        ? `${customModelButton}<div class="model-catalog-empty">${escapeHtml(modelEmptyText)}</div>`
+        : `${customModelButton}${models.map(model => renderCatalogModelButton(selectedProvider, model)).join('')}`;
+    modelListEl.querySelectorAll('.model-catalog-custom-model-btn').forEach(button => {
+        button.onclick = toggleDraftModelInputFields;
+    });
+    const customModelInput = getOptionalElement('model-catalog-custom-model-input');
+    if (customModelInput) {
+        customModelInput.oninput = handleCatalogCustomModelInput;
+        customModelInput.onkeydown = handleCatalogCustomModelKeydown;
+    }
+    const customModelApplyBtn = getOptionalElement('model-catalog-custom-model-apply-btn');
+    if (customModelApplyBtn) {
+        customModelApplyBtn.onclick = applyCatalogCustomModelInput;
+    }
+    modelListEl.querySelectorAll('.model-catalog-model-btn').forEach(button => {
+        button.onclick = () => handleCatalogModelPicked(
+            button.dataset.providerId || '',
+            button.dataset.modelId || '',
+        );
+    });
+    if (selectedEl) {
+        selectedEl.innerHTML = renderCatalogSelectionSummary();
+    }
+    syncCatalogPickerInputs(selectedProvider);
+
+    if (!catalogLoadState) {
+        statusEl.textContent = t('settings.model.catalog_loading');
+        statusEl.className = 'model-catalog-status probe-status probe-status-probing';
+    } else {
+        statusEl.textContent = catalogLoadState.message;
+        statusEl.className = `model-catalog-status probe-status probe-status-${catalogLoadState.status}`;
+    }
+    refreshBtn.disabled = catalogLoadState?.status === 'probing';
+}
+
+function selectCatalogProvider(providerId) {
+    const provider = findCatalogProvider(providerId);
+    if (!provider) {
+        return;
+    }
+    selectedCatalogProviderId = provider.id;
+    catalogProviderSearch = '';
+    catalogModelSearch = '';
+    catalogProviderSearchDirty = false;
+    catalogModelSearchDirty = false;
+    catalogProviderKeyboardIndex = -1;
+    catalogModelKeyboardIndex = -1;
+    if (draftCatalogSelection?.providerId !== selectedCatalogProviderId) {
+        draftCatalogSelection = null;
+        setDraftModelValue('');
+    }
+    catalogPickerOpen = 'model';
+    renderModelCatalog();
+    getOptionalElement('model-catalog-model-search')?.focus();
+}
+
+function renderCatalogCustomModelButton() {
+    const activeClass = catalogModelKeyboardIndex === 0 ? ' is-keyboard-active' : '';
+    if (draftProviderMode === PROVIDER_MODES.EXTERNAL && draftModelInputExpanded) {
+        return renderCatalogCustomModelInput(activeClass);
+    }
+    return `
+        <button class="model-catalog-custom-model-btn${activeClass}" type="button">
+            <span class="model-catalog-model-main">
+                <span class="model-catalog-model-name">${escapeHtml(t('settings.model.custom_model'))}</span>
+                <span class="model-catalog-model-summary">${escapeHtml(t('settings.model.custom_model_catalog_hint'))}</span>
+            </span>
+        </button>
+    `;
+}
+
+function renderCatalogCustomModelInput(activeClass) {
+    const model = String(getOptionalElement('profile-model')?.value || '').trim();
+    return `
+        <div class="model-catalog-custom-model-slot${activeClass}" id="model-catalog-custom-model-slot">
+            <div class="model-catalog-model-main">
+                <label class="model-catalog-model-name" for="model-catalog-custom-model-input">${escapeHtml(t('settings.model.custom_model'))}</label>
+                <span class="model-catalog-model-summary">${escapeHtml(t('settings.model.custom_model_catalog_hint'))}</span>
+            </div>
+            <div class="model-catalog-custom-model-row">
+                <input type="text" id="model-catalog-custom-model-input" value="${escapeHtml(model)}" placeholder="${escapeHtml(t('settings.model.custom_model_placeholder'))}" autocomplete="off" spellcheck="false">
+                <button class="settings-inline-action settings-list-action" id="model-catalog-custom-model-apply-btn" type="button">${escapeHtml(t('settings.model.use_custom_model'))}</button>
+            </div>
+        </div>
+    `;
+}
+
+function handleCatalogCustomModelInput(event) {
+    const value = String(event?.target?.value || '').trim();
+    syncDraftModelValueWithoutRender(value);
+    draftCatalogSelection = null;
+    setElementText('profile-model-summary', formatDraftModelSummary(value));
+}
+
+function handleCatalogCustomModelKeydown(event) {
+    if (event?.key === 'Enter') {
+        event.preventDefault();
+        applyCatalogCustomModelInput();
+    }
+}
+
+function applyCatalogCustomModelInput() {
+    const model = String(getOptionalElement('model-catalog-custom-model-input')?.value || '').trim();
+    if (!model) {
+        return;
+    }
+    const provider = findCatalogProvider(selectedCatalogProviderId);
+    draftCatalogSelection = provider
+        ? {
+            providerId: provider.id,
+            providerName: provider.name || provider.id,
+            modelName: model,
+        }
+        : null;
+    setDraftModelValue(model);
+    catalogModelSearch = '';
+    catalogModelSearchDirty = false;
+    catalogPickerOpen = null;
+    renderProfileEditorState();
+}
+
+function syncCatalogPickerInputs(selectedProvider) {
+    const providerSearchInput = getOptionalElement('model-catalog-provider-search');
+    const modelSearchInput = getOptionalElement('model-catalog-model-search');
+    if (providerSearchInput) {
+        providerSearchInput.value = catalogPickerOpen === 'provider' && catalogProviderSearchDirty
+            ? catalogProviderSearch
+            : catalogProviderDisplayName(selectedProvider);
+    }
+    if (modelSearchInput) {
+        modelSearchInput.value = catalogPickerOpen === 'model' && catalogModelSearchDirty
+            ? catalogModelSearch
+            : catalogModelDisplayName();
+    }
+}
+
+function catalogProviderDisplayName(provider) {
+    return String(
+        provider?.name
+        || draftCatalogSelection?.providerName
+        || draftCatalogSelection?.providerId
+        || '',
+    ).trim();
+}
+
+function catalogModelDisplayName() {
+    return String(
+        draftCatalogSelection?.modelName
+        || getOptionalElement('profile-model')?.value
+        || '',
+    ).trim();
+}
+
+function renderCatalogProviderButton(provider) {
+    const index = filterCatalogProviders().findIndex(candidate => candidate.id === provider.id);
+    const activeClass = provider.id === selectedCatalogProviderId ? ' is-active' : '';
+    const keyboardClass = index === catalogProviderKeyboardIndex ? ' is-keyboard-active' : '';
+    const modelCount = Array.isArray(provider.models) ? provider.models.length : 0;
+    return `
+        <button class="model-catalog-provider-btn${activeClass}${keyboardClass}" type="button" data-provider-id="${escapeHtml(provider.id)}">
+            <span class="model-catalog-provider-name">${escapeHtml(provider.name || provider.id)}</span>
+            <span class="model-catalog-provider-count">${escapeHtml(String(modelCount))}</span>
+        </button>
+    `;
+}
+
+function renderCatalogModelButton(provider, model) {
+    const providerId = provider?.id || '';
+    const savedCatalogModelName = String(draftCatalogSelection?.modelName || '').trim();
+    const draftModelId = String(getOptionalElement('profile-model')?.value || '').trim();
+    const selectedClass = draftCatalogSelection?.providerId === providerId
+        && (draftModelId === model.id || (savedCatalogModelName && savedCatalogModelName === model.name))
+        ? ' is-active'
+        : '';
+    const providerModels = filterCatalogModels(provider);
+    const keyboardIndex = providerModels.findIndex(candidate => candidate.id === model.id);
+    const keyboardClass = keyboardIndex >= 0 && catalogModelKeyboardIndex === keyboardIndex + 1
+        ? ' is-keyboard-active'
+        : '';
+    const summaryParts = [];
+    if (Number.isInteger(model.context_window)) {
+        summaryParts.push(formatContextWindowLabel(model.context_window));
+    }
+    if (model.reasoning === true) {
+        summaryParts.push(t('settings.model.catalog_reasoning'));
+    }
+    if (model.tool_call === true) {
+        summaryParts.push(t('settings.model.catalog_tools'));
+    }
+    const summary = summaryParts.join(' / ');
+    return `
+        <button class="model-catalog-model-btn${selectedClass}${keyboardClass}" type="button" data-provider-id="${escapeHtml(providerId)}" data-model-id="${escapeHtml(model.id)}">
+            <span class="model-catalog-model-main">
+                <span class="model-catalog-model-name">${escapeHtml(model.name || model.id)}</span>
+                <span class="model-catalog-model-id">${escapeHtml(model.id)}</span>
+                ${summary ? `<span class="model-catalog-model-summary">${escapeHtml(summary)}</span>` : ''}
+            </span>
+            ${renderInputCapabilityChip(model.capabilities, {
+                compact: true,
+                inputModalities: model.input_modalities,
+            })}
+        </button>
+    `;
+}
+
+function renderCatalogSelectionSummary() {
+    const model = String(getOptionalElement('profile-model')?.value || '').trim();
+    const providerName = draftCatalogSelection?.providerName || draftCatalogSelection?.providerId || '';
+    if (!model) {
+        return `
+            <div class="model-catalog-selected-title">${escapeHtml(t('settings.model.catalog_selected'))}</div>
+            <div class="model-catalog-selected-empty">${escapeHtml(t('settings.model.catalog_selected_empty'))}</div>
+        `;
+    }
+    return `
+        <div class="model-catalog-selected-title">${escapeHtml(t('settings.model.catalog_selected'))}</div>
+        <div class="model-catalog-selected-model">${escapeHtml(draftCatalogSelection?.modelName || model)}</div>
+        <div class="model-catalog-selected-meta">${escapeHtml(providerName || getDraftProvider())} · ${escapeHtml(model)}</div>
+    `;
+}
+
+function filterCatalogProviders() {
+    const query = catalogProviderSearch.trim().toLowerCase();
+    if (!query) {
+        return modelCatalogProviders;
+    }
+    return modelCatalogProviders.filter(provider => {
+        const haystack = `${provider.id || ''} ${provider.name || ''}`.toLowerCase();
+        return haystack.includes(query);
+    });
+}
+
+function filterCatalogModels(provider) {
+    if (!provider || !Array.isArray(provider.models)) {
+        return [];
+    }
+    const query = catalogModelSearch.trim().toLowerCase();
+    if (!query) {
+        return provider.models;
+    }
+    return provider.models.filter(model => {
+        const haystack = `${model.id || ''} ${model.name || ''} ${model.family || ''}`.toLowerCase();
+        return haystack.includes(query);
+    });
+}
+
+function findCatalogProvider(providerId) {
+    const normalized = String(providerId || '').trim();
+    if (!normalized) {
+        return null;
+    }
+    return modelCatalogProviders.find(provider => provider.id === normalized) || null;
+}
+
+function findCatalogModel(provider, modelId) {
+    const normalized = String(modelId || '').trim();
+    if (!provider || !normalized || !Array.isArray(provider.models)) {
+        return null;
+    }
+    return provider.models.find(model => model.id === normalized) || null;
+}
+
+function handleCatalogModelPicked(providerId, modelId) {
+    const provider = findCatalogProvider(providerId);
+    const model = findCatalogModel(provider, modelId);
+    if (!provider || !model) {
+        return;
+    }
+    const providerApi = String(provider.api || '').trim();
+    const runtimeProvider = mapCatalogProviderToRuntimeProvider(provider.id);
+    const catalogMaasProvider = isMaaSProvider(runtimeProvider);
+    draftProviderMode = catalogMaasProvider ? PROVIDER_MODES.MAAS : PROVIDER_MODES.EXTERNAL;
+    draftBaseUrlExpanded = !catalogMaasProvider && !providerApi;
+    draftModelInputExpanded = catalogMaasProvider;
+    catalogProviderSearch = '';
+    catalogModelSearch = '';
+    catalogProviderSearchDirty = false;
+    catalogModelSearchDirty = false;
+    catalogPickerOpen = null;
+    selectedCatalogProviderId = provider.id;
+    draftCatalogSelection = {
+        providerId: provider.id,
+        providerName: provider.name || provider.id,
+        modelName: model.name || model.id,
+    };
+    const profileNameInput = document.getElementById('profile-name');
+    if (!editingProfile && !String(profileNameInput.value || '').trim()) {
+        profileNameInput.value = buildCatalogProfileName(provider.id, model.id);
+    }
+    setDraftProviderValue(runtimeProvider);
+    setDraftModelValue(model.id);
+    document.getElementById('profile-base-url').value = providerApi;
+    document.getElementById('profile-base-url').dataset.initialValue = providerApi;
+    document.getElementById('profile-base-url').dataset.previousProvider = getDraftProvider();
+    delete document.getElementById('profile-base-url').dataset.defaultSourceProvider;
+    document.getElementById('profile-max-tokens').value = model.output_limit ? String(model.output_limit) : '';
+    document.getElementById('profile-context-window').value = model.context_window ? String(model.context_window) : '';
+    delete document.getElementById('profile-context-window').dataset.autofilledModel;
+    draftImageCapabilityMode = deriveImageCapabilityMode(model.capabilities, model.input_modalities);
+    draftDiscoveredModels = [normalizeCatalogModelForDraft(model)];
+
+    renderDraftApiKeyField();
+    renderDraftProviderFields();
+    renderDraftImageCapability();
+    renderDraftProbeState();
+    renderDraftModelDiscoveryState();
+    renderDiscoveredModels();
+    renderProfileEditorState();
+    setModelMenuOpen(false);
+    document.getElementById('profile-api-key').focus();
+}
+
+function normalizeCatalogModelForDraft(model) {
+    return {
+        model: model.id,
+        context_window: Number.isInteger(model.context_window) ? model.context_window : null,
+        capabilities: normalizeModelCapabilities(model.capabilities, model.input_modalities),
+        input_modalities: normalizeInputModalities(model.input_modalities, model.capabilities),
+    };
+}
+
+function buildCatalogProfileName(providerId, modelId) {
+    const base = `${providerId}-${modelId}`
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '') || 'model-profile';
+    if (!profiles[base]) {
+        return base;
+    }
+    for (let index = 2; index < 1000; index += 1) {
+        const candidate = `${base}-${index}`;
+        if (!profiles[candidate]) {
+            return candidate;
+        }
+    }
+    return `${base}-${Date.now()}`;
+}
+
+function mapCatalogProviderToRuntimeProvider(providerId) {
+    const normalized = String(providerId || '').trim().toLowerCase();
+    if (normalized === 'maas' || normalized.includes('maas')) {
+        return 'maas';
+    }
+    return 'openai_compatible';
+}
+
+function formatModelCatalogStatus(result) {
+    const providerCount = Array.isArray(result?.providers) ? result.providers.length : 0;
+    const modelCount = modelCatalogProviders.reduce(
+        (total, provider) => total + (Array.isArray(provider.models) ? provider.models.length : 0),
+        0,
+    );
+    const age = Number.isInteger(result?.cache_age_seconds)
+        ? formatMessage('settings.model.catalog_cache_age', {
+            seconds: result.cache_age_seconds,
+        })
+        : t('settings.model.catalog_cache_current');
+    return formatMessage('settings.model.catalog_loaded', {
+        providers: providerCount,
+        models: modelCount,
+        age,
+    });
 }
 
 function renderProfiles() {
@@ -224,6 +878,9 @@ function renderProfiles() {
     listEl.querySelectorAll('.profile-card-test-btn').forEach(btn => {
         btn.onclick = () => handleTestProfile(btn.dataset.name);
     });
+    listEl.querySelectorAll('.set-default-profile-btn').forEach(btn => {
+        btn.onclick = () => handleSetDefaultProfile(btn.dataset.name);
+    });
     listEl.querySelectorAll('.edit-profile-btn').forEach(btn => {
         btn.onclick = () => handleEditProfile(btn.dataset.name);
     });
@@ -235,10 +892,11 @@ function renderProfiles() {
 function handleAddProfile() {
     editingProfile = null;
     resetDraftEditorState();
+    resetCatalogFilters();
     renderProfileEditorTitle();
     renderFallbackPolicyOptions();
     document.getElementById('profile-name').value = '';
-    document.getElementById('profile-provider').value = 'openai_compatible';
+    setDraftProviderValue('openai_compatible');
     setDraftModelValue('');
     document.getElementById('profile-base-url').value = '';
     delete document.getElementById('profile-base-url').dataset.initialValue;
@@ -267,7 +925,9 @@ function handleAddProfile() {
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
+    renderProfileEditorState();
     setModelMenuOpen(false);
+    void loadModelCatalogForNewProfile();
     document.getElementById('profile-name').focus();
 }
 
@@ -280,7 +940,7 @@ function handleEditProfile(name) {
     renderProfileEditorTitle();
     renderFallbackPolicyOptions();
     document.getElementById('profile-name').value = name;
-    document.getElementById('profile-provider').value = profile.provider || 'openai_compatible';
+    setDraftProviderValue(profile.provider || 'openai_compatible');
     setDraftModelValue(profile.model || '');
     document.getElementById('profile-base-url').value = profile.base_url || '';
     document.getElementById('profile-base-url').dataset.initialValue = profile.base_url || '';
@@ -314,7 +974,19 @@ function handleEditProfile(name) {
     document.getElementById('profile-ssl-verify').value = serializeTriStateValue(profile.ssl_verify);
     document.getElementById('profile-fallback-policy').value = profile.fallback_policy_id || '';
     document.getElementById('profile-fallback-priority').value = String(profile.fallback_priority || 0);
+    draftCatalogSelection = buildDraftCatalogSelection(profile);
     draftImageCapabilityMode = deriveImageCapabilityMode(profile.capabilities);
+    draftProviderMode = isMaaSProvider(profile.provider)
+        ? PROVIDER_MODES.MAAS
+        : profile.catalog_provider_id
+            ? PROVIDER_MODES.EXTERNAL
+            : PROVIDER_MODES.CUSTOM;
+    draftModelInputExpanded = draftProviderMode !== PROVIDER_MODES.EXTERNAL;
+    draftBaseUrlExpanded = draftProviderMode === PROVIDER_MODES.CUSTOM
+        || (draftProviderMode === PROVIDER_MODES.EXTERNAL && !String(profile.base_url || '').trim());
+    if (draftCatalogSelection?.providerId) {
+        selectedCatalogProviderId = draftCatalogSelection.providerId;
+    }
 
     showProfileEditor();
     renderDraftApiKeyField();
@@ -323,17 +995,23 @@ function handleEditProfile(name) {
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
+    renderProfileEditorState();
     setModelMenuOpen(false);
+    if (draftProviderMode === PROVIDER_MODES.EXTERNAL) {
+        void loadModelCatalogForNewProfile();
+    }
 }
 
 function handleCancelProfile() {
     showProfilesList();
     editingProfile = null;
     resetDraftEditorState();
+    resetCatalogFilters();
     renderDraftImageCapability();
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
+    renderProfileEditorState();
     setModelMenuOpen(false);
 }
 
@@ -405,6 +1083,15 @@ async function handleSaveProfile() {
         fallback_priority: fallbackPriority,
         connect_timeout_seconds: connectTimeoutSeconds,
     };
+    if (draftCatalogSelection) {
+        profile.catalog_provider_id = draftCatalogSelection.providerId;
+        profile.catalog_provider_name = draftCatalogSelection.providerName;
+        profile.catalog_model_name = draftCatalogSelection.modelName;
+    } else {
+        profile.catalog_provider_id = null;
+        profile.catalog_provider_name = null;
+        profile.catalog_model_name = null;
+    }
     if (maxTokens !== null) {
         profile.max_tokens = maxTokens;
     }
@@ -431,6 +1118,7 @@ async function handleSaveProfile() {
         await saveModelProfile(name, profile);
         await reloadModelConfig();
         resetDraftEditorState();
+        resetCatalogFilters();
         renderDraftProbeState();
         renderDraftModelDiscoveryState();
         renderDiscoveredModels();
@@ -441,6 +1129,64 @@ async function handleSaveProfile() {
     } catch (e) {
         showToast({ title: t('settings.model.save_failed_title'), message: formatMessage('settings.model.save_failed_detail', { error: e.message }), tone: 'danger' });
     }
+}
+
+async function handleSetDefaultProfile(name) {
+    const profile = profiles[name];
+    if (!profile || profile.is_default === true) {
+        return;
+    }
+    try {
+        await saveModelProfile(name, buildExistingProfileSavePayload(profile, { isDefault: true }));
+        await reloadModelConfig();
+        showToast({
+            title: t('settings.model.default_saved_title'),
+            message: formatMessage('settings.model.default_saved_message', { name }),
+            tone: 'success',
+        });
+        await loadModelProfilesPanel();
+        notifyModelProfilesUpdated();
+    } catch (e) {
+        showToast({
+            title: t('settings.model.save_failed_title'),
+            message: formatMessage('settings.model.save_failed_detail', { error: e.message }),
+            tone: 'danger',
+        });
+    }
+}
+
+function buildExistingProfileSavePayload(profile, options = {}) {
+    const payload = {
+        provider: profile.provider || 'openai_compatible',
+        model: profile.model || '',
+        base_url: profile.base_url || '',
+        is_default: options.isDefault === true ? true : profile.is_default === true,
+        temperature: Number(profile.temperature ?? 0.7),
+        top_p: Number(profile.top_p ?? 1.0),
+        context_window: Number.isInteger(profile.context_window) ? profile.context_window : null,
+        fallback_policy_id: profile.fallback_policy_id || null,
+        fallback_priority: Number(profile.fallback_priority || 0),
+        connect_timeout_seconds: Number(profile.connect_timeout_seconds || 15),
+    };
+    if (Number.isInteger(profile.max_tokens)) {
+        payload.max_tokens = profile.max_tokens;
+    }
+    if (profile.ssl_verify === true || profile.ssl_verify === false) {
+        payload.ssl_verify = profile.ssl_verify;
+    }
+    if (profile.catalog_provider_id) {
+        payload.catalog_provider_id = profile.catalog_provider_id;
+    }
+    if (profile.catalog_provider_name) {
+        payload.catalog_provider_name = profile.catalog_provider_name;
+    }
+    if (profile.catalog_model_name) {
+        payload.catalog_model_name = profile.catalog_model_name;
+    }
+    if (profile.capabilities && typeof profile.capabilities === 'object') {
+        payload.capabilities = profile.capabilities;
+    }
+    return payload;
 }
 
 async function handleTestProfile(name) {
@@ -717,7 +1463,7 @@ function buildProbeState(result) {
 }
 
 function renderDraftProbeState() {
-    const statusEl = document.getElementById('profile-probe-status');
+    const statusEl = document.getElementById('profile-probe-inline-status');
     const testBtn = document.getElementById('test-profile-btn');
     if (!statusEl || !testBtn) {
         return;
@@ -726,15 +1472,15 @@ function renderDraftProbeState() {
     if (!draftProbeState) {
         statusEl.style.display = 'none';
         statusEl.textContent = '';
-        statusEl.className = 'profile-probe-status';
+        statusEl.className = 'settings-action-status profile-probe-inline-status';
         testBtn.disabled = false;
         testBtn.textContent = t('settings.action.test');
         return;
     }
 
-    statusEl.style.display = 'block';
+    statusEl.style.display = 'inline-flex';
     statusEl.textContent = draftProbeState.message;
-    statusEl.className = `profile-probe-status probe-status probe-status-${draftProbeState.status}`;
+    statusEl.className = `settings-action-status profile-probe-inline-status profile-probe-inline-status-${draftProbeState.status}`;
     testBtn.disabled = draftProbeState.status === 'probing';
     testBtn.textContent = draftProbeState.status === 'probing' ? t('settings.model.testing') : t('settings.action.test');
 }
@@ -843,9 +1589,23 @@ function renderDiscoveredModels() {
 }
 
 function handleDraftEndpointChanged() {
+    const previousProvider = String(getOptionalElement('profile-base-url')?.dataset.previousProvider || '').trim();
+    if (getDraftProvider() === 'maas') {
+        draftProviderMode = PROVIDER_MODES.MAAS;
+    } else if (draftProviderMode === PROVIDER_MODES.MAAS) {
+        draftProviderMode = PROVIDER_MODES.EXTERNAL;
+    }
     applyProviderDefaultBaseUrl();
     syncDraftBaseUrlDefaultSource();
+    const maasProvider = isMaaSProvider(getDraftProvider());
+    if (maasProvider) {
+        draftModelInputExpanded = true;
+        draftBaseUrlExpanded = false;
+    } else if (isMaaSProvider(previousProvider) && draftProviderMode === PROVIDER_MODES.EXTERNAL) {
+        draftModelInputExpanded = false;
+    }
     renderDraftProviderFields();
+    renderProfileEditorState();
     draftDiscoveredModels = [];
     draftModelDiscoveryState = null;
     renderDiscoveredModels();
@@ -986,9 +1746,15 @@ function handleContextWindowInputChanged() {
         return;
     }
     delete contextInput.dataset.autofilledModel;
+    renderProfileEditorState();
 }
 
 function setDraftModelValue(value) {
+    syncDraftModelValueWithoutRender(value);
+    renderProfileEditorState();
+}
+
+function syncDraftModelValueWithoutRender(value) {
     const modelInput = document.getElementById('profile-model');
     if (!modelInput) {
         return;
@@ -1007,6 +1773,7 @@ function syncDraftModelSelection() {
     modelInput.dataset.currentValue = normalized;
     applyDiscoveredContextWindow(normalized);
     renderDiscoveredModels();
+    renderProfileEditorState();
     if (draftDiscoveredModels.length > 0) {
         setModelMenuOpen(true);
     }
@@ -1113,8 +1880,51 @@ function resetDraftEditorState() {
     draftModelDiscoveryState = null;
     draftApiKeyState = createDraftSecretState();
     draftMaasPasswordState = createDraftSecretState();
+    draftCatalogSelection = null;
     draftImageCapabilityMode = IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
     isModelMenuOpen = false;
+    draftBaseUrlExpanded = false;
+    draftModelInputExpanded = false;
+    draftProviderMode = PROVIDER_MODES.EXTERNAL;
+    catalogPickerOpen = null;
+}
+
+function resetCatalogFilters() {
+    catalogProviderSearch = '';
+    catalogModelSearch = '';
+    catalogProviderSearchDirty = false;
+    catalogModelSearchDirty = false;
+    const providerSearchInput = document.getElementById('model-catalog-provider-search');
+    const modelSearchInput = document.getElementById('model-catalog-model-search');
+    if (providerSearchInput) {
+        providerSearchInput.value = '';
+    }
+    if (modelSearchInput) {
+        modelSearchInput.value = '';
+    }
+    selectedCatalogProviderId = '';
+    catalogPickerOpen = null;
+}
+
+function setModelCatalogPanelVisible(visible) {
+    const panel = document.getElementById('model-catalog-panel');
+    if (panel) {
+        panel.style.display = visible ? 'flex' : 'none';
+    }
+}
+
+function buildDraftCatalogSelection(profile) {
+    const providerId = String(profile?.catalog_provider_id || '').trim();
+    if (!providerId) {
+        return null;
+    }
+    const providerName = String(profile?.catalog_provider_name || providerId).trim();
+    const modelName = String(profile?.catalog_model_name || profile?.model || '').trim();
+    return {
+        providerId,
+        providerName: providerName || providerId,
+        modelName: modelName || String(profile?.model || '').trim(),
+    };
 }
 
 function notifyModelProfilesUpdated() {
@@ -1139,6 +1949,7 @@ function syncDraftImageCapabilityMode() {
     const imageCapabilityInput = document.getElementById('profile-image-capability');
     draftImageCapabilityMode = normalizeImageCapabilityMode(imageCapabilityInput?.value);
     renderDraftImageCapability();
+    renderProfileEditorState();
 }
 
 function renderDraftImageCapability() {
@@ -1204,6 +2015,217 @@ function renderProfileEditorTitle() {
     titleEl.textContent = editingProfile ? t('settings.model.edit_profile') : t('settings.model.add_profile');
 }
 
+function handleProviderChoice(provider) {
+    const providerInput = document.getElementById('profile-provider');
+    if (!providerInput) {
+        return;
+    }
+    const nextMode = normalizeProviderMode(provider);
+    const nextProvider = nextMode === PROVIDER_MODES.MAAS ? 'maas' : 'openai_compatible';
+    draftProviderMode = nextMode;
+    catalogPickerOpen = null;
+    setDraftProviderValue(nextProvider);
+    if (nextMode === PROVIDER_MODES.MAAS) {
+        draftCatalogSelection = null;
+        draftModelInputExpanded = true;
+        draftBaseUrlExpanded = false;
+        setModelCatalogPanelVisible(false);
+    } else if (nextMode === PROVIDER_MODES.CUSTOM) {
+        draftCatalogSelection = null;
+        draftModelInputExpanded = true;
+        draftBaseUrlExpanded = true;
+        setModelCatalogPanelVisible(false);
+    } else {
+        draftModelInputExpanded = false;
+        draftBaseUrlExpanded = false;
+        setModelCatalogPanelVisible(true);
+        if (!catalogLoadState || modelCatalogProviders.length === 0) {
+            void loadModelCatalogForNewProfile();
+        }
+    }
+    handleDraftEndpointChanged();
+}
+
+function normalizeProviderMode(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === PROVIDER_MODES.MAAS || normalized === 'maas') {
+        return PROVIDER_MODES.MAAS;
+    }
+    if (normalized === PROVIDER_MODES.CUSTOM) {
+        return PROVIDER_MODES.CUSTOM;
+    }
+    return PROVIDER_MODES.EXTERNAL;
+}
+
+function toggleDraftBaseUrlFields() {
+    draftProviderMode = PROVIDER_MODES.CUSTOM;
+    setDraftProviderValue('openai_compatible');
+    draftBaseUrlExpanded = true;
+    draftModelInputExpanded = true;
+    renderProfileEditorState();
+    getOptionalElement('profile-base-url')?.focus();
+}
+
+function toggleDraftModelInputFields() {
+    if (draftProviderMode !== PROVIDER_MODES.CUSTOM) {
+        draftProviderMode = PROVIDER_MODES.EXTERNAL;
+    }
+    draftModelInputExpanded = true;
+    renderProfileEditorState();
+    if (draftProviderMode === PROVIDER_MODES.EXTERNAL) {
+        getOptionalElement('model-catalog-custom-model-input')?.focus();
+    } else {
+        getOptionalElement('profile-model')?.focus();
+    }
+}
+
+function toggleProfileStep(stepName) {
+    const step = findProfileStep(stepName);
+    if (!step) {
+        return;
+    }
+    setElementClassFlag(step, 'is-open', !hasElementClass(step, 'is-open'));
+}
+
+function renderProfileEditorState() {
+    const provider = getDraftProvider();
+    const maasProvider = isMaaSProvider(provider);
+    const customMode = draftProviderMode === PROVIDER_MODES.CUSTOM;
+    const marketplaceBaseUrlVisible = draftProviderMode === PROVIDER_MODES.EXTERNAL && draftBaseUrlExpanded;
+    const model = String(getOptionalElement('profile-model')?.value || '').trim();
+    const temperature = String(getOptionalElement('profile-temperature')?.value || '0.7').trim() || '0.7';
+    const topP = String(getOptionalElement('profile-top-p')?.value || '1.0').trim() || '1.0';
+    const fallbackPolicyId = String(getOptionalElement('profile-fallback-policy')?.value || '').trim();
+    const fallbackPriority = String(getOptionalElement('profile-fallback-priority')?.value || '0').trim() || '0';
+    const apiKeyConfigured = draftApiKeyState.hasPersistedValue || Boolean(readDraftApiKeyValue());
+    const maasAuth = readDraftMaasAuth();
+    const credentialsReady = maasProvider
+        ? Boolean(maasAuth.username && hasDraftMaasPassword(maasAuth))
+        : apiKeyConfigured;
+
+    setElementText(
+        'profile-model-summary',
+        formatDraftModelSummary(model),
+    );
+    setElementText(
+        'profile-credentials-summary',
+        credentialsReady ? t('settings.model.credentials_configured') : t('settings.model.credentials_missing'),
+    );
+    setElementClassFlag(
+        getOptionalElement('profile-primary-credentials-row'),
+        'is-missing-required',
+        !maasProvider && !apiKeyConfigured,
+    );
+    setElementText(
+        'profile-advanced-summary',
+        formatMessage('settings.model.advanced_summary', { temperature, top_p: topP }),
+    );
+    setElementText(
+        'profile-fallback-summary',
+        fallbackPolicyId
+            ? `${formatFallbackPolicyLabel(fallbackPolicyId)} · ${formatMessage('settings.model.priority_compact', { priority: fallbackPriority })}`
+            : t('settings.model.fallback_disabled'),
+    );
+
+    setProviderChoiceActive('profile-provider-external-btn', draftProviderMode === PROVIDER_MODES.EXTERNAL);
+    setProviderChoiceActive('profile-provider-maas-btn', draftProviderMode === PROVIDER_MODES.MAAS);
+    setProviderChoiceActive('profile-provider-custom-btn', customMode);
+    setOptionalElementDisplay('profile-base-url-fields', customMode || marketplaceBaseUrlVisible ? 'block' : 'none');
+    setOptionalElementDisplay('profile-model-group', maasProvider || customMode ? 'block' : 'none');
+    setModelCatalogPanelVisible(draftProviderMode === PROVIDER_MODES.EXTERNAL);
+    renderModelCatalog();
+}
+
+function formatDraftModelSummary(model) {
+    const providerLabel = formatDraftProviderModeLabel();
+    const modelLabel = model || t('settings.model.no_model');
+    if (draftProviderMode !== PROVIDER_MODES.EXTERNAL) {
+        return `${providerLabel} · ${modelLabel}`;
+    }
+    const catalogProvider = String(draftCatalogSelection?.providerName || draftCatalogSelection?.providerId || '').trim();
+    const catalogModel = String(draftCatalogSelection?.modelName || model || '').trim();
+    if (catalogProvider && catalogModel) {
+        return `${providerLabel} · ${catalogProvider} · ${catalogModel}`;
+    }
+    if (catalogProvider) {
+        return `${providerLabel} · ${catalogProvider}`;
+    }
+    return `${providerLabel} · ${modelLabel}`;
+}
+
+function formatDraftProviderModeLabel() {
+    if (draftProviderMode === PROVIDER_MODES.MAAS) {
+        return t('settings.model.provider_maas');
+    }
+    if (draftProviderMode === PROVIDER_MODES.CUSTOM) {
+        return t('settings.model.provider_custom');
+    }
+    return t('settings.model.provider_external');
+}
+
+function setProviderChoiceActive(elementId, active) {
+    const element = getOptionalElement(elementId);
+    if (!element) {
+        return;
+    }
+    setElementClassFlag(element, 'is-active', active);
+}
+
+function setElementText(elementId, value) {
+    const element = getOptionalElement(elementId);
+    if (element) {
+        element.textContent = value;
+    }
+}
+
+function setOptionalElementDisplay(elementId, display) {
+    const element = getOptionalElement(elementId);
+    if (element) {
+        element.style.display = display;
+    }
+}
+
+function getOptionalElement(elementId) {
+    try {
+        return document.getElementById(elementId);
+    } catch (_e) {
+        return null;
+    }
+}
+
+function findProfileStep(stepName) {
+    const normalized = String(stepName || '').trim();
+    if (!normalized || typeof document.querySelectorAll !== 'function') {
+        return null;
+    }
+    return Array.from(document.querySelectorAll('[data-profile-step]'))
+        .find(step => step?.dataset?.profileStep === normalized) || null;
+}
+
+function hasElementClass(element, className) {
+    if (element?.classList && typeof element.classList.contains === 'function') {
+        return element.classList.contains(className);
+    }
+    return String(element?.className || '').split(/\s+/).includes(className);
+}
+
+function setElementClassFlag(element, className, active) {
+    if (!element) {
+        return;
+    }
+    if (element.classList && typeof element.classList.toggle === 'function') {
+        element.classList.toggle(className, active);
+        return;
+    }
+    const classes = new Set(String(element.className || '').split(/\s+/).filter(Boolean));
+    if (active) {
+        classes.add(className);
+    } else {
+        classes.delete(className);
+    }
+    element.className = Array.from(classes).join(' ');
+}
+
 function getProviderDefaultBaseUrl(provider) {
     if (isMaaSProvider(provider)) {
         return DEFAULT_MAAS_BASE_URL;
@@ -1247,6 +2269,30 @@ function getDraftProvider() {
     return providerInput ? String(providerInput.value || '').trim() || 'openai_compatible' : 'openai_compatible';
 }
 
+function setDraftProviderValue(provider) {
+    const providerInput = getOptionalElement('profile-provider');
+    if (!providerInput) {
+        return;
+    }
+    const normalized = String(provider || '').trim() || 'openai_compatible';
+    ensureProviderOption(providerInput, normalized);
+    providerInput.value = normalized;
+}
+
+function ensureProviderOption(providerInput, value) {
+    if (!value || typeof document === 'undefined' || typeof document.createElement !== 'function') {
+        return;
+    }
+    const options = Array.from(providerInput.options || []);
+    if (options.some(option => option.value === value)) {
+        return;
+    }
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value;
+    providerInput.appendChild(option);
+}
+
 function readDraftMaasAuth() {
     return {
         username: document.getElementById('profile-maas-username').value.trim(),
@@ -1260,25 +2306,10 @@ function hasDraftMaasPassword(maasAuth) {
 
 function syncDraftModelFieldPlacement(maasProvider) {
     const primaryCredentialsRow = document.getElementById('profile-primary-credentials-row');
-    const apiKeyGroup = document.getElementById('profile-api-key-group');
-    const modelGroup = document.getElementById('profile-model-group');
-    const maasModelSlot = document.getElementById('profile-maas-model-slot');
-    if (!primaryCredentialsRow || !apiKeyGroup || !modelGroup || !maasModelSlot) {
+    if (!primaryCredentialsRow) {
         return;
     }
-
-    if (maasProvider) {
-        if (modelGroup.parentElement !== maasModelSlot && typeof maasModelSlot.appendChild === 'function') {
-            maasModelSlot.appendChild(modelGroup);
-        }
-        primaryCredentialsRow.style.display = 'none';
-        return;
-    }
-
-    if (modelGroup.parentElement !== primaryCredentialsRow && typeof primaryCredentialsRow.appendChild === 'function') {
-        primaryCredentialsRow.appendChild(modelGroup);
-    }
-    primaryCredentialsRow.style.display = 'grid';
+    primaryCredentialsRow.style.display = maasProvider ? 'none' : 'grid';
 }
 
 function renderDraftProviderFields() {
@@ -1507,6 +2538,7 @@ function serializeTriStateValue(value) {
 function showProfilesList() {
     document.getElementById('profile-editor').style.display = 'none';
     document.getElementById('profiles-list').style.display = 'block';
+    setModelCatalogPanelVisible(false);
     toggleModelProfileActions({
         add: true,
         test: false,
@@ -1582,6 +2614,7 @@ function renderProfileCard(name, profile, index) {
                     </div>
                 </div>
                 <div class="profile-card-actions">
+                    <button class="settings-inline-action settings-list-action profile-card-action-btn set-default-profile-btn" data-name="${escapeHtml(name)}" title="${escapeHtml(t('settings.model.default_model_action'))}" ${profile.is_default === true ? 'disabled' : ''}>${escapeHtml(t('settings.model.default_model_action_short'))}</button>
                     <button class="settings-inline-action settings-list-action profile-card-action-btn profile-card-test-btn" data-name="${escapeHtml(name)}" title="${escapeHtml(t('settings.action.test'))}" ${probeState?.status === 'probing' ? 'disabled' : ''}>${escapeHtml(testButtonLabel)}</button>
                     <button class="settings-inline-action settings-list-action profile-card-action-btn edit-profile-btn" data-name="${escapeHtml(name)}" title="${escapeHtml(t('settings.action.edit'))}">${escapeHtml(t('settings.action.edit'))}</button>
                     <button class="settings-inline-action settings-list-action settings-list-action-danger profile-card-action-btn delete-profile-btn" data-name="${escapeHtml(name)}" title="${escapeHtml(t('settings.action.delete'))}">${escapeHtml(t('settings.action.delete'))}</button>

@@ -10,6 +10,7 @@ import {
 } from './commandsSettings.js';
 import { bindHooksSettingsHandlers, loadHooksSettingsPanel } from './hooksSettings.js';
 import { bindModelProfileHandlers, loadModelProfilesPanel } from './modelProfiles.js';
+import { renderModelProfilesPanelMarkup } from './modelProfiles/template.js';
 import {
     bindNotificationSettingsHandlers,
     loadNotificationSettingsPanel,
@@ -233,156 +234,7 @@ function createModal() {
                             </div>
                         </div>
                     </div>
-                    <div class="settings-panel" id="model-panel" style="display:none;">
-                        <div class="settings-section settings-section-model">
-                            <div class="settings-content-stack settings-model-stack">
-                                <div class="profiles-list" id="profiles-list"></div>
-                                <div class="profile-editor" id="profile-editor" style="display:none;">
-                                    <div class="profile-editor-header">
-                                        <h4 id="profile-editor-title" data-i18n="settings.model.add_profile">Add Profile</h4>
-                                        <p data-i18n="settings.model.editor_copy">Configure the endpoint, model, request limits, and sampling defaults.</p>
-                                    </div>
-                                    <form class="profile-editor-form" id="profile-editor-form" autocomplete="off">
-                                        <div class="profile-editor-grid">
-                                            <div class="form-group">
-                                                <label for="profile-name" data-i18n="settings.model.profile_name">Profile Name</label>
-                                                <input type="text" id="profile-name" placeholder="e.g., default, kimi" data-i18n-placeholder="settings.model.profile_name_placeholder" autocomplete="off">
-                                            </div>
-                                            <div class="form-group">
-                                                <label for="profile-provider" data-i18n="settings.model.provider">Provider</label>
-                                                <select id="profile-provider">
-                                                    <option value="openai_compatible">openai_compatible</option>
-                                                    <option value="bigmodel">bigmodel</option>
-                                                    <option value="minimax">minimax</option>
-                                                    <option value="maas">maas</option>
-                                                </select>
-                                            </div>
-                                            <div class="form-group form-group-span-2">
-                                                <label for="profile-base-url" data-i18n="settings.model.base_url">Base URL</label>
-                                                <input type="text" id="profile-base-url" placeholder="e.g., https://api.openai.com/v1" data-i18n-placeholder="settings.model.base_url_placeholder" autocomplete="url">
-                                            </div>
-                                            <div class="profile-credentials-row form-group-span-2" id="profile-primary-credentials-row">
-                                                <div class="form-group" id="profile-api-key-group">
-                                                    <label for="profile-api-key" data-i18n="settings.model.api_key">API Key</label>
-                                                    <div class="secure-input-row">
-                                                        <input type="password" id="profile-api-key" placeholder="sk-..." autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
-                                                        <button class="secure-input-btn" id="toggle-profile-api-key-btn" type="button" title="Show API key" aria-label="Show API key" style="display:none;">
-                                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                                                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
-                                                                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
-                                                            </svg>
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                                <div class="form-group form-group-inline-action" id="profile-model-group">
-                                                    <label for="profile-model" data-i18n="settings.model.model">Model</label>
-                                                    <div class="secure-input-row profile-model-input-row">
-                                                        <input type="text" id="profile-model" autocomplete="off" spellcheck="false">
-                                                        <button class="secure-input-btn profile-model-menu-btn" id="open-profile-model-menu-btn" type="button" title="Show Models" aria-label="Show Models">
-                                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                                                <path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
-                                                            </svg>
-                                                        </button>
-                                                        <button class="secure-input-btn profile-discovery-btn" id="fetch-profile-models-btn" type="button" title="Fetch Models" aria-label="Fetch Models">
-                                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                                                <path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
-                                                                <path d="M20 4v6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
-                                                            </svg>
-                                                        </button>
-                                                        <div class="profile-model-menu" id="profile-model-menu" style="display:none;"></div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div class="profile-credentials-row form-group-span-2" id="profile-maas-auth-fields" style="display:none;">
-                                                <div class="form-group">
-                                                    <label for="profile-maas-username">MAAS Username</label>
-                                                    <input type="text" id="profile-maas-username" placeholder="username" autocomplete="username">
-                                                </div>
-                                                <div class="form-group">
-                                                    <label for="profile-maas-password">MAAS Password</label>
-                                                    <div class="secure-input-row">
-                                                        <input type="password" id="profile-maas-password" placeholder="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
-                                                        <button class="secure-input-btn" id="toggle-profile-maas-password-btn" type="button" title="Show password" aria-label="Show password" style="display:none;">
-                                                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                                                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
-                                                                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
-                                                            </svg>
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                                <div class="form-group-span-2" id="profile-maas-model-slot"></div>
-                                            </div>
-                                         </div>
-                                         <div class="profile-model-discovery-status" id="profile-model-discovery-status" style="display:none;"></div>
-                                         <div class="profile-editor-subsection">
-                                             <h5 data-i18n="settings.model.capability_section">Capabilities</h5>
-                                             <div class="form-row">
-                                                 <div class="form-group">
-                                                     <label for="profile-image-capability" data-i18n="settings.model.image_capability">Image Input</label>
-                                                     <select id="profile-image-capability">
-                                                         <option value="follow_detection" data-i18n="settings.model.image_capability_follow">Follow detection</option>
-                                                         <option value="supported" data-i18n="settings.model.image_capability_supported">Supports image input</option>
-                                                         <option value="unsupported" data-i18n="settings.model.image_capability_unsupported">Text only</option>
-                                                     </select>
-                                                 </div>
-                                             </div>
-                                         </div>
-                                         <div class="profile-editor-subsection">
-                                             <h5 data-i18n="settings.model.request_controls">Request Controls</h5>
-                                             <div class="form-row">
-                                                <div class="form-group">
-                                                    <label for="profile-temperature" data-i18n="settings.model.temperature">Temperature</label>
-                                                    <input type="number" id="profile-temperature" value="0.7" step="0.1" min="0" max="2" autocomplete="off">
-                                                </div>
-                                                <div class="form-group">
-                                                    <label for="profile-top-p" data-i18n="settings.model.top_p">Top P</label>
-                                                    <input type="number" id="profile-top-p" value="1.0" step="0.1" min="0" max="1" autocomplete="off">
-                                                </div>
-                                                <div class="form-group">
-                                                    <label for="profile-max-tokens" data-i18n="settings.model.max_output_tokens">Max Output Tokens</label>
-                                                    <input type="number" id="profile-max-tokens" value="" min="1" autocomplete="off" placeholder="Optional" data-i18n-placeholder="settings.model.optional">
-                                                </div>
-                                                <div class="form-group">
-                                                    <label for="profile-context-window" data-i18n="settings.model.context_window">Context Window</label>
-                                                    <input type="number" id="profile-context-window" value="" min="1" autocomplete="off" placeholder="Optional" data-i18n-placeholder="settings.model.optional">
-                                                </div>
-                                                <div class="form-group">
-                                                    <label for="profile-connect-timeout" data-i18n="settings.model.connect_timeout">Connect Timeout (s)</label>
-                                                    <input type="number" id="profile-connect-timeout" value="15" step="1" min="1" max="300" autocomplete="off">
-                                                </div>
-                                                <div class="form-group">
-                                                    <label for="profile-ssl-verify" data-i18n="settings.proxy.default_ssl">SSL Verification</label>
-                                                    <select id="profile-ssl-verify">
-                                                        <option value="" data-i18n="settings.proxy.inherit_default">Inherit Default</option>
-                                                        <option value="true" data-i18n="settings.proxy.verify">Verify</option>
-                                                        <option value="false" data-i18n="settings.proxy.skip_verify">Skip Verify</option>
-                                                    </select>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div class="profile-editor-subsection">
-                                            <h5 data-i18n="settings.model.fallback">Fallback</h5>
-                                            <div class="form-row">
-                                                <div class="form-group">
-                                                    <label for="profile-fallback-policy" data-i18n="settings.model.fallback_strategy">Fallback Strategy</label>
-                                                    <select id="profile-fallback-policy"></select>
-                                                </div>
-                                                <div class="form-group">
-                                                    <label for="profile-fallback-priority" data-i18n="settings.model.fallback_priority">Fallback Priority</label>
-                                                    <input type="number" id="profile-fallback-priority" value="0" min="0" max="1000000" autocomplete="off">
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div class="profile-default-row">
-                                            <input type="checkbox" id="profile-is-default">
-                                            <label for="profile-is-default" data-i18n="settings.model.set_default">Set as default profile</label>
-                                        </div>
-                                        <div class="profile-probe-status" id="profile-probe-status" style="display:none;"></div>
-                                    </form>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                    ${renderModelProfilesPanelMarkup()}
                     <div class="settings-panel" id="mcp-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack status-stack" id="mcp-status"></div>
@@ -959,6 +811,7 @@ function createModal() {
                     <div class="settings-panel-actions" id="settings-panel-actions">
                         <div class="settings-panel-actions-group settings-panel-actions-group-start">
                             <button class="secondary-btn section-action-btn settings-action" id="test-profile-btn" type="button" style="display:none;">Test</button>
+                            <span class="settings-action-status profile-probe-inline-status" id="profile-probe-inline-status" style="display:none;"></span>
                             <button class="secondary-btn section-action-btn settings-action" id="test-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.test">Test</button>
                             <button class="secondary-btn section-action-btn settings-action" id="test-agent-btn" type="button" style="display:none;" data-i18n="settings.action.test">Test</button>
                             <button class="secondary-btn section-action-btn settings-action" id="validate-role-btn" type="button" style="display:none;" data-i18n="settings.action.validate">Validate</button>
