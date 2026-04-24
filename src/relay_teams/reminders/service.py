@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+
+from relay_teams.logger import get_logger, log_event
 from relay_teams.reminders.models import (
     CompletionAttemptObservation,
     ContextPressureObservation,
@@ -9,10 +12,13 @@ from relay_teams.reminders.models import (
 from relay_teams.reminders.policy import SystemReminderPolicy
 from relay_teams.reminders.renderer import render_system_reminder
 from relay_teams.reminders.state import (
+    ReminderRunState,
     ReminderStateRepository,
     mark_issued,
 )
 from relay_teams.sessions.runs.system_injection import SystemInjectionSink
+
+LOGGER = get_logger(__name__)
 
 
 class SystemReminderService:
@@ -35,7 +41,7 @@ class SystemReminderService:
         self,
         observation: ToolResultObservation,
     ) -> ReminderDecision:
-        state = self._state_repository.get_run_state(
+        state = self._load_state(
             session_id=observation.session_id,
             run_id=observation.run_id,
         )
@@ -56,7 +62,7 @@ class SystemReminderService:
                     role_id=observation.role_id,
                     content=content,
                 )
-        self._state_repository.save_run_state(
+        self._save_state(
             session_id=observation.session_id,
             run_id=observation.run_id,
             state=next_state,
@@ -67,7 +73,7 @@ class SystemReminderService:
         self,
         observation: CompletionAttemptObservation,
     ) -> ReminderDecision:
-        state = self._state_repository.get_run_state(
+        state = self._load_state(
             session_id=observation.session_id,
             run_id=observation.run_id,
         )
@@ -89,7 +95,7 @@ class SystemReminderService:
                     conversation_id=observation.conversation_id,
                     content=content,
                 )
-        self._state_repository.save_run_state(
+        self._save_state(
             session_id=observation.session_id,
             run_id=observation.run_id,
             state=next_state,
@@ -100,7 +106,7 @@ class SystemReminderService:
         self,
         observation: ContextPressureObservation,
     ) -> ReminderDecision:
-        state = self._state_repository.get_run_state(
+        state = self._load_state(
             session_id=observation.session_id,
             run_id=observation.run_id,
         )
@@ -121,9 +127,49 @@ class SystemReminderService:
                     role_id=observation.role_id,
                     content=content,
                 )
-        self._state_repository.save_run_state(
+        self._save_state(
             session_id=observation.session_id,
             run_id=observation.run_id,
             state=next_state,
         )
         return decision
+
+    def _load_state(self, *, session_id: str, run_id: str) -> ReminderRunState:
+        try:
+            return self._state_repository.get_run_state(
+                session_id=session_id,
+                run_id=run_id,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="reminders.state.load_failed",
+                message="Falling back to empty reminder state",
+                payload={"session_id": session_id, "run_id": run_id},
+                exc_info=exc,
+            )
+            return ReminderRunState()
+
+    def _save_state(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        state: ReminderRunState,
+    ) -> None:
+        try:
+            self._state_repository.save_run_state(
+                session_id=session_id,
+                run_id=run_id,
+                state=state,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="reminders.state.save_failed",
+                message="Ignoring reminder state persistence failure",
+                payload={"session_id": session_id, "run_id": run_id},
+                exc_info=exc,
+            )
