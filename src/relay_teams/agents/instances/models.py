@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -64,7 +64,7 @@ class AgentRuntimeRecord(BaseModel):
     conversation_id: str = Field(min_length=1)
     status: InstanceStatus
     lifecycle: InstanceLifecycle = InstanceLifecycle.REUSABLE
-    parent_instance_id: str | None = None
+    parent_instance_id: Optional[str] = None
     runtime_system_prompt: str = ""
     runtime_tools_json: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))

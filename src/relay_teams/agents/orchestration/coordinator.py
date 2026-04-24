@@ -482,20 +482,20 @@ class CoordinatorGraph(BaseModel):
         semaphore = asyncio.Semaphore(MAX_PARALLEL_DELEGATED_TASKS)
 
         async def run_lane(instance_id: str, lane_records: list[TaskRecord]) -> bool:
-            instance = instances[instance_id]
+            lane_instance = instances[instance_id]
             ran_lane = False
             async with semaphore:
                 for lane_record in lane_records:
                     try:
                         _ = await self._task_executor(
-                            instance_id=instance.instance_id,
-                            role_id=instance.role_id,
+                            instance_id=lane_instance.instance_id,
+                            role_id=lane_instance.role_id,
                             task=lane_record.envelope,
                         )
                     except asyncio.CancelledError:
                         if self.run_control_manager.is_subagent_stop_requested(
                             run_id=trace_id,
-                            instance_id=instance.instance_id,
+                            instance_id=lane_instance.instance_id,
                         ):
                             continue
                         raise

@@ -302,11 +302,11 @@ class TaskOrchestrationService:
     ) -> asyncio.Lock:
         key = (session_id, role_id)
         async with self._assignment_locks_guard:
-            lock = self._assignment_locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                self._assignment_locks[key] = lock
-            return lock
+            assignment_lock = self._assignment_locks.get(key)
+            if assignment_lock is None:
+                assignment_lock = asyncio.Lock()
+                self._assignment_locks[key] = assignment_lock
+        return assignment_lock
 
     def _ensure_execution_instance(
         self,
