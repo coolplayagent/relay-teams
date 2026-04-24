@@ -57,6 +57,7 @@ class ToolInternalRecord(BaseModel):
     visible_result: ToolResultEnvelope
     internal_data: JsonValue | None = None
     runtime_meta: dict[str, JsonValue] = Field(default_factory=dict)
+    tool_content_parts: tuple[ContentPart, ...] = ()
 
 
 class ToolResultProjection(BaseModel):

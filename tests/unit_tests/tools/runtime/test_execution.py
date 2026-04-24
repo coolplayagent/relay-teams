@@ -1144,6 +1144,54 @@ def test_execute_tool_returns_tool_return_for_tool_content_parts() -> None:
     assert state.call_state == {}
 
 
+def test_execute_tool_reuses_duplicate_tool_return_content() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.media_asset_service = SimpleNamespace()
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-read-image-duplicate"
+    call_count = 0
+
+    def action() -> ToolResultProjection:
+        nonlocal call_count
+        call_count += 1
+        return ToolResultProjection(
+            visible_data={"type": "image", "count": call_count},
+            tool_content_parts=(TextContentPart(text="attached image"),),
+        )
+
+    first = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "docs/relay_teams.png"},
+            action=action,
+            allow_tool_return=True,
+        )
+    )
+    second = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "docs/relay_teams.png"},
+            action=lambda: ToolResultProjection(
+                visible_data={"type": "image", "count": 999},
+                tool_content_parts=(TextContentPart(text="wrong image"),),
+            ),
+            allow_tool_return=True,
+        )
+    )
+
+    assert call_count == 1
+    assert isinstance(first, ToolReturn)
+    assert isinstance(second, ToolReturn)
+    assert second.return_value == first.return_value
+    assert second.content == "attached image"
+    assert len(_tool_result_payloads(deps)) == 1
+
+
 def test_execute_tool_hydrates_local_media_tool_return_content() -> None:
     deps = _FakeDeps(
         manager=_FakeApprovalManager(wait_result=("approve", "")),
@@ -1389,6 +1437,54 @@ class _FakeHookService:
         if event_name in self.bundles:
             return self.bundles[event_name]
         return HookDecisionBundle(decision=self.decision, reason=self.reason)
+
+
+def test_execute_tool_call_reuses_duplicate_after_pre_tool_rewrite() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.hook_service = _FakeHookService(
+        bundles={
+            HookEventName.PRE_TOOL_USE: HookDecisionBundle(
+                decision=HookDecisionType.ALLOW,
+                updated_input={"path": "README.md"},
+            ),
+        }
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-read-rewritten-duplicate"
+    call_count = 0
+
+    def action(path: str) -> dict[str, JsonValue]:
+        nonlocal call_count
+        assert path == "README.md"
+        call_count += 1
+        return {"value": call_count}
+
+    first = asyncio.run(
+        execute_tool_call(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "alias.md"},
+            action=action,
+            raw_args={"ctx": ctx, "path": "alias.md"},
+        )
+    )
+    second = asyncio.run(
+        execute_tool_call(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "alias.md"},
+            action=lambda path: {"path": path, "value": 999},
+            raw_args={"ctx": ctx, "path": "alias.md"},
+        )
+    )
+
+    assert call_count == 1
+    assert second == first
+    assert cast(dict[str, JsonValue], second)["data"] == {"value": 1}
+    assert len(_tool_result_payloads(deps)) == 1
 
 
 def test_execute_tool_denies_pre_tool_use_when_hook_blocks_call() -> None:
