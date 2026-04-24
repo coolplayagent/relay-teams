@@ -107,6 +107,18 @@ def test_qodana_code_quality_workflow_uses_cloud_scan() -> None:
     assert "failureConditions" not in qodana_config
 
 
+def test_qodana_excludes_known_false_positives_for_provider_sso_modules() -> None:
+    qodana_config = (_project_root() / "qodana.yaml").read_text(encoding="utf-8")
+
+    assert "name: PyInconsistentReturnsInspection" in qodana_config
+    assert "name: PyMethodMayBeStaticInspection" in qodana_config
+    assert "src/relay_teams/interfaces/server/routers/system.py" in qodana_config
+    assert "src/relay_teams/providers/codeagent_auth.py" in qodana_config
+    assert "src/relay_teams/providers/model_config.py" in qodana_config
+    assert "src/relay_teams/providers/model_config_manager.py" in qodana_config
+    assert "src/relay_teams/providers/model_connectivity.py" in qodana_config
+
+
 def test_pptx_craft_package_metadata_preserves_esm_runtime_contract() -> None:
     package_json_path = (
         _project_root()
