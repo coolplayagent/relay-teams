@@ -97,6 +97,18 @@ class _SlowRecordingTaskExecutionService:
         return TaskExecutionResult(output=result)
 
 
+class _CancellingTaskExecutionService:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def execute(
+        self, *, instance_id: str, role_id: str, task: TaskEnvelope
+    ) -> TaskExecutionResult:
+        _ = instance_id, role_id
+        self.calls.append(task.task_id)
+        raise asyncio.CancelledError
+
+
 class _CapturingHookService:
     def __init__(self) -> None:
         self.calls: list[tuple[object, object | None]] = []
@@ -469,6 +481,128 @@ async def test_pending_delegated_tasks_run_parallel_by_instance_lane(
     assert followup_start >= first_end
     assert second_start < first_end
     assert first_start < second_end
+
+
+@pytest.mark.asyncio
+async def test_pending_delegated_task_cancellation_continues_when_stop_requested(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, _ = _build_coordinator(
+        tmp_path
+    )
+    cancelling_service = _CancellingTaskExecutionService()
+    coordinator.task_execution_service = cast(TaskExecutionService, cancelling_service)
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="do work",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    child_task = TaskEnvelope(
+        task_id="task-child-1",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="query time",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    _ = task_repo.create(child_task)
+    child_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-time",
+    )
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=child_instance.instance_id,
+        role_id="time",
+        workspace_id=child_instance.workspace_id,
+        conversation_id=child_instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+    task_repo.update_status(
+        child_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=child_instance.instance_id,
+    )
+    _ = coordinator.run_control_manager.request_subagent_stop(
+        run_id="run-1",
+        instance_id=child_instance.instance_id,
+    )
+
+    ran_any = await coordinator._run_pending_delegated_tasks(
+        trace_id="run-1",
+        root_task_id=root_task.task_id,
+    )
+
+    assert ran_any is True
+    assert cancelling_service.calls == [child_task.task_id]
+
+
+@pytest.mark.asyncio
+async def test_pending_delegated_task_cancellation_raises_without_stop_request(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, _ = _build_coordinator(
+        tmp_path
+    )
+    coordinator.task_execution_service = cast(
+        TaskExecutionService,
+        _CancellingTaskExecutionService(),
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="do work",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    child_task = TaskEnvelope(
+        task_id="task-child-1",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="query time",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    _ = task_repo.create(child_task)
+    child_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-time",
+    )
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=child_instance.instance_id,
+        role_id="time",
+        workspace_id=child_instance.workspace_id,
+        conversation_id=child_instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+    task_repo.update_status(
+        child_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=child_instance.instance_id,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator._run_pending_delegated_tasks(
+            trace_id="run-1",
+            root_task_id=root_task.task_id,
+        )
 
 
 def test_prepare_recovery_preserves_paused_subagent_followup_state(

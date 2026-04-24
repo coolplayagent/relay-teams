@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from pydantic import JsonValue
 
 from pathlib import Path
@@ -484,6 +485,128 @@ async def test_dispatch_task_clones_same_role_while_reusable_instance_is_busy(
     assert len(session_agents) == 1
     assert session_agents[0].instance_id == instance_id
     assert session_agents[0].lifecycle == InstanceLifecycle.REUSABLE
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_binds_unassigned_created_task_to_requested_role(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        task_repo,
+        _agent_repo,
+        _message_repo,
+        execution_service,
+    ) = _build_service(tmp_path / "task_orchestration_bind_unassigned.db")
+    created = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id=None,
+            title="Implement endpoint",
+            objective="Implement the endpoint",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    payload = await service.dispatch_task(
+        run_id="run-1",
+        task_id=created.envelope.task_id,
+        role_id="spec_coder",
+    )
+
+    record = task_repo.get(created.envelope.task_id)
+    task_payload = cast(dict[str, JsonValue], payload["task"])
+    assert record.envelope.role_id == "spec_coder"
+    assert task_payload["assigned_role_id"] == "spec_coder"
+    assert execution_service.calls[0][1:3] == ("spec_coder", created.envelope.task_id)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_rejects_created_task_role_rebinding(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_rebind_created.db"
+    )
+    created = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="reviewer",
+            title="Review endpoint",
+            objective="Review the endpoint",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    with pytest.raises(ValueError, match="already bound to role reviewer"):
+        await service.dispatch_task(
+            run_id="run-1",
+            task_id=created.envelope.task_id,
+            role_id="spec_coder",
+        )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_uses_assignment_done_by_parallel_dispatch(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        task_repo,
+        _agent_repo,
+        _message_repo,
+        execution_service,
+    ) = _build_service(tmp_path / "task_orchestration_parallel_assignment.db")
+    created = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title="Implement endpoint",
+            objective="Implement the endpoint",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    assignment_lock = await service._role_assignment_lock(
+        session_id="session-1",
+        role_id="spec_coder",
+    )
+    await assignment_lock.acquire()
+    dispatch_task = asyncio.create_task(
+        service.dispatch_task(
+            run_id="run-1",
+            task_id=created.envelope.task_id,
+            role_id="spec_coder",
+        )
+    )
+    await asyncio.sleep(0)
+    task_repo.update_status(
+        created.envelope.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id="inst-existing",
+    )
+    assignment_lock.release()
+
+    payload = await dispatch_task
+
+    task_payload = cast(dict[str, JsonValue], payload["task"])
+    assert task_payload["assigned_instance_id"] == "inst-existing"
+    assert execution_service.calls == [
+        (
+            "inst-existing",
+            "spec_coder",
+            created.envelope.task_id,
+            "Execute this task contract and return the requested result.",
+        )
+    ]
 
 
 @pytest.mark.asyncio
