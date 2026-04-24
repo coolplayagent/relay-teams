@@ -8,6 +8,7 @@ from threading import RLock
 import yaml
 
 from relay_teams.builtin import get_builtin_skills_dir
+from relay_teams.hooks import parse_tolerant_hooks_payload
 from relay_teams.hooks.hook_models import HooksConfig
 from relay_teams.logger import get_logger
 from relay_teams.paths import get_app_config_dir, get_project_root_or_none
@@ -361,8 +362,11 @@ def _resolve_optional_path(base_dir: Path, value: object) -> Path | None:
 
 
 def _parse_frontmatter_hooks(value: object) -> HooksConfig:
-    if isinstance(value, dict) and "hooks" in value:
-        return HooksConfig.model_validate(value)
-    if isinstance(value, dict):
-        return HooksConfig.model_validate({"hooks": value})
+    try:
+        if isinstance(value, dict) and "hooks" in value:
+            return parse_tolerant_hooks_payload(value)
+        if isinstance(value, dict):
+            return parse_tolerant_hooks_payload({"hooks": value})
+    except Exception as exc:
+        logger.warning("Ignoring invalid skill frontmatter hooks: %s", exc)
     return HooksConfig()

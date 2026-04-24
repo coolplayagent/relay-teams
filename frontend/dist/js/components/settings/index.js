@@ -947,6 +947,9 @@ function createModal() {
                             <button class="secondary-btn section-action-btn settings-action" id="validate-role-btn" type="button" style="display:none;" data-i18n="settings.action.validate">Validate</button>
                         </div>
                         <div class="settings-panel-actions-group settings-panel-actions-group-end">
+                            <button class="secondary-btn section-action-btn settings-action" id="add-hook-btn" type="button" style="display:none;" data-i18n="settings.hooks.add_group">Add Hook</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="validate-hooks-btn" type="button" style="display:none;" data-i18n="settings.action.validate">Validate</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-hooks-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-profile-btn" type="button" style="display:none;" data-i18n="settings.action.add_profile">Add Profile</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.workspace.add_profile">Add SSH Profile</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-profile-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
@@ -1101,6 +1104,12 @@ function renderPanelActions(tab) {
     if (actionsBar) actionsBar.style.display = 'flex';
     if (tab === 'model') {
         document.getElementById('add-profile-btn').style.display = 'inline-flex';
+        return;
+    }
+    if (tab === 'hooks') {
+        document.getElementById('validate-hooks-btn').style.display = 'inline-flex';
+        document.getElementById('add-hook-btn').style.display = 'inline-flex';
+        document.getElementById('save-hooks-btn').style.display = 'inline-flex';
         return;
     }
     if (tab === 'agents') {

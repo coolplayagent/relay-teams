@@ -526,12 +526,13 @@ class _FakeSystemService:
     def get_runtime_view(self) -> HookRuntimeView:
         return HookRuntimeView()
 
-    def save_user_config(self, config: HooksConfig) -> HooksConfig:
-        self.saved_hooks_config = config.model_dump(mode="json")
-        return config
+    def save_user_config(self, config: object) -> HooksConfig:
+        parsed = HooksConfig.model_validate(config)
+        self.saved_hooks_config = parsed.model_dump(mode="json")
+        return parsed
 
-    def validate_config(self, config: HooksConfig) -> HooksConfig:
-        return config
+    def validate_config(self, config: object) -> HooksConfig:
+        return HooksConfig.model_validate(config)
 
     def get_provider_models(
         self,

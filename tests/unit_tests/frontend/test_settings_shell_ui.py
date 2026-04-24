@@ -147,6 +147,37 @@ console.log(JSON.stringify({
     assert payload["hasGitHubSaveButton"] is False
 
 
+def test_hooks_settings_tab_shows_add_validate_and_save_actions(
+    tmp_path: Path,
+) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+initSettings();
+openSettings("hooks");
+
+console.log(JSON.stringify({
+    panelTitle: document.getElementById("settings-panel-title").textContent,
+    hooksPanelDisplay: document.getElementById("hooks-panel").style.display,
+    addHookDisplay: document.getElementById("add-hook-btn").style.display,
+    validateHooksDisplay: document.getElementById("validate-hooks-btn").style.display,
+    saveHooksDisplay: document.getElementById("save-hooks-btn").style.display,
+    loadCalls: globalThis.__loadCalls,
+}));
+""".strip(),
+    )
+
+    load_calls = cast(dict[str, JsonValue], payload["loadCalls"])
+    assert payload["panelTitle"] == "Hooks"
+    assert payload["hooksPanelDisplay"] == "block"
+    assert payload["addHookDisplay"] == "inline-flex"
+    assert payload["validateHooksDisplay"] == "inline-flex"
+    assert payload["saveHooksDisplay"] == "inline-flex"
+    assert load_calls["hooks"] == 1
+
+
 def test_settings_tab_order_and_labels_are_simplified() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source_text = (
@@ -390,6 +421,36 @@ def test_settings_action_button_order_keeps_cancel_on_far_right() -> None:
     )
 
 
+def test_hooks_actions_are_grouped_on_the_right_with_consistent_order() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_text = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "settings" / "index.js"
+    ).read_text(encoding="utf-8")
+
+    start_group_start = source_text.index(
+        '<div class="settings-panel-actions-group settings-panel-actions-group-start">'
+    )
+    start_group_end = source_text.index("</div>", start_group_start)
+    start_group_html = source_text[start_group_start:start_group_end]
+
+    end_group_start = source_text.index(
+        '<div class="settings-panel-actions-group settings-panel-actions-group-end">'
+    )
+    end_group_end = source_text.index("</div>", end_group_start)
+    end_group_html = source_text[end_group_start:end_group_end]
+
+    assert 'id="validate-hooks-btn"' not in start_group_html
+    assert 'id="add-hook-btn"' in end_group_html
+    assert 'id="validate-hooks-btn"' in end_group_html
+    assert 'id="save-hooks-btn"' in end_group_html
+    assert end_group_html.index('id="add-hook-btn"') < end_group_html.index(
+        'id="validate-hooks-btn"'
+    )
+    assert end_group_html.index('id="validate-hooks-btn"') < end_group_html.index(
+        'id="save-hooks-btn"'
+    )
+
+
 def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -615,7 +676,7 @@ export function t(key) {
         'settings.panel.mcp.title': 'MCP',
         'settings.panel.mcp.description': 'Review the currently loaded MCP servers and reload the runtime view.',
         'settings.panel.hooks.title': 'Hooks',
-        'settings.panel.hooks.description': 'Inspect the hook handlers currently loaded for this workspace.',
+        'settings.panel.hooks.description': 'View currently loaded hooks and provide custom editing.',
         'settings.panel.agents.title': 'Agents',
         'settings.panel.agents.description': 'Configure ACP-compatible external agents and make them available for role bindings.',
         'settings.panel.roles.title': 'Roles',

@@ -18,6 +18,7 @@ from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.models import create_subagent_instance
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
+from relay_teams.agents.execution.system_prompts import RuntimePromptSections
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
 from relay_teams.roles.memory_repository import RoleMemoryRepository
@@ -47,6 +48,12 @@ from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
+from relay_teams.skills.skill_routing_models import (
+    SkillPromptResult,
+    SkillRoutingDiagnostics,
+    SkillRoutingMode,
+    SkillRoutingResult,
+)
 from relay_teams.tools.registry.defaults import build_default_registry
 from relay_teams.workspace import (
     WorkspaceManager,
@@ -122,6 +129,66 @@ class _CapturingHookService:
         return object()
 
 
+class _StaticPromptBuilder(RuntimePromptBuilder):
+    async def build_sections(self, data: object) -> RuntimePromptSections:
+        _ = data
+        return RuntimePromptSections(
+            prompt="You are the time role.",
+            base_instructions="You are the time role.",
+        )
+
+
+class _StaticSkillRegistry:
+    def resolve_known(
+        self,
+        skill_names: tuple[str, ...],
+        *,
+        strict: bool,
+        consumer: str,
+    ) -> tuple[str, ...]:
+        _ = (strict, consumer)
+        return tuple(skill_names)
+
+    def get_toolset_tools(self, resolved_skills: tuple[str, ...]) -> tuple[object, ...]:
+        _ = resolved_skills
+        return ()
+
+
+class _StaticSkillRuntimeService:
+    def prepare_prompt(
+        self,
+        *,
+        role: RoleDefinition,
+        objective: str,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        conversation_context: object | None = None,
+        orchestration_prompt: str = "",
+        skill_names: tuple[str, ...] | None = None,
+        consumer: str,
+    ) -> SkillPromptResult:
+        _ = (
+            shared_state_snapshot,
+            conversation_context,
+            orchestration_prompt,
+            consumer,
+        )
+        visible_skills = role.skills if skill_names is None else skill_names
+        appendix = "\n".join(f"- {name}: {name} helper" for name in visible_skills)
+        return SkillPromptResult(
+            user_prompt=f"{objective.strip()}\n\n## Skill Candidates\n{appendix}",
+            system_prompt_skill_instructions=(),
+            routing=SkillRoutingResult(
+                authorized_skills=tuple(visible_skills),
+                visible_skills=tuple(visible_skills),
+                diagnostics=SkillRoutingDiagnostics(
+                    mode=SkillRoutingMode.PASSTHROUGH,
+                    authorized_count=len(visible_skills),
+                    visible_skills=tuple(visible_skills),
+                ),
+            ),
+        )
+
+
 def _build_service(
     db_path: Path,
     provider: object,
@@ -159,13 +226,13 @@ def _build_service(
         workspace_manager=WorkspaceManager(
             project_root=Path("."), shared_store=shared_store
         ),
-        prompt_builder=RuntimePromptBuilder(
+        prompt_builder=_StaticPromptBuilder(
             role_registry=role_registry,
             mcp_registry=McpRegistry(),
         ),
         provider_factory=lambda _, __=None: provider,
         tool_registry=build_default_registry(),
-        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        skill_registry=_StaticSkillRegistry(),
         mcp_registry=McpRegistry(),
         run_intent_repo=RunIntentRepository(db_path),
     )
@@ -232,13 +299,13 @@ def _build_service_with_control(
         workspace_manager=WorkspaceManager(
             project_root=Path("."), shared_store=shared_store
         ),
-        prompt_builder=RuntimePromptBuilder(
+        prompt_builder=_StaticPromptBuilder(
             role_registry=role_registry,
             mcp_registry=McpRegistry(),
         ),
         provider_factory=lambda _, __=None: provider,
         tool_registry=build_default_registry(),
-        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        skill_registry=_StaticSkillRegistry(),
         mcp_registry=McpRegistry(),
         run_control_manager=run_control_manager,
         run_intent_repo=RunIntentRepository(db_path),
@@ -688,23 +755,6 @@ async def test_execute_root_intent_input_appends_routed_skill_candidates(
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
     shared_store = SharedStateRepository(db_path)
-    for name in (
-        "time",
-        "planner",
-        "sql",
-        "docs",
-        "api",
-        "tests",
-        "frontend",
-        "ops",
-        "calendar",
-    ):
-        _write_skill(
-            db_path.parent,
-            name=name,
-            description=f"{name} helper",
-        )
-    skill_registry = SkillRegistry.from_config_dirs(app_config_dir=db_path.parent)
     run_intent_repo = RunIntentRepository(db_path)
     service = TaskExecutionService(
         role_registry=role_registry,
@@ -718,19 +768,14 @@ async def test_execute_root_intent_input_appends_routed_skill_candidates(
         workspace_manager=WorkspaceManager(
             project_root=Path("."), shared_store=shared_store
         ),
-        prompt_builder=RuntimePromptBuilder(
+        prompt_builder=_StaticPromptBuilder(
             role_registry=role_registry,
             mcp_registry=McpRegistry(),
         ),
         provider_factory=lambda _, __=None: provider,
         tool_registry=build_default_registry(),
-        skill_registry=skill_registry,
-        skill_runtime_service=SkillRuntimeService(
-            skill_registry=skill_registry,
-            retrieval_service=RetrievalService(
-                store=SqliteFts5RetrievalStore(db_path),
-            ),
-        ),
+        skill_registry=_StaticSkillRegistry(),
+        skill_runtime_service=_StaticSkillRuntimeService(),
         mcp_registry=McpRegistry(),
         run_intent_repo=run_intent_repo,
         media_asset_service=MediaAssetService(

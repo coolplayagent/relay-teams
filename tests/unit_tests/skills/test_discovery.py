@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from relay_teams.hooks.hook_models import HookEventName
+from relay_teams.hooks.hook_models import HooksConfig
 from relay_teams.skills import discovery
-from relay_teams.skills.discovery import SkillsDirectory
+from relay_teams.skills.discovery import SkillsDirectory, _parse_frontmatter_hooks
 from relay_teams.skills.skill_models import SkillSource
 
 
@@ -384,6 +386,111 @@ def test_discover_skips_invalid_and_excessively_nested_skills(tmp_path: Path) ->
     assert directory.get_skill("too-deep") is None
 
 
+def test_discover_keeps_skill_when_one_frontmatter_hook_group_is_empty(
+    tmp_path: Path,
+) -> None:
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "valid"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: valid\n"
+        "description: valid skill\n"
+        "hooks:\n"
+        "  PreToolUse:\n"
+        "    - hooks: []\n"
+        "    - matcher: Read\n"
+        "      hooks:\n"
+        "        - type: command\n"
+        "          command: echo ok\n"
+        "---\n"
+        "Use the valid skill.\n",
+        encoding="utf-8",
+    )
+    directory = SkillsDirectory(
+        sources=((SkillSource.USER_RELAY_TEAMS, skills_dir),),
+        max_depth=3,
+    )
+
+    directory.discover()
+
+    skill = directory.get_skill("valid")
+    assert skill is not None
+    groups = skill.metadata.hooks.hooks[HookEventName.PRE_TOOL_USE]
+    assert len(groups) == 2
+    assert groups[0].hooks == ()
+    assert groups[1].matcher == "Read"
+    assert groups[1].hooks[0].command == "echo ok"
+
+
+def test_discover_normalizes_legacy_frontmatter_hook_fields(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "valid"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: valid\n"
+        "description: valid skill\n"
+        "hooks:\n"
+        "  PreToolUse:\n"
+        "    - matcher: '*'\n"
+        "      if_condition: Bash(git *)\n"
+        "      tool_names:\n"
+        "        - Read\n"
+        "        - Write\n"
+        "      hooks:\n"
+        "        - type: command\n"
+        "          command: echo ok\n"
+        "---\n"
+        "Use the valid skill.\n",
+        encoding="utf-8",
+    )
+    directory = SkillsDirectory(
+        sources=((SkillSource.USER_RELAY_TEAMS, skills_dir),),
+        max_depth=3,
+    )
+
+    directory.discover()
+
+    skill = directory.get_skill("valid")
+    assert skill is not None
+    groups = skill.metadata.hooks.hooks[HookEventName.PRE_TOOL_USE]
+    assert [group.matcher for group in groups] == ["Read", "Write"]
+    assert all(group.hooks[0].if_rule == "Bash(git *)" for group in groups)
+
+
+def test_discover_ignores_unsupported_frontmatter_matcher_for_stop_hooks(
+    tmp_path: Path,
+) -> None:
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "valid"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: valid\n"
+        "description: valid skill\n"
+        "hooks:\n"
+        "  Stop:\n"
+        "    - matcher: manual\n"
+        "      hooks:\n"
+        "        - type: command\n"
+        "          command: echo stop\n"
+        "---\n"
+        "Use the valid skill.\n",
+        encoding="utf-8",
+    )
+    directory = SkillsDirectory(
+        sources=((SkillSource.USER_RELAY_TEAMS, skills_dir),),
+        max_depth=3,
+    )
+
+    directory.discover()
+
+    skill = directory.get_skill("valid")
+    assert skill is not None
+    assert skill.metadata.hooks.hooks == {}
+
+
 def test_load_skill_autodiscovers_assets_resources_and_scripts(tmp_path: Path) -> None:
     skill_dir = tmp_path / "skills" / "deck"
     resources_dir = skill_dir / "resources"
@@ -427,6 +534,21 @@ def test_load_skill_autodiscovers_assets_resources_and_scripts(tmp_path: Path) -
         "Script source: build"
     )
     assert skill.metadata.scripts["build"].description == "Generate the deck."
+
+
+def test_parse_frontmatter_hooks_tolerates_parser_failure() -> None:
+    original = _parse_frontmatter_hooks.__globals__["parse_tolerant_hooks_payload"]
+
+    def _raise(_: object) -> None:
+        raise RuntimeError("boom")
+
+    _parse_frontmatter_hooks.__globals__["parse_tolerant_hooks_payload"] = _raise
+    try:
+        hooks = _parse_frontmatter_hooks({"hooks": {"Stop": []}})
+    finally:
+        _parse_frontmatter_hooks.__globals__["parse_tolerant_hooks_payload"] = original
+
+    assert hooks == HooksConfig()
 
 
 def _write_skill(
