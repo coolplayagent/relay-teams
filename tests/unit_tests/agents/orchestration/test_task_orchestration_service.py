@@ -667,6 +667,8 @@ async def test_dispatch_task_binds_unassigned_created_task_to_requested_role(
     assert record.envelope.role_id == "spec_coder"
     assert task_payload["assigned_role_id"] == "spec_coder"
     assert execution_service.calls[0][1:3] == ("spec_coder", created.envelope.task_id)
+    assert service._assignment_locks == {}
+    assert service._assignment_lock_ref_counts == {}
 
 
 @pytest.mark.asyncio
@@ -720,25 +722,25 @@ async def test_dispatch_task_uses_assignment_done_by_parallel_dispatch(
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
     )
-    assignment_lock = await service._role_assignment_lock(
+    async with service._role_assignment_lock_slot(
         session_id="session-1",
         role_id="spec_coder",
-    )
-    await assignment_lock.acquire()
-    dispatch_task = asyncio.create_task(
-        service.dispatch_task(
-            run_id="run-1",
-            task_id=created.envelope.task_id,
-            role_id="spec_coder",
+    ) as assignment_lock:
+        await assignment_lock.acquire()
+        dispatch_task = asyncio.create_task(
+            service.dispatch_task(
+                run_id="run-1",
+                task_id=created.envelope.task_id,
+                role_id="spec_coder",
+            )
         )
-    )
-    await asyncio.sleep(0)
-    task_repo.update_status(
-        created.envelope.task_id,
-        TaskStatus.ASSIGNED,
-        assigned_instance_id="inst-existing",
-    )
-    assignment_lock.release()
+        await asyncio.sleep(0)
+        task_repo.update_status(
+            created.envelope.task_id,
+            TaskStatus.ASSIGNED,
+            assigned_instance_id="inst-existing",
+        )
+        assignment_lock.release()
 
     payload = await dispatch_task
 
@@ -752,6 +754,8 @@ async def test_dispatch_task_uses_assignment_done_by_parallel_dispatch(
             "Execute this task contract and return the requested result.",
         )
     ]
+    assert service._assignment_locks == {}
+    assert service._assignment_lock_ref_counts == {}
 
 
 @pytest.mark.asyncio
@@ -773,32 +777,34 @@ async def test_dispatch_task_revalidates_role_after_parallel_assignment(
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
     )
-    assignment_lock = await service._role_assignment_lock(
+    async with service._role_assignment_lock_slot(
         session_id="session-1",
         role_id="spec_coder",
-    )
-    await assignment_lock.acquire()
-    dispatch_task = asyncio.create_task(
-        service.dispatch_task(
-            run_id="run-1",
-            task_id=created.envelope.task_id,
-            role_id="spec_coder",
+    ) as assignment_lock:
+        await assignment_lock.acquire()
+        dispatch_task = asyncio.create_task(
+            service.dispatch_task(
+                run_id="run-1",
+                task_id=created.envelope.task_id,
+                role_id="spec_coder",
+            )
         )
-    )
-    await asyncio.sleep(0)
-    _ = task_repo.update_envelope(
-        created.envelope.task_id,
-        created.envelope.model_copy(update={"role_id": "reviewer"}),
-    )
-    task_repo.update_status(
-        created.envelope.task_id,
-        TaskStatus.ASSIGNED,
-        assigned_instance_id="inst-reviewer",
-    )
-    assignment_lock.release()
+        await asyncio.sleep(0)
+        _ = task_repo.update_envelope(
+            created.envelope.task_id,
+            created.envelope.model_copy(update={"role_id": "reviewer"}),
+        )
+        task_repo.update_status(
+            created.envelope.task_id,
+            TaskStatus.ASSIGNED,
+            assigned_instance_id="inst-reviewer",
+        )
+        assignment_lock.release()
 
     with pytest.raises(ValueError, match="already bound to role reviewer"):
         await dispatch_task
+    assert service._assignment_locks == {}
+    assert service._assignment_lock_ref_counts == {}
 
 
 @pytest.mark.asyncio

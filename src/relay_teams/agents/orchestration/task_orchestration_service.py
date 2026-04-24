@@ -60,6 +60,7 @@ class TaskOrchestrationService:
         self._execution_semaphore_ref_counts: dict[str, int] = {}
         self._execution_semaphores_guard = asyncio.Lock()
         self._assignment_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._assignment_lock_ref_counts: dict[tuple[str, str], int] = {}
         self._assignment_locks_guard = asyncio.Lock()
 
     async def create_tasks(
@@ -210,48 +211,48 @@ class TaskOrchestrationService:
         instance_id = record.assigned_instance_id or ""
 
         if record.status == TaskStatus.CREATED:
-            assignment_lock = await self._role_assignment_lock(
+            async with self._role_assignment_lock_slot(
                 session_id=record.envelope.session_id,
                 role_id=normalized_role_id,
-            )
-            async with assignment_lock:
-                record = self._task_repo.get(task_id)
-                bound_role_id = str(record.envelope.role_id or "").strip()
-                if record.status == TaskStatus.CREATED:
-                    if bound_role_id and bound_role_id != normalized_role_id:
-                        raise ValueError(
-                            f"Task is already bound to role {bound_role_id}; create a replacement task to change roles."
-                        )
-                    if not bound_role_id:
-                        record = self._task_repo.update_envelope(
-                            task_id,
-                            record.envelope.model_copy(
-                                update={"role_id": normalized_role_id}
-                            ),
-                        )
-                        bound_role_id = normalized_role_id
-                    instance_id = self._ensure_execution_instance(
-                        session_id=record.envelope.session_id,
-                        run_id=resolved_run_id,
-                        role_id=bound_role_id,
-                        task_id=task_id,
-                    )
-                    self._task_repo.update_status(
-                        task_id=task_id,
-                        status=TaskStatus.ASSIGNED,
-                        assigned_instance_id=instance_id,
-                    )
+            ) as assignment_lock:
+                async with assignment_lock:
                     record = self._task_repo.get(task_id)
-                else:
-                    if not bound_role_id:
-                        raise ValueError(
-                            "task must be bound to a role before it can be dispatched"
+                    bound_role_id = str(record.envelope.role_id or "").strip()
+                    if record.status == TaskStatus.CREATED:
+                        if bound_role_id and bound_role_id != normalized_role_id:
+                            raise ValueError(
+                                f"Task is already bound to role {bound_role_id}; create a replacement task to change roles."
+                            )
+                        if not bound_role_id:
+                            record = self._task_repo.update_envelope(
+                                task_id,
+                                record.envelope.model_copy(
+                                    update={"role_id": normalized_role_id}
+                                ),
+                            )
+                            bound_role_id = normalized_role_id
+                        instance_id = self._ensure_execution_instance(
+                            session_id=record.envelope.session_id,
+                            run_id=resolved_run_id,
+                            role_id=bound_role_id,
+                            task_id=task_id,
                         )
-                    if bound_role_id != normalized_role_id:
-                        raise ValueError(
-                            f"Task is already bound to role {bound_role_id}; create a replacement task to change roles."
+                        self._task_repo.update_status(
+                            task_id=task_id,
+                            status=TaskStatus.ASSIGNED,
+                            assigned_instance_id=instance_id,
                         )
-                    instance_id = record.assigned_instance_id or instance_id
+                        record = self._task_repo.get(task_id)
+                    else:
+                        if not bound_role_id:
+                            raise ValueError(
+                                "task must be bound to a role before it can be dispatched"
+                            )
+                        if bound_role_id != normalized_role_id:
+                            raise ValueError(
+                                f"Task is already bound to role {bound_role_id}; create a replacement task to change roles."
+                            )
+                        instance_id = record.assigned_instance_id or instance_id
         else:
             if not bound_role_id:
                 raise ValueError(
@@ -328,19 +329,47 @@ class TaskOrchestrationService:
                 return
             self._execution_semaphore_ref_counts[run_id] = remaining
 
-    async def _role_assignment_lock(
+    @asynccontextmanager
+    async def _role_assignment_lock_slot(
         self,
         *,
         session_id: str,
         role_id: str,
-    ) -> asyncio.Lock:
+    ) -> AsyncIterator[asyncio.Lock]:
+        key, assignment_lock = await self._retain_role_assignment_lock(
+            session_id=session_id,
+            role_id=role_id,
+        )
+        try:
+            yield assignment_lock
+        finally:
+            await self._release_role_assignment_lock(key=key)
+
+    async def _retain_role_assignment_lock(
+        self,
+        *,
+        session_id: str,
+        role_id: str,
+    ) -> tuple[tuple[str, str], asyncio.Lock]:
         key = (session_id, role_id)
         async with self._assignment_locks_guard:
             assignment_lock = self._assignment_locks.get(key)
             if assignment_lock is None:
                 assignment_lock = asyncio.Lock()
                 self._assignment_locks[key] = assignment_lock
-        return assignment_lock
+            self._assignment_lock_ref_counts[key] = (
+                self._assignment_lock_ref_counts.get(key, 0) + 1
+            )
+        return key, assignment_lock
+
+    async def _release_role_assignment_lock(self, *, key: tuple[str, str]) -> None:
+        async with self._assignment_locks_guard:
+            remaining = self._assignment_lock_ref_counts.get(key, 1) - 1
+            if remaining <= 0:
+                self._assignment_lock_ref_counts.pop(key, None)
+                self._assignment_locks.pop(key, None)
+                return
+            self._assignment_lock_ref_counts[key] = remaining
 
     def _ensure_execution_instance(
         self,
