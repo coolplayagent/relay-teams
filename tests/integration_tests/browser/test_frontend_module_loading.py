@@ -214,17 +214,60 @@ def test_new_session_draft_opens_without_creating_session() -> None:
         )
 
     assert completed.stdout.strip() == "draft-opened"
-    css = (
+    interface_css = (
         repo_root / "frontend" / "dist" / "css" / "components" / "interface.css"
     ).read_text(encoding="utf-8")
+    draft_css = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "css"
+        / "components"
+        / "new-session-draft.css"
+    ).read_text(encoding="utf-8")
+    composer_css = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "css"
+        / "components"
+        / "new-session-draft-composer.css"
+    ).read_text(encoding="utf-8")
+    mention_css = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "css"
+        / "components"
+        / "new-session-draft-mentions.css"
+    ).read_text(encoding="utf-8")
+    cards_css = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "css"
+        / "components"
+        / "new-session-draft-cards.css"
+    ).read_text(encoding="utf-8")
+    index_html = (repo_root / "frontend" / "dist" / "index.html").read_text(
+        encoding="utf-8"
+    )
     draft_js = module_path.read_text(encoding="utf-8")
-    assert ".chat-container.is-new-session-draft .chat-scroll" in css
-    assert "overflow-y: auto;" in css
-    assert ".new-session-draft-mention-hint .new-session-mention-action" in css
-    assert "color: inherit;" in css
-    assert "#input-container .composer-preset-select" in css
-    assert "appearance: none;" in css
-    assert "#input-container .composer-mode-inline-select:focus" in css
+    assert ".chat-container.is-new-session-draft .chat-scroll" in draft_css
+    assert "overflow-y: hidden;" in draft_css
+    assert ".new-session-draft-priority" in draft_css
+    assert ".new-session-draft-mention-hint .new-session-mention-action" in mention_css
+    assert "color: inherit;" in cards_css
+    assert "#input-container.is-new-session-draft-composer .composer-preset-select" in composer_css
+    assert "appearance: none;" in interface_css
+    assert "#input-container .composer-mode-inline-select:focus" in interface_css
+    assert "/css/components/new-session-draft.css" in index_html
+    assert "/css/components/new-session-draft-composer.css" in index_html
+    assert "/css/components/new-session-draft-workspace.css" in index_html
+    assert "/css/components/new-session-draft-mentions.css" in index_html
+    assert "/css/components/new-session-draft-cards.css" in index_html
+    assert "/css/components/new-session-draft-aside.css" in index_html
+    assert "newSessionDraftView.js" in draft_js
     assert (
         "bindWorkspaceSelectorInteractions(els.inputContainer || root);" not in draft_js
     )
