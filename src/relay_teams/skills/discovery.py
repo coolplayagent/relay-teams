@@ -63,6 +63,7 @@ class SkillsDirectory:
         )
         self._skills: dict[str, Skill] = {}
         self._lock = RLock()
+        self._discovered = False
 
     @classmethod
     def from_skill_dirs(
@@ -116,6 +117,9 @@ class SkillsDirectory:
         )
 
     def discover(self) -> None:
+        with self._lock:
+            if self._discovered:
+                return
         with trace_span(
             logger,
             component="skills.discovery",
@@ -155,6 +159,7 @@ class SkillsDirectory:
                         logger.warning("Failed to load skill at %s: %s", path, exc)
             with self._lock:
                 self._skills = discovered_skills
+                self._discovered = True
 
     def list_skills(self) -> list[Skill]:
         with self._lock:
