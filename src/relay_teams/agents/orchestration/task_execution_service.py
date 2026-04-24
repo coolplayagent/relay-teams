@@ -36,7 +36,7 @@ from relay_teams.agents.instances.models import (
 )
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
-from relay_teams.agents.tasks.models import TaskEnvelope
+from relay_teams.agents.tasks.models import TaskEnvelope, TaskRecord
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.logger import get_logger, log_event
@@ -1110,6 +1110,8 @@ class TaskExecutionService(BaseModel):
         terminal_task_id: str,
         last_error: Optional[str],
     ) -> bool:
+        coordinator_record: Optional[TaskRecord] = None
+        promoted_record: Optional[TaskRecord] = None
         for record in self.task_repo.list_by_trace(run_id):
             task = record.envelope
             if task.task_id == terminal_task_id:
@@ -1118,25 +1120,35 @@ class TaskExecutionService(BaseModel):
                 continue
             if not record.assigned_instance_id:
                 continue
-            is_coordinator = task.parent_task_id is None
-            self.run_runtime_repo.update(
-                run_id,
-                status=RunRuntimeStatus.RUNNING,
-                phase=(
-                    RunRuntimePhase.COORDINATOR_RUNNING
-                    if is_coordinator
-                    else RunRuntimePhase.SUBAGENT_RUNNING
-                ),
-                active_instance_id=record.assigned_instance_id,
-                active_task_id=task.task_id,
-                active_role_id=task.role_id,
-                active_subagent_instance_id=(
-                    None if is_coordinator else record.assigned_instance_id
-                ),
-                last_error=last_error,
-            )
-            return True
-        return False
+            if task.parent_task_id is not None:
+                promoted_record = record
+                break
+            if coordinator_record is None:
+                coordinator_record = record
+        if promoted_record is None:
+            promoted_record = coordinator_record
+        if promoted_record is None:
+            return False
+        task = promoted_record.envelope
+        instance_id = promoted_record.assigned_instance_id
+        if not instance_id:
+            return False
+        is_coordinator = task.parent_task_id is None
+        self.run_runtime_repo.update(
+            run_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=(
+                RunRuntimePhase.COORDINATOR_RUNNING
+                if is_coordinator
+                else RunRuntimePhase.SUBAGENT_RUNNING
+            ),
+            active_instance_id=instance_id,
+            active_task_id=task.task_id,
+            active_role_id=task.role_id,
+            active_subagent_instance_id=(None if is_coordinator else instance_id),
+            last_error=last_error,
+        )
+        return True
 
     def _shared_state_snapshot(
         self,
