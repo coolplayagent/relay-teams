@@ -484,7 +484,7 @@ async def test_pending_delegated_tasks_run_parallel_by_instance_lane(
 
 
 @pytest.mark.asyncio
-async def test_pending_delegated_task_cancellation_continues_when_stop_requested(
+async def test_pending_delegated_task_cancellation_exits_lane_when_stop_requested(
     tmp_path: Path,
 ) -> None:
     coordinator, task_repo, agent_repo, _run_runtime_repo, _ = _build_coordinator(
@@ -510,8 +510,18 @@ async def test_pending_delegated_task_cancellation_continues_when_stop_requested
         objective="query time",
         verification=VerificationPlan(checklist=("non_empty_response",)),
     )
+    queued_task = TaskEnvelope(
+        task_id="task-child-2",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="query later",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
     _ = task_repo.create(root_task)
     _ = task_repo.create(child_task)
+    _ = task_repo.create(queued_task)
     child_instance = create_subagent_instance(
         "time",
         workspace_id="workspace-1",
@@ -532,6 +542,11 @@ async def test_pending_delegated_task_cancellation_continues_when_stop_requested
         TaskStatus.ASSIGNED,
         assigned_instance_id=child_instance.instance_id,
     )
+    task_repo.update_status(
+        queued_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=child_instance.instance_id,
+    )
     _ = coordinator.run_control_manager.request_subagent_stop(
         run_id="run-1",
         instance_id=child_instance.instance_id,
@@ -544,6 +559,7 @@ async def test_pending_delegated_task_cancellation_continues_when_stop_requested
 
     assert ran_any is False
     assert cancelling_service.calls == [child_task.task_id]
+    assert task_repo.get(queued_task.task_id).status == TaskStatus.ASSIGNED
 
 
 @pytest.mark.asyncio

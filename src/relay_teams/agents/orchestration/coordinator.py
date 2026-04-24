@@ -497,7 +497,7 @@ class CoordinatorGraph(BaseModel):
                             run_id=trace_id,
                             instance_id=lane_instance.instance_id,
                         ):
-                            continue
+                            return ran_lane
                         raise
                     ran_lane = True
             return ran_lane
