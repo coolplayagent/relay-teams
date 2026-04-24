@@ -920,7 +920,7 @@ def _clip_rendered_message_suffix(text: str, *, max_chars: int) -> str:
     suffix = stripped[-max_chars:].lstrip()
     first_newline = suffix.find("\n")
     if first_newline < 0:
-        return ""
+        return suffix
     candidate = suffix[first_newline + 1 :].lstrip()
     return candidate or suffix
 

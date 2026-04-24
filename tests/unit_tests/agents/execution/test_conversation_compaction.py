@@ -353,7 +353,7 @@ def test_render_transcript_preserves_newest_compacted_turns_when_budget_clips() 
     assert "transcript middle clipped" in transcript
 
 
-def test_render_transcript_omits_marker_when_suffix_has_no_safe_boundary() -> None:
+def test_render_transcript_preserves_single_line_suffix_when_clipped() -> None:
     transcript = compaction_module._render_transcript(
         [
             ModelRequest(parts=[UserPromptPart(content="head objective")]),
@@ -363,7 +363,8 @@ def test_render_transcript_omits_marker_when_suffix_has_no_safe_boundary() -> No
     )
 
     assert "head objective" in transcript
-    assert "transcript middle clipped" not in transcript
+    assert "transcript middle clipped" in transcript
+    assert "x" * 20 in transcript
 
 
 def test_clip_rendered_message_suffix_uses_complete_tail_lines() -> None:
@@ -376,7 +377,7 @@ def test_clip_rendered_message_suffix_uses_complete_tail_lines() -> None:
             "abcdef",
             max_chars=3,
         )
-        == ""
+        == "def"
     )
     assert (
         compaction_module._clip_rendered_message_suffix(
