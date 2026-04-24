@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 from json import dumps
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -15,7 +15,6 @@ from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
-    RunRuntimeRecord,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
@@ -41,7 +40,7 @@ class RunControlContext(BaseModel):
 
     manager: "RunControlManager"
     run_id: str
-    instance_id: str | None = None
+    instance_id: Optional[str] = None
 
     def is_cancelled(self) -> bool:
         return self.manager.is_cancelled(
@@ -173,8 +172,8 @@ class _SubagentPauseRegistry:
         return paused
 
     def get(
-        self, session_id: str, instance_id: str | None = None
-    ) -> PausedSubagent | None:
+        self, session_id: str, instance_id: Optional[str] = None
+    ) -> Optional[PausedSubagent]:
         with self._lock:
             paused_for_session = self._paused_by_session.get(session_id)
             if not paused_for_session:
@@ -708,8 +707,8 @@ class RunControlManager:
         self,
         *,
         session_id: str,
-        instance_id: str | None = None,
-    ) -> PausedSubagent | None:
+        instance_id: Optional[str] = None,
+    ) -> Optional[PausedSubagent]:
         if self._run_runtime_repo is None:
             return None
         runtimes = sorted(
@@ -751,13 +750,16 @@ class RunControlManager:
         self,
         *,
         session_id: str,
-        instance_id: str | None = None,
-    ) -> PausedSubagent | None:
+        instance_id: Optional[str] = None,
+    ) -> Optional[PausedSubagent]:
         if self._run_runtime_repo is None or self._task_repo is None:
             return None
         candidates: list[PausedSubagent] = []
         for runtime in self._run_runtime_repo.list_by_session(session_id):
-            if not self._runtime_can_have_paused_subagent(runtime):
+            if not (
+                runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
+                or runtime.status == RunRuntimeStatus.RUNNING
+            ):
                 continue
             for record in self._task_repo.list_by_trace(runtime.run_id):
                 task = record.envelope
@@ -796,12 +798,6 @@ class RunControlManager:
         if not candidates:
             return None
         return max(candidates, key=lambda item: item.paused_at)
-
-    def _runtime_can_have_paused_subagent(self, runtime: RunRuntimeRecord) -> bool:
-        return (
-            runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
-            or runtime.status == RunRuntimeStatus.RUNNING
-        )
 
     def _require_run_event_hub(self) -> RunEventHub:
         if self._run_event_hub is None:
