@@ -23,6 +23,7 @@ from relay_teams.providers.model_config import (
 __all__ = [
     "CODEAGENT_ACCESS_TOKEN_SECRET_FIELD",
     "CODEAGENT_REFRESH_TOKEN_SECRET_FIELD",
+    "CodeAgentOAuthError",
     "CodeAgentOAuthSession",
     "CodeAgentOAuthTokenResult",
     "CodeAgentTokenService",
