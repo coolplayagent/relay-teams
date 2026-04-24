@@ -101,7 +101,7 @@ class AgentInstanceRepository:
         workspace_id: str,
         conversation_id: str | None = None,
         status: InstanceStatus,
-        lifecycle: InstanceLifecycle = InstanceLifecycle.REUSABLE,
+        lifecycle: InstanceLifecycle | None = None,
         parent_instance_id: str | None = None,
     ) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
@@ -109,13 +109,14 @@ class AgentInstanceRepository:
             session_id,
             role_id,
         )
+        lifecycle_value = lifecycle.value if lifecycle is not None else None
         run_sqlite_write_with_retry(
             conn=self._conn,
             db_path=self._db_path,
             operation=lambda: self._conn.execute(
                 """
                 INSERT INTO agent_instances(run_id, trace_id, session_id, instance_id, role_id, workspace_id, conversation_id, status, lifecycle, parent_instance_id, runtime_system_prompt, runtime_tools_json, created_at, updated_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, 'reusable'), ?, '', '', ?, ?)
                 ON CONFLICT(instance_id)
                 DO UPDATE SET
                     run_id=excluded.run_id,
@@ -125,8 +126,14 @@ class AgentInstanceRepository:
                     status=excluded.status,
                     workspace_id=excluded.workspace_id,
                     conversation_id=excluded.conversation_id,
-                    lifecycle=excluded.lifecycle,
-                    parent_instance_id=excluded.parent_instance_id,
+                    lifecycle=CASE
+                        WHEN ? IS NULL THEN agent_instances.lifecycle
+                        ELSE excluded.lifecycle
+                    END,
+                    parent_instance_id=CASE
+                        WHEN ? IS NULL THEN agent_instances.parent_instance_id
+                        ELSE excluded.parent_instance_id
+                    END,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -138,10 +145,12 @@ class AgentInstanceRepository:
                     workspace_id,
                     resolved_conversation_id,
                     status.value,
-                    lifecycle.value,
+                    lifecycle_value,
                     parent_instance_id,
                     now,
                     now,
+                    lifecycle_value,
+                    lifecycle_value,
                 ),
             ),
             lock=self._lock,

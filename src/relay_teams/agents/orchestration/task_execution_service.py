@@ -1020,16 +1020,27 @@ class TaskExecutionService(BaseModel):
             "result_excerpt": _truncate_task_memory_result(result),
             "completed_at": datetime.now(tz=timezone.utc).isoformat(),
         }
-        self.shared_store.manage_state(
-            StateMutation(
-                scope=ScopeRef(
-                    scope_type=ScopeType.ROLE,
-                    scope_id=f"{task.session_id}:{role_id}",
-                ),
-                key=f"task_result:{task.task_id}",
-                value_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        try:
+            self.shared_store.manage_state(
+                StateMutation(
+                    scope=ScopeRef(
+                        scope_type=ScopeType.ROLE,
+                        scope_id=f"{task.session_id}:{role_id}",
+                    ),
+                    key=f"task_result:{task.task_id}",
+                    value_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                )
             )
-        )
+        except Exception:
+            LOGGER.warning(
+                "Failed to persist completed task memory",
+                extra={
+                    "task_id": task.task_id,
+                    "role_id": role_id,
+                    "instance_id": instance_id,
+                },
+                exc_info=True,
+            )
 
     def _shared_state_snapshot(
         self,

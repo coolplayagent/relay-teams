@@ -129,7 +129,7 @@ class _BackgroundTaskAgentRepository(Protocol):
         workspace_id: str,
         conversation_id: str | None = None,
         status: InstanceStatus,
-        lifecycle: InstanceLifecycle = InstanceLifecycle.REUSABLE,
+        lifecycle: InstanceLifecycle | None = None,
         parent_instance_id: str | None = None,
     ) -> None: ...
 

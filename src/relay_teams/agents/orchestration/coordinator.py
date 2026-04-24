@@ -481,8 +481,9 @@ class CoordinatorGraph(BaseModel):
 
         semaphore = asyncio.Semaphore(MAX_PARALLEL_DELEGATED_TASKS)
 
-        async def run_lane(instance_id: str, lane_records: list[TaskRecord]) -> None:
+        async def run_lane(instance_id: str, lane_records: list[TaskRecord]) -> bool:
             instance = instances[instance_id]
+            ran_lane = False
             async with semaphore:
                 for lane_record in lane_records:
                     try:
@@ -498,14 +499,16 @@ class CoordinatorGraph(BaseModel):
                         ):
                             continue
                         raise
+                    ran_lane = True
+            return ran_lane
 
-        await asyncio.gather(
+        lane_results = await asyncio.gather(
             *(
                 run_lane(instance_id, lane_records)
                 for instance_id, lane_records in lanes.items()
             )
         )
-        return True
+        return any(lane_results)
 
     def _get_root_task_by_trace(self, trace_id: str) -> TaskRecord:
         for record in self.task_repo.list_by_trace(trace_id):

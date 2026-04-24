@@ -542,7 +542,7 @@ async def test_pending_delegated_task_cancellation_continues_when_stop_requested
         root_task_id=root_task.task_id,
     )
 
-    assert ran_any is True
+    assert ran_any is False
     assert cancelling_service.calls == [child_task.task_id]
 
 

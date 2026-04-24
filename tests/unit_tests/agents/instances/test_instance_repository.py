@@ -68,3 +68,53 @@ def test_repository_migrates_lifecycle_columns_for_existing_tables(
         }
     assert "lifecycle" in columns
     assert "parent_instance_id" in columns
+
+
+def test_upsert_preserves_existing_lifecycle_when_not_explicit(
+    tmp_path: Path,
+) -> None:
+    repository = AgentInstanceRepository(tmp_path / "agent_instances_lifecycle.db")
+    repository.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="writer",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        status=InstanceStatus.IDLE,
+        lifecycle=InstanceLifecycle.EPHEMERAL,
+        parent_instance_id="inst-parent",
+    )
+
+    repository.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="writer",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        status=InstanceStatus.RUNNING,
+    )
+
+    record = repository.get_instance("inst-1")
+    assert record.status == InstanceStatus.RUNNING
+    assert record.lifecycle == InstanceLifecycle.EPHEMERAL
+    assert record.parent_instance_id == "inst-parent"
+
+    repository.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="writer",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        status=InstanceStatus.IDLE,
+        lifecycle=InstanceLifecycle.REUSABLE,
+    )
+
+    refreshed = repository.get_instance("inst-1")
+    assert refreshed.lifecycle == InstanceLifecycle.REUSABLE
+    assert refreshed.parent_instance_id is None
