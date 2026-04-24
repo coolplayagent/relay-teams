@@ -104,6 +104,7 @@ from relay_teams.providers.model_config import (
     ModelProfileConfigPayload,
     ProviderType,
 )
+from relay_teams.providers.model_catalog import ModelCatalogResult
 from relay_teams.providers.model_config_service import ModelConfigService
 from relay_teams.providers.model_connectivity import (
     ModelDiscoveryRequest,
@@ -341,6 +342,21 @@ async def get_model_fallback_config(
     return await asyncio.to_thread(service.get_model_fallback_config)
 
 
+@router.get("/configs/model/catalog")
+async def get_model_catalog(
+    refresh: bool = Query(default=False),
+    service: ModelConfigService = Depends(get_model_config_service),
+) -> ModelCatalogResult:
+    return await asyncio.to_thread(service.get_model_catalog, refresh=refresh)
+
+
+@router.post("/configs/model/catalog:refresh")
+async def refresh_model_catalog(
+    service: ModelConfigService = Depends(get_model_config_service),
+) -> ModelCatalogResult:
+    return await asyncio.to_thread(service.get_model_catalog, refresh=True)
+
+
 class ModelProfileRequest(ModelProfileConfigPayload):
     model_config = ConfigDict(extra="forbid")
 
@@ -371,6 +387,12 @@ async def save_model_profile(
             profile["fallback_policy_id"] = req.fallback_policy_id
         if "fallback_priority" in req.model_fields_set:
             profile["fallback_priority"] = req.fallback_priority
+        if "catalog_provider_id" in req.model_fields_set:
+            profile["catalog_provider_id"] = req.catalog_provider_id
+        if "catalog_provider_name" in req.model_fields_set:
+            profile["catalog_provider_name"] = req.catalog_provider_name
+        if "catalog_model_name" in req.model_fields_set:
+            profile["catalog_model_name"] = req.catalog_model_name
         if "max_tokens" in req.model_fields_set:
             profile["max_tokens"] = req.max_tokens
         if req.is_default is not None:

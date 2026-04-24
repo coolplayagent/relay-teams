@@ -750,6 +750,84 @@ export async function requestJson(url, options, errorMessage) {
     ]
 
 
+def test_model_catalog_api_helpers_call_expected_endpoints(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = repo_root / "frontend" / "dist" / "js" / "core" / "api" / "system.js"
+    module_under_test_path = tmp_path / "system.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJson(url, options, errorMessage) {
+    globalThis.__capturedRequests = globalThis.__capturedRequests || [];
+    globalThis.__capturedRequests.push({
+        url,
+        options: options ?? null,
+        errorMessage,
+    });
+    return globalThis.__capturedRequests.at(-1);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "import { requestJson } from './request.js';",
+        "import { requestJson } from './mockRequest.mjs';",
+    )
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "const signal = {}; "
+                "await mod.fetchModelCatalog({ signal }); "
+                "await mod.fetchModelCatalog({ refresh: true }); "
+                "await mod.refreshModelCatalog(); "
+                "console.log(JSON.stringify(globalThis.__capturedRequests));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload == [
+        {
+            "url": "/api/system/configs/model/catalog",
+            "options": {"signal": {}},
+            "errorMessage": "Failed to fetch model catalog",
+        },
+        {
+            "url": "/api/system/configs/model/catalog?refresh=true",
+            "options": {},
+            "errorMessage": "Failed to fetch model catalog",
+        },
+        {
+            "url": "/api/system/configs/model/catalog:refresh",
+            "options": {"method": "POST"},
+            "errorMessage": "Failed to refresh model catalog",
+        },
+    ]
+
+
 def test_request_json_disables_browser_cache_for_get_requests(
     tmp_path: Path,
 ) -> None:

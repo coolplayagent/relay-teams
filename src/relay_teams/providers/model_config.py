@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Optional
 
 from pydantic import (
     BaseModel,
@@ -155,6 +156,9 @@ class ModelEndpointConfig(BaseModel):
     context_window: int | None = Field(default=None, ge=1)
     fallback_policy_id: str | None = Field(default=None, min_length=1)
     fallback_priority: int = Field(default=0, ge=0, le=1_000_000)
+    catalog_provider_id: str | None = Field(default=None, min_length=1)
+    catalog_provider_name: str | None = Field(default=None, min_length=1)
+    catalog_model_name: str | None = Field(default=None, min_length=1)
     connect_timeout_seconds: float = Field(
         default=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
         gt=0.0,
@@ -162,7 +166,15 @@ class ModelEndpointConfig(BaseModel):
     )
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
 
-    @field_validator("model", "base_url", "api_key", mode="before")
+    @field_validator(
+        "model",
+        "base_url",
+        "api_key",
+        "catalog_provider_id",
+        "catalog_provider_name",
+        "catalog_model_name",
+        mode="before",
+    )
     @classmethod
     def _normalize_string_fields(cls, value: object) -> object:
         if isinstance(value, str):
@@ -224,27 +236,38 @@ class ModelProfileConfigPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: ProviderType = ProviderType.OPENAI_COMPATIBLE
-    is_default: bool | None = None
+    is_default: Optional[bool] = None
     model: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
-    api_key: str | None = Field(default=None, min_length=1)
-    headers: tuple[ModelRequestHeader, ...] | None = None
-    maas_auth: MaaSAuthConfig | None = None
-    ssl_verify: bool | None = None
-    capabilities: ModelCapabilities | None = None
+    api_key: Optional[str] = Field(default=None, min_length=1)
+    headers: Optional[tuple[ModelRequestHeader, ...]] = None
+    maas_auth: Optional[MaaSAuthConfig] = None
+    ssl_verify: Optional[bool] = None
+    capabilities: Optional[ModelCapabilities] = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
-    max_tokens: int | None = Field(default=None, ge=1)
-    context_window: int | None = Field(default=None, ge=1)
-    fallback_policy_id: str | None = Field(default=None, min_length=1)
+    max_tokens: Optional[int] = Field(default=None, ge=1)
+    context_window: Optional[int] = Field(default=None, ge=1)
+    fallback_policy_id: Optional[str] = Field(default=None, min_length=1)
     fallback_priority: int = Field(default=0, ge=0, le=1_000_000)
+    catalog_provider_id: Optional[str] = Field(default=None, min_length=1)
+    catalog_provider_name: Optional[str] = Field(default=None, min_length=1)
+    catalog_model_name: Optional[str] = Field(default=None, min_length=1)
     connect_timeout_seconds: float = Field(
         default=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
         gt=0.0,
         le=300.0,
     )
 
-    @field_validator("model", "base_url", "api_key", mode="before")
+    @field_validator(
+        "model",
+        "base_url",
+        "api_key",
+        "catalog_provider_id",
+        "catalog_provider_name",
+        "catalog_model_name",
+        mode="before",
+    )
     @classmethod
     def _normalize_string_fields(cls, value: object) -> object:
         if isinstance(value, str):
@@ -337,7 +360,7 @@ class ModelFallbackConfig(BaseModel):
             seen_ids.add(normalized_id)
         return self
 
-    def get_policy(self, policy_id: str | None) -> ModelFallbackPolicy | None:
+    def get_policy(self, policy_id: Optional[str]) -> Optional[ModelFallbackPolicy]:
         if policy_id is None:
             return None
         normalized_id = policy_id.strip().casefold()
