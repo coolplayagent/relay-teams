@@ -30,7 +30,7 @@ export function renderModelProfilesPanelMarkup() {
                                     <span class="model-profile-step-summary" id="profile-model-summary"></span>
                                 </button>
                                 <div class="model-profile-step-body">
-                                    <div class="model-provider-choice-grid model-provider-choice-grid-three" id="profile-provider-options">
+                                    <div class="model-provider-choice-grid model-provider-choice-grid-four" id="profile-provider-options">
                                         <button class="model-provider-choice is-active" id="profile-provider-external-btn" type="button" data-provider-mode="external" data-provider-value="openai_compatible">
                                             <span class="model-provider-choice-icon" aria-hidden="true">
                                                 <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
@@ -54,6 +54,18 @@ export function renderModelProfilesPanelMarkup() {
                                                 <span data-i18n="settings.model.provider_maas_copy">Hosted model service platform</span>
                                             </span>
                                         </button>
+                                        <button class="model-provider-choice" id="profile-provider-codeagent-btn" type="button" data-provider-mode="codeagent" data-provider-value="codeagent">
+                                            <span class="model-provider-choice-icon" aria-hidden="true">
+                                                <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
+                                                    <path d="M7 6.5 12 4l5 2.5v5.75c0 3.03-1.93 5.73-5 7.75-3.07-2.02-5-4.72-5-7.75V6.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"></path>
+                                                    <path d="M9.5 11.5 11 13l3.5-3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"></path>
+                                                </svg>
+                                            </span>
+                                            <span>
+                                                <strong data-i18n="settings.model.provider_codeagent">CodeAgent Model</strong>
+                                                <span data-i18n="settings.model.provider_codeagent_copy">Use CodeAgent models with SSO sign-in</span>
+                                            </span>
+                                        </button>
                                         <button class="model-provider-choice" id="profile-provider-custom-btn" type="button" data-provider-mode="custom" data-provider-value="openai_compatible">
                                             <span class="model-provider-choice-icon" aria-hidden="true">
                                                 <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
@@ -72,6 +84,7 @@ export function renderModelProfilesPanelMarkup() {
                                         <select id="profile-provider" aria-hidden="true" tabindex="-1">
                                             <option value="openai_compatible">openai_compatible</option>
                                             <option value="maas">maas</option>
+                                            <option value="codeagent">codeagent</option>
                                         </select>
                                     </div>
                                     <div class="form-group model-profile-collapsible-field" id="profile-base-url-fields" style="display:none;">
@@ -164,6 +177,16 @@ export function renderModelProfilesPanelMarkup() {
                                             </div>
                                         </div>
                                         <div class="form-group-span-2" id="profile-maas-model-slot"></div>
+                                    </div>
+                                    <div class="profile-credentials-row profile-codeagent-credentials-row" id="profile-codeagent-auth-fields" style="display:none;">
+                                        <div class="form-group form-group-inline-action profile-codeagent-sso-group">
+                                            <label for="profile-codeagent-login-status">CodeAgent SSO</label>
+                                            <div class="codeagent-sso-control">
+                                                <button class="settings-inline-action settings-list-action codeagent-sso-login-btn" type="button" id="profile-codeagent-login-status" data-i18n="settings.model.codeagent_sign_in_sso" data-i18n-title="settings.model.codeagent_sign_in_sso" data-i18n-aria-label="settings.model.codeagent_sign_in_sso" aria-controls="profile-codeagent-login-status-message">Sign in with SSO</button>
+                                            </div>
+                                            <div class="codeagent-sso-status-message" id="profile-codeagent-login-status-message" role="status" aria-live="polite" style="display:none;"></div>
+                                        </div>
+                                        <div class="form-group-span-2" id="profile-codeagent-model-slot"></div>
                                     </div>
                                 </div>
                             </section>

@@ -2402,11 +2402,74 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    assert payload["initialParentId"] == "profile-model-field-home"
-    assert payload["maasParentId"] == "profile-model-field-home"
+    assert payload["initialParentId"] == "profile-primary-credentials-row"
+    assert payload["maasParentId"] == "profile-maas-model-slot"
     assert payload["maasPrimaryRowDisplay"] == "none"
-    assert payload["finalParentId"] == "profile-model-field-home"
+    assert payload["finalParentId"] == "profile-primary-credentials-row"
     assert payload["primaryRowDisplay"] == "grid"
+
+
+def test_switching_from_codeagent_to_custom_restores_base_url_and_api_key(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider-codeagent-btn").onclick();
+
+const codeagentState = {
+    providerValue: document.getElementById("profile-provider").value,
+    baseUrlValue: document.getElementById("profile-base-url").value,
+    baseUrlDisabled: document.getElementById("profile-base-url").disabled,
+    baseUrlGroupDisplay: document.getElementById("profile-base-url").closest(".form-group")?.style.display || null,
+    apiKeyDisplay: document.getElementById("profile-api-key-group").style.display,
+    codeagentDisplay: document.getElementById("profile-codeagent-auth-fields").style.display,
+    summary: document.getElementById("profile-model-summary").textContent,
+};
+
+document.getElementById("profile-provider-custom-btn").onclick();
+
+console.log(JSON.stringify({
+    codeagentState,
+    customState: {
+        providerValue: document.getElementById("profile-provider").value,
+        baseUrlValue: document.getElementById("profile-base-url").value,
+        baseUrlDisabled: document.getElementById("profile-base-url").disabled,
+        baseUrlGroupDisplay: document.getElementById("profile-base-url").closest(".form-group")?.style.display || null,
+        apiKeyDisplay: document.getElementById("profile-api-key-group").style.display,
+        codeagentDisplay: document.getElementById("profile-codeagent-auth-fields").style.display,
+    },
+}));
+""".strip(),
+    )
+
+    codeagent_state = cast(dict[str, JsonValue], payload["codeagentState"])
+    custom_state = cast(dict[str, JsonValue], payload["customState"])
+    assert codeagent_state["providerValue"] == "codeagent"
+    assert (
+        codeagent_state["baseUrlValue"]
+        == "https://codeagentcli.rnd.huawei.com/codeAgentPro"
+    )
+    assert codeagent_state["baseUrlDisabled"] is True
+    assert codeagent_state["baseUrlGroupDisplay"] == "none"
+    assert codeagent_state["apiKeyDisplay"] == "none"
+    assert codeagent_state["codeagentDisplay"] == "grid"
+    assert codeagent_state["summary"] == "CodeAgent Model · No model"
+    assert custom_state["providerValue"] == "openai_compatible"
+    assert custom_state["baseUrlValue"] == ""
+    assert custom_state["baseUrlDisabled"] is False
+    assert custom_state["baseUrlGroupDisplay"] == "block"
+    assert custom_state["apiKeyDisplay"] == "block"
+    assert custom_state["codeagentDisplay"] == "none"
 
 
 def test_fetching_models_keeps_full_browser_list_when_model_input_is_partial(
@@ -3324,17 +3387,115 @@ export async function deleteModelProfile(name) {
     assert payload["disabledWhileStarting"] is True
     assert payload["disabledAfterCompletion"] is False
     assert payload["authStatus"] == "Signed in"
-    assert payload["windowOpensBeforeResolve"] == [
-        ["", "_blank", "noopener,noreferrer"]
-    ]
+    assert payload["windowOpensBeforeResolve"] == [["about:blank", "_blank"]]
     assert payload["windowOpens"] == [
         [
-            "",
+            "about:blank",
             "_blank",
-            "noopener,noreferrer",
         ]
     ]
     assert payload["windowOpenNavigations"] == ["https://example.test/codeagent-sso"]
+
+
+def test_codeagent_sso_allows_retry_when_popup_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+globalThis.__windowOpenReturnsNull = true;
+globalThis.setTimeout = callback => {
+    callback();
+    return 0;
+};
+
+const elements = createElements();
+installGlobals(elements, notifications);
+globalThis.__windowOpenReturnsNull = true;
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider").value = "codeagent";
+document.getElementById("profile-provider").onchange();
+
+await document.getElementById("profile-codeagent-login-status").onclick();
+const blockedStatus = document.getElementById("profile-codeagent-login-status-message").textContent;
+const buttonDisabledAfterBlocked = document.getElementById("profile-codeagent-login-status").disabled;
+
+globalThis.__windowOpenReturnsNull = false;
+await document.getElementById("profile-codeagent-login-status").onclick();
+
+console.log(JSON.stringify({
+    startCalls: globalThis.__codeAgentOAuthStartCalls,
+    windowOpens: globalThis.__windowOpens,
+    windowOpenNavigations: globalThis.__windowOpenNavigations,
+    blockedStatus,
+    buttonDisabledAfterBlocked,
+    authStatus: document.getElementById("profile-codeagent-login-status-message").textContent,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {};
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42 };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: ["codeagent-chat"] };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function startCodeAgentOAuth() {
+    globalThis.__codeAgentOAuthStartCalls = (globalThis.__codeAgentOAuthStartCalls || 0) + 1;
+    return {
+        auth_session_id: "auth-session-fallback",
+        authorization_url: "https://example.test/codeagent-sso-fallback",
+    };
+}
+
+export async function fetchCodeAgentOAuthSession(authSessionId) {
+    globalThis.__codeAgentOAuthSessionChecks = globalThis.__codeAgentOAuthSessionChecks || [];
+    globalThis.__codeAgentOAuthSessionChecks.push(authSessionId);
+    return { completed: true };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+    )
+
+    assert payload["startCalls"] == 1
+    assert payload["windowOpens"] == [
+        ["about:blank", "_blank"],
+        ["https://example.test/codeagent-sso-fallback", "_blank"],
+    ]
+    assert payload["windowOpenNavigations"] == []
+    assert payload["blockedStatus"] == (
+        "SSO popup was blocked. Click Sign in with SSO again to continue."
+    )
+    assert payload["buttonDisabledAfterBlocked"] is False
+    assert payload["authStatus"] == "Signed in"
 
 
 def test_failed_codeagent_sso_does_not_send_incomplete_oauth_session_id(
@@ -3859,6 +4020,7 @@ const translations = {
     "settings.model.codeagent_sso_starting": "Starting SSO login",
     "settings.model.codeagent_sso_waiting": "Waiting for SSO callback",
     "settings.model.codeagent_sso_signed_in": "Signed in",
+    "settings.model.codeagent_sso_popup_blocked": "SSO popup was blocked. Click Sign in with SSO again to continue.",
     "settings.model.codeagent_sso_timed_out": "SSO login timed out",
     "settings.model.codeagent_sso_failed": "SSO failed: {error}",
     "settings.model.show_api_key": "Show API key",
@@ -3872,6 +4034,8 @@ const translations = {
     "settings.model.default_saved_message": "{name} is now the default model.",
     "settings.model.provider_external": "Model Marketplace",
     "settings.model.provider_maas": "MaaS Model",
+    "settings.model.provider_codeagent_copy": "Use CodeAgent models with SSO sign-in",
+    "settings.model.provider_codeagent": "CodeAgent Model",
     "settings.model.provider_custom": "Custom Model",
     "settings.model.custom_model": "Custom model",
     "settings.model.custom_model_catalog_hint": "Enter a model name manually",
@@ -4049,6 +4213,7 @@ function createElements() {{
             ["profile-provider-options", createElement("block", "profile-provider-options")],
             ["profile-provider-external-btn", createElement("block", "profile-provider-external-btn")],
             ["profile-provider-maas-btn", createElement("block", "profile-provider-maas-btn")],
+            ["profile-provider-codeagent-btn", createElement("block", "profile-provider-codeagent-btn")],
             ["profile-provider-custom-btn", createElement("block", "profile-provider-custom-btn")],
             ["profile-is-default", createElement("block", "profile-is-default")],
             ["profile-model", createElement("block", "profile-model")],
@@ -4090,6 +4255,7 @@ function createElements() {{
         }}
         elements.get("profile-provider-external-btn").dataset.providerMode = "external";
         elements.get("profile-provider-maas-btn").dataset.providerMode = "maas";
+        elements.get("profile-provider-codeagent-btn").dataset.providerMode = "codeagent";
         elements.get("profile-provider-custom-btn").dataset.providerMode = "custom";
         elements.get("profile-primary-credentials-row")?.appendChild(elements.get("profile-api-key-group"));
         elements.get("profile-model-field-home")?.appendChild(elements.get("profile-model-group"));
@@ -4109,6 +4275,7 @@ function installGlobals(elements, notifications) {{
             return [
                 elements.get("profile-provider-external-btn"),
                 elements.get("profile-provider-maas-btn"),
+                elements.get("profile-provider-codeagent-btn"),
                 elements.get("profile-provider-custom-btn"),
             ].filter(Boolean);
         }}
@@ -4189,6 +4356,9 @@ function installGlobals(elements, notifications) {{
     globalThis.window = {{
         open(...args) {{
             globalThis.__windowOpens.push(args);
+            if (globalThis.__windowOpenReturnsNull) {{
+                return null;
+            }}
             return {{
                 location: {{
                     replace(value) {{
@@ -4203,12 +4373,22 @@ function installGlobals(elements, notifications) {{
                 }},
             }};
         }},
+        location: {{
+            assign(value) {{
+                globalThis.__windowLocationNavigations.push(value);
+            }},
+            set href(value) {{
+                globalThis.__windowLocationNavigations.push(value);
+            }},
+        }},
     }};
     globalThis.__feedbackNotifications = notifications;
     globalThis.__feedbackConfirms = [];
     globalThis.__dispatchedEvents = [];
     globalThis.__windowOpens = [];
     globalThis.__windowOpenNavigations = [];
+    globalThis.__windowLocationNavigations = [];
+    globalThis.__windowOpenReturnsNull = false;
 }}
 
 {runner_source}

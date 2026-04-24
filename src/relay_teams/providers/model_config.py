@@ -124,6 +124,14 @@ class CodeAgentAuthConfig(BaseModel):
         copied._secret_owner_id = owner_id
         return copied
 
+    @property
+    def secret_config_dir(self) -> Path | None:
+        return self._secret_config_dir
+
+    @property
+    def secret_owner_id(self) -> str | None:
+        return self._secret_owner_id
+
 
 class MaaSAuthConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")

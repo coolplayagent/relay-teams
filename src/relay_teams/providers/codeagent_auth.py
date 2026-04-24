@@ -316,12 +316,16 @@ class CodeAgentTokenService:
         return _build_polled_token_result(response)
 
     def _cache_key(self, *, base_url: str, auth_config: CodeAgentAuthConfig) -> str:
+        cache_discriminator = (
+            auth_config.secret_owner_id or auth_config.oauth_session_id or ""
+        )
         raw = "\0".join(
             (
                 base_url.strip(),
                 auth_config.client_id,
                 auth_config.scope,
                 auth_config.scope_resource,
+                cache_discriminator,
                 auth_config.refresh_token or "",
             )
         )
@@ -866,6 +870,14 @@ def _build_polled_token_result(
         return None
     access_token = _extract_str(payload, ("access_token", "accessToken", "token"))
     if access_token is None:
+        if _is_pending_poll_payload(payload):
+            return None
+        error_message = _extract_error_message(payload)
+        if error_message is not None:
+            raise CodeAgentOAuthError(
+                error_message,
+                status_code=response.status_code,
+            )
         return None
     refresh_token = _extract_str(payload, ("refresh_token", "refreshToken"))
     if refresh_token is None:
@@ -966,13 +978,32 @@ def _extract_error_message(payload: object) -> str | None:
     return None
 
 
+def _is_pending_poll_payload(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    for key in ("status", "state", "message", "detail"):
+        value = payload.get(key)
+        if not isinstance(value, str):
+            continue
+        normalized = value.strip().casefold()
+        if normalized in {
+            "pending",
+            "waiting",
+            "processing",
+            "in_progress",
+            "in progress",
+        }:
+            return True
+    return False
+
+
 def _persist_codeagent_profile_tokens(
     *,
     auth_config: CodeAgentAuthConfig,
     token_result: CodeAgentOAuthTokenResult,
 ) -> None:
-    config_dir = auth_config._secret_config_dir
-    owner_id = auth_config._secret_owner_id
+    config_dir = auth_config.secret_config_dir
+    owner_id = auth_config.secret_owner_id
     if config_dir is None or owner_id is None:
         return
     _set_model_profile_secret(

@@ -323,6 +323,33 @@ def test_codeagent_token_service_get_token_result_sync_rechecks_cache_inside_loc
     assert result == token_result
 
 
+def test_codeagent_token_service_cache_key_includes_secret_owner_id() -> None:
+    service = CodeAgentTokenService()
+    profile_a = CodeAgentAuthConfig(
+        refresh_token="shared-refresh-token"
+    ).with_secret_owner(
+        config_dir=Path("."),
+        owner_id="profile-a",
+    )
+    profile_b = CodeAgentAuthConfig(
+        refresh_token="shared-refresh-token"
+    ).with_secret_owner(
+        config_dir=Path("."),
+        owner_id="profile-b",
+    )
+
+    profile_a_key = service._cache_key(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        auth_config=profile_a,
+    )
+    profile_b_key = service._cache_key(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        auth_config=profile_b,
+    )
+
+    assert profile_a_key != profile_b_key
+
+
 def test_codeagent_token_service_refreshes_with_rotated_refresh_token(
     monkeypatch,
 ) -> None:
@@ -1139,6 +1166,13 @@ def test_build_polled_token_result_returns_none_for_non_200_response() -> None:
     response = httpx.Response(202, json={"message": "pending"})
 
     assert codeagent_auth_module._build_polled_token_result(response) is None
+
+
+def test_build_polled_token_result_raises_for_200_error_payload() -> None:
+    response = httpx.Response(200, json={"message": "expired session"})
+
+    with pytest.raises(CodeAgentOAuthError, match="expired session"):
+        codeagent_auth_module._build_polled_token_result(response)
 
 
 def test_build_polled_token_result_requires_refresh_token() -> None:

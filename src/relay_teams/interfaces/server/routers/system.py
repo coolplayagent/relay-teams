@@ -115,6 +115,7 @@ from relay_teams.providers.codeagent_auth import (
     CodeAgentOAuthError,
     build_codeagent_authorization_url,
     create_codeagent_oauth_session,
+    get_codeagent_oauth_tokens,
     get_codeagent_oauth_session,
     get_codeagent_token_service,
     save_codeagent_oauth_tokens_for_session,
@@ -528,6 +529,11 @@ def get_codeagent_oauth_session_status(
                 status_code=502,
                 detail=str(exc) or "CodeAgent OAuth token polling request failed.",
             ) from exc
+    session_tokens_available = (
+        get_codeagent_oauth_tokens(auth_session_id) is not None
+        if session.completed
+        else False
+    )
     codeagent_auth = (
         CodeAgentAuthConfig(
             client_id=session.client_id,
@@ -537,12 +543,12 @@ def get_codeagent_oauth_session_status(
             has_access_token=True,
             has_refresh_token=True,
         )
-        if session.completed
+        if session.completed and session_tokens_available
         else None
     )
     return CodeAgentOAuthSessionResponse(
         auth_session_id=session.auth_session_id,
-        completed=session.completed,
+        completed=session.completed and session_tokens_available,
         error_message=session.error_message,
         codeagent_auth=codeagent_auth,
     )

@@ -659,6 +659,115 @@ def test_probe_codeagent_rejects_event_stream_error_payload(monkeypatch) -> None
     assert result.error_message == "invalid codeagent model"
 
 
+def test_probe_codeagent_rejects_event_stream_top_level_message_payload(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(["session-access-token"], {}),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text='data: {"message":"invalid codeagent model"}\n\n',
+            ),
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.CODEAGENT,
+                model="codeagent-chat",
+                codeagent_auth=CodeAgentAuthConfig(
+                    refresh_token="refresh-token",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.error_code == "invalid_response"
+    assert result.error_message == "invalid codeagent model"
+
+
+def test_probe_codeagent_rejects_invalid_event_stream_payload(monkeypatch) -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(["session-access-token"], {}),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text="event: ping\n\n",
+            ),
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.CODEAGENT,
+                model="codeagent-chat",
+                codeagent_auth=CodeAgentAuthConfig(
+                    refresh_token="refresh-token",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.error_code == "invalid_response"
+    assert result.error_message == "Provider returned invalid SSE payload."
+
+
+def test_probe_codeagent_rejects_plain_text_event_stream_heartbeat(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(["session-access-token"], {}),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text="data: ping\n\n",
+            ),
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.CODEAGENT,
+                model="codeagent-chat",
+                codeagent_auth=CodeAgentAuthConfig(
+                    refresh_token="refresh-token",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.error_code == "invalid_response"
+    assert result.error_message == "Provider returned invalid SSE payload."
+
+
 def test_probe_prefers_fresh_codeagent_oauth_session_over_saved_refresh_token(
     monkeypatch,
 ) -> None:

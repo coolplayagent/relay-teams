@@ -103,6 +103,8 @@ from relay_teams.providers.codeagent_auth import (
     CodeAgentOAuthError,
     CodeAgentOAuthTokenResult,
     clear_codeagent_oauth_session_store,
+    consume_codeagent_oauth_tokens,
+    save_codeagent_oauth_tokens_for_session,
 )
 from relay_teams.skills.clawhub_models import (
     ClawHubSkillDetail,
@@ -2982,6 +2984,40 @@ def test_codeagent_oauth_status_polls_until_token_available(monkeypatch) -> None
     status_payload = status_response.json()
     assert status_payload["completed"] is True
     assert status_payload["codeagent_auth"]["has_refresh_token"] is True
+    clear_codeagent_oauth_session_store()
+
+
+def test_codeagent_oauth_status_hides_consumed_completed_session() -> None:
+    clear_codeagent_oauth_session_store()
+    client = _create_test_client(_FakeSystemService())
+    start_response = client.post(
+        "/api/system/configs/model/codeagent/oauth:start",
+        json={},
+    )
+    payload = start_response.json()
+    save_codeagent_oauth_tokens_for_session(
+        auth_session_id=payload["auth_session_id"],
+        token_result=CodeAgentOAuthTokenResult(
+            access_token="codeagent-access-token",
+            refresh_token="codeagent-refresh-token",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+
+    completed_response = client.get(
+        f"/api/system/configs/model/codeagent/oauth/{payload['auth_session_id']}"
+    )
+    consumed_tokens = consume_codeagent_oauth_tokens(payload["auth_session_id"])
+    consumed_response = client.get(
+        f"/api/system/configs/model/codeagent/oauth/{payload['auth_session_id']}"
+    )
+
+    assert completed_response.status_code == 200
+    assert completed_response.json()["completed"] is True
+    assert consumed_tokens is not None
+    assert consumed_response.status_code == 200
+    assert consumed_response.json()["completed"] is False
+    assert consumed_response.json()["codeagent_auth"] is None
     clear_codeagent_oauth_session_store()
 
 

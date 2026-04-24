@@ -54,6 +54,7 @@ from relay_teams.sessions.runs.runtime_config import RuntimeConfig
 
 
 _INVALID_RESPONSE_PAYLOAD = object()
+_EVENT_STREAM_PLAIN_TEXT_SUCCESS = object()
 _MAX_PROBE_TIMEOUT_MS = 300_000
 
 LOGGER = get_logger(__name__)
@@ -619,8 +620,8 @@ class ModelConnectivityProbeService:
         preferred: CodeAgentAuthConfig,
         fallback: CodeAgentAuthConfig,
     ) -> CodeAgentAuthConfig:
-        config_dir = preferred._secret_config_dir or fallback._secret_config_dir
-        owner_id = preferred._secret_owner_id or fallback._secret_owner_id
+        config_dir = preferred.secret_config_dir or fallback.secret_config_dir
+        owner_id = preferred.secret_owner_id or fallback.secret_owner_id
         if config_dir is None or owner_id is None:
             return auth_config
         return auth_config.with_secret_owner(
@@ -1643,13 +1644,13 @@ class ModelConnectivityProbeService:
                     oauth_session_id=auth_config.oauth_session_id,
                 )
                 if (
-                    auth_config._secret_config_dir is None
-                    or auth_config._secret_owner_id is None
+                    auth_config.secret_config_dir is None
+                    or auth_config.secret_owner_id is None
                 ):
                     return resolved_auth
                 return resolved_auth.with_secret_owner(
-                    config_dir=auth_config._secret_config_dir,
-                    owner_id=auth_config._secret_owner_id,
+                    config_dir=auth_config.secret_config_dir,
+                    owner_id=auth_config.secret_owner_id,
                 )
         if auth_config.refresh_token is not None:
             return auth_config
@@ -1803,6 +1804,36 @@ class ModelConnectivityProbeService:
         if config.provider == ProviderType.CODEAGENT and self._is_event_stream_response(
             response
         ):
+            if response_payload is _EVENT_STREAM_PLAIN_TEXT_SUCCESS:
+                return ModelConnectivityProbeResult(
+                    ok=True,
+                    provider=config.provider,
+                    model=config.model,
+                    latency_ms=latency_ms,
+                    checked_at=checked_at,
+                    diagnostics=ModelConnectivityDiagnostics(
+                        endpoint_reachable=True,
+                        auth_valid=True,
+                        rate_limited=False,
+                    ),
+                    token_usage=None,
+                )
+            if response_payload is _INVALID_RESPONSE_PAYLOAD:
+                return ModelConnectivityProbeResult(
+                    ok=False,
+                    provider=config.provider,
+                    model=config.model,
+                    latency_ms=latency_ms,
+                    checked_at=checked_at,
+                    diagnostics=ModelConnectivityDiagnostics(
+                        endpoint_reachable=True,
+                        auth_valid=True,
+                        rate_limited=False,
+                    ),
+                    error_code="invalid_response",
+                    error_message="Provider returned invalid SSE payload.",
+                    retryable=False,
+                )
             error_message = self._extract_error_message(response_payload)
             if error_message is not None:
                 return ModelConnectivityProbeResult(
@@ -2015,14 +2046,17 @@ class ModelConnectivityProbeService:
     def _extract_error_message(self, payload: object) -> str | None:
         if not isinstance(payload, dict):
             return None
+        for key in ("message", "detail", "error_description"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
         error_payload = payload.get("error")
         if isinstance(error_payload, dict):
             message = error_payload.get("message")
             if isinstance(message, str) and message.strip():
                 return message.strip()
-        detail = payload.get("detail")
-        if isinstance(detail, str) and detail.strip():
-            return detail.strip()
+        if isinstance(error_payload, str) and error_payload.strip():
+            return error_payload.strip()
         return None
 
     def _extract_model_entries(
@@ -2308,6 +2342,8 @@ class ModelConnectivityProbeService:
             try:
                 return cast(object, json.loads(chunk))
             except ValueError:
+                if chunk.casefold() == "pong":
+                    return _EVENT_STREAM_PLAIN_TEXT_SUCCESS
                 continue
         return _INVALID_RESPONSE_PAYLOAD
 

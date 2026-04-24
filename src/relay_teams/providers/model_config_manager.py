@@ -11,6 +11,7 @@ from relay_teams.providers.codeagent_auth import (
     codeagent_access_token_secret_field_name,
     codeagent_refresh_token_secret_field_name,
     consume_codeagent_oauth_tokens,
+    get_codeagent_oauth_tokens,
 )
 from relay_teams.providers.maas_auth import maas_password_secret_field_name
 from relay_teams.providers.model_capabilities import resolve_model_capabilities
@@ -206,11 +207,16 @@ class ModelConfigManager:
                 preserve_secret=preserve_secret,
             )
         )
+        raw_header_secret_sync_profile = dict(cast(dict[str, JsonValue], config[name]))
         config[name] = self._prepare_profile_headers_for_storage(
             profile_name=name,
             existing_profile=existing_profile,
             next_profile=cast(dict[str, JsonValue], config[name]),
             source_name=source_name,
+        )
+        header_secret_sync_profile = _build_header_secret_sync_profile(
+            raw_profile=raw_header_secret_sync_profile,
+            sanitized_profile=cast(dict[str, JsonValue], config[name]),
         )
         (
             config[name],
@@ -228,6 +234,7 @@ class ModelConfigManager:
             next_codeagent_access_token,
             next_codeagent_refresh_token,
             preserve_codeagent_tokens,
+            _pending_oauth_session_id,
         ) = self._prepare_profile_codeagent_auth_for_storage(
             profile_name=name,
             existing_profile=existing_profile,
@@ -264,7 +271,7 @@ class ModelConfigManager:
         self._sync_profile_header_secrets(
             profile_name=name,
             existing_profile=existing_profile,
-            next_profile=normalized_next_profile,
+            next_profile=header_secret_sync_profile,
             source_name=source_name,
         )
 
@@ -294,6 +301,8 @@ class ModelConfigManager:
         secret_updates: dict[str, tuple[str | None, bool]] = {}
         maas_password_updates: dict[str, tuple[str | None, bool]] = {}
         codeagent_token_updates: dict[str, tuple[str | None, str | None, bool]] = {}
+        header_secret_sync_profiles: dict[str, dict[str, JsonValue]] = {}
+        pending_codeagent_oauth_sessions: dict[str, str] = {}
         for name, profile in config.items():
             if not isinstance(profile, dict):
                 next_config[name] = profile
@@ -326,11 +335,16 @@ class ModelConfigManager:
                     preserve_secret=preserve_secret,
                 )
             )
+            raw_header_secret_sync_profile = dict(next_profile)
             next_profile = self._prepare_profile_headers_for_storage(
                 profile_name=name,
                 existing_profile=existing_config.get(name),
                 next_profile=next_profile,
                 source_name=None,
+            )
+            header_secret_sync_profile = _build_header_secret_sync_profile(
+                raw_profile=raw_header_secret_sync_profile,
+                sanitized_profile=next_profile,
             )
             (
                 next_profile,
@@ -348,6 +362,7 @@ class ModelConfigManager:
                 next_codeagent_access_token,
                 next_codeagent_refresh_token,
                 preserve_codeagent_tokens,
+                pending_oauth_session_id,
             ) = self._prepare_profile_codeagent_auth_for_storage(
                 profile_name=name,
                 existing_profile=existing_config.get(name),
@@ -355,6 +370,7 @@ class ModelConfigManager:
                 source_name=None,
                 current_access_token=current_codeagent_access_token,
                 current_refresh_token=current_codeagent_refresh_token,
+                consume_oauth_session=False,
             )
             next_config[name] = next_profile
             secret_updates[name] = (next_secret, preserve_secret)
@@ -367,7 +383,16 @@ class ModelConfigManager:
                 next_codeagent_refresh_token,
                 preserve_codeagent_tokens,
             )
+            header_secret_sync_profiles[name] = header_secret_sync_profile
+            if pending_oauth_session_id is not None:
+                pending_codeagent_oauth_sessions[name] = pending_oauth_session_id
         _normalize_default_profile_flags(next_config)
+        for profile_name, oauth_session_id in pending_codeagent_oauth_sessions.items():
+            token_result = consume_codeagent_oauth_tokens(oauth_session_id)
+            if token_result is None:
+                raise ValueError(
+                    f"CodeAgent OAuth session became unavailable before saving profile '{profile_name}'."
+                )
         _ = model_file.write_text(dumps(next_config, indent=2), encoding="utf-8")
         existing_profile_names = {
             profile_name
@@ -410,12 +435,14 @@ class ModelConfigManager:
             if isinstance(next_profile, dict) and isinstance(
                 config.get(profile_name), dict
             ):
+                next_profile_for_header_secrets = header_secret_sync_profiles.get(
+                    profile_name,
+                    cast(dict[str, JsonValue], next_profile),
+                )
                 self._sync_profile_header_secrets(
                     profile_name=profile_name,
                     existing_profile=existing_config.get(profile_name),
-                    next_profile=_normalize_profile_context_window(
-                        cast(dict[str, JsonValue], config[profile_name])
-                    ),
+                    next_profile=next_profile_for_header_secrets,
                     source_name=None,
                 )
 
@@ -875,7 +902,8 @@ class ModelConfigManager:
         source_name: str | None,
         current_access_token: str | None,
         current_refresh_token: str | None,
-    ) -> tuple[dict[str, JsonValue], str | None, str | None, bool]:
+        consume_oauth_session: bool = True,
+    ) -> tuple[dict[str, JsonValue], str | None, str | None, bool, str | None]:
         merged_profile = dict(next_profile)
         provider_raw = merged_profile.get(
             "provider", ProviderType.OPENAI_COMPATIBLE.value
@@ -887,6 +915,7 @@ class ModelConfigManager:
                 None,
                 None,
                 False,
+                None,
             )
         if "codeagent_auth" not in merged_profile:
             if (
@@ -899,6 +928,7 @@ class ModelConfigManager:
                     None,
                     None,
                     current_refresh_token is not None,
+                    None,
                 )
             raise ValueError(
                 "CodeAgent model profile requires codeagent_auth configuration."
@@ -917,9 +947,15 @@ class ModelConfigManager:
             else None
         )
         token_result = None
+        pending_oauth_session_id = None
         oauth_session_id = raw_codeagent_auth.get("oauth_session_id")
         if isinstance(oauth_session_id, str) and oauth_session_id.strip():
-            token_result = consume_codeagent_oauth_tokens(oauth_session_id.strip())
+            pending_oauth_session_id = oauth_session_id.strip()
+            token_result = (
+                consume_codeagent_oauth_tokens(pending_oauth_session_id)
+                if consume_oauth_session
+                else get_codeagent_oauth_tokens(pending_oauth_session_id)
+            )
             if token_result is None:
                 raise ValueError(
                     "CodeAgent OAuth session is missing, expired, or already consumed."
@@ -993,6 +1029,7 @@ class ModelConfigManager:
             next_access_token,
             next_refresh_token,
             preserve_tokens,
+            pending_oauth_session_id if not consume_oauth_session else None,
         )
 
     def _migrate_legacy_profile_api_keys(
@@ -1474,3 +1511,24 @@ def _build_codeagent_auth_profile_payload(
         "has_refresh_token": codeagent_auth.refresh_token is not None
         or codeagent_auth.has_refresh_token,
     }
+
+
+def _build_header_secret_sync_profile(
+    *,
+    raw_profile: dict[str, JsonValue],
+    sanitized_profile: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    provider_raw = sanitized_profile.get(
+        "provider",
+        ProviderType.OPENAI_COMPATIBLE.value,
+    )
+    if provider_raw == ProviderType.CODEAGENT.value:
+        return {
+            "provider": cast(JsonValue, provider_raw),
+            "headers": cast(JsonValue, []),
+        }
+    if "headers" not in raw_profile:
+        return raw_profile
+    sync_profile = dict(raw_profile)
+    sync_profile["provider"] = cast(JsonValue, provider_raw)
+    return sync_profile
