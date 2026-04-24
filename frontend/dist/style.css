@@ -17,4 +17,10 @@
 @import url("./css/components/subagent.css");
 @import url("./css/components/observability.css");
 @import url("./css/components/interface.css");
+@import url("./css/components/new-session-draft.css");
+@import url("./css/components/new-session-draft-composer.css");
+@import url("./css/components/new-session-draft-workspace.css");
+@import url("./css/components/new-session-draft-mentions.css");
+@import url("./css/components/new-session-draft-cards.css");
+@import url("./css/components/new-session-draft-aside.css");
 @import url("./css/components/highlight.css");
