@@ -247,6 +247,37 @@ def test_service_preserves_completion_retry_limit_when_state_save_fails() -> Non
     assert len(sink.appended) == 1
 
 
+def test_service_preserves_completion_retry_limit_when_state_load_fails() -> None:
+    sink = _CapturingSink()
+    repository = _FailingStateRepository(fail_get=True)
+    service = SystemReminderService(
+        state_repository=repository,
+        injection_sink=cast(SystemInjectionSink, sink),
+        policy=SystemReminderPolicy(ReminderPolicyConfig(completion_max_retries=1)),
+    )
+    observation = CompletionAttemptObservation(
+        session_id="session-1",
+        run_id="run-1",
+        trace_id="run-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="role-1",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        incomplete_todos=(
+            IncompleteTodoItem(content="finish tests", status="pending"),
+        ),
+    )
+
+    first = service.evaluate_completion_attempt(observation)
+    second = service.evaluate_completion_attempt(observation)
+
+    assert first.retry_completion is True
+    assert second.fail_completion is True
+    assert len(sink.appended) == 1
+    assert [state.completion_retry_count for state in repository.saved_states] == [1, 2]
+
+
 def _service(
     tmp_path: Path,
     sink: _CapturingSink,

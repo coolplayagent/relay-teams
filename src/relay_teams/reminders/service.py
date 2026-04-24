@@ -33,6 +33,8 @@ class SystemReminderService:
         self._injection_sink = injection_sink
         self._policy = policy or SystemReminderPolicy()
         self._fallback_states: dict[tuple[str, str], ReminderRunState] = {}
+        self._read_degraded_keys: set[tuple[str, str]] = set()
+        self._write_degraded_keys: set[tuple[str, str]] = set()
 
     @property
     def policy(self) -> SystemReminderPolicy:
@@ -137,24 +139,33 @@ class SystemReminderService:
 
     def _load_state(self, *, session_id: str, run_id: str) -> ReminderRunState:
         key = _state_cache_key(session_id=session_id, run_id=run_id)
-        fallback_state = self._fallback_states.get(key)
-        if fallback_state is not None:
-            return fallback_state
+        if key in self._write_degraded_keys:
+            fallback_state = self._fallback_states.get(key)
+            if fallback_state is not None:
+                return fallback_state
         try:
-            return self._state_repository.get_run_state(
+            state = self._state_repository.get_run_state(
                 session_id=session_id,
                 run_id=run_id,
             )
+            self._read_degraded_keys.discard(key)
+            self._fallback_states.pop(key, None)
+            return state
         except Exception as exc:
+            fallback_state = self._fallback_states.get(key)
+            if fallback_state is None:
+                fallback_state = ReminderRunState()
+                self._fallback_states[key] = fallback_state
+            self._read_degraded_keys.add(key)
             log_event(
                 LOGGER,
                 logging.WARNING,
                 event="reminders.state.load_failed",
-                message="Falling back to empty reminder state",
+                message="Falling back to in-memory reminder state",
                 payload={"session_id": session_id, "run_id": run_id},
                 exc_info=exc,
             )
-            return ReminderRunState()
+            return fallback_state
 
     def _save_state(
         self,
@@ -170,9 +181,14 @@ class SystemReminderService:
                 run_id=run_id,
                 state=state,
             )
-            self._fallback_states.pop(key, None)
+            self._write_degraded_keys.discard(key)
+            if key in self._read_degraded_keys:
+                self._fallback_states[key] = state
+            else:
+                self._fallback_states.pop(key, None)
         except Exception as exc:
             self._fallback_states[key] = state
+            self._write_degraded_keys.add(key)
             log_event(
                 LOGGER,
                 logging.WARNING,
