@@ -6,7 +6,7 @@ import json
 import logging
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, Union, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai.messages import ModelRequest, UserContent, UserPromptPart
@@ -511,7 +511,7 @@ class TaskExecutionService(BaseModel):
         conversation_id: str,
         shared_state_snapshot: tuple[tuple[str, str], ...],
         system_prompt_override: str,
-    ) -> str | TaskExecutionResult:
+    ) -> Union[str, TaskExecutionResult]:
         result = await self._run_agent_once(
             runner=runner,
             task=task,

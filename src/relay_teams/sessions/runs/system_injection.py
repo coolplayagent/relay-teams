@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel, ConfigDict
 
 from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.media import UserPromptContent
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
@@ -23,7 +24,7 @@ class SystemInjectionSink:
         *,
         injection_manager: RunInjectionManager,
         run_event_hub: RunEventHub,
-        message_repo: MessageRepository | None = None,
+        message_repo: Optional[MessageRepository] = None,
     ) -> None:
         self._injection_manager = injection_manager
         self._run_event_hub = run_event_hub
@@ -35,10 +36,10 @@ class SystemInjectionSink:
         session_id: str,
         run_id: str,
         trace_id: str,
-        task_id: str | None,
+        task_id: Optional[str],
         instance_id: str,
         role_id: str,
-        content: UserPromptContent,
+        content: str,
         source: InjectionSource = InjectionSource.SYSTEM,
     ) -> SystemInjectionResult:
         record = self._enqueue(
@@ -64,7 +65,7 @@ class SystemInjectionSink:
         role_id: str,
         workspace_id: str,
         conversation_id: str,
-        content: UserPromptContent,
+        content: str,
         source: InjectionSource = InjectionSource.SYSTEM,
     ) -> SystemInjectionResult:
         appended = self._append(
@@ -99,7 +100,7 @@ class SystemInjectionSink:
         role_id: str,
         workspace_id: str,
         conversation_id: str,
-        content: UserPromptContent,
+        content: str,
     ) -> SystemInjectionResult:
         appended = self._append(
             session_id=session_id,
@@ -123,7 +124,7 @@ class SystemInjectionSink:
         role_id: str,
         workspace_id: str,
         conversation_id: str,
-        content: UserPromptContent,
+        content: str,
     ) -> bool:
         if self._message_repo is None:
             return False
@@ -144,12 +145,12 @@ class SystemInjectionSink:
         session_id: str,
         run_id: str,
         trace_id: str,
-        task_id: str | None,
+        task_id: Optional[str],
         instance_id: str,
         role_id: str,
-        content: UserPromptContent,
+        content: str,
         source: InjectionSource,
-    ) -> InjectionMessage | None:
+    ) -> Optional[InjectionMessage]:
         if not self._injection_manager.is_active(run_id):
             return None
         try:

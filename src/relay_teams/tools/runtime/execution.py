@@ -15,6 +15,7 @@ from enum import Enum
 from json import dumps
 from typing import (
     Literal,
+    Optional,
     Protocol,
     cast,
     get_args,
@@ -1283,6 +1284,7 @@ def _system_injection_sink(ctx: ToolContext) -> SystemInjectionSink:
     )
 
 
+# noinspection PyTypeHints
 def _observe_tool_result_reminders(
     *,
     ctx: ToolContext,
@@ -1341,7 +1343,7 @@ def _reported_failure_from_success_envelope(
     *,
     tool_name: str,
     envelope: dict[str, JsonValue],
-) -> tuple[str, str] | None:
+) -> Optional[tuple[str, str]]:
     if envelope.get("ok") is not True:
         return None
     if tool_name != "shell":
@@ -1357,7 +1359,7 @@ def _reported_failure_from_success_envelope(
         return None
 
     message = _reported_failure_message(data)
-    return ("reported_failed_status", message)
+    return "reported_failed_status", message
 
 
 def _reported_failure_message(data: dict[str, JsonValue]) -> str:
@@ -1877,11 +1879,12 @@ class _RequiresApprovalPolicy(Protocol):
     def requires_approval(self, tool_name: str) -> bool: ...
 
 
+# noinspection PyTypeHints
 def _internal_record(
     *,
     tool_name: str,
     visible_envelope: dict[str, JsonValue],
-    internal_data: JsonValue | None,
+    internal_data: Optional[JsonValue],
     runtime_meta: dict[str, JsonValue],
 ) -> dict[str, JsonValue]:
     record = ToolInternalRecord(
