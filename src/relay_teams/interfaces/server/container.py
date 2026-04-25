@@ -218,6 +218,7 @@ from relay_teams.gateway.xiaoluban import (
     XiaolubanAccountRepository,
     XiaolubanClient,
     XiaolubanGatewayService,
+    XiaolubanNotificationDispatcher,
     get_xiaoluban_secret_store,
 )
 from relay_teams.hooks import HookLoader, HookRuntimeState, HookService
@@ -817,6 +818,7 @@ class ServerContainer:
             repository=self.xiaoluban_account_repository,
             secret_store=get_xiaoluban_secret_store(),
             client=self.xiaoluban_client,
+            workspace_lookup=self.workspace_service,
         )
         self.automation_feishu_binding_service = AutomationFeishuBindingService(
             external_session_binding_repo=self.external_session_binding_repo,
@@ -835,6 +837,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             event_log=self.event_log,
             notification_service=self.notification_service,
+            session_lookup=self.session_repo,
         )
         self.automation_delivery_worker = AutomationDeliveryWorker(
             delivery_service=self.automation_delivery_service
@@ -852,10 +855,18 @@ class ServerContainer:
                         self.automation_delivery_service,
                     ),
                 ),
+                XiaolubanNotificationDispatcher(
+                    session_repo=self.session_repo,
+                    account_lookup=self.xiaoluban_gateway_service,
+                    terminal_notification_suppressor=self.automation_delivery_service,
+                ),
             ),
         )
         self.run_service._notification_service = self.notification_service
         self.monitor_service.bind_notification_service(self.notification_service)
+        self.automation_delivery_service.bind_notification_service(
+            self.notification_service
+        )
         self.automation_bound_session_queue_service = (
             AutomationBoundSessionQueueService(
                 repository=self.automation_bound_session_queue_repo,

@@ -77,6 +77,26 @@ def test_validate_binding_returns_canonical_binding() -> None:
     assert binding.source_label == "发送给自己（uid_1）"
 
 
+def test_list_candidates_labels_configured_receiver() -> None:
+    service = AutomationXiaolubanBindingService(
+        account_lookup=_FakeXiaolubanLookup(
+            accounts=(
+                _build_account(
+                    "xlb_1",
+                    "小鲁班主账号",
+                    "uid_1",
+                    notification_receiver="group-123",
+                ),
+            ),
+            usable_account_ids=("xlb_1",),
+        )
+    )
+
+    candidates = service.list_candidates()
+
+    assert candidates[0].source_label == "发送给 group-123"
+
+
 def test_validate_binding_rejects_account_without_usable_credentials() -> None:
     service = AutomationXiaolubanBindingService(
         account_lookup=_FakeXiaolubanLookup(
@@ -124,6 +144,7 @@ def _build_account(
     account_id: str,
     display_name: str,
     derived_uid: str,
+    notification_receiver: str | None = None,
 ) -> XiaolubanAccountRecord:
     now = datetime(2026, 4, 22, tzinfo=UTC)
     return XiaolubanAccountRecord(
@@ -131,6 +152,7 @@ def _build_account(
         display_name=display_name,
         status=XiaolubanAccountStatus.ENABLED,
         derived_uid=derived_uid,
+        notification_receiver=notification_receiver,
         secret_status=XiaolubanSecretStatus(token_configured=True),
         created_at=now,
         updated_at=now,

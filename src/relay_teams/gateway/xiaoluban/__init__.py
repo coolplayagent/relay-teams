@@ -17,6 +17,12 @@ from relay_teams.gateway.xiaoluban.models import (
     XiaolubanSendTextRequest,
     XiaolubanSendTextResponse,
 )
+from relay_teams.gateway.xiaoluban.notification_delivery import (
+    XiaolubanNotificationDispatcher,
+)
+from relay_teams.gateway.xiaoluban.notification_format import (
+    format_xiaoluban_notification_text,
+)
 from relay_teams.gateway.xiaoluban.secret_store import (
     XiaolubanSecretStore,
     get_xiaoluban_secret_store,
@@ -37,10 +43,12 @@ __all__ = [
     "XiaolubanAutomationBindingPreview",
     "XiaolubanClient",
     "XiaolubanGatewayService",
+    "XiaolubanNotificationDispatcher",
     "XiaolubanSecretStatus",
     "XiaolubanSecretStore",
     "XiaolubanSendTextRequest",
     "XiaolubanSendTextResponse",
     "derive_uid_from_token",
+    "format_xiaoluban_notification_text",
     "get_xiaoluban_secret_store",
 ]
