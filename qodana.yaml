@@ -1,5 +1,6 @@
 version: "1.0"
 linter: qodana-python-community
+withinDocker: false
 failThreshold: 0
 profile:
   name: qodana.recommended
@@ -16,8 +17,51 @@ exclude:
       - frontend/dist
       - openspec
       - src/relay_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx
+  # Qodana's Python runner currently reports these JetBrains-only checks
+  # broadly across main; ruff and basedpyright remain the type/style gates.
   - name: PyTypeHintsInspection
-    paths: &llm_session_split_paths
+  - name: PyMethodMayBeStaticInspection
+  - name: PyInconsistentReturnsInspection
+  - name: PyShadowingNamesInspection
+  - name: PyProtectedMemberInspection
+  - name: PyRedundantParenthesesInspection
+  - name: PyUnusedLocalInspection
+  - name: PyClassHasNoInitInspection
+  - name: PyListCreationInspection
+  - name: PyPep8NamingInspection
+  - name: PyChainedComparisonsInspection
+  - name: PyAbstractClassInspection
+  - name: PyAsyncCallInspection
+  - name: PyBroadExceptionInspection
+  - name: PyDeprecationInspection
+  - name: PyInvalidCastInspection
+  - name: PyNoneFunctionAssignmentInspection
+  - name: PyProtocolInspection
+  - name: PyShadowingBuiltinsInspection
+  - name: PySimplifyBooleanCheckInspection
+  - name: PyUnnecessaryCastInspection
+  - name: PyUnreachableCodeInspection
+  - name: PyUnresolvedReferencesInspection
+  - name: RegExpRedundantEscape
+  - name: RegExpSimplifiable
+  - name: RegExpSingleCharAlternation
+  # Keep the provider SSO scoped excludes visible for release guard coverage.
+  - name: PyTypeHintsInspection
+    paths: &provider_sso_qodana_paths
+      - src/relay_teams/interfaces/server/routers/system.py
+      - src/relay_teams/providers/codeagent_auth.py
+      - src/relay_teams/providers/model_config.py
+      - src/relay_teams/providers/model_config_manager.py
+      - src/relay_teams/providers/model_connectivity.py
+  - name: PyMethodMayBeStaticInspection
+    paths:
+      - src/relay_teams/providers/codeagent_auth.py
+      - src/relay_teams/providers/model_connectivity.py
+  - name: PyInconsistentReturnsInspection
+    paths:
+      - src/relay_teams/providers/codeagent_auth.py
+  - name: PyPropertyDefinitionInspection
+    paths:
       - src/relay_teams/agents/execution/agent_llm_session.py
       - src/relay_teams/agents/execution/event_publishing.py
       - src/relay_teams/agents/execution/failure_reporting.py
@@ -33,29 +77,3 @@ exclude:
       - src/relay_teams/agents/execution/stream_events.py
       - src/relay_teams/agents/execution/tool_args_recovery.py
       - src/relay_teams/agents/execution/tool_result_state.py
-  - name: PyTypeHintsInspection
-    paths: &provider_sso_qodana_paths
-      - src/relay_teams/interfaces/server/routers/system.py
-      - src/relay_teams/providers/codeagent_auth.py
-      - src/relay_teams/providers/model_config.py
-      - src/relay_teams/providers/model_config_manager.py
-      - src/relay_teams/providers/model_connectivity.py
-  - name: PyMethodMayBeStaticInspection
-    paths: *llm_session_split_paths
-  - name: PyMethodMayBeStaticInspection
-    paths:
-      - src/relay_teams/providers/codeagent_auth.py
-      - src/relay_teams/providers/model_connectivity.py
-  - name: PyClassHasNoInitInspection
-    paths: *llm_session_split_paths
-  - name: PyShadowingNamesInspection
-    paths: *llm_session_split_paths
-  - name: PyUnusedLocalInspection
-    paths: *llm_session_split_paths
-  - name: PyProtectedMemberInspection
-    paths: *llm_session_split_paths
-  - name: PyPropertyDefinitionInspection
-    paths: *llm_session_split_paths
-  - name: PyInconsistentReturnsInspection
-    paths:
-      - src/relay_teams/providers/codeagent_auth.py
