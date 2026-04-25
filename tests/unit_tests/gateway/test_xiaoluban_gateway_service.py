@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sqlite3
 from types import TracebackType
 
 import httpx
@@ -67,6 +68,16 @@ class _FakeXiaolubanClient(XiaolubanClient):
             }
         )
         return XiaolubanSendTextResponse(message_id="xlbmsg_1")
+
+
+class _FakeWorkspaceLookup:
+    def __init__(self, workspace_ids: set[str]) -> None:
+        self.workspace_ids = workspace_ids
+
+    def get_workspace(self, workspace_id: str) -> object:
+        if workspace_id not in self.workspace_ids:
+            raise KeyError(workspace_id)
+        return object()
 
 
 class _FakeHttpClient:
@@ -187,6 +198,8 @@ def test_create_account_persists_token_and_derived_uid(tmp_path: Path) -> None:
     assert record.account_id.startswith("xlb_")
     assert record.status == XiaolubanAccountStatus.ENABLED
     assert record.derived_uid == "uid"
+    assert record.notification_workspace_ids == ()
+    assert record.notification_receiver is None
     assert record.secret_status.token_configured is True
     assert (
         secret_store.tokens[record.account_id] == "uid_1234567890abcdef1234567890abcdef"
@@ -208,16 +221,69 @@ def test_update_account_replaces_token_and_derived_uid(tmp_path: Path) -> None:
             display_name="小鲁班新账号",
             token="user2_abcdef1234567890abcdef1234567890",
             enabled=False,
+            notification_workspace_ids=("workspace-1", "workspace-2"),
+            notification_receiver="group-123",
         ),
     )
 
     assert updated.display_name == "小鲁班新账号"
     assert updated.status == XiaolubanAccountStatus.DISABLED
     assert updated.derived_uid == "user2"
+    assert updated.notification_workspace_ids == ("workspace-1", "workspace-2")
+    assert updated.notification_receiver == "group-123"
     assert (
         secret_store.tokens[created.account_id]
         == "user2_abcdef1234567890abcdef1234567890"
     )
+
+
+def test_update_account_skips_stale_workspace_validation_for_unrelated_patch(
+    tmp_path: Path,
+) -> None:
+    workspace_lookup = _FakeWorkspaceLookup({"workspace-1"})
+    service, _secret_store, _client = _build_service(
+        tmp_path,
+        workspace_lookup=workspace_lookup,
+    )
+    created = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="小鲁班主账号",
+            token="uid_1234567890abcdef1234567890abcdef",
+            notification_workspace_ids=("workspace-1",),
+        )
+    )
+    workspace_lookup.workspace_ids.clear()
+
+    updated = service.update_account(
+        created.account_id,
+        XiaolubanAccountUpdateInput(display_name="小鲁班新账号"),
+    )
+
+    assert updated.display_name == "小鲁班新账号"
+    assert updated.notification_workspace_ids == ("workspace-1",)
+
+
+def test_update_account_rejects_unknown_workspace_on_explicit_patch(
+    tmp_path: Path,
+) -> None:
+    service, _secret_store, _client = _build_service(
+        tmp_path,
+        workspace_lookup=_FakeWorkspaceLookup(set()),
+    )
+    created = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="小鲁班主账号",
+            token="uid_1234567890abcdef1234567890abcdef",
+        )
+    )
+
+    with pytest.raises(ValueError, match="Unknown notification workspace"):
+        _ = service.update_account(
+            created.account_id,
+            XiaolubanAccountUpdateInput(
+                notification_workspace_ids=("missing-workspace",)
+            ),
+        )
 
 
 def test_list_and_get_accounts_include_secret_status(tmp_path: Path) -> None:
@@ -279,6 +345,26 @@ def test_send_text_message_uses_explicit_receiver_uid(tmp_path: Path) -> None:
     )
 
     assert client.calls[0]["receiver_uid"] == "override_uid"
+
+
+def test_send_text_message_uses_configured_notification_receiver(
+    tmp_path: Path,
+) -> None:
+    service, _secret_store, client = _build_service(tmp_path)
+    created = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="小鲁班主账号",
+            token="uid_1234567890abcdef1234567890abcdef",
+            notification_receiver="group-123",
+        )
+    )
+
+    _ = service.send_text_message(
+        account_id=created.account_id,
+        text="started",
+    )
+
+    assert client.calls[0]["receiver_uid"] == "group-123"
 
 
 def test_send_text_message_rejects_disabled_or_missing_token(
@@ -428,6 +514,37 @@ def test_account_repository_skips_invalid_rows_and_raises_for_invalid_get(
         _ = repository.get_account("missing")
 
 
+def test_account_repository_adds_missing_notification_columns(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "xiaoluban_legacy.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE xiaoluban_accounts (
+                account_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                status TEXT NOT NULL,
+                derived_uid TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    repository = XiaolubanAccountRepository(db_path)
+
+    columns = {
+        str(row["name"])
+        for row in repository._conn.execute(
+            "PRAGMA table_info(xiaoluban_accounts)"
+        ).fetchall()
+    }
+    assert "notification_workspace_ids_json" in columns
+    assert "notification_receiver" in columns
+
+
 def test_secret_store_normalizes_tokens_and_deletes_values(tmp_path: Path) -> None:
     app_secret_store = _FakeAppSecretStore()
     secret_store = XiaolubanSecretStore(secret_store=app_secret_store)
@@ -523,6 +640,7 @@ def test_client_response_parsing_handles_fallback_shapes() -> None:
 
 def _build_service(
     tmp_path: Path,
+    workspace_lookup: _FakeWorkspaceLookup | None = None,
 ) -> tuple[XiaolubanGatewayService, _FakeXiaolubanSecretStore, _FakeXiaolubanClient]:
     secret_store = _FakeXiaolubanSecretStore()
     client = _FakeXiaolubanClient()
@@ -531,5 +649,6 @@ def _build_service(
         repository=XiaolubanAccountRepository(tmp_path / "xiaoluban.db"),
         secret_store=secret_store,
         client=client,
+        workspace_lookup=workspace_lookup,
     )
     return service, secret_store, client

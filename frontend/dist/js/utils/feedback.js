@@ -2,7 +2,7 @@
  * utils/feedback.js
  * Unified in-app toast and dialog feedback helpers.
  */
-import { t } from './i18n.js';
+import { formatMessage, t } from './i18n.js';
 
 let toastStack = null;
 let dialogRoot = null;
@@ -188,12 +188,25 @@ function renderNextDialog() {
                                     const selectedValues = Array.isArray(fieldValue)
                                         ? fieldValue.map(value => String(value ?? ''))
                                         : [String(fieldValue ?? '')];
+                                    const summaryMode = String(field.summaryMode || '').trim();
+                                    const summaryKey = String(field.summaryKey || '').trim();
+                                    const summaryAllValue = String(field.summaryAllValue || '').trim();
+                                    const summaryNoneValue = String(field.summaryNoneValue || '').trim();
+                                    const summaryNoneLabel = summaryNoneValue
+                                        ? String(options.find(option => String(option?.value ?? '') === summaryNoneValue)?.label || '')
+                                        : '';
+                                    const summaryOptionCount = summaryAllValue
+                                        ? options.filter(option => {
+                                            const optionValue = String(option?.value ?? '');
+                                            return optionValue !== summaryAllValue && optionValue !== summaryNoneValue;
+                                        }).length
+                                        : options.length;
                                     return `
                                         <div class="feedback-dialog-input-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             ${fieldCopy}
-                                            <details class="feedback-dialog-multiselect" data-feedback-form-input="${escapeHtml(fieldId)}" data-feedback-form-type="multiselect" data-feedback-multiselect-placeholder="${placeholder}">
-                                                <summary class="feedback-dialog-multiselect-trigger" data-feedback-multiselect-summary>${escapeHtml(formatMultiselectSummary(selectedValues, options, placeholder))}</summary>
+                                            <details class="feedback-dialog-multiselect" data-feedback-form-input="${escapeHtml(fieldId)}" data-feedback-form-type="multiselect" data-feedback-multiselect-placeholder="${placeholder}" data-feedback-multiselect-summary-mode="${escapeHtml(summaryMode)}" data-feedback-multiselect-summary-key="${escapeHtml(summaryKey)}" data-feedback-multiselect-summary-all-value="${escapeHtml(summaryAllValue)}" data-feedback-multiselect-summary-none-value="${escapeHtml(summaryNoneValue)}" data-feedback-multiselect-summary-none-label="${escapeHtml(summaryNoneLabel)}" data-feedback-multiselect-summary-option-count="${escapeHtml(summaryOptionCount)}">
+                                                <summary class="feedback-dialog-multiselect-trigger" data-feedback-multiselect-summary>${escapeHtml(formatMultiselectSummary(selectedValues, options, placeholder, { summaryMode, summaryKey, summaryAllValue, summaryNoneValue, summaryNoneLabel, summaryOptionCount }))}</summary>
                                                 <div class="feedback-dialog-multiselect-menu">
                                                     ${options.map(option => {
                                                         const optionValue = String(option?.value ?? '');
@@ -619,12 +632,28 @@ function isDialogFormInputHidden(node) {
     return wrapper.hidden === true || wrapper.getAttribute('aria-hidden') === 'true';
 }
 
-function formatMultiselectSummary(selectedValues, options, placeholder = '') {
+function formatMultiselectSummary(selectedValues, options, placeholder = '', config = {}) {
     const normalizedSelectedValues = Array.isArray(selectedValues)
         ? selectedValues.map(value => String(value ?? '')).filter(Boolean)
         : [];
     if (normalizedSelectedValues.length === 0) {
         return placeholder || t('feedback.confirm');
+    }
+    if (String(config?.summaryMode || '').trim() === 'count') {
+        const summaryKey = String(config?.summaryKey || '').trim();
+        const summaryAllValue = String(config?.summaryAllValue || '').trim();
+        const summaryNoneValue = String(config?.summaryNoneValue || '').trim();
+        const summaryNoneLabel = String(config?.summaryNoneLabel || '').trim();
+        if (summaryNoneValue && normalizedSelectedValues.includes(summaryNoneValue)) {
+            return summaryNoneLabel || placeholder || t('feedback.confirm');
+        }
+        const summaryOptionCount = Number(config?.summaryOptionCount || 0);
+        const count = summaryAllValue && normalizedSelectedValues.includes(summaryAllValue) && summaryOptionCount > 0
+            ? summaryOptionCount
+            : normalizedSelectedValues.length;
+        return summaryKey
+            ? formatMessage(summaryKey, { count })
+            : String(count);
     }
     const labels = normalizedSelectedValues.map(value => {
         const matchedOption = (Array.isArray(options) ? options : []).find(option => String(option?.value ?? '') === value);
@@ -640,22 +669,120 @@ function bindMultiselectControls(dialogNode) {
         }
         const checkboxes = Array.from(node.querySelectorAll('[data-feedback-multiselect-option]'));
         const summary = node.querySelector('[data-feedback-multiselect-summary]');
+        const summaryAllValue = String(node.getAttribute('data-feedback-multiselect-summary-all-value') || '').trim();
+        const summaryNoneValue = String(node.getAttribute('data-feedback-multiselect-summary-none-value') || '').trim();
+        const concreteCheckboxes = () => checkboxes.filter(option => {
+            if (!(option instanceof HTMLInputElement)) {
+                return false;
+            }
+            const optionValue = String(option.value || '').trim();
+            return optionValue && optionValue !== summaryAllValue && optionValue !== summaryNoneValue;
+        });
+        const findCheckboxByValue = value => checkboxes.find(option => (
+            option instanceof HTMLInputElement
+            && String(option.value || '').trim() === value
+        ));
+        const syncSelection = changedOption => {
+            const allOption = summaryAllValue ? findCheckboxByValue(summaryAllValue) : null;
+            const noneOption = summaryNoneValue ? findCheckboxByValue(summaryNoneValue) : null;
+            const changedValue = changedOption instanceof HTMLInputElement
+                ? String(changedOption.value || '').trim()
+                : '';
+            const concreteOptions = concreteCheckboxes();
+            if (noneOption instanceof HTMLInputElement && changedValue === summaryNoneValue && noneOption.checked) {
+                checkboxes.forEach(option => {
+                    if (option instanceof HTMLInputElement && option !== noneOption) {
+                        option.checked = false;
+                    }
+                });
+                return;
+            }
+            if (
+                allOption instanceof HTMLInputElement
+                && (changedValue === summaryAllValue || (!changedValue && allOption.checked))
+            ) {
+                if (allOption.checked) {
+                    if (noneOption instanceof HTMLInputElement) {
+                        noneOption.checked = false;
+                    }
+                    concreteOptions.forEach(option => {
+                        option.checked = true;
+                    });
+                    return;
+                }
+                concreteOptions.forEach(option => {
+                    option.checked = false;
+                });
+            }
+            if (
+                changedOption instanceof HTMLInputElement
+                && changedOption.checked
+                && changedValue !== summaryAllValue
+                && changedValue !== summaryNoneValue
+                && noneOption instanceof HTMLInputElement
+            ) {
+                noneOption.checked = false;
+            }
+            const selectedConcreteCount = concreteOptions.filter(option => option.checked).length;
+            if (allOption instanceof HTMLInputElement) {
+                allOption.checked = concreteOptions.length > 0 && selectedConcreteCount === concreteOptions.length;
+            }
+            if (noneOption instanceof HTMLInputElement) {
+                noneOption.checked = selectedConcreteCount === 0 && !(allOption instanceof HTMLInputElement && allOption.checked);
+                if (noneOption.checked) {
+                    checkboxes.forEach(option => {
+                        if (option instanceof HTMLInputElement && option !== noneOption) {
+                            option.checked = false;
+                        }
+                    });
+                }
+            }
+        };
         const updateSummary = () => {
             if (!(summary instanceof HTMLElement)) {
                 return;
             }
-            const selectedLabels = checkboxes
-                .filter(option => option instanceof HTMLInputElement && option.checked)
+            const checkedOptions = checkboxes.filter(option => option instanceof HTMLInputElement && option.checked);
+            const selectedValues = checkedOptions
+                .map(option => String(option.value || '').trim())
+                .filter(Boolean);
+            const selectedLabels = checkedOptions
                 .map(option => String(option.getAttribute('data-feedback-multiselect-label') || option.value || '').trim())
                 .filter(Boolean);
             const placeholder = String(node.getAttribute('data-feedback-multiselect-placeholder') || '').trim();
+            const summaryMode = String(node.getAttribute('data-feedback-multiselect-summary-mode') || '').trim();
+            const summaryKey = String(node.getAttribute('data-feedback-multiselect-summary-key') || '').trim();
+            const currentSummaryAllValue = String(node.getAttribute('data-feedback-multiselect-summary-all-value') || '').trim();
+            const currentSummaryNoneValue = String(node.getAttribute('data-feedback-multiselect-summary-none-value') || '').trim();
+            const summaryNoneLabel = String(node.getAttribute('data-feedback-multiselect-summary-none-label') || '').trim();
+            const summaryOptionCount = Number(node.getAttribute('data-feedback-multiselect-summary-option-count') || 0);
+            if (summaryMode === 'count') {
+                summary.textContent = formatMultiselectSummary(
+                    selectedValues,
+                    [],
+                    placeholder,
+                    {
+                        summaryMode,
+                        summaryKey,
+                        summaryAllValue: currentSummaryAllValue,
+                        summaryNoneValue: currentSummaryNoneValue,
+                        summaryNoneLabel,
+                        summaryOptionCount,
+                    },
+                );
+                return;
+            }
             summary.textContent = selectedLabels.length > 0 ? selectedLabels.join(', ') : (placeholder || t('feedback.confirm'));
         };
         checkboxes.forEach(option => {
             if (option instanceof HTMLInputElement) {
-                option.onchange = updateSummary;
+                option.onchange = () => {
+                    syncSelection(option);
+                    updateSummary();
+                };
             }
         });
+        syncSelection(null);
         updateSummary();
     });
 }

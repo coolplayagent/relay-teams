@@ -18,11 +18,14 @@ from relay_teams.automation.automation_models import (
     AutomationFeishuBinding,
     AutomationProjectRecord,
     AutomationRunDeliveryRecord,
+    AutomationXiaolubanBinding,
 )
 from relay_teams.gateway.feishu import FEISHU_PLATFORM
 from relay_teams.gateway.feishu.models import FeishuEnvironment
+from relay_teams.gateway.xiaoluban import format_xiaoluban_notification_text
 from relay_teams.logger import get_logger, log_event
 from relay_teams.notifications import NotificationContext, NotificationType
+from relay_teams.sessions.session_models import SessionRecord
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
@@ -94,6 +97,10 @@ class XiaolubanGatewayServiceLike(Protocol):
     ) -> str: ...
 
 
+class SessionLookup(Protocol):
+    def get(self, session_id: str) -> SessionRecord: ...
+
+
 class AutomationDeliveryService:
     def __init__(
         self,
@@ -105,6 +112,7 @@ class AutomationDeliveryService:
         run_runtime_repo: RunRuntimeRepository,
         event_log: EventLog,
         notification_service: Optional[NotificationServiceLike] = None,
+        session_lookup: Optional[SessionLookup] = None,
     ) -> None:
         self._repository = repository
         self._runtime_config_lookup = runtime_config_lookup
@@ -113,6 +121,7 @@ class AutomationDeliveryService:
         self._run_runtime_repo = run_runtime_repo
         self._event_log = event_log
         self._notification_service = notification_service
+        self._session_lookup = session_lookup
 
     def register_run(
         self,
@@ -210,6 +219,11 @@ class AutomationDeliveryService:
     def delete_project_deliveries(self, automation_project_id: str) -> None:
         self._repository.delete_by_project(automation_project_id)
 
+    def bind_notification_service(
+        self, notification_service: Optional[NotificationServiceLike]
+    ) -> None:
+        self._notification_service = notification_service
+
     def should_suppress_terminal_notification(self, run_id: Optional[str]) -> bool:
         normalized_run_id = str(run_id or "").strip()
         if not normalized_run_id:
@@ -227,6 +241,20 @@ class AutomationDeliveryService:
         if record.terminal_status == AutomationDeliveryStatus.FAILED:
             return False
         return bool(str(record.terminal_message or "").strip())
+
+    def should_suppress_xiaoluban_terminal_notification(
+        self, run_id: Optional[str]
+    ) -> bool:
+        normalized_run_id = str(run_id or "").strip()
+        if not normalized_run_id:
+            return False
+        try:
+            record = self._repository.get_by_run_id(normalized_run_id)
+        except KeyError:
+            return False
+        if not isinstance(record.binding, AutomationXiaolubanBinding):
+            return False
+        return self.should_suppress_terminal_notification(normalized_run_id)
 
     def mark_terminal_delivery_skipped(
         self,
@@ -274,6 +302,8 @@ class AutomationDeliveryService:
             message_id = self._send_text(
                 binding=claimed.binding,
                 text=str(claimed.started_message or "").strip(),
+                session_id=claimed.session_id,
+                status="started",
             )
         except RuntimeError as exc:
             now = _utc_now()
@@ -368,6 +398,8 @@ class AutomationDeliveryService:
                 binding=claimed.binding,
                 text=terminal_message,
                 reply_to_message_id=reply_to_message_id or None,
+                session_id=claimed.session_id,
+                status=terminal_event.value,
             )
         except RuntimeError as exc:
             now = _utc_now()
@@ -435,6 +467,8 @@ class AutomationDeliveryService:
         binding: AutomationDeliveryBinding,
         text: str,
         reply_to_message_id: Optional[str] = None,
+        session_id: str = "",
+        status: str = "",
     ) -> str:
         if isinstance(binding, AutomationFeishuBinding):
             runtime_config = (
@@ -458,13 +492,29 @@ class AutomationDeliveryService:
             )
         if self._xiaoluban_gateway_service is None:
             raise RuntimeError("xiaoluban_delivery_service_unavailable")
+        xiaoluban_text = format_xiaoluban_notification_text(
+            workspace_id=self._resolve_workspace_id(session_id),
+            session_id=session_id,
+            status=status,
+            body=text,
+        )
         try:
             return self._xiaoluban_gateway_service.send_text_message(
                 account_id=binding.account_id,
-                text=text,
+                text=xiaoluban_text,
             )
         except KeyError as exc:
             raise RuntimeError("missing_xiaoluban_account") from exc
+
+    def _resolve_workspace_id(self, session_id: str) -> str:
+        normalized_session_id = str(session_id or "").strip()
+        if not normalized_session_id or self._session_lookup is None:
+            return ""
+        try:
+            session = self._session_lookup.get(normalized_session_id)
+        except KeyError:
+            return ""
+        return str(session.workspace_id or "").strip()
 
     def _emit_fallback_terminal_notification(
         self,

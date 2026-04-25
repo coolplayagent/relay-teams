@@ -32,7 +32,7 @@ class AutomationXiaolubanBindingService:
                     account_id=account.account_id,
                     display_name=account.display_name,
                     derived_uid=account.derived_uid,
-                    source_label=_build_source_label(account.derived_uid),
+                    source_label=_build_source_label(account),
                     updated_at=account.updated_at,
                 )
             )
@@ -69,8 +69,11 @@ class AutomationXiaolubanBindingService:
         )
 
 
-def _build_source_label(derived_uid: str) -> str:
-    return f"发送给自己（{derived_uid}）"
+def _build_source_label(account: XiaolubanAccountRecord) -> str:
+    receiver = str(account.notification_receiver or "").strip()
+    if receiver:
+        return f"发送给 {receiver}"
+    return f"发送给自己（{account.derived_uid}）"
 
 
 __all__ = ["AutomationXiaolubanBindingService"]

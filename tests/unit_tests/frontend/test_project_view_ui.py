@@ -3160,6 +3160,15 @@ def test_feedback_form_dialog_supports_multiselect_fields() -> None:
     assert 'data-feedback-form-type="multiselect"' in source
     assert "data-feedback-multiselect-option" in source
     assert "bindMultiselectControls(hosts.dialogRoot);" in source
+    assert "summaryMode" in source
+    assert "data-feedback-multiselect-summary-key" in source
+    assert "data-feedback-multiselect-summary-all-value" in source
+    assert "data-feedback-multiselect-summary-none-value" in source
+    assert "formatMessage(summaryKey, { count })" in source
+    assert "function bindMultiselectControls(dialogNode)" in source
+    assert "const syncSelection = changedOption =>" in source
+    assert "changedValue === summaryNoneValue" in source
+    assert "changedValue === summaryAllValue" in source
 
 
 def test_feedback_form_dialog_supports_inline_submit_errors() -> None:
@@ -4929,6 +4938,7 @@ console.log(JSON.stringify({
     showFormDialogCalls: globalThis.__showFormDialogCalls || [],
     fieldIds: fields.map(field => field.id),
     displayNameValue: String((fields.find(field => field.id === "display_name") || {}).value || ""),
+    workspaceField: fields.find(field => field.id === "notification_workspace_ids") || null,
 }));
 """.strip(),
         mock_api_source="""
@@ -4944,6 +4954,8 @@ export async function fetchXiaolubanGatewayAccounts() {
             base_url: "http://127.0.0.1:18080/send",
             status: "enabled",
             derived_uid: "uid_self",
+            notification_workspace_ids: Array.from({ length: 30 }, (_, index) => `workspace-long-id-${String(index + 1).padStart(3, "0")}`),
+            notification_receiver: "group-123",
             secret_status: { token_configured: true },
         },
     ];
@@ -4971,6 +4983,10 @@ export async function createXiaolubanGatewayAccount(payload) {
     assert "Xiaoluban" in str(payload["contentHtml"])
     assert "Self Notify" in str(payload["contentHtml"])
     assert "Internal ID: xlb_1" in str(payload["contentHtml"])
+    assert "Notify: group-123" in str(payload["contentHtml"])
+    assert "30 workspaces" in str(payload["contentHtml"])
+    assert "workspace-long-id-001" not in str(payload["contentHtml"])
+    assert "workspace-long-id-030" not in str(payload["contentHtml"])
     assert "data-feature-gateway-add-xiaoluban" in str(payload["contentHtml"])
     assert "http://127.0.0.1:18080/send" not in str(payload["contentHtml"])
     assert str(payload["contentHtml"]).find("WeChat") < str(
@@ -4978,11 +4994,35 @@ export async function createXiaolubanGatewayAccount(payload) {
     ).find("Xiaoluban")
     assert payload["createdPayload"] == {
         "display_name": "Xiaoluban",
+        "notification_workspace_ids": [],
+        "notification_receiver": None,
         "token": "uid_self_1234567890abcdef1234567890ab",
     }
     assert payload["showFormDialogCalls"] != []
-    assert payload["fieldIds"] == ["display_name", "token"]
+    assert payload["fieldIds"] == [
+        "display_name",
+        "token",
+        "notification_workspace_ids",
+        "notification_receiver",
+    ]
     assert payload["displayNameValue"] == "Xiaoluban"
+    workspace_field = cast(dict[str, object], payload["workspaceField"])
+    workspace_options = cast(list[dict[str, object]], workspace_field["options"])
+    assert workspace_options[0]["value"] == "__no_xiaoluban_notification_workspaces__"
+    assert workspace_field["value"] == ["__no_xiaoluban_notification_workspaces__"]
+    assert workspace_field["summaryMode"] == "count"
+    assert (
+        workspace_field["summaryKey"]
+        == "settings.gateway.xiaoluban_notification_workspace_count"
+    )
+    assert (
+        workspace_field["summaryAllValue"]
+        == "__all_xiaoluban_notification_workspaces__"
+    )
+    assert (
+        workspace_field["summaryNoneValue"]
+        == "__no_xiaoluban_notification_workspaces__"
+    )
     toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
     assert toast_calls[-1]["message"] == "Xiaoluban account saved."
 
@@ -5030,6 +5070,8 @@ console.log(JSON.stringify({
     editDialogMessage: dialogCall.message || "",
     tokenFieldPlaceholder: (dialogCall.fields || []).find(field => field.id === "token")?.placeholder || "",
     tokenFieldDescription: (dialogCall.fields || []).find(field => field.id === "token")?.description || "",
+    receiverFieldPlaceholder: (dialogCall.fields || []).find(field => field.id === "notification_receiver")?.placeholder || "",
+    receiverFieldDescription: (dialogCall.fields || []).find(field => field.id === "notification_receiver")?.description || "",
     toastCalls: globalThis.__toastCalls || [],
 }));
 """.strip(),
@@ -5083,15 +5125,24 @@ export async function deleteXiaolubanGatewayAccount(accountId) {
         "accountId": "xlb_1",
         "payload": {
             "display_name": "Self Notify Updated",
+            "notification_workspace_ids": [],
+            "notification_receiver": None,
         },
     }
     assert payload["disabledAccountId"] == "xlb_1"
     assert payload["deletedAccountId"] == "xlb_1"
     assert payload["editDialogMessage"] == "Internal ID: xlb_1"
-    assert payload["tokenFieldPlaceholder"] == ""
+    assert (
+        payload["tokenFieldPlaceholder"] == "Personal token saved, re-enter to update"
+    )
     assert (
         payload["tokenFieldDescription"]
         == "A personal token is already configured. Leave this blank to keep it, and enter a new personal token only if you want to update it."
+    )
+    assert payload["receiverFieldPlaceholder"] == "Defaults to self; optional group ID"
+    assert (
+        payload["receiverFieldDescription"]
+        == "Leave empty to notify yourself. Enter a group ID to notify a group after a selected workspace run completes."
     )
     toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
     assert toast_calls[0]["message"] == "Xiaoluban account saved."
@@ -6150,6 +6201,7 @@ export const state = {
         "settings.gateway.xiaoluban_none_copy": "Create an account to send automation updates to yourself.",
         "settings.gateway.xiaoluban_token": "Personal Token",
         "settings.gateway.xiaoluban_token_copy": "Paste the personal token used for outbound notifications.",
+        "settings.gateway.xiaoluban_token_edit_placeholder": "Personal token saved, re-enter to update",
         "settings.gateway.xiaoluban_token_edit_copy": "A personal token is already configured. Leave this blank to keep it, and enter a new personal token only if you want to update it.",
         "settings.gateway.xiaoluban_token_keep": "Keep existing token",
         "settings.gateway.xiaoluban_missing_token": "Personal token is required.",
@@ -6157,6 +6209,17 @@ export const state = {
         "settings.gateway.xiaoluban_personal_token_only": "Enter a personal token. Plugin tokens are not supported.",
         "settings.gateway.xiaoluban_uid": "Derived UID",
         "settings.gateway.xiaoluban_internal_id_copy": "Internal ID: {account_id}",
+        "settings.gateway.xiaoluban_notification_workspaces": "Notification Workspaces",
+        "settings.gateway.xiaoluban_notification_workspaces_none": "Do not notify",
+        "settings.gateway.xiaoluban_notification_workspaces_all": "All workspaces",
+        "settings.gateway.xiaoluban_notification_workspaces_placeholder": "No workspaces selected",
+        "settings.gateway.xiaoluban_notification_workspaces_copy": "Run completion notifications are sent only for selected workspaces.",
+        "settings.gateway.xiaoluban_notification_workspace_count": "{count} workspaces",
+        "settings.gateway.xiaoluban_notification_receiver": "Notification Recipient",
+        "settings.gateway.xiaoluban_notification_receiver_placeholder": "Defaults to self; optional group ID",
+        "settings.gateway.xiaoluban_notification_receiver_copy": "Leave empty to notify yourself. Enter a group ID to notify a group after a selected workspace run completes.",
+        "settings.gateway.xiaoluban_notification_receiver_self": "self",
+        "settings.gateway.xiaoluban_notification_receiver_summary": "Notify: {receiver}",
         "settings.gateway.qr_title": "Scan To Connect",
         "settings.gateway.qr_copy": "Scan this QR code in WeChat.",
         "settings.gateway.login_waiting": "Waiting for QR scan confirmation...",
