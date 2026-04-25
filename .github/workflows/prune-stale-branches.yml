@@ -1,0 +1,96 @@
+name: Prune stale branches
+
+on:
+  schedule:
+    - cron: "21 3 * * *"
+  workflow_dispatch:
+    inputs:
+      stale_days:
+        description: "Delete branches whose head commit is older than this many days."
+        required: false
+        default: "14"
+      dry_run:
+        description: "Report branches that would be deleted without deleting them."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete stale unprotected branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          STALE_DAYS: ${{ github.event.inputs.stale_days || '14' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$STALE_DAYS" =~ ^[0-9]+$ ]] || [[ "$STALE_DAYS" -lt 1 ]]; then
+            echo "stale_days must be a positive integer."
+            exit 1
+          fi
+
+          owner="${REPO%%/*}"
+          cutoff_epoch="$(date -u -d "${STALE_DAYS} days ago" +%s)"
+          declare -A open_pr_heads=()
+
+          mapfile -t pr_heads < <(
+            gh pr list \
+              --repo "$REPO" \
+              --state open \
+              --limit 1000 \
+              --json headRefName,headRepositoryOwner \
+            | jq -r --arg owner "$owner" '.[] | select(.headRepositoryOwner.login? == $owner) | .headRefName'
+          )
+
+          for pr_head in "${pr_heads[@]}"; do
+            open_pr_heads["$pr_head"]=1
+          done
+
+          mapfile -t branches < <(gh api --paginate "repos/$REPO/branches?per_page=100" --jq '.[] | @base64')
+
+          for branch_row in "${branches[@]}"; do
+            branch_json="$(printf '%s' "$branch_row" | base64 --decode)"
+            branch_name="$(jq -r '.name' <<<"$branch_json")"
+            protected="$(jq -r '.protected' <<<"$branch_json")"
+            sha="$(jq -r '.commit.sha' <<<"$branch_json")"
+
+            if [[ "$branch_name" == "main" || "$branch_name" == "release" || "$branch_name" == release/* || "$branch_name" == release-* ]]; then
+              echo "Keeping excluded branch: $branch_name"
+              continue
+            fi
+
+            if [[ "$protected" == "true" ]]; then
+              echo "Keeping protected branch: $branch_name"
+              continue
+            fi
+
+            if [[ -n "${open_pr_heads[$branch_name]+x}" ]]; then
+              echo "Keeping branch with an open PR: $branch_name"
+              continue
+            fi
+
+            commit_date="$(gh api "repos/$REPO/commits/$sha" --jq '.commit.committer.date')"
+            commit_epoch="$(date -u -d "$commit_date" +%s)"
+
+            if [[ "$commit_epoch" -ge "$cutoff_epoch" ]]; then
+              echo "Keeping recent branch: $branch_name ($commit_date)"
+              continue
+            fi
+
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "Would delete stale branch: $branch_name ($commit_date)"
+              continue
+            fi
+
+            echo "Deleting stale branch: $branch_name ($commit_date)"
+            gh api --method DELETE "repos/$REPO/git/refs/heads/$branch_name"
+          done
