@@ -13,6 +13,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from relay_teams.logger import get_logger
 from relay_teams.media import MediaModality
 from relay_teams.net.clients import create_sync_http_client
+from relay_teams.providers.codeagent_auth import (
+    CodeAgentOAuthError,
+    build_codeagent_request_headers,
+    get_codeagent_oauth_tokens,
+    get_codeagent_token_service,
+)
 from relay_teams.providers.maas_auth import (
     MaaSAuthContext,
     MaaSLoginError,
@@ -22,6 +28,8 @@ from relay_teams.providers.known_model_context_windows import (
     infer_known_context_window,
 )
 from relay_teams.providers.model_config import (
+    CodeAgentAuthConfig,
+    DEFAULT_CODEAGENT_BASE_URL,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_APP_ID,
     DEFAULT_MAAS_DISCOVERY_APPLICATION,
@@ -46,6 +54,7 @@ from relay_teams.sessions.runs.runtime_config import RuntimeConfig
 
 
 _INVALID_RESPONSE_PAYLOAD = object()
+_EVENT_STREAM_PLAIN_TEXT_SUCCESS = object()
 _MAX_PROBE_TIMEOUT_MS = 300_000
 
 LOGGER = get_logger(__name__)
@@ -68,6 +77,7 @@ class ModelConnectivityProbeOverride(BaseModel):
     api_key: str | None = Field(default=None, min_length=1)
     headers: tuple[ModelRequestHeader, ...] = ()
     maas_auth: MaaSAuthConfig | None = None
+    codeagent_auth: CodeAgentAuthConfig | None = None
     ssl_verify: bool | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_p: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -198,6 +208,7 @@ class ModelDiscoveryResolvedConfig(BaseModel):
     api_key: str | None = Field(default=None, min_length=1)
     headers: tuple[ModelRequestHeader, ...] = ()
     maas_auth: MaaSAuthConfig | None = None
+    codeagent_auth: CodeAgentAuthConfig | None = None
     ssl_verify: bool | None = None
     connect_timeout_seconds: float = Field(gt=0.0, le=300.0)
 
@@ -220,6 +231,11 @@ class ModelConnectivityProbeService:
             return self._build_echo_result(resolved_config)
         if resolved_config.provider == ProviderType.MAAS:
             return self._probe_maas(
+                config=resolved_config,
+                timeout_ms=timeout_ms,
+            )
+        if resolved_config.provider == ProviderType.CODEAGENT:
+            return self._probe_codeagent(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
             )
@@ -257,6 +273,11 @@ class ModelConnectivityProbeService:
             )
         if resolved_config.provider == ProviderType.MAAS:
             return self._discover_maas_models(
+                config=resolved_config,
+                timeout_ms=timeout_ms,
+            )
+        if resolved_config.provider == ProviderType.CODEAGENT:
+            return self._discover_codeagent_models(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
             )
@@ -299,16 +320,21 @@ class ModelConnectivityProbeService:
                 raise ValueError(
                     "Override config is required when profile_name is omitted."
                 )
+            override_provider = override.provider or ProviderType.OPENAI_COMPATIBLE
             missing_fields: list[str] = []
             if override.model is None:
                 missing_fields.append("model")
-            if override.base_url is None:
-                missing_fields.append("base_url")
             if (
-                override.provider or ProviderType.OPENAI_COMPATIBLE
-            ) == ProviderType.MAAS:
+                override.base_url is None
+                and override_provider != ProviderType.CODEAGENT
+            ):
+                missing_fields.append("base_url")
+            if override_provider == ProviderType.MAAS:
                 if override.maas_auth is None:
                     missing_fields.append("maas_auth")
+            elif override_provider == ProviderType.CODEAGENT:
+                if override.codeagent_auth is None:
+                    missing_fields.append("codeagent_auth")
             elif override.api_key is None and not override.headers:
                 missing_fields.append("api_key or headers")
             if missing_fields:
@@ -317,17 +343,22 @@ class ModelConnectivityProbeService:
                     f"Override config is missing required fields: {joined_fields}."
                 )
             override_model = cast(str, override.model)
-            override_base_url = cast(str, override.base_url)
+            override_base_url = (
+                DEFAULT_CODEAGENT_BASE_URL
+                if override_provider == ProviderType.CODEAGENT
+                else cast(str, override.base_url)
+            )
             return ModelEndpointConfig(
-                provider=override.provider or ProviderType.OPENAI_COMPATIBLE,
+                provider=override_provider,
                 model=override_model,
                 base_url=override_base_url,
                 api_key=override.api_key,
                 headers=override.headers,
                 maas_auth=override.maas_auth,
+                codeagent_auth=override.codeagent_auth,
                 ssl_verify=override.ssl_verify,
                 capabilities=resolve_model_capabilities(
-                    provider=override.provider or ProviderType.OPENAI_COMPATIBLE,
+                    provider=override_provider,
                     base_url=override_base_url,
                     model_name=override_model,
                     metadata=(
@@ -379,14 +410,19 @@ class ModelConnectivityProbeService:
                 raise ValueError(
                     "Override config is required when profile_name is omitted."
                 )
+            override_provider = override.provider or ProviderType.OPENAI_COMPATIBLE
             missing_fields: list[str] = []
-            if override.base_url is None:
-                missing_fields.append("base_url")
             if (
-                override.provider or ProviderType.OPENAI_COMPATIBLE
-            ) == ProviderType.MAAS:
+                override.base_url is None
+                and override_provider != ProviderType.CODEAGENT
+            ):
+                missing_fields.append("base_url")
+            if override_provider == ProviderType.MAAS:
                 if override.maas_auth is None:
                     missing_fields.append("maas_auth")
+            elif override_provider == ProviderType.CODEAGENT:
+                if override.codeagent_auth is None:
+                    missing_fields.append("codeagent_auth")
             elif override.api_key is None and not override.headers:
                 missing_fields.append("api_key or headers")
             if missing_fields:
@@ -395,24 +431,38 @@ class ModelConnectivityProbeService:
                     f"Override config is missing required fields: {joined_fields}."
                 )
             return ModelDiscoveryResolvedConfig(
-                provider=override.provider or ProviderType.OPENAI_COMPATIBLE,
-                base_url=cast(str, override.base_url),
+                provider=override_provider,
+                base_url=(
+                    DEFAULT_CODEAGENT_BASE_URL
+                    if override_provider == ProviderType.CODEAGENT
+                    else cast(str, override.base_url)
+                ),
                 api_key=override.api_key,
                 headers=override.headers,
                 maas_auth=override.maas_auth,
+                codeagent_auth=override.codeagent_auth,
                 ssl_verify=override.ssl_verify,
                 connect_timeout_seconds=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
             )
 
         resolved_override = override or ModelConnectivityProbeOverride()
+        resolved_provider = resolved_override.provider or base_config.provider
         return ModelDiscoveryResolvedConfig(
-            provider=resolved_override.provider or base_config.provider,
-            base_url=resolved_override.base_url or base_config.base_url,
+            provider=resolved_provider,
+            base_url=(
+                DEFAULT_CODEAGENT_BASE_URL
+                if resolved_provider == ProviderType.CODEAGENT
+                else resolved_override.base_url or base_config.base_url
+            ),
             api_key=resolved_override.api_key or base_config.api_key,
             headers=resolved_override.headers or base_config.headers,
             maas_auth=self._merge_maas_auth(
                 base_maas_auth=base_config.maas_auth,
                 override_maas_auth=resolved_override.maas_auth,
+            ),
+            codeagent_auth=self._merge_codeagent_auth(
+                base_codeagent_auth=base_config.codeagent_auth,
+                override_codeagent_auth=resolved_override.codeagent_auth,
             ),
             ssl_verify=(
                 resolved_override.ssl_verify
@@ -432,7 +482,11 @@ class ModelConnectivityProbeService:
             return base_config
         resolved_provider = override.provider or base_config.provider
         resolved_model = override.model or base_config.model
-        resolved_base_url = override.base_url or base_config.base_url
+        resolved_base_url = (
+            DEFAULT_CODEAGENT_BASE_URL
+            if resolved_provider == ProviderType.CODEAGENT
+            else override.base_url or base_config.base_url
+        )
         return ModelEndpointConfig(
             provider=resolved_provider,
             model=resolved_model,
@@ -442,6 +496,10 @@ class ModelConnectivityProbeService:
             maas_auth=self._merge_maas_auth(
                 base_maas_auth=base_config.maas_auth,
                 override_maas_auth=override.maas_auth,
+            ),
+            codeagent_auth=self._merge_codeagent_auth(
+                base_codeagent_auth=base_config.codeagent_auth,
+                override_codeagent_auth=override.codeagent_auth,
             ),
             ssl_verify=(
                 override.ssl_verify
@@ -498,6 +556,77 @@ class ModelConnectivityProbeService:
                 if override_maas_auth.password is not None
                 else base_maas_auth.password
             ),
+        )
+
+    def _merge_codeagent_auth(
+        self,
+        *,
+        base_codeagent_auth: CodeAgentAuthConfig | None,
+        override_codeagent_auth: CodeAgentAuthConfig | None,
+    ) -> CodeAgentAuthConfig | None:
+        if override_codeagent_auth is None:
+            return base_codeagent_auth
+        if base_codeagent_auth is None:
+            return override_codeagent_auth
+        if override_codeagent_auth.oauth_session_id is not None:
+            merged_auth = CodeAgentAuthConfig(
+                client_id=override_codeagent_auth.client_id
+                or base_codeagent_auth.client_id,
+                scope=override_codeagent_auth.scope or base_codeagent_auth.scope,
+                scope_resource=override_codeagent_auth.scope_resource
+                or base_codeagent_auth.scope_resource,
+                access_token=override_codeagent_auth.access_token,
+                refresh_token=override_codeagent_auth.refresh_token,
+                has_access_token=override_codeagent_auth.has_access_token,
+                has_refresh_token=override_codeagent_auth.has_refresh_token,
+                oauth_session_id=override_codeagent_auth.oauth_session_id,
+            )
+            return self._with_codeagent_secret_owner(
+                merged_auth,
+                preferred=override_codeagent_auth,
+                fallback=base_codeagent_auth,
+            )
+        merged_auth = CodeAgentAuthConfig(
+            client_id=override_codeagent_auth.client_id
+            or base_codeagent_auth.client_id,
+            scope=override_codeagent_auth.scope or base_codeagent_auth.scope,
+            scope_resource=override_codeagent_auth.scope_resource
+            or base_codeagent_auth.scope_resource,
+            access_token=override_codeagent_auth.access_token
+            or base_codeagent_auth.access_token,
+            refresh_token=override_codeagent_auth.refresh_token
+            or base_codeagent_auth.refresh_token,
+            has_access_token=(
+                override_codeagent_auth.has_access_token
+                or base_codeagent_auth.has_access_token
+            ),
+            has_refresh_token=(
+                override_codeagent_auth.has_refresh_token
+                or base_codeagent_auth.has_refresh_token
+            ),
+            oauth_session_id=override_codeagent_auth.oauth_session_id
+            or base_codeagent_auth.oauth_session_id,
+        )
+        return self._with_codeagent_secret_owner(
+            merged_auth,
+            preferred=override_codeagent_auth,
+            fallback=base_codeagent_auth,
+        )
+
+    def _with_codeagent_secret_owner(
+        self,
+        auth_config: CodeAgentAuthConfig,
+        *,
+        preferred: CodeAgentAuthConfig,
+        fallback: CodeAgentAuthConfig,
+    ) -> CodeAgentAuthConfig:
+        config_dir = preferred.secret_config_dir or fallback.secret_config_dir
+        owner_id = preferred.secret_owner_id or fallback.secret_owner_id
+        if config_dir is None or owner_id is None:
+            return auth_config
+        return auth_config.with_secret_owner(
+            config_dir=config_dir,
+            owner_id=owner_id,
         )
 
     def _resolve_timeout_ms(
@@ -715,6 +844,82 @@ class ModelConnectivityProbeService:
             started=started,
         )
 
+    def _probe_codeagent(
+        self,
+        *,
+        config: ModelEndpointConfig,
+        timeout_ms: int,
+    ) -> ModelConnectivityProbeResult:
+        if config.codeagent_auth is None:
+            raise ValueError("CodeAgent probe requires codeagent_auth configuration.")
+        endpoint = f"{config.base_url.rstrip('/')}/chat/completions"
+        payload = {
+            "model": config.model,
+            "messages": [{"role": "user", "content": "reply with pong"}],
+            "temperature": config.sampling.temperature,
+            "top_p": config.sampling.top_p,
+            "stream": True,
+            "max_tokens": 1,
+        }
+        started = perf_counter()
+        checked_at = datetime.now(timezone.utc)
+        token_or_result = self._get_codeagent_token_for_probe(
+            config=config,
+            checked_at=checked_at,
+            started=started,
+            timeout_ms=timeout_ms,
+        )
+        if isinstance(token_or_result, ModelConnectivityProbeResult):
+            return token_or_result
+        headers = build_codeagent_request_headers(
+            token=token_or_result,
+            content_type="application/json",
+            accept="text/event-stream",
+        )
+        response = self._post_probe_request(
+            config=config,
+            endpoint=endpoint,
+            headers=headers,
+            payload=payload,
+            checked_at=checked_at,
+            started=started,
+            timeout_ms=timeout_ms,
+        )
+        if isinstance(response, ModelConnectivityProbeResult):
+            return response
+        if response.status_code in {401, 403}:
+            retry_token_or_result = self._get_codeagent_token_for_probe(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                timeout_ms=timeout_ms,
+                force_refresh=True,
+            )
+            if isinstance(retry_token_or_result, ModelConnectivityProbeResult):
+                return retry_token_or_result
+            retry_headers = build_codeagent_request_headers(
+                token=retry_token_or_result,
+                content_type="application/json",
+                accept="text/event-stream",
+            )
+            response = self._post_probe_request(
+                config=config,
+                endpoint=endpoint,
+                headers=retry_headers,
+                payload=payload,
+                checked_at=checked_at,
+                started=started,
+                timeout_ms=timeout_ms,
+            )
+            if isinstance(response, ModelConnectivityProbeResult):
+                return response
+        return self._build_probe_result_from_response(
+            config=config,
+            response=response,
+            checked_at=checked_at,
+            started=started,
+        )
+
     def _discover_maas_models(
         self,
         *,
@@ -872,7 +1077,7 @@ class ModelConnectivityProbeService:
                 retryable=False,
             )
 
-        if not isinstance(response_payload, dict):
+        if not isinstance(response_payload, dict | list):
             return ModelDiscoveryResult(
                 ok=False,
                 provider=config.provider,
@@ -923,6 +1128,65 @@ class ModelConnectivityProbeService:
             ),
             models=tuple(entry.model for entry in model_entries),
             model_entries=model_entries,
+        )
+
+    def _discover_codeagent_models(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        timeout_ms: int,
+    ) -> ModelDiscoveryResult:
+        if config.codeagent_auth is None:
+            raise ValueError(
+                "CodeAgent model discovery requires codeagent_auth configuration."
+            )
+        endpoint = f"{config.base_url.rstrip('/')}/chat/modles?checkUserPermission=TRUE"
+        started = perf_counter()
+        checked_at = datetime.now(timezone.utc)
+        token_or_result = self._get_codeagent_token_for_discovery(
+            config=config,
+            checked_at=checked_at,
+            started=started,
+            timeout_ms=timeout_ms,
+        )
+        if isinstance(token_or_result, ModelDiscoveryResult):
+            return token_or_result
+        headers = build_codeagent_request_headers(token=token_or_result)
+        response = self._get_model_discovery_request(
+            config=config,
+            endpoint=endpoint,
+            headers=headers,
+            checked_at=checked_at,
+            started=started,
+            timeout_ms=timeout_ms,
+        )
+        if isinstance(response, ModelDiscoveryResult):
+            return response
+        if response.status_code in {401, 403}:
+            retry_token_or_result = self._get_codeagent_token_for_discovery(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                timeout_ms=timeout_ms,
+                force_refresh=True,
+            )
+            if isinstance(retry_token_or_result, ModelDiscoveryResult):
+                return retry_token_or_result
+            response = self._get_model_discovery_request(
+                config=config,
+                endpoint=endpoint,
+                headers=build_codeagent_request_headers(token=retry_token_or_result),
+                checked_at=checked_at,
+                started=started,
+                timeout_ms=timeout_ms,
+            )
+            if isinstance(response, ModelDiscoveryResult):
+                return response
+        return self._build_model_discovery_result_from_response(
+            config=config,
+            response=response,
+            checked_at=checked_at,
+            started=started,
         )
 
     def _get_maas_model_discovery_auth_context(
@@ -1060,6 +1324,43 @@ class ModelConnectivityProbeService:
                 error_message=str(exc) or "Failed to reach model endpoint.",
             )
 
+    def _get_model_discovery_request(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        endpoint: str,
+        headers: dict[str, str],
+        checked_at: datetime,
+        started: float,
+        timeout_ms: int,
+    ) -> httpx.Response | ModelDiscoveryResult:
+        try:
+            with create_sync_http_client(
+                timeout_seconds=timeout_ms / 1000,
+                connect_timeout_seconds=timeout_ms / 1000,
+                ssl_verify=config.ssl_verify,
+            ) as client:
+                return client.get(
+                    endpoint,
+                    headers=headers,
+                )
+        except httpx.TimeoutException as exc:
+            return self._build_model_discovery_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_timeout",
+                error_message=str(exc) or "Connection timed out.",
+            )
+        except httpx.RequestError as exc:
+            return self._build_model_discovery_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_error",
+                error_message=str(exc) or "Failed to reach model endpoint.",
+            )
+
     def _build_model_discovery_result_from_response(
         self,
         *,
@@ -1099,7 +1400,7 @@ class ModelConnectivityProbeService:
                 retryable=False,
             )
 
-        if not isinstance(response_payload, dict):
+        if not isinstance(response_payload, dict | list):
             return ModelDiscoveryResult(
                 ok=False,
                 provider=config.provider,
@@ -1239,6 +1540,198 @@ class ModelConnectivityProbeService:
             retryable=retryable,
         )
 
+    def _get_codeagent_token_for_probe(
+        self,
+        *,
+        config: ModelEndpointConfig,
+        checked_at: datetime,
+        started: float,
+        timeout_ms: int,
+        force_refresh: bool = False,
+    ) -> str | ModelConnectivityProbeResult:
+        try:
+            auth_config = self._resolve_codeagent_auth_for_request(
+                cast(CodeAgentAuthConfig, config.codeagent_auth)
+            )
+            return get_codeagent_token_service().get_token_sync(
+                base_url=config.base_url,
+                auth_config=auth_config,
+                ssl_verify=config.ssl_verify,
+                connect_timeout_seconds=timeout_ms / 1000,
+                force_refresh=force_refresh,
+            )
+        except httpx.TimeoutException as exc:
+            return self._build_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_timeout",
+                error_message=str(exc) or "Connection timed out.",
+            )
+        except httpx.RequestError as exc:
+            return self._build_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_error",
+                error_message=str(exc) or "Failed to reach model endpoint.",
+            )
+        except CodeAgentOAuthError as exc:
+            return self._build_codeagent_oauth_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error=exc,
+            )
+
+    def _get_codeagent_token_for_discovery(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        checked_at: datetime,
+        started: float,
+        timeout_ms: int,
+        force_refresh: bool = False,
+    ) -> str | ModelDiscoveryResult:
+        try:
+            auth_config = self._resolve_codeagent_auth_for_request(
+                cast(CodeAgentAuthConfig, config.codeagent_auth)
+            )
+            return get_codeagent_token_service().get_token_sync(
+                base_url=config.base_url,
+                auth_config=auth_config,
+                ssl_verify=config.ssl_verify,
+                connect_timeout_seconds=timeout_ms / 1000,
+                force_refresh=force_refresh,
+            )
+        except httpx.TimeoutException as exc:
+            return self._build_model_discovery_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_timeout",
+                error_message=str(exc) or "Connection timed out.",
+            )
+        except httpx.RequestError as exc:
+            return self._build_model_discovery_transport_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error_code="network_error",
+                error_message=str(exc) or "Failed to reach model endpoint.",
+            )
+        except CodeAgentOAuthError as exc:
+            return self._build_model_discovery_codeagent_oauth_error_result(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                error=exc,
+            )
+
+    def _resolve_codeagent_auth_for_request(
+        self,
+        auth_config: CodeAgentAuthConfig,
+    ) -> CodeAgentAuthConfig:
+        if auth_config.oauth_session_id is not None:
+            token_result = get_codeagent_oauth_tokens(auth_config.oauth_session_id)
+            if token_result is not None:
+                resolved_auth = CodeAgentAuthConfig(
+                    client_id=auth_config.client_id,
+                    scope=auth_config.scope,
+                    scope_resource=auth_config.scope_resource,
+                    access_token=token_result.access_token,
+                    refresh_token=token_result.refresh_token,
+                    oauth_session_id=auth_config.oauth_session_id,
+                )
+                if (
+                    auth_config.secret_config_dir is None
+                    or auth_config.secret_owner_id is None
+                ):
+                    return resolved_auth
+                return resolved_auth.with_secret_owner(
+                    config_dir=auth_config.secret_config_dir,
+                    owner_id=auth_config.secret_owner_id,
+                )
+        if auth_config.refresh_token is not None:
+            return auth_config
+        if auth_config.oauth_session_id is None:
+            raise CodeAgentOAuthError(
+                "CodeAgent refresh token is not configured.",
+                status_code=None,
+            )
+        raise CodeAgentOAuthError(
+            "CodeAgent OAuth session is missing, expired, or already consumed.",
+            status_code=400,
+        )
+
+    def _build_codeagent_oauth_error_result(
+        self,
+        *,
+        config: ModelEndpointConfig,
+        checked_at: datetime,
+        started: float,
+        error: CodeAgentOAuthError,
+    ) -> ModelConnectivityProbeResult:
+        status_code = error.status_code
+        error_message = str(error) or "CodeAgent OAuth request failed."
+        if status_code is None or status_code < 400:
+            return ModelConnectivityProbeResult(
+                ok=False,
+                provider=config.provider,
+                model=config.model,
+                latency_ms=self._latency_ms(started),
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="invalid_response",
+                error_message=error_message,
+                retryable=False,
+            )
+        return self._build_http_error_result(
+            config=config,
+            checked_at=checked_at,
+            latency_ms=self._latency_ms(started),
+            status_code=status_code,
+            error_message=error_message,
+        )
+
+    def _build_model_discovery_codeagent_oauth_error_result(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        checked_at: datetime,
+        started: float,
+        error: CodeAgentOAuthError,
+    ) -> ModelDiscoveryResult:
+        status_code = error.status_code
+        error_message = str(error) or "CodeAgent OAuth request failed."
+        if status_code is None or status_code < 400:
+            return ModelDiscoveryResult(
+                ok=False,
+                provider=config.provider,
+                base_url=config.base_url,
+                latency_ms=self._latency_ms(started),
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                error_code="invalid_response",
+                error_message=error_message,
+                retryable=False,
+            )
+        return self._build_model_discovery_http_error_result(
+            config=config,
+            checked_at=checked_at,
+            latency_ms=self._latency_ms(started),
+            status_code=status_code,
+            error_message=error_message,
+        )
+
     def _build_model_discovery_maas_login_error_result(
         self,
         *,
@@ -1307,6 +1800,72 @@ class ModelConnectivityProbeService:
                 latency_ms=latency_ms,
                 status_code=response.status_code,
                 error_message=error_message or "Model connectivity check failed.",
+            )
+        if config.provider == ProviderType.CODEAGENT and self._is_event_stream_response(
+            response
+        ):
+            if response_payload is _EVENT_STREAM_PLAIN_TEXT_SUCCESS:
+                return ModelConnectivityProbeResult(
+                    ok=True,
+                    provider=config.provider,
+                    model=config.model,
+                    latency_ms=latency_ms,
+                    checked_at=checked_at,
+                    diagnostics=ModelConnectivityDiagnostics(
+                        endpoint_reachable=True,
+                        auth_valid=True,
+                        rate_limited=False,
+                    ),
+                    token_usage=None,
+                )
+            if response_payload is _INVALID_RESPONSE_PAYLOAD:
+                return ModelConnectivityProbeResult(
+                    ok=False,
+                    provider=config.provider,
+                    model=config.model,
+                    latency_ms=latency_ms,
+                    checked_at=checked_at,
+                    diagnostics=ModelConnectivityDiagnostics(
+                        endpoint_reachable=True,
+                        auth_valid=True,
+                        rate_limited=False,
+                    ),
+                    error_code="invalid_response",
+                    error_message="Provider returned invalid SSE payload.",
+                    retryable=False,
+                )
+            error_message = self._extract_error_message(response_payload)
+            if error_message is not None:
+                return ModelConnectivityProbeResult(
+                    ok=False,
+                    provider=config.provider,
+                    model=config.model,
+                    latency_ms=latency_ms,
+                    checked_at=checked_at,
+                    diagnostics=ModelConnectivityDiagnostics(
+                        endpoint_reachable=True,
+                        auth_valid=True,
+                        rate_limited=False,
+                    ),
+                    error_code="invalid_response",
+                    error_message=error_message,
+                    retryable=False,
+                )
+            token_usage = None
+            if isinstance(response_payload, dict):
+                token_usage = self._extract_token_usage(response_payload.get("usage"))
+            return ModelConnectivityProbeResult(
+                ok=True,
+                provider=config.provider,
+                model=config.model,
+                latency_ms=latency_ms,
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=True,
+                    rate_limited=False,
+                ),
+                token_usage=token_usage,
             )
         if response_payload is _INVALID_RESPONSE_PAYLOAD:
             return ModelConnectivityProbeResult(
@@ -1487,24 +2046,31 @@ class ModelConnectivityProbeService:
     def _extract_error_message(self, payload: object) -> str | None:
         if not isinstance(payload, dict):
             return None
+        for key in ("message", "detail", "error_description"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
         error_payload = payload.get("error")
         if isinstance(error_payload, dict):
             message = error_payload.get("message")
             if isinstance(message, str) and message.strip():
                 return message.strip()
-        detail = payload.get("detail")
-        if isinstance(detail, str) and detail.strip():
-            return detail.strip()
+        if isinstance(error_payload, str) and error_payload.strip():
+            return error_payload.strip()
         return None
 
     def _extract_model_entries(
         self,
         *,
-        payload: dict[str, object],
+        payload: dict[str, object] | list[object],
         provider: ProviderType,
     ) -> tuple[ModelDiscoveryEntry, ...] | None:
+        if provider == ProviderType.CODEAGENT:
+            return self._extract_codeagent_model_entries(payload)
         if provider == ProviderType.MAAS:
             return self._extract_maas_model_entries(payload)
+        if not isinstance(payload, dict):
+            return None
         data = payload.get("data")
         if not isinstance(data, list):
             return None
@@ -1547,10 +2113,67 @@ class ModelConnectivityProbeService:
         model_entries.sort(key=lambda item: item.model)
         return tuple(model_entries)
 
+    def _extract_codeagent_model_entries(
+        self,
+        payload: dict[str, object] | list[object],
+    ) -> tuple[ModelDiscoveryEntry, ...] | None:
+        entries_payload: list[object] | None = None
+        if isinstance(payload, list):
+            entries_payload = payload
+        elif isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, list):
+                entries_payload = data
+            elif isinstance(payload.get("models"), list):
+                entries_payload = cast(list[object], payload.get("models"))
+        if entries_payload is None:
+            return None
+        model_entries: list[ModelDiscoveryEntry] = []
+        seen_model_ids: set[str] = set()
+        for entry in entries_payload:
+            model_id: str | None = None
+            metadata: object | None = entry
+            if isinstance(entry, str):
+                model_id = entry.strip()
+            elif isinstance(entry, dict):
+                for field_name in ("name", "id", "model"):
+                    value = entry.get(field_name)
+                    if isinstance(value, str) and value.strip():
+                        model_id = value.strip()
+                        break
+            if model_id is None or not model_id or model_id in seen_model_ids:
+                continue
+            seen_model_ids.add(model_id)
+            model_entries.append(
+                ModelDiscoveryEntry(
+                    model=model_id,
+                    context_window=infer_known_context_window(
+                        provider=ProviderType.CODEAGENT,
+                        model=model_id,
+                    ),
+                    capabilities=resolve_model_capabilities(
+                        provider=ProviderType.CODEAGENT,
+                        base_url="",
+                        model_name=model_id,
+                        metadata=metadata,
+                    ),
+                    input_modalities=resolve_model_input_modalities(
+                        provider=ProviderType.CODEAGENT,
+                        base_url="",
+                        model_name=model_id,
+                        metadata=metadata,
+                    ),
+                )
+            )
+        model_entries.sort(key=lambda item: item.model)
+        return tuple(model_entries)
+
     def _extract_maas_model_entries(
         self,
-        payload: dict[str, object],
+        payload: dict[str, object] | list[object],
     ) -> tuple[ModelDiscoveryEntry, ...] | None:
+        if not isinstance(payload, dict):
+            return None
         has_supported_section = False
         model_ids: set[str] = set()
 
@@ -1719,8 +2342,14 @@ class ModelConnectivityProbeService:
             try:
                 return cast(object, json.loads(chunk))
             except ValueError:
+                if chunk.casefold() == "pong":
+                    return _EVENT_STREAM_PLAIN_TEXT_SUCCESS
                 continue
         return _INVALID_RESPONSE_PAYLOAD
+
+    def _is_event_stream_response(self, response: httpx.Response) -> bool:
+        content_type = response.headers.get("content-type", "")
+        return "text/event-stream" in content_type.casefold()
 
     def _http_error_code(self, status_code: int) -> str:
         if status_code in {401, 403}:

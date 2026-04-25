@@ -11,7 +11,11 @@ from relay_teams.providers.maas_auth import (
     build_maas_openai_client,
     maas_reserved_header_names,
 )
+from relay_teams.providers.codeagent_auth import (
+    build_codeagent_openai_client,
+)
 from relay_teams.providers.model_config import (
+    CodeAgentAuthConfig,
     MaaSAuthConfig,
     ModelEndpointConfig,
     ModelRequestHeader,
@@ -66,6 +70,7 @@ def build_openai_provider(
         http_client=http_client,
         provider_type=config.provider,
         maas_auth=config.maas_auth,
+        codeagent_auth=config.codeagent_auth,
         ssl_verify=config.ssl_verify,
         connect_timeout_seconds=config.connect_timeout_seconds,
     )
@@ -79,6 +84,7 @@ def build_openai_provider_for_endpoint(
     http_client: httpx.AsyncClient,
     provider_type: ProviderType = ProviderType.OPENAI_COMPATIBLE,
     maas_auth: MaaSAuthConfig | None = None,
+    codeagent_auth: CodeAgentAuthConfig | None = None,
     ssl_verify: bool | None = None,
     connect_timeout_seconds: float = 15.0,
 ) -> OpenAIProvider:
@@ -92,6 +98,20 @@ def build_openai_provider_for_endpoint(
         openai_client = build_maas_openai_client(
             base_url=base_url,
             auth_config=maas_auth,
+            default_headers=custom_headers or None,
+            http_client=http_client,
+            connect_timeout_seconds=connect_timeout_seconds,
+            ssl_verify=ssl_verify,
+        )
+        return OpenAIProvider(openai_client=openai_client)
+    if provider_type == ProviderType.CODEAGENT:
+        if codeagent_auth is None:
+            raise ValueError(
+                "CodeAgent provider requires codeagent_auth configuration."
+            )
+        openai_client = build_codeagent_openai_client(
+            base_url=base_url,
+            auth_config=codeagent_auth,
             default_headers=custom_headers or None,
             http_client=http_client,
             connect_timeout_seconds=connect_timeout_seconds,

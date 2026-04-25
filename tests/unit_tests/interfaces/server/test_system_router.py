@@ -4,11 +4,14 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable, cast
+from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 
-from pydantic import JsonValue
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import httpx
 import pytest
+from pydantic import JsonValue
 
 from relay_teams.env.proxy_env import ProxyEnvInput
 from relay_teams.external_agents import (
@@ -85,6 +88,8 @@ from relay_teams.providers.model_connectivity import (
     ModelDiscoveryResult,
 )
 from relay_teams.providers.model_config import (
+    DEFAULT_CODEAGENT_BASE_URL,
+    DEFAULT_CODEAGENT_CLIENT_ID,
     DEFAULT_MAAS_BASE_URL,
     ModelConfigPayload,
     ModelFallbackConfig,
@@ -94,6 +99,13 @@ from relay_teams.providers.model_config import (
     ProviderType,
 )
 from relay_teams.providers.model_catalog import ModelCatalogResult
+from relay_teams.providers.codeagent_auth import (
+    CodeAgentOAuthError,
+    CodeAgentOAuthTokenResult,
+    clear_codeagent_oauth_session_store,
+    consume_codeagent_oauth_tokens,
+    save_codeagent_oauth_tokens_for_session,
+)
 from relay_teams.skills.clawhub_models import (
     ClawHubSkillDetail,
     ClawHubSkillSummary,
@@ -2841,6 +2853,285 @@ def test_save_model_profile_accepts_maas_provider() -> None:
         "username": "relay-user",
         "password": "relay-password",
     }
+
+
+def test_save_model_profile_sets_default_codeagent_base_url() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/codeagent",
+        json={
+            "provider": ProviderType.CODEAGENT.value,
+            "model": "codeagent-chat",
+            "base_url": "https://custom.example/codeAgentPro",
+            "codeagent_auth": {
+                "has_access_token": True,
+                "has_refresh_token": True,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    assert saved_profile["provider"] == ProviderType.CODEAGENT.value
+    assert saved_profile["base_url"] == DEFAULT_CODEAGENT_BASE_URL
+
+
+def test_codeagent_oauth_start_uses_hardcoded_sso_url() -> None:
+    clear_codeagent_oauth_session_store()
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/model/codeagent/oauth:start",
+        json={},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["authorization_url"].startswith(
+        "https://ssoproxysvr.cd-cloud-ssoproxysvr.szv.dragon.tools.huawei.com"
+        "/ssoproxysvr/oauth2/authorize?"
+    )
+    query = parse_qs(urlparse(payload["authorization_url"]).query)
+    assert query["scope"] == ["1000:1002"]
+    assert query["redirect_uri"][0].startswith(
+        f"{DEFAULT_CODEAGENT_BASE_URL}/codeAgent/oauth/callback?client_code="
+    )
+    assert payload["codeagent_auth"]["client_id"] == DEFAULT_CODEAGENT_CLIENT_ID
+    assert payload["codeagent_auth"]["oauth_session_id"] == payload["auth_session_id"]
+    clear_codeagent_oauth_session_store()
+
+
+def test_codeagent_oauth_start_rejects_user_config_values() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.post(
+        "/api/system/configs/model/codeagent/oauth:start",
+        json={
+            "base_url": "https://codeagent.example/codeAgentPro",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_codeagent_oauth_local_callback_route_is_not_supported() -> None:
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get(
+        "/api/system/configs/model/codeagent/oauth/callback",
+        params={"code": "unused-code", "state": "unused-state"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_codeagent_oauth_status_polls_until_token_available(monkeypatch) -> None:
+    clear_codeagent_oauth_session_store()
+    client = _create_test_client(_FakeSystemService())
+    start_response = client.post(
+        "/api/system/configs/model/codeagent/oauth:start",
+        json={},
+    )
+    payload = start_response.json()
+
+    class _FakeCodeAgentTokenService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def poll_token_sync(
+            self,
+            *,
+            session: object,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+        ) -> CodeAgentOAuthTokenResult | None:
+            self.calls += 1
+            assert getattr(session, "base_url") == DEFAULT_CODEAGENT_BASE_URL
+            assert getattr(session, "client_code")
+            assert str(getattr(session, "callback_url")).startswith(
+                f"{DEFAULT_CODEAGENT_BASE_URL}/codeAgent/oauth/callback?client_code="
+            )
+            _ = ssl_verify
+            _ = connect_timeout_seconds
+            if self.calls == 1:
+                return None
+            return CodeAgentOAuthTokenResult(
+                access_token="codeagent-access-token",
+                refresh_token="codeagent-refresh-token",
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+
+    token_service = _FakeCodeAgentTokenService()
+    monkeypatch.setattr(
+        system,
+        "get_codeagent_token_service",
+        lambda: token_service,
+    )
+
+    pending_response = client.get(
+        f"/api/system/configs/model/codeagent/oauth/{payload['auth_session_id']}"
+    )
+    status_response = client.get(
+        f"/api/system/configs/model/codeagent/oauth/{payload['auth_session_id']}"
+    )
+
+    assert pending_response.status_code == 200
+    assert pending_response.json()["completed"] is False
+    assert status_response.status_code == 200
+    status_payload = status_response.json()
+    assert status_payload["completed"] is True
+    assert status_payload["codeagent_auth"]["has_refresh_token"] is True
+    clear_codeagent_oauth_session_store()
+
+
+def test_codeagent_oauth_status_hides_consumed_completed_session() -> None:
+    clear_codeagent_oauth_session_store()
+    client = _create_test_client(_FakeSystemService())
+    start_response = client.post(
+        "/api/system/configs/model/codeagent/oauth:start",
+        json={},
+    )
+    payload = start_response.json()
+    save_codeagent_oauth_tokens_for_session(
+        auth_session_id=payload["auth_session_id"],
+        token_result=CodeAgentOAuthTokenResult(
+            access_token="codeagent-access-token",
+            refresh_token="codeagent-refresh-token",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+
+    completed_response = client.get(
+        f"/api/system/configs/model/codeagent/oauth/{payload['auth_session_id']}"
+    )
+    consumed_tokens = consume_codeagent_oauth_tokens(payload["auth_session_id"])
+    consumed_response = client.get(
+        f"/api/system/configs/model/codeagent/oauth/{payload['auth_session_id']}"
+    )
+
+    assert completed_response.status_code == 200
+    assert completed_response.json()["completed"] is True
+    assert consumed_tokens is not None
+    assert consumed_response.status_code == 200
+    assert consumed_response.json()["completed"] is False
+    assert consumed_response.json()["codeagent_auth"] is None
+    clear_codeagent_oauth_session_store()
+
+
+def test_codeagent_oauth_status_returns_bad_gateway_for_transport_errors(
+    monkeypatch,
+) -> None:
+    clear_codeagent_oauth_session_store()
+    client = _create_test_client(_FakeSystemService())
+    start_response = client.post(
+        "/api/system/configs/model/codeagent/oauth:start",
+        json={},
+    )
+    payload = start_response.json()
+    request = httpx.Request("POST", "https://codeagent.example/codeAgentPro")
+
+    class _FakeCodeAgentTokenService:
+        def poll_token_sync(
+            self,
+            *,
+            session: object,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+        ) -> CodeAgentOAuthTokenResult | None:
+            _ = (session, ssl_verify, connect_timeout_seconds)
+            raise httpx.ConnectError("connection reset", request=request)
+
+    monkeypatch.setattr(
+        system,
+        "get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(),
+    )
+
+    response = client.get(
+        f"/api/system/configs/model/codeagent/oauth/{payload['auth_session_id']}"
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "connection reset"
+    clear_codeagent_oauth_session_store()
+
+
+def test_codeagent_oauth_status_returns_gateway_timeout_for_poll_timeouts(
+    monkeypatch,
+) -> None:
+    clear_codeagent_oauth_session_store()
+    client = _create_test_client(_FakeSystemService())
+    start_response = client.post(
+        "/api/system/configs/model/codeagent/oauth:start",
+        json={},
+    )
+    payload = start_response.json()
+    request = httpx.Request("POST", "https://codeagent.example/codeAgentPro")
+
+    class _FakeCodeAgentTokenService:
+        def poll_token_sync(
+            self,
+            *,
+            session: object,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+        ) -> CodeAgentOAuthTokenResult | None:
+            _ = (session, ssl_verify, connect_timeout_seconds)
+            raise httpx.ReadTimeout("timed out", request=request)
+
+    monkeypatch.setattr(
+        system,
+        "get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(),
+    )
+
+    response = client.get(
+        f"/api/system/configs/model/codeagent/oauth/{payload['auth_session_id']}"
+    )
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "timed out"
+    clear_codeagent_oauth_session_store()
+
+
+def test_codeagent_oauth_status_preserves_explicit_oauth_error_status(
+    monkeypatch,
+) -> None:
+    clear_codeagent_oauth_session_store()
+    client = _create_test_client(_FakeSystemService())
+    start_response = client.post(
+        "/api/system/configs/model/codeagent/oauth:start",
+        json={},
+    )
+    payload = start_response.json()
+
+    class _FakeCodeAgentTokenService:
+        def poll_token_sync(
+            self,
+            *,
+            session: object,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+        ) -> CodeAgentOAuthTokenResult | None:
+            _ = (session, ssl_verify, connect_timeout_seconds)
+            raise CodeAgentOAuthError("session denied", status_code=409)
+
+    monkeypatch.setattr(
+        system,
+        "get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(),
+    )
+
+    response = client.get(
+        f"/api/system/configs/model/codeagent/oauth/{payload['auth_session_id']}"
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "session denied"
+    clear_codeagent_oauth_session_store()
 
 
 def test_save_model_profile_accepts_source_name_for_rename() -> None:

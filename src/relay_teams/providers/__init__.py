@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from relay_teams.providers.model_config import (
+    CodeAgentAuthConfig,
     LlmRetryConfig,
     MaaSAuthConfig,
     ModelCapabilities,
@@ -25,12 +26,7 @@ from relay_teams.providers.model_catalog import (
     ModelCatalogResult,
     ModelCatalogService,
 )
-
-from relay_teams.providers.provider_contracts import (
-    EchoProvider,
-    LLMProvider,
-)
-
+from relay_teams.providers.provider_contracts import EchoProvider, LLMProvider
 from relay_teams.providers.token_usage_repo import (
     AgentTokenSummary,
     RunTokenUsage,
@@ -41,6 +37,7 @@ from relay_teams.providers.token_usage_repo import (
 
 __all__ = [
     "AgentTokenSummary",
+    "CodeAgentAuthConfig",
     "EchoProvider",
     "LLMProvider",
     "LlmRetryConfig",
@@ -51,13 +48,13 @@ __all__ = [
     "ModelCatalogResult",
     "ModelCatalogService",
     "ModelConfigPayload",
+    "ModelEndpointConfig",
     "ModelFallbackConfig",
     "ModelFallbackPolicy",
     "ModelFallbackStrategy",
     "ModelFallbackTrigger",
-    "ModelEndpointConfig",
-    "ModelProfileConfigPayload",
     "ModelModalityMatrix",
+    "ModelProfileConfigPayload",
     "ModelRequestHeader",
     "ProviderModelInfo",
     "ProviderType",

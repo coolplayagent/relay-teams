@@ -2095,6 +2095,37 @@
     margin-bottom: 0;
 }
 
+.profile-codeagent-credentials-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.85rem;
+}
+
+.profile-codeagent-sso-group {
+    max-width: 560px;
+}
+
+.codeagent-sso-control {
+    display: flex;
+    align-items: flex-start;
+}
+
+.codeagent-sso-login-btn {
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    white-space: nowrap;
+}
+
+.codeagent-sso-login-btn:disabled {
+    cursor: wait;
+    opacity: 0.72;
+}
+
+.codeagent-sso-status-message {
+    margin-top: 0.55rem;
+    max-width: 560px;
+}
+
 .profile-editor-subsection {
     margin-top: 1.15rem;
     padding-top: 1rem;

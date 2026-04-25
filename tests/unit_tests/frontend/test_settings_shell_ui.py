@@ -311,6 +311,7 @@ console.log(JSON.stringify({
     assert 'value="bigmodel"' not in modal_html
     assert 'value="minimax"' not in modal_html
     assert 'value="maas"' in modal_html
+    assert 'value="codeagent"' in modal_html
     assert 'value="echo"' not in modal_html
     assert 'id="profile-model"' in modal_html
     assert (
@@ -345,6 +346,15 @@ console.log(JSON.stringify({
     )
     assert 'id="profile-maas-model-slot"' in modal_html
     assert 'id="toggle-profile-maas-password-btn"' in modal_html
+    assert 'id="profile-provider-codeagent-btn"' in modal_html
+    assert 'data-i18n="settings.model.provider_codeagent"' in modal_html
+    assert 'data-i18n="settings.model.provider_codeagent_copy"' in modal_html
+    assert "CodeAgent Model" in modal_html
+    assert "Use CodeAgent models with SSO sign-in" in modal_html
+    assert 'id="profile-codeagent-auth-fields"' in modal_html
+    assert 'id="profile-codeagent-login-status"' in modal_html
+    assert 'id="profile-codeagent-login-status-message"' in modal_html
+    assert 'id="profile-codeagent-model-slot"' in modal_html
     assert 'id="toggle-web-api-key-btn"' in modal_html
     assert (
         'id="toggle-web-api-key-btn" type="button" title="Show API key" aria-label="Show API key"'

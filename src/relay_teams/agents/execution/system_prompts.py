@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import lru_cache
 from datetime import datetime, timedelta
 import logging
 import os
@@ -500,6 +501,7 @@ def _build_python_package_environment_lines() -> list[str]:
     return lines
 
 
+@lru_cache(maxsize=None)
 def _resolve_package_tool_path(command_names: tuple[str, ...]) -> Path | None:
     for command_name in command_names:
         resolved = shutil.which(command_name)

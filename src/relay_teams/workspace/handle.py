@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 import posixpath
 from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, PrivateAttr, model_validator
 
 from relay_teams.workspace.workspace_models import (
     WorkspaceLocations,
@@ -34,6 +34,7 @@ class WorkspaceHandle(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     _TMP_PREFIXES: ClassVar[tuple[str, str]] = ("tmp/", "tmp\\")
+    _resolved_workdirs: dict[str, Path] = PrivateAttr(default_factory=dict)
 
     ref: WorkspaceRef
     mounts: tuple[WorkspaceMountRecord, ...] = ()
@@ -501,9 +502,13 @@ class WorkspaceHandle(BaseModel):
 
     def resolve_workdir(self, relative_path: str | None = None) -> Path:
         raw_path = "." if relative_path is None else relative_path
+        cached = self._resolved_workdirs.get(raw_path)
+        if cached is not None:
+            return cached
         resolved = self.resolve_workspace_path(raw_path, write=True)
         if resolved.local_path is None:
             raise ValueError(
                 f"Workspace workdir resolves to non-local mount: {resolved.mount_name}"
             )
+        self._resolved_workdirs[raw_path] = resolved.local_path
         return resolved.local_path

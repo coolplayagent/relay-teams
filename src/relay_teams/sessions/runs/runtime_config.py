@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from json import loads
 import logging
 from pathlib import Path
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -18,8 +19,13 @@ from relay_teams.paths import (
     format_app_config_file_reference,
     get_app_config_dir,
 )
+from relay_teams.providers.codeagent_auth import (
+    codeagent_access_token_secret_field_name,
+    codeagent_refresh_token_secret_field_name,
+)
 from relay_teams.providers.maas_auth import maas_password_secret_field_name
 from relay_teams.providers.model_config import (
+    CodeAgentAuthConfig,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_BASE_URL,
     LlmRetryConfig,
@@ -47,6 +53,10 @@ from relay_teams.secrets import get_secret_store
 _MODEL_PROFILE_SECRET_NAMESPACE = "model_profile"
 _MODEL_PROFILE_SECRET_FIELD = "api_key"
 _MODEL_PROFILE_MAAS_PASSWORD_FIELD = maas_password_secret_field_name()
+_MODEL_PROFILE_CODEAGENT_ACCESS_TOKEN_FIELD = codeagent_access_token_secret_field_name()
+_MODEL_PROFILE_CODEAGENT_REFRESH_TOKEN_FIELD = (
+    codeagent_refresh_token_secret_field_name()
+)
 LOGGER = get_logger(__name__)
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -229,6 +239,12 @@ def load_llm_profile_state(
             raw_value=cfg.get("maas_auth"),
             env_values=env_values,
         )
+        codeagent_auth = _resolve_profile_codeagent_auth(
+            config_dir=config_dir,
+            profile_name=name,
+            raw_value=cfg.get("codeagent_auth"),
+            env_values=env_values,
+        )
 
         if not model or not base_url:
             raise ValueError(
@@ -238,6 +254,11 @@ def load_llm_profile_state(
             if maas_auth is None or maas_auth.password is None:
                 raise ValueError(
                     f"Invalid profile '{name}': MAAS profiles require maas_auth with a password."
+                )
+        elif provider == ProviderType.CODEAGENT:
+            if codeagent_auth is None or codeagent_auth.refresh_token is None:
+                raise ValueError(
+                    f"Invalid profile '{name}': CodeAgent profiles require codeagent_auth from completed SSO login."
                 )
         elif not api_key and not headers:
             raise ValueError(
@@ -273,6 +294,7 @@ def load_llm_profile_state(
             api_key=api_key or None,
             headers=headers,
             maas_auth=maas_auth,
+            codeagent_auth=codeagent_auth,
             ssl_verify=ssl_verify,
             capabilities=resolve_model_capabilities(
                 provider=provider,
@@ -517,6 +539,76 @@ def _resolve_profile_maas_auth(
         if secret_value is not None:
             normalized_payload["password"] = secret_value
     return MaaSAuthConfig.model_validate(normalized_payload)
+
+
+def _resolve_profile_codeagent_auth(
+    *,
+    config_dir: Path,
+    profile_name: str,
+    raw_value: object,
+    env_values: Mapping[str, str],
+) -> CodeAgentAuthConfig | None:
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, dict):
+        raise ValueError(
+            f"Invalid profile '{profile_name}': codeagent_auth must be an object."
+        )
+    payload = dict(raw_value)
+    normalized_payload: dict[str, str | bool] = {}
+
+    access_token = _resolve_profile_codeagent_token(
+        config_dir=config_dir,
+        profile_name=profile_name,
+        raw_value=payload.get("access_token"),
+        env_values=env_values,
+        field_name="codeagent_auth.access_token",
+        secret_field_name=_MODEL_PROFILE_CODEAGENT_ACCESS_TOKEN_FIELD,
+    )
+    refresh_token = _resolve_profile_codeagent_token(
+        config_dir=config_dir,
+        profile_name=profile_name,
+        raw_value=payload.get("refresh_token"),
+        env_values=env_values,
+        field_name="codeagent_auth.refresh_token",
+        secret_field_name=_MODEL_PROFILE_CODEAGENT_REFRESH_TOKEN_FIELD,
+    )
+    if access_token is not None:
+        normalized_payload["access_token"] = access_token
+    if refresh_token is not None:
+        normalized_payload["refresh_token"] = refresh_token
+    if payload.get("has_access_token") is True:
+        normalized_payload["has_access_token"] = True
+    if payload.get("has_refresh_token") is True:
+        normalized_payload["has_refresh_token"] = True
+    return CodeAgentAuthConfig.model_validate(normalized_payload).with_secret_owner(
+        config_dir=config_dir,
+        owner_id=profile_name,
+    )
+
+
+def _resolve_profile_codeagent_token(
+    *,
+    config_dir: Path,
+    profile_name: str,
+    raw_value: object,
+    env_values: Mapping[str, str],
+    field_name: str,
+    secret_field_name: str,
+) -> Optional[str]:
+    if isinstance(raw_value, str) and raw_value.strip():
+        return _resolve_required_config_value(
+            raw_value,
+            env_values,
+            profile_name=profile_name,
+            field_name=field_name,
+        )
+    return get_secret_store().get_secret(
+        config_dir,
+        namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+        owner_id=profile_name,
+        field_name=secret_field_name,
+    )
 
 
 def _coerce_optional_ssl_verify(value: object, *, profile_name: str) -> bool | None:

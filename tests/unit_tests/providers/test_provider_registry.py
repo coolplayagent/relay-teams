@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from relay_teams.providers.provider_contracts import EchoProvider
 from relay_teams.providers.model_config import (
+    CodeAgentAuthConfig,
     DEFAULT_MAAS_BASE_URL,
     MaaSAuthConfig,
     ModelEndpointConfig,
@@ -139,3 +140,20 @@ def test_create_default_provider_registry_has_maas_support() -> None:
 
     assert isinstance(provider, EchoProvider)
     assert config.base_url == DEFAULT_MAAS_BASE_URL
+
+
+def test_create_default_provider_registry_has_codeagent_support() -> None:
+    registry = create_default_provider_registry(
+        openai_compatible_builder=lambda _config: EchoProvider()
+    )
+
+    provider = registry.create(
+        ModelEndpointConfig(
+            provider=ProviderType.CODEAGENT,
+            model="codeagent-chat",
+            base_url="https://codeagent.example/codeAgentPro",
+            codeagent_auth=CodeAgentAuthConfig(refresh_token="codeagent-refresh-token"),
+        )
+    )
+
+    assert isinstance(provider, EchoProvider)

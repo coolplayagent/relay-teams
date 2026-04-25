@@ -4,10 +4,23 @@ from __future__ import annotations
 from pydantic import JsonValue
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+import pytest
+
+from relay_teams.providers.codeagent_auth import (
+    CodeAgentOAuthTokenResult,
+    clear_codeagent_oauth_session_store,
+    codeagent_access_token_secret_field_name,
+    codeagent_refresh_token_secret_field_name,
+    create_codeagent_oauth_session,
+    get_codeagent_oauth_tokens,
+    save_codeagent_oauth_tokens,
+)
 from relay_teams.providers.model_config import (
+    DEFAULT_CODEAGENT_BASE_URL,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_BASE_URL,
 )
@@ -161,6 +174,53 @@ def test_save_model_profile_preserves_existing_secret_header_when_blank(
     saved_headers = cast(list[dict[str, JsonValue]], saved_profile["headers"])
     assert saved_profile["model"] == "kimi-k2.5"
     assert saved_headers[0]["value"] == "Bearer first-secret"
+
+
+def test_save_model_profile_updates_secret_header_value(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager.save_model_profile(
+        "default",
+        {
+            "provider": "openai_compatible",
+            "model": "gpt-4o-mini",
+            "base_url": "https://example.test/v1",
+            "headers": [
+                {
+                    "name": "Authorization",
+                    "value": "Bearer first-secret",
+                    "secret": True,
+                }
+            ],
+        },
+    )
+
+    manager.save_model_profile(
+        "default",
+        {
+            "provider": "openai_compatible",
+            "model": "gpt-4.1",
+            "base_url": "https://example.test/v1",
+            "headers": [
+                {
+                    "name": "Authorization",
+                    "value": "Bearer second-secret",
+                    "secret": True,
+                }
+            ],
+        },
+    )
+
+    config = manager.get_model_config()
+    saved_profile = cast(dict[str, JsonValue], config["default"])
+    saved_headers = cast(list[dict[str, JsonValue]], saved_profile["headers"])
+
+    assert saved_profile["model"] == "gpt-4.1"
+    assert saved_headers[0]["value"] == "Bearer second-secret"
 
 
 def test_get_model_profiles_uses_default_connect_timeout_when_missing(
@@ -663,6 +723,75 @@ def test_save_model_profile_preserves_existing_maas_password_when_blank(
     assert saved_maas_auth["username"] == "relay-user-2"
 
 
+def test_save_model_profile_stores_codeagent_tokens_from_oauth_session(
+    tmp_path: Path,
+) -> None:
+    clear_codeagent_oauth_session_store()
+    session = create_codeagent_oauth_session(
+        base_url="https://codeagent.example/codeAgentPro",
+        client_id="codeagent-client",
+        scope="SCOPE",
+        scope_resource="devuc",
+    )
+    save_codeagent_oauth_tokens(
+        state=session.state,
+        token_result=CodeAgentOAuthTokenResult(
+            access_token="codeagent-access-token",
+            refresh_token="codeagent-refresh-token",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    manager.save_model_profile(
+        "codeagent-profile",
+        {
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "base_url": "https://codeagent.example/codeAgentPro",
+            "codeagent_auth": {
+                "oauth_session_id": session.auth_session_id,
+            },
+        },
+    )
+
+    profiles = manager.get_model_profiles()
+    codeagent_auth = cast(
+        dict[str, JsonValue],
+        profiles["codeagent-profile"]["codeagent_auth"],
+    )
+    model_payload = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
+    secrets_payload = json.loads(
+        (tmp_path / "secrets.json").read_text(encoding="utf-8")
+    )
+
+    assert codeagent_auth["has_access_token"] is True
+    assert codeagent_auth["has_refresh_token"] is True
+    assert model_payload["codeagent-profile"]["base_url"] == DEFAULT_CODEAGENT_BASE_URL
+    assert model_payload["codeagent-profile"]["codeagent_auth"] == {
+        "has_access_token": True,
+        "has_refresh_token": True,
+    }
+    assert {
+        "namespace": "model_profile",
+        "owner_id": "codeagent-profile",
+        "field_name": codeagent_access_token_secret_field_name(),
+        "storage": "file",
+        "value": "codeagent-access-token",
+    } in secrets_payload["entries"]
+    assert {
+        "namespace": "model_profile",
+        "owner_id": "codeagent-profile",
+        "field_name": codeagent_refresh_token_secret_field_name(),
+        "storage": "file",
+        "value": "codeagent-refresh-token",
+    } in secrets_payload["entries"]
+    clear_codeagent_oauth_session_store()
+
+
 def test_switching_profile_to_maas_removes_stale_api_key_secret(tmp_path: Path) -> None:
     manager = ModelConfigManager(
         config_dir=tmp_path,
@@ -698,3 +827,681 @@ def test_switching_profile_to_maas_removes_stale_api_key_secret(tmp_path: Path) 
 
     assert "api_key" not in field_names
     assert maas_password_secret_field_name() in field_names
+
+
+def test_switching_profile_to_codeagent_clears_inherited_headers(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager.save_model_profile(
+        "default",
+        {
+            "provider": "openai_compatible",
+            "model": "gpt-4o-mini",
+            "base_url": "https://example.test/v1",
+            "headers": [
+                {
+                    "name": "Authorization",
+                    "secret": True,
+                    "value": "Bearer secret-header",
+                }
+            ],
+        },
+    )
+
+    session = create_codeagent_oauth_session(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        client_id="codeagent-client",
+        scope="SCOPE",
+        scope_resource="devuc",
+    )
+    save_codeagent_oauth_tokens(
+        state=session.state,
+        token_result=CodeAgentOAuthTokenResult(
+            access_token="codeagent-access-token",
+            refresh_token="codeagent-refresh-token",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+
+    manager.save_model_profile(
+        "default",
+        {
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "base_url": DEFAULT_CODEAGENT_BASE_URL,
+            "codeagent_auth": {
+                "oauth_session_id": session.auth_session_id,
+            },
+        },
+    )
+
+    model_payload = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
+    secrets_payload = json.loads(
+        (tmp_path / "secrets.json").read_text(encoding="utf-8")
+    )
+    saved_profile = cast(dict[str, JsonValue], model_payload["default"])
+    header_fields = {
+        entry["field_name"]
+        for entry in secrets_payload["entries"]
+        if entry["owner_id"] == "default"
+    }
+
+    assert saved_profile["provider"] == "codeagent"
+    assert saved_profile["headers"] == []
+    assert "header:Authorization" not in header_fields
+    clear_codeagent_oauth_session_store()
+
+
+def test_save_model_config_switch_to_codeagent_clears_header_secrets(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager.save_model_profile(
+        "default",
+        {
+            "provider": "openai_compatible",
+            "model": "gpt-4o-mini",
+            "base_url": "https://example.test/v1",
+            "headers": [
+                {
+                    "name": "Authorization",
+                    "secret": True,
+                    "value": "Bearer secret-header",
+                }
+            ],
+        },
+    )
+
+    session = create_codeagent_oauth_session(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        client_id="codeagent-client",
+        scope="SCOPE",
+        scope_resource="devuc",
+    )
+    save_codeagent_oauth_tokens(
+        state=session.state,
+        token_result=CodeAgentOAuthTokenResult(
+            access_token="codeagent-access-token",
+            refresh_token="codeagent-refresh-token",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+
+    manager.save_model_config(
+        {
+            "default": {
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+                "base_url": DEFAULT_CODEAGENT_BASE_URL,
+                "codeagent_auth": {
+                    "oauth_session_id": session.auth_session_id,
+                },
+            }
+        }
+    )
+
+    model_payload = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
+    secrets_payload = json.loads(
+        (tmp_path / "secrets.json").read_text(encoding="utf-8")
+    )
+    saved_profile = cast(dict[str, JsonValue], model_payload["default"])
+    header_fields = {
+        entry["field_name"]
+        for entry in secrets_payload["entries"]
+        if entry["owner_id"] == "default"
+    }
+
+    assert saved_profile["provider"] == "codeagent"
+    assert saved_profile["headers"] == []
+    assert "header:Authorization" not in header_fields
+    clear_codeagent_oauth_session_store()
+
+
+def test_save_model_config_stores_codeagent_profiles_and_hydrates_auth(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    clear_codeagent_oauth_session_store()
+    session = create_codeagent_oauth_session(
+        base_url="https://codeagent.example/codeAgentPro",
+        client_id="codeagent-client",
+        scope="SCOPE",
+        scope_resource="devuc",
+    )
+    save_codeagent_oauth_tokens(
+        state=session.state,
+        token_result=CodeAgentOAuthTokenResult(
+            access_token="codeagent-access-token",
+            refresh_token="codeagent-refresh-token",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+
+    manager.save_model_config(
+        {
+            "codeagent-profile": {
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+                "base_url": "https://codeagent.example/codeAgentPro",
+                "codeagent_auth": {
+                    "oauth_session_id": session.auth_session_id,
+                },
+            },
+            "raw-note": "keep-me",
+        }
+    )
+
+    raw_config = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
+    hydrated_config = manager.get_model_config()
+    profiles = manager.get_model_profiles()
+    raw_profile = cast(dict[str, JsonValue], raw_config["codeagent-profile"])
+    hydrated_model = cast(
+        dict[str, JsonValue],
+        hydrated_config["codeagent-profile"],
+    )
+    hydrated_model_auth = cast(
+        dict[str, JsonValue],
+        hydrated_model["codeagent_auth"],
+    )
+    hydrated_profile = cast(dict[str, JsonValue], profiles["codeagent-profile"])
+    raw_auth = cast(dict[str, JsonValue], raw_profile["codeagent_auth"])
+    hydrated_auth = cast(dict[str, JsonValue], hydrated_profile["codeagent_auth"])
+
+    assert raw_config["raw-note"] == "keep-me"
+    assert raw_auth["has_access_token"] is True
+    assert raw_auth["has_refresh_token"] is True
+    assert "access_token" not in raw_auth
+    assert "refresh_token" not in raw_auth
+    assert hydrated_model_auth["access_token"] == "codeagent-access-token"
+    assert hydrated_model_auth["refresh_token"] == "codeagent-refresh-token"
+    assert hydrated_auth["has_access_token"] is True
+    assert hydrated_auth["has_refresh_token"] is True
+    clear_codeagent_oauth_session_store()
+
+
+def test_save_model_config_updates_secret_header_value(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager.save_model_profile(
+        "default",
+        {
+            "provider": "openai_compatible",
+            "model": "gpt-4o-mini",
+            "base_url": "https://example.test/v1",
+            "headers": [
+                {
+                    "name": "Authorization",
+                    "secret": True,
+                    "value": "Bearer first-secret",
+                }
+            ],
+        },
+    )
+
+    manager.save_model_config(
+        {
+            "default": {
+                "provider": "openai_compatible",
+                "model": "gpt-4.1",
+                "base_url": "https://example.test/v1",
+                "headers": [
+                    {
+                        "name": "Authorization",
+                        "secret": True,
+                        "value": "Bearer second-secret",
+                    }
+                ],
+            }
+        }
+    )
+
+    config = manager.get_model_config()
+    saved_profile = cast(dict[str, JsonValue], config["default"])
+    saved_headers = cast(list[dict[str, JsonValue]], saved_profile["headers"])
+
+    assert saved_profile["model"] == "gpt-4.1"
+    assert saved_headers[0]["value"] == "Bearer second-secret"
+
+
+def test_rename_to_non_codeagent_clears_overwritten_codeagent_tokens(
+    tmp_path: Path,
+) -> None:
+    clear_codeagent_oauth_session_store()
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    session = create_codeagent_oauth_session(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        client_id="codeagent-client",
+        scope="SCOPE",
+        scope_resource="devuc",
+    )
+    save_codeagent_oauth_tokens(
+        state=session.state,
+        token_result=CodeAgentOAuthTokenResult(
+            access_token="target-access-token",
+            refresh_token="target-refresh-token",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+    manager.save_model_profile(
+        "target-profile",
+        {
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "base_url": DEFAULT_CODEAGENT_BASE_URL,
+            "codeagent_auth": {
+                "oauth_session_id": session.auth_session_id,
+            },
+        },
+    )
+    manager.save_model_profile(
+        "source-profile",
+        {
+            "provider": "openai_compatible",
+            "model": "gpt-4o-mini",
+            "base_url": "https://example.test/v1",
+            "api_key": "source-api-key",
+        },
+    )
+
+    manager.save_model_profile(
+        "target-profile",
+        {
+            "provider": "openai_compatible",
+            "model": "gpt-4.1",
+            "base_url": "https://example.test/v1",
+        },
+        source_name="source-profile",
+    )
+
+    profiles = manager.get_model_profiles()
+    secrets_payload = json.loads(
+        (tmp_path / "secrets.json").read_text(encoding="utf-8")
+    )
+    target_fields = {
+        entry["field_name"]
+        for entry in secrets_payload["entries"]
+        if entry["owner_id"] == "target-profile"
+    }
+
+    assert "source-profile" not in profiles
+    assert profiles["target-profile"]["provider"] == "openai_compatible"
+    assert codeagent_access_token_secret_field_name() not in target_fields
+    assert codeagent_refresh_token_secret_field_name() not in target_fields
+    clear_codeagent_oauth_session_store()
+
+
+def test_prepare_profile_codeagent_auth_reuses_existing_config_when_omitted(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    merged_profile, next_access_token, next_refresh_token, preserve_tokens, _pending = (
+        manager._prepare_profile_codeagent_auth_for_storage(
+            profile_name="codeagent-profile",
+            existing_profile={
+                "provider": "codeagent",
+                "codeagent_auth": {
+                    "has_access_token": True,
+                    "has_refresh_token": True,
+                },
+            },
+            next_profile={
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+            },
+            source_name=None,
+            current_access_token=None,
+            current_refresh_token="saved-refresh-token",
+        )
+    )
+
+    assert merged_profile["codeagent_auth"] == {
+        "has_access_token": True,
+        "has_refresh_token": True,
+    }
+    assert next_access_token is None
+    assert next_refresh_token is None
+    assert preserve_tokens is True
+
+
+def test_prepare_profile_codeagent_auth_requires_config_for_codeagent_profiles(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="CodeAgent model profile requires codeagent_auth configuration.",
+    ):
+        manager._prepare_profile_codeagent_auth_for_storage(
+            profile_name="codeagent-profile",
+            existing_profile={},
+            next_profile={
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+            },
+            source_name=None,
+            current_access_token=None,
+            current_refresh_token=None,
+        )
+
+
+def test_prepare_profile_codeagent_auth_rejects_non_object_payload(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    with pytest.raises(ValueError, match="codeagent_auth must be an object"):
+        manager._prepare_profile_codeagent_auth_for_storage(
+            profile_name="codeagent-profile",
+            existing_profile={},
+            next_profile={
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+                "codeagent_auth": "invalid",
+            },
+            source_name=None,
+            current_access_token=None,
+            current_refresh_token=None,
+        )
+
+
+def test_prepare_profile_codeagent_auth_rejects_missing_oauth_session(
+    tmp_path: Path,
+) -> None:
+    clear_codeagent_oauth_session_store()
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="CodeAgent OAuth session is missing, expired, or already consumed.",
+    ):
+        manager._prepare_profile_codeagent_auth_for_storage(
+            profile_name="codeagent-profile",
+            existing_profile={},
+            next_profile={
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+                "codeagent_auth": {
+                    "oauth_session_id": "missing-session",
+                },
+            },
+            source_name=None,
+            current_access_token=None,
+            current_refresh_token=None,
+        )
+
+
+def test_prepare_profile_codeagent_auth_requires_completed_login_without_saved_tokens(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="CodeAgent auth requires completing SSO login before saving.",
+    ):
+        manager._prepare_profile_codeagent_auth_for_storage(
+            profile_name="codeagent-profile",
+            existing_profile={},
+            next_profile={
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+                "codeagent_auth": {},
+            },
+            source_name=None,
+            current_access_token=None,
+            current_refresh_token=None,
+        )
+
+
+def test_prepare_profile_codeagent_auth_preserves_existing_refresh_token(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+
+    next_profile, next_access_token, next_refresh_token, preserve_tokens, _pending = (
+        manager._prepare_profile_codeagent_auth_for_storage(
+            profile_name="codeagent-profile",
+            existing_profile={
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+                "codeagent_auth": {
+                    "refresh_token": "saved-refresh-token",
+                },
+            },
+            next_profile={
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+                "codeagent_auth": {},
+            },
+            source_name=None,
+            current_access_token=None,
+            current_refresh_token=None,
+        )
+    )
+
+    assert preserve_tokens is True
+    assert next_access_token is None
+    assert next_refresh_token is None
+    assert "codeagent_auth" in next_profile
+
+
+def test_prepare_profile_codeagent_auth_preserves_current_refresh_token(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+
+    _next_profile, next_access_token, next_refresh_token, preserve_tokens, _pending = (
+        manager._prepare_profile_codeagent_auth_for_storage(
+            profile_name="codeagent-profile",
+            existing_profile=None,
+            next_profile={
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+                "codeagent_auth": {},
+            },
+            source_name=None,
+            current_access_token=None,
+            current_refresh_token="current-refresh-token",
+        )
+    )
+
+    assert preserve_tokens is True
+    assert next_access_token is None
+    assert next_refresh_token is None
+
+
+def test_save_model_config_does_not_consume_codeagent_session_before_full_validation(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    clear_codeagent_oauth_session_store()
+    session = create_codeagent_oauth_session(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        client_id="codeagent-client",
+        scope="SCOPE",
+        scope_resource="devuc",
+    )
+    save_codeagent_oauth_tokens(
+        state=session.state,
+        token_result=CodeAgentOAuthTokenResult(
+            access_token="codeagent-access-token",
+            refresh_token="codeagent-refresh-token",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="codeagent_auth must be an object"):
+        manager.save_model_config(
+            {
+                "codeagent-profile": {
+                    "provider": "codeagent",
+                    "model": "codeagent-chat",
+                    "base_url": DEFAULT_CODEAGENT_BASE_URL,
+                    "codeagent_auth": {
+                        "oauth_session_id": session.auth_session_id,
+                    },
+                },
+                "broken-profile": {
+                    "provider": "codeagent",
+                    "model": "broken-codeagent-chat",
+                    "base_url": DEFAULT_CODEAGENT_BASE_URL,
+                    "codeagent_auth": "invalid",
+                },
+            }
+        )
+
+    token_result = get_codeagent_oauth_tokens(session.auth_session_id)
+    assert token_result is not None
+    assert token_result.access_token == "codeagent-access-token"
+    assert token_result.refresh_token == "codeagent-refresh-token"
+    clear_codeagent_oauth_session_store()
+
+
+def test_resolve_codeagent_auth_requires_object_payload(tmp_path: Path) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+
+    with pytest.raises(ValueError, match="codeagent_auth must be an object"):
+        manager._resolve_codeagent_auth(
+            "codeagent-profile",
+            {"codeagent_auth": "invalid"},
+        )
+
+
+def test_resolve_codeagent_auth_prefers_inline_tokens_and_session_id(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+
+    resolved = manager._resolve_codeagent_auth(
+        "codeagent-profile",
+        {
+            "codeagent_auth": {
+                "oauth_session_id": " session-id ",
+                "access_token": " access-token ",
+                "refresh_token": " refresh-token ",
+                "has_access_token": True,
+                "has_refresh_token": True,
+            }
+        },
+    )
+
+    assert resolved is not None
+    assert resolved.oauth_session_id == "session-id"
+    assert resolved.access_token == "access-token"
+    assert resolved.refresh_token == "refresh-token"
+    assert resolved._secret_owner_id == "codeagent-profile"
+
+
+def test_profile_codeagent_secret_accessors_return_none_for_missing_profile_name(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    assert manager._get_profile_codeagent_access_token(None) is None
+    assert manager._get_profile_codeagent_refresh_token(None) is None
+
+
+def test_apply_profile_codeagent_token_update_moves_explicit_tokens_on_rename(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager._set_profile_codeagent_access_token("source-profile", "source-access-token")
+    manager._set_profile_codeagent_refresh_token(
+        "source-profile",
+        "source-refresh-token",
+    )
+
+    manager._apply_profile_codeagent_token_update(
+        name="target-profile",
+        source_name="source-profile",
+        next_access_token="target-access-token",
+        next_refresh_token="target-refresh-token",
+        preserve_tokens=False,
+    )
+
+    assert (
+        manager._get_profile_codeagent_access_token("target-profile")
+        == "target-access-token"
+    )
+    assert (
+        manager._get_profile_codeagent_refresh_token("target-profile")
+        == "target-refresh-token"
+    )
+    assert manager._get_profile_codeagent_access_token("source-profile") is None
+    assert manager._get_profile_codeagent_refresh_token("source-profile") is None
+
+
+def test_apply_profile_codeagent_token_update_copies_source_tokens_when_preserving(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager._set_profile_codeagent_access_token("source-profile", "source-access-token")
+    manager._set_profile_codeagent_refresh_token(
+        "source-profile",
+        "source-refresh-token",
+    )
+
+    manager._apply_profile_codeagent_token_update(
+        name="target-profile",
+        source_name="source-profile",
+        next_access_token=None,
+        next_refresh_token=None,
+        preserve_tokens=True,
+    )
+
+    assert (
+        manager._get_profile_codeagent_access_token("target-profile")
+        == "source-access-token"
+    )
+    assert (
+        manager._get_profile_codeagent_refresh_token("target-profile")
+        == "source-refresh-token"
+    )
+    assert manager._get_profile_codeagent_access_token("source-profile") is None
+    assert manager._get_profile_codeagent_refresh_token("source-profile") is None

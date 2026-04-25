@@ -45,6 +45,7 @@ from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.notifications import NotificationService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.providers.model_config import (
+    CodeAgentAuthConfig,
     ModelEndpointConfig,
     ModelRequestHeader,
     ProviderType,
@@ -1530,3 +1531,29 @@ async def test_prompt_retries_once_when_external_agent_returns_empty_response(
     second_prompt_text = cast(str, second_prompt[0]["text"])
     assert "## Role Prompt" in second_prompt_text
     assert "Your previous reply was empty." in second_prompt_text
+
+
+def test_resolve_transport_agent_config_rejects_codeagent_model_profile(
+    tmp_path: Path,
+) -> None:
+    manager = _build_manager(
+        prompt_text="hello",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+        resolve_model_config=lambda _role, _request: ModelEndpointConfig(
+            provider=ProviderType.CODEAGENT,
+            model="codeagent-chat",
+            base_url="https://codeagent.example/codeAgentPro",
+            codeagent_auth=CodeAgentAuthConfig(refresh_token="codeagent-refresh-token"),
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="CodeAgent model profiles are not supported for external ACP agents.",
+    ):
+        manager._resolve_transport_agent_config(
+            agent=_build_agent(command="opencode"),
+            role=_build_role(),
+            request=_build_request(),
+        )

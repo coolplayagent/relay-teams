@@ -6458,6 +6458,7 @@ installGlobals(createDomEnvironment());
         capture_output=True,
         check=False,
         cwd=str(repo_root),
+        encoding="utf-8",
         text=True,
         timeout=30,
     )
