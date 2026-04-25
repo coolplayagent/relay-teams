@@ -219,6 +219,7 @@ async def test_activate_skill_roles_creates_run_scoped_temporary_roles(
     activated_roles = cast(list[dict[str, object]], result["activated_roles"])
     assert activated_roles[0]["role_id"] == "analyst"
     assert activated_roles[0]["effective_role_id"] == role_spec.role_id
+    assert activated_roles[0]["tools"] == ["read", "office_read_markdown"]
 
 
 def _build_role_registry() -> tuple[RoleRegistry, RoleDefinition]:

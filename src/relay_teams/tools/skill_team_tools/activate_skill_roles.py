@@ -8,7 +8,6 @@ from relay_teams.roles.temporary_role_models import TemporaryRoleSource
 from relay_teams.skills.skill_team_roles import (
     build_skill_team_role_spec,
     list_skill_team_roles,
-    summarize_skill_team_role,
 )
 from relay_teams.tools._description_loader import load_tool_description
 from relay_teams.tools.runtime.context import ToolContext, ToolDeps
@@ -60,9 +59,16 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                         role=entry.role,
                     ),
                 )
-                summary = summarize_skill_team_role(skill=skill, role=entry.role)
-                summary = summary.model_copy(
-                    update={"effective_role_id": activated_role.role_id}
+                summary = entry.summary.model_copy(
+                    update={
+                        "effective_role_id": activated_role.role_id,
+                        "name": activated_role.name,
+                        "description": activated_role.description,
+                        "tools": activated_role.tools,
+                        "mcp_servers": activated_role.mcp_servers,
+                        "skills": activated_role.skills,
+                        "model_profile": activated_role.model_profile,
+                    }
                 )
                 activated_roles.append(skill_team_role_summary_to_json(summary))
             return {

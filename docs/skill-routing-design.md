@@ -146,6 +146,9 @@ This rule applies equally to local runtime tools and external ACP host tools.
 
 The same authorization boundary applies to skill-team tools. A role may list or
 activate skill-local roles only for skills already authorized by its capability set.
+The built-in `MainAgent` and `Coordinator` roles both use the wildcard skill
+capability so normal and orchestration mode can activate team roles without
+manual role edits.
 
 ## Skill-Team Role Tools
 
@@ -160,8 +163,9 @@ flag. The normal flow is:
 
 The `skill-teams` group contains:
 
-- `list_skill_roles(skill_name)`: scans `agents/` and `roles/` under the skill
-  directory and returns role summaries only.
+- `list_skill_roles(skill_name)`: scans skill-local markdown files that expose role
+  front matter and returns role summaries only; directory and workflow file names
+  are not part of the contract.
 - `activate_skill_roles(skill_name, role_ids)`: materializes selected skill-local
   roles as run-scoped effective roles. Returned `effective_role_id` values may be
   passed to existing `spawn_subagent` or `orch_dispatch_task`.

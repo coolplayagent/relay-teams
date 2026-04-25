@@ -24,6 +24,7 @@ class ToolSource(str, Enum):
 SKILL_TOOL_NAMES = frozenset(
     {
         "activate_skill_roles",
+        "list_skills",
         "list_skill_roles",
         "load_skill",
     }

@@ -61,6 +61,7 @@ async def test_run_stdio_server_passes_todo_service_to_host_tool_bridge(
     fake_role = object()
     fake_todo_service = object()
     fake_resolve_model_config = object()
+    fake_runtime_role_resolver = object()
     fake_container = SimpleNamespace(
         role_registry=SimpleNamespace(get=lambda role_id: fake_role),
         task_repo=object(),
@@ -94,6 +95,7 @@ async def test_run_stdio_server_passes_todo_service_to_host_tool_bridge(
         metric_recorder=object(),
         im_tool_service=object(),
         computer_runtime=object(),
+        runtime_role_resolver=fake_runtime_role_resolver,
         resolve_external_agent_model_config=fake_resolve_model_config,
     )
 
@@ -122,6 +124,7 @@ async def test_run_stdio_server_passes_todo_service_to_host_tool_bridge(
     assert bridge is not None
     assert bridge.init_kwargs["todo_service"] is fake_todo_service
     assert bridge.init_kwargs["resolve_model_config"] is fake_resolve_model_config
+    assert bridge.init_kwargs["runtime_role_resolver"] is fake_runtime_role_resolver
     assert bridge.configure_calls[0]["role"] is fake_role
     assert bridge.configure_calls[0]["session_id"] == "session-1"
     assert len(bridge.bound_requests) == 1

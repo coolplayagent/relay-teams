@@ -72,6 +72,7 @@ async def _run_stdio_server() -> None:
         tool_approval_manager=container.tool_approval_manager,
         user_question_manager=container.user_question_manager,
         tool_approval_policy=container.tool_approval_policy,
+        runtime_role_resolver=container.runtime_role_resolver,
         shell_approval_repo=container.shell_approval_repo,
         get_notification_service=lambda: container.notification_service,
         resolve_model_config=container.resolve_external_agent_model_config,

@@ -775,12 +775,16 @@ class BackgroundTaskService:
             output_text=summarized_output,
         )
         runtime = self._subagent_runtimes.pop(background_task_id, None)
-        if runtime is not None:
+        subagent_run_id = (
+            runtime.subagent_run_id if runtime is not None else record.subagent_run_id
+        )
+        if subagent_run_id:
             self._finalize_subagent_run_runtime(
-                subagent_run_id=runtime.subagent_run_id,
+                subagent_run_id=subagent_run_id,
                 status=status,
                 output=summarized_output,
             )
+        if runtime is not None:
             self._require_run_control_manager().unregister_run_task(
                 runtime.subagent_run_id
             )
@@ -1154,12 +1158,9 @@ class BackgroundTaskService:
         session_id: str,
         subagent_role: RoleDefinition | None,
     ) -> None:
-        if subagent_role is None or self._task_execution_service is None:
+        if subagent_role is None:
             return
-        runtime_role_resolver = cast(
-            RuntimeRoleResolver | None,
-            getattr(self._task_execution_service, "runtime_role_resolver", None),
-        )
+        runtime_role_resolver = self._get_runtime_role_resolver()
         if runtime_role_resolver is None:
             return
         runtime_role_resolver.create_temporary_role(
@@ -1167,6 +1168,14 @@ class BackgroundTaskService:
             session_id=session_id,
             source=TemporaryRoleSource.SKILL_TEAM,
             role=_temporary_role_spec_from_definition(subagent_role),
+        )
+
+    def _get_runtime_role_resolver(self) -> RuntimeRoleResolver | None:
+        if self._task_execution_service is None:
+            return None
+        return cast(
+            RuntimeRoleResolver | None,
+            getattr(self._task_execution_service, "runtime_role_resolver", None),
         )
 
     def _prime_subagent_hook_snapshot(self, *, subagent_run_id: str) -> None:
@@ -1322,6 +1331,9 @@ class BackgroundTaskService:
     ) -> None:
         if self._hook_service is not None:
             self._hook_service.clear_run(subagent_run_id)
+        runtime_role_resolver = self._get_runtime_role_resolver()
+        if runtime_role_resolver is not None:
+            runtime_role_resolver.cleanup_run(run_id=subagent_run_id)
         run_runtime_repo = self._run_runtime_repo
         if run_runtime_repo is None:
             return

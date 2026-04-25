@@ -828,6 +828,11 @@ async def test_background_task_service_clones_temporary_subagent_role(
         background_task_id=started.background_task_id,
     )
     assert completed is True
+    with pytest.raises(KeyError, match="Unknown temporary role"):
+        runtime_role_resolver.get_temporary_role(
+            run_id=started.subagent_run_id,
+            role_id=role.role_id,
+        )
 
 
 @pytest.mark.asyncio

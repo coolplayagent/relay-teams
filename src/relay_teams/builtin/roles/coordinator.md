@@ -5,6 +5,8 @@ description: Orchestrates delegated work across specialist roles.
 model_profile: default
 version: 1.0.0
 mode: primary
+skills:
+  - '*'
 tools:
   - orch_create_tasks
   - orch_create_temporary_role

@@ -69,10 +69,10 @@ def test_skill_index_documents_include_lightweight_team_role_signals(
     tmp_path: Path,
 ) -> None:
     skill_dir = tmp_path / "skills" / "team-review"
-    agents_dir = skill_dir / "agents"
-    agents_dir.mkdir(parents=True)
-    (skill_dir / "workflow.md").write_text("Full workflow text.\n", encoding="utf-8")
-    (agents_dir / "analyst.md").write_text(
+    contributors_dir = skill_dir / "contributors"
+    contributors_dir.mkdir(parents=True)
+    (skill_dir / "playbook.md").write_text("Full workflow text.\n", encoding="utf-8")
+    (contributors_dir / "analyst.md").write_text(
         "---\n"
         "role_id: analyst\n"
         "name: Research Analyst\n"
@@ -107,11 +107,11 @@ def test_skill_index_documents_include_lightweight_team_role_signals(
     assert len(documents) == 1
     document = documents[0]
     assert "Team Skill Signals" in document.body
-    assert "- Team file: workflow.md" in document.body
-    assert "- Team role directory: agents" in document.body
+    assert "- Inferred skill team roles: 1" in document.body
     assert "Role analyst: Research Analyst - Collects evidence for review." in (
         document.body
     )
+    assert "contributors/analyst.md" in document.body
     assert "SYSTEM PROMPT SHOULD NOT BE INDEXED" not in document.body
 
 

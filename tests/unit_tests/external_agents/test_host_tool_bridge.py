@@ -161,6 +161,7 @@ def test_build_tool_deps_uses_resolved_model_capabilities() -> None:
         return resolved_config
 
     bridge = object.__new__(host_tool_bridge_module.ExternalAcpHostToolBridge)
+    runtime_role_resolver = object()
     role = RoleDefinition(
         role_id="main-agent",
         name="Main Agent",
@@ -201,9 +202,11 @@ def test_build_tool_deps_uses_resolved_model_capabilities() -> None:
             "_todo_service": None,
             "_run_intent_repo": _MissingRunIntentRepo(),
             "_get_role_registry": lambda: object(),
+            "_get_skill_registry": lambda: object(),
             "_get_mcp_registry": lambda: object(),
             "_get_task_service": lambda: object(),
             "_get_task_execution_service": lambda: object(),
+            "_runtime_role_resolver": runtime_role_resolver,
             "_run_control_manager": object(),
             "_tool_approval_manager": object(),
             "_user_question_manager": None,
@@ -221,6 +224,7 @@ def test_build_tool_deps_uses_resolved_model_capabilities() -> None:
 
     assert requested == [(role, request)]
     assert deps.model_capabilities == resolved_config.capabilities
+    assert deps.runtime_role_resolver is runtime_role_resolver
 
 
 def test_host_tool_bridge_init_stores_model_resolver(
@@ -263,6 +267,7 @@ def test_host_tool_bridge_init_stores_model_resolver(
         "user_question_manager": None,
         "tool_approval_policy": _FakeToolApprovalPolicy(),
         "get_notification_service": lambda: None,
+        "runtime_role_resolver": object(),
         "resolve_model_config": resolver,
     }
     bridge_ctor = cast(
@@ -273,6 +278,7 @@ def test_host_tool_bridge_init_stores_model_resolver(
     )
 
     assert bridge._resolve_model_config is resolver
+    assert bridge._runtime_role_resolver is kwargs["runtime_role_resolver"]
 
 
 def test_resolve_request_model_capabilities_defaults_when_resolution_is_unavailable() -> (
