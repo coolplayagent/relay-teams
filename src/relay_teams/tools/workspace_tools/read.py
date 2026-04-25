@@ -293,7 +293,8 @@ def _project_image_read_result(
     media_part = media_content_part.model_dump(mode="json")
     record_file_read(
         shared_store=ctx.deps.shared_store,
-        task_id=ctx.deps.task_id,
+        session_id=ctx.deps.session_id,
+        conversation_id=ctx.deps.conversation_id,
         path=file_path,
     )
     output = "\n".join(
@@ -406,7 +407,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 output = _inject_instruction_sections(output, instruction_sections)
                 record_file_read(
                     shared_store=ctx.deps.shared_store,
-                    task_id=ctx.deps.task_id,
+                    session_id=ctx.deps.session_id,
+                    conversation_id=ctx.deps.conversation_id,
                     path=file_path,
                 )
                 return _project_read_result(
@@ -481,7 +483,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             output.append("</content>")
             record_file_read(
                 shared_store=ctx.deps.shared_store,
-                task_id=ctx.deps.task_id,
+                session_id=ctx.deps.session_id,
+                conversation_id=ctx.deps.conversation_id,
                 path=file_path,
             )
 

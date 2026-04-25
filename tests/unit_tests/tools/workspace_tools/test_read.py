@@ -493,6 +493,8 @@ async def test_read_tool_reads_notebook_cell_without_outputs(
             workspace=_FakeWorkspace(tmp_path),
             shared_store=shared_store,
             task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
         )
     )
 
@@ -545,7 +547,8 @@ async def test_read_tool_reads_notebook_cell_without_outputs(
     assert (
         load_file_read_state(
             shared_store=shared_store,
-            task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
             path=file_path,
         )
         is not None
@@ -706,6 +709,7 @@ async def test_read_tool_projects_images_for_model_inspection(
             shared_store=SharedStateRepository(tmp_path / "state.db"),
             task_id="task-1",
             session_id="session-1",
+            conversation_id="conversation-1",
             workspace_id="workspace-1",
             run_id="run-1",
             instance_id="inst-1",
@@ -755,7 +759,8 @@ async def test_read_tool_projects_images_for_model_inspection(
     assert (
         load_file_read_state(
             shared_store=ctx.deps.shared_store,
-            task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
             path=file_path.resolve(),
         )
         is not None
@@ -786,6 +791,7 @@ async def test_read_tool_rejects_images_larger_than_limit(
             shared_store=SharedStateRepository(tmp_path / "state.db"),
             task_id="task-1",
             session_id="session-1",
+            conversation_id="conversation-1",
             workspace_id="workspace-1",
             run_id="run-1",
             instance_id="inst-1",
@@ -864,6 +870,7 @@ async def test_read_tool_rejects_images_without_model_image_input(
             shared_store=SharedStateRepository(tmp_path / "state.db"),
             task_id="task-1",
             session_id="session-1",
+            conversation_id="conversation-1",
             workspace_id="workspace-1",
             run_id="run-1",
             instance_id="inst-1",
@@ -929,6 +936,7 @@ async def test_read_tool_rejects_invalid_image_payloads(
             shared_store=SharedStateRepository(tmp_path / "state.db"),
             task_id="task-1",
             session_id="session-1",
+            conversation_id="conversation-1",
             workspace_id="workspace-1",
             run_id="run-1",
             instance_id="inst-1",

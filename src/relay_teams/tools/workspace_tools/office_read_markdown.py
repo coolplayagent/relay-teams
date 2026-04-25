@@ -184,7 +184,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             output.append("</content>")
             record_file_read(
                 shared_store=ctx.deps.shared_store,
-                task_id=ctx.deps.task_id,
+                session_id=ctx.deps.session_id,
+                conversation_id=ctx.deps.conversation_id,
                 path=file_path,
             )
 

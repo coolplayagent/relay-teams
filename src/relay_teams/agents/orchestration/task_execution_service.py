@@ -86,6 +86,7 @@ from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.tools.registry.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.tools.workspace_tools.edit_state import READ_STATE_PREFIX
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
 
@@ -1223,7 +1224,10 @@ class TaskExecutionService(BaseModel):
             ScopeRef(scope_type=ScopeType.ROLE, scope_id=f"{session_id}:{role_id}"),
             ScopeRef(scope_type=ScopeType.CONVERSATION, scope_id=conversation_id),
         )
-        return self.shared_store.snapshot_many(scopes)
+        return self.shared_store.snapshot_many(
+            scopes,
+            exclude_key_prefixes=(READ_STATE_PREFIX,),
+        )
 
     def _ensure_committed_task_prompt(
         self,
