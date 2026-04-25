@@ -45,7 +45,7 @@ from relay_teams.automation.xiaoluban_binding_service import (
 )
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.roles import RoleRegistry
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.sessions.session_models import SessionMode
@@ -54,7 +54,7 @@ from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from relay_teams.workspace import WorkspaceRepository, WorkspaceService
 
 
-class _FakeRunManager:
+class _FakeRunService:
     def __init__(self) -> None:
         self.create_calls: list[object] = []
         self.started_run_ids: list[str] = []
@@ -187,9 +187,9 @@ def _build_service(
     role_registry: _FakeRoleRegistry | None = None,
     get_role_registry: Callable[[], _FakeRoleRegistry | None] | None = None,
     orchestration_settings_service: _FakeOrchestrationSettingsService | None = None,
-) -> tuple[AutomationService, _FakeRunManager, SessionService]:
+) -> tuple[AutomationService, _FakeRunService, SessionService]:
     db_path = tmp_path / "automation.db"
-    run_manager = _FakeRunManager()
+    run_service = _FakeRunService()
     session_service = _build_session_service(db_path)
     workspace_service = WorkspaceService(repository=WorkspaceRepository(db_path))
     _ = workspace_service.create_workspace(
@@ -200,7 +200,7 @@ def _build_service(
         repository=AutomationProjectRepository(db_path),
         event_repository=AutomationEventRepository(db_path),
         session_service=session_service,
-        run_service=cast(RunManager, run_manager),
+        run_service=cast(SessionRunService, run_service),
         feishu_binding_service=cast(
             AutomationFeishuBindingService | None,
             feishu_binding_service,
@@ -224,7 +224,7 @@ def _build_service(
             orchestration_settings_service,
         ),
     )
-    return service, run_manager, session_service
+    return service, run_service, session_service
 
 
 def test_create_project_sets_next_run_at_for_cron(tmp_path: Path) -> None:
@@ -247,7 +247,7 @@ def test_create_project_sets_next_run_at_for_cron(tmp_path: Path) -> None:
 
 
 def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> None:
-    service, run_manager, _ = _build_service(tmp_path)
+    service, run_service, _ = _build_service(tmp_path)
     created = service.create_project(
         AutomationProjectCreateInput(
             name="nightly-report",
@@ -274,10 +274,10 @@ def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> No
     assert session_payload["project_id"] == created.automation_project_id
     assert metadata["automation_reason"] == "manual"
     assert "automation_trigger_event_id" in metadata
-    assert len(run_manager.create_calls) == 1
-    assert run_manager.started_run_ids == ["run-1"]
+    assert len(run_service.create_calls) == 1
+    assert run_service.started_run_ids == ["run-1"]
     assert (
-        getattr(run_manager.create_calls[0], "intent")
+        getattr(run_service.create_calls[0], "intent")
         == "自动化项目“nightly-report”已由系统触发进入本次执行。\n"
         "不要创建、启动或安排新的定时任务；定时调度由后台负责。"
         "请直接完成以下任务：\n"
@@ -597,7 +597,7 @@ def test_run_config_execution_coercion_drops_invalid_persisted_orchestration_pre
 def test_process_due_projects_runs_one_shot_once_and_disables_it(
     tmp_path: Path,
 ) -> None:
-    service, run_manager, _ = _build_service(tmp_path)
+    service, run_service, _ = _build_service(tmp_path)
     run_at = datetime.now(tz=UTC) + timedelta(minutes=5)
     created = service.create_project(
         AutomationProjectCreateInput(
@@ -621,9 +621,9 @@ def test_process_due_projects_runs_one_shot_once_and_disables_it(
     session_payload = cast(dict[str, object], sessions[0])
     metadata = cast(dict[str, str], session_payload["metadata"])
     assert metadata["automation_reason"] == "schedule"
-    assert run_manager.started_run_ids == ["run-1"]
+    assert run_service.started_run_ids == ["run-1"]
     assert (
-        getattr(run_manager.create_calls[0], "intent")
+        getattr(run_service.create_calls[0], "intent")
         == "自动化项目“one-shot-report”已由系统触发进入本次执行。\n"
         "不要创建、启动或安排新的定时任务；定时调度由后台负责。"
         "请直接完成以下任务：\n"
@@ -634,7 +634,7 @@ def test_process_due_projects_runs_one_shot_once_and_disables_it(
 def test_process_due_projects_skips_invalid_persisted_projects(
     tmp_path: Path,
 ) -> None:
-    service, run_manager, _ = _build_service(tmp_path)
+    service, run_service, _ = _build_service(tmp_path)
     run_at = datetime.now(tz=UTC) + timedelta(minutes=5)
     created = service.create_project(
         AutomationProjectCreateInput(
@@ -671,13 +671,13 @@ def test_process_due_projects_skips_invalid_persisted_projects(
     processed = service.process_due_projects(now=run_at + timedelta(minutes=1))
 
     assert processed == (created.automation_project_id,)
-    assert run_manager.started_run_ids == ["run-1"]
+    assert run_service.started_run_ids == ["run-1"]
     with pytest.raises(KeyError):
         service.get_project(invalid.automation_project_id)
 
 
 def test_enable_project_recomputes_schedule_for_manual_run(tmp_path: Path) -> None:
-    service, run_manager, _ = _build_service(tmp_path)
+    service, run_service, _ = _build_service(tmp_path)
     created = service.create_project(
         AutomationProjectCreateInput(
             name="disabled-report",
@@ -700,7 +700,7 @@ def test_enable_project_recomputes_schedule_for_manual_run(tmp_path: Path) -> No
     assert enabled.next_run_at is not None
     assert result["automation_project_id"] == created.automation_project_id
     assert result["reused_bound_session"] is False
-    assert run_manager.started_run_ids == ["run-1"]
+    assert run_service.started_run_ids == ["run-1"]
 
 
 def test_run_now_reuses_bound_session_without_creating_new_session(
@@ -713,7 +713,7 @@ def test_run_now_reuses_bound_session_without_creating_new_session(
             queued=False,
         )
     )
-    service, run_manager, session_service = _build_service(
+    service, run_service, session_service = _build_service(
         tmp_path,
         bound_session_queue_service=bound_queue_service,
         feishu_binding_service=_FakeFeishuBindingService(),
@@ -755,7 +755,7 @@ def test_run_now_reuses_bound_session_without_creating_new_session(
     assert bound_queue_service.materialize_calls == [
         (created.automation_project_id, "manual")
     ]
-    assert run_manager.create_calls == []
+    assert run_service.create_calls == []
     assert len(sessions) == 1
     session_payload = cast(dict[str, object], sessions[0])
     assert session_payload["session_id"] == "bound-session-1"
@@ -774,7 +774,7 @@ def test_run_now_fails_when_bound_session_execution_errors(tmp_path: Path) -> No
             raise RuntimeError("missing_bound_session:session-im-1")
 
     bound_queue_service = _FailingBoundSessionQueueService()
-    service, run_manager, _session_service = _build_service(
+    service, run_service, _session_service = _build_service(
         tmp_path,
         bound_session_queue_service=bound_queue_service,
         feishu_binding_service=_FakeFeishuBindingService(),
@@ -806,7 +806,7 @@ def test_run_now_fails_when_bound_session_execution_errors(tmp_path: Path) -> No
         raise AssertionError("Expected bound session error to propagate")
     updated = service.get_project(created.automation_project_id)
     assert updated.last_error == "missing_bound_session:session-im-1"
-    assert run_manager.create_calls == []
+    assert run_service.create_calls == []
 
 
 def test_create_project_rejects_unknown_workspace(tmp_path: Path) -> None:

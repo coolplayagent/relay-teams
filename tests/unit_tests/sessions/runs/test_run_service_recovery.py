@@ -4,13 +4,18 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Literal, cast
+from typing import Callable, Literal, cast
 
 import pytest
+from pydantic import JsonValue
 
 from relay_teams.agents.orchestration.meta_agent import MetaAgent
 from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.media import content_parts_from_text
+from relay_teams.media import (
+    MediaAssetService,
+    TextContentPart,
+    content_parts_from_text,
+)
 from relay_teams.monitors import (
     MonitorAction,
     MonitorActionType,
@@ -34,8 +39,17 @@ from relay_teams.sessions.runs.background_tasks.service import (
 from relay_teams.sessions.runs.background_tasks.manager import (
     BackgroundTaskManager,
 )
-from relay_teams.sessions.runs.run_manager import AutoRecoveryReason, RunManager
-from relay_teams.sessions.runs.run_models import IntentInput, RunEvent, RunResult
+from relay_teams.sessions.runs.run_recovery import AutoRecoveryReason
+from relay_teams.sessions.runs.run_service import SessionRunService
+from relay_teams.sessions.runs.run_models import (
+    AudioGenerationConfig,
+    ImageGenerationConfig,
+    IntentInput,
+    RunEvent,
+    RunKind,
+    RunResult,
+    VideoGenerationConfig,
+)
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
 from relay_teams.sessions.runs.recoverable_pause import (
     RecoverableRunPauseError,
@@ -43,6 +57,7 @@ from relay_teams.sessions.runs.recoverable_pause import (
 )
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.tools.runtime.approval_ticket_repo import (
+    ApprovalTicketRecord,
     ApprovalTicketRepository,
     ApprovalTicketStatus,
     ApprovalTicketStatusConflictError,
@@ -55,6 +70,8 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
+from relay_teams.sessions.runs.todo_repository import TodoRepository
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.sessions.runs.user_question_manager import (
     UserQuestionClosedError,
     UserQuestionManager,
@@ -74,6 +91,9 @@ from relay_teams.sessions.runs.user_question_repository import (
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 from relay_teams.sessions.session_models import SessionRecord
 from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
@@ -122,15 +142,140 @@ class _EventBus:
         _ = event
 
 
+class _NativeImageProvider(LLMProvider):
+    def __init__(self, output: tuple[TextContentPart, ...] | None = None) -> None:
+        self.output = (
+            output if output is not None else (TextContentPart(text="image ready"),)
+        )
+        self.requests: list[LLMRequest] = []
+
+    async def generate_image(self, request: LLMRequest) -> tuple[TextContentPart, ...]:
+        self.requests.append(request)
+        return self.output
+
+    async def generate_audio(self, request: LLMRequest) -> tuple[TextContentPart, ...]:
+        self.requests.append(request)
+        return self.output
+
+    async def generate_video(self, request: LLMRequest) -> tuple[TextContentPart, ...]:
+        self.requests.append(request)
+        return self.output
+
+
+class _SchedulerDelegateSpy:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def create_run_local(
+        self,
+        intent: IntentInput,
+        *,
+        allow_active_run_attach: bool,
+        source: InjectionSource,
+    ) -> tuple[str, str]:
+        self.calls.append(
+            f"create:{intent.session_id}:{allow_active_run_attach}:{source.value}"
+        )
+        return "run-created", "session-created"
+
+    def queue_new_run(
+        self,
+        *,
+        session_id: str,
+        intent: IntentInput,
+    ) -> tuple[str, str]:
+        self.calls.append(f"queue:{session_id}:{intent.intent}")
+        return "run-queued", session_id
+
+    def ensure_run_started_local(self, run_id: str) -> None:
+        self.calls.append(f"ensure:{run_id}")
+
+    def start_new_run_worker(self, run_id: str) -> None:
+        self.calls.append(f"new-worker:{run_id}")
+
+    def start_resume_worker(self, run_id: str) -> None:
+        self.calls.append(f"resume-worker:{run_id}")
+
+    def stop_run_local(self, run_id: str) -> None:
+        self.calls.append(f"stop:{run_id}")
+
+
+class _AuxiliaryDelegateSpy:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def list_monitors(self, run_id: str) -> tuple[dict[str, object], ...]:
+        self.calls.append(f"list-monitors:{run_id}")
+        return ({"run_id": run_id},)
+
+    def stop_monitor(
+        self,
+        *,
+        run_id: str,
+        monitor_id: str,
+    ) -> dict[str, object]:
+        self.calls.append(f"stop-monitor:{run_id}:{monitor_id}")
+        return {"run_id": run_id, "monitor_id": monitor_id, "status": "stopped"}
+
+    def get_todo(self, run_id: str) -> dict[str, object]:
+        self.calls.append(f"todo:{run_id}")
+        return {"run_id": run_id, "items": []}
+
+
+class _InteractionDelegateSpy:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def inject_subagent_message(
+        self,
+        *,
+        run_id: str,
+        instance_id: str,
+        content: str,
+    ) -> None:
+        self.calls.append(f"inject:{run_id}:{instance_id}:{content}")
+
+    def persist_shell_approval_grants(
+        self,
+        *,
+        ticket: ApprovalTicketRecord | None,
+        action: str,
+    ) -> None:
+        ticket_id = "none" if ticket is None else ticket.tool_call_id
+        self.calls.append(f"persist-shell:{ticket_id}:{action}")
+
+    def list_user_questions(self, run_id: str) -> list[dict[str, JsonValue]]:
+        self.calls.append(f"questions:{run_id}")
+        return [{"run_id": run_id, "status": "pending"}]
+
+
+def _media_role_registry() -> RoleRegistry:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="MainAgent",
+            name="Main Agent",
+            description="Handles direct media generation",
+            version="1",
+            system_prompt="Create requested media.",
+        )
+    )
+    return registry
+
+
 def _build_manager(
     db_path: Path,
     *,
     attach_manager_event_log: bool = True,
     meta_agent: object | None = None,
+    provider_factory: Callable[[RoleDefinition, str | None], LLMProvider] | None = None,
+    role_registry: RoleRegistry | None = None,
+    media_asset_service: MediaAssetService | None = None,
     background_task_manager: BackgroundTaskManager | None = None,
     background_task_service: BackgroundTaskService | None = None,
+    todo_service: TodoService | None = None,
     monitor_service: MonitorService | None = None,
-) -> RunManager:
+) -> SessionRunService:
     control = RunControlManager()
     injection = RunInjectionManager()
     agent_repo = AgentInstanceRepository(db_path)
@@ -153,8 +298,10 @@ def _build_manager(
         event_bus=cast(EventLog, cast(object, _EventBus())),
         run_runtime_repo=run_runtime_repo,
     )
-    return RunManager(
+    return SessionRunService(
         meta_agent=cast(MetaAgent, meta_agent or cast(object, _MetaAgent())),
+        provider_factory=provider_factory,
+        role_registry=role_registry,
         injection_manager=injection,
         run_event_hub=hub,
         run_control_manager=control,
@@ -172,8 +319,10 @@ def _build_manager(
         run_state_repo=run_state_repo,
         background_task_manager=background_task_manager,
         background_task_service=background_task_service,
+        todo_service=todo_service,
         monitor_service=monitor_service,
         notification_service=None,
+        media_asset_service=media_asset_service,
         shell_approval_repo=shell_approval_repo,
         user_question_manager=UserQuestionManager(),
     )
@@ -189,6 +338,101 @@ def _upsert_coordinator(agent_repo: AgentInstanceRepository) -> None:
         workspace_id="default",
         status=InstanceStatus.RUNNING,
     )
+
+
+def test_run_service_compatibility_facade_delegates_to_split_services(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _build_manager(tmp_path / "run_service_facade.db")
+    scheduler = _SchedulerDelegateSpy()
+    auxiliary = _AuxiliaryDelegateSpy()
+    interactions = _InteractionDelegateSpy()
+    monkeypatch.setattr(manager, "_scheduler", scheduler)
+    monkeypatch.setattr(manager, "_auxiliary_service", auxiliary)
+    monkeypatch.setattr(manager, "_interaction_service", interactions)
+
+    intent = IntentInput(
+        session_id="session-1",
+        input=content_parts_from_text("hello"),
+    )
+
+    assert manager._create_run_local(
+        intent,
+        allow_active_run_attach=False,
+        source=InjectionSource.SYSTEM,
+    ) == ("run-created", "session-created")
+    assert manager._queue_new_run(session_id="session-1", intent=intent) == (
+        "run-queued",
+        "session-1",
+    )
+    manager._ensure_run_started_local("run-ensure")
+    manager._start_new_run_worker("run-new-worker")
+    manager._start_resume_worker("run-resume-worker")
+    manager._stop_run_local("run-stop")
+
+    assert manager.list_monitors("run-aux") == ({"run_id": "run-aux"},)
+    assert manager.stop_monitor(run_id="run-aux", monitor_id="monitor-1") == {
+        "run_id": "run-aux",
+        "monitor_id": "monitor-1",
+        "status": "stopped",
+    }
+    assert manager.get_todo("run-aux") == {"run_id": "run-aux", "items": []}
+
+    manager.inject_subagent_message(
+        run_id="run-interaction",
+        instance_id="subagent-1",
+        content="continue",
+    )
+    manager._persist_shell_approval_grants(ticket=None, action="approved")
+    assert manager.list_user_questions("run-interaction") == [
+        {"run_id": "run-interaction", "status": "pending"}
+    ]
+
+    assert scheduler.calls == [
+        "create:session-1:False:system",
+        "queue:session-1:hello",
+        "ensure:run-ensure",
+        "new-worker:run-new-worker",
+        "resume-worker:run-resume-worker",
+        "stop:run-stop",
+    ]
+    assert auxiliary.calls == [
+        "list-monitors:run-aux",
+        "stop-monitor:run-aux:monitor-1",
+        "todo:run-aux",
+    ]
+    assert interactions.calls == [
+        "inject:run-interaction:subagent-1:continue",
+        "persist-shell:none:approved",
+        "questions:run-interaction",
+    ]
+
+
+def test_get_todo_uses_run_session_from_runtime(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_todo_snapshot.db"
+    manager = _build_manager(
+        db_path,
+        todo_service=TodoService(repository=TodoRepository(db_path)),
+    )
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.IDLE,
+    )
+
+    assert manager.get_todo("run-existing") == {
+        "run_id": "run-existing",
+        "session_id": "session-1",
+        "version": 0,
+        "items": [],
+        "updated_at": None,
+        "updated_by_role_id": None,
+        "updated_by_instance_id": None,
+    }
 
 
 def _upsert_instance(
@@ -250,6 +494,110 @@ def _build_background_record(
         output_excerpt="done",
         log_path="tmp/background_tasks/exec-1.log",
     )
+
+
+@pytest.mark.asyncio
+async def test_media_generation_run_uses_native_provider(tmp_path: Path) -> None:
+    provider = _NativeImageProvider()
+    manager = _build_manager(
+        tmp_path / "run_media_generation.db",
+        provider_factory=lambda _role, _session_id: provider,
+        role_registry=_media_role_registry(),
+        media_asset_service=cast(MediaAssetService, object()),
+    )
+
+    result = await manager.run_intent(
+        IntentInput(
+            session_id="session-1",
+            run_kind=RunKind.GENERATE_IMAGE,
+            generation_config=ImageGenerationConfig(),
+            input=content_parts_from_text("draw a compact icon"),
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_RESPONSE
+    assert result.output_text == "image ready"
+    assert len(provider.requests) == 1
+    request = provider.requests[0]
+    assert request.run_kind == RunKind.GENERATE_IMAGE
+    assert request.role_id == "MainAgent"
+    assert request.prompt_text == "draw a compact icon"
+
+
+@pytest.mark.asyncio
+async def test_audio_generation_run_uses_native_provider(tmp_path: Path) -> None:
+    provider = _NativeImageProvider()
+    manager = _build_manager(
+        tmp_path / "run_audio_generation.db",
+        provider_factory=lambda _role, _session_id: provider,
+        role_registry=_media_role_registry(),
+        media_asset_service=cast(MediaAssetService, object()),
+    )
+
+    result = await manager.run_intent(
+        IntentInput(
+            session_id="session-1",
+            run_kind=RunKind.GENERATE_AUDIO,
+            generation_config=AudioGenerationConfig(),
+            input=content_parts_from_text("read this aloud"),
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.output_text == "image ready"
+    assert provider.requests[0].run_kind == RunKind.GENERATE_AUDIO
+
+
+@pytest.mark.asyncio
+async def test_video_generation_run_uses_native_provider(tmp_path: Path) -> None:
+    provider = _NativeImageProvider()
+    manager = _build_manager(
+        tmp_path / "run_video_generation.db",
+        provider_factory=lambda _role, _session_id: provider,
+        role_registry=_media_role_registry(),
+        media_asset_service=cast(MediaAssetService, object()),
+    )
+
+    result = await manager.run_intent(
+        IntentInput(
+            session_id="session-1",
+            run_kind=RunKind.GENERATE_VIDEO,
+            generation_config=VideoGenerationConfig(),
+            input=content_parts_from_text("animate this"),
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.output_text == "image ready"
+    assert provider.requests[0].run_kind == RunKind.GENERATE_VIDEO
+
+
+@pytest.mark.asyncio
+async def test_media_generation_returns_terminal_error_for_empty_output(
+    tmp_path: Path,
+) -> None:
+    provider = _NativeImageProvider(output=())
+    manager = _build_manager(
+        tmp_path / "run_empty_media_generation.db",
+        provider_factory=lambda _role, _session_id: provider,
+        role_registry=_media_role_registry(),
+        media_asset_service=cast(MediaAssetService, object()),
+    )
+
+    result = await manager.run_intent(
+        IntentInput(
+            session_id="session-1",
+            run_kind=RunKind.GENERATE_IMAGE,
+            generation_config=ImageGenerationConfig(),
+            input=content_parts_from_text("draw nothing"),
+        )
+    )
+
+    assert result.status == "failed"
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert result.error_code == "native_generation_failed"
+    assert result.error_message == "Provider returned no media output"
 
 
 def test_create_run_injects_into_active_run(tmp_path: Path) -> None:
@@ -637,7 +985,7 @@ async def test_background_task_completion_starts_new_run_when_live_delivery_is_u
 
 
 @pytest.mark.asyncio
-async def test_run_manager_background_task_endpoints_delegate_to_service(
+async def test_run_service_background_task_endpoints_delegate_to_service(
     tmp_path: Path,
 ) -> None:
     class _CapturingBackgroundTaskService:
@@ -665,7 +1013,7 @@ async def test_run_manager_background_task_endpoints_delegate_to_service(
 
     service = _CapturingBackgroundTaskService(_build_background_record())
     manager = _build_manager(
-        tmp_path / "run_manager_background_task_service.db",
+        tmp_path / "run_service_background_task_service.db",
         background_task_service=cast(BackgroundTaskService, service),
     )
 
@@ -684,6 +1032,60 @@ async def test_run_manager_background_task_endpoints_delegate_to_service(
     assert stopped["status"] == "stopped"
     assert service.calls == [
         ("list", ("run-existing",)),
+        ("get", ("run-existing", "exec-1")),
+        ("stop", ("run-existing", "exec-1")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_service_background_task_endpoints_fall_back_to_manager(
+    tmp_path: Path,
+) -> None:
+    class _CapturingBackgroundTaskManager:
+        def __init__(self, record: BackgroundTaskRecord) -> None:
+            self.record = record
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+        def list_for_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
+            self.calls.append(("list", (run_id,)))
+            return (self.record,)
+
+        def get_for_run(
+            self, *, run_id: str, background_task_id: str
+        ) -> BackgroundTaskRecord:
+            self.calls.append(("get", (run_id, background_task_id)))
+            return self.record
+
+        async def stop_for_run(
+            self, *, run_id: str, background_task_id: str
+        ) -> BackgroundTaskRecord:
+            self.calls.append(("stop", (run_id, background_task_id)))
+            return self.record.model_copy(
+                update={"status": BackgroundTaskStatus.STOPPED}
+            )
+
+    task_manager = _CapturingBackgroundTaskManager(_build_background_record())
+    manager = _build_manager(
+        tmp_path / "run_service_background_task_manager.db",
+        background_task_manager=cast(BackgroundTaskManager, task_manager),
+    )
+
+    listed = manager.list_background_tasks("run-existing")
+    fetched = manager.get_background_task(
+        run_id="run-existing",
+        background_task_id="exec-1",
+    )
+    stopped = await manager.stop_background_task(
+        run_id="run-existing",
+        background_task_id="exec-1",
+    )
+
+    assert [item["background_task_id"] for item in listed] == ["exec-1"]
+    assert fetched["background_task_id"] == "exec-1"
+    assert stopped["status"] == "stopped"
+    assert task_manager.calls == [
+        ("list", ("run-existing",)),
+        ("get", ("run-existing", "exec-1")),
         ("get", ("run-existing", "exec-1")),
         ("stop", ("run-existing", "exec-1")),
     ]
@@ -753,7 +1155,7 @@ def test_create_monitor_validates_background_task_belongs_to_run(
     )
     monitor_service = _CapturingMonitorService()
     manager = _build_manager(
-        tmp_path / "run_manager_monitor_validation.db",
+        tmp_path / "run_service_monitor_validation.db",
         background_task_service=cast(BackgroundTaskService, background_task_service),
         monitor_service=cast(MonitorService, monitor_service),
     )
@@ -2749,9 +3151,10 @@ async def test_worker_caps_invalid_tool_args_auto_recovery_without_event_log(
     assert runtime.status == RunRuntimeStatus.PAUSED
     assert runtime.phase == RunRuntimePhase.AWAITING_RECOVERY
     assert (
-        manager._auto_recovery_attempts[
-            ("run-existing", AutoRecoveryReason.INVALID_TOOL_ARGS_JSON)
-        ]
+        manager._recovery_service.count_attempts(
+            "run-existing",
+            reason=AutoRecoveryReason.INVALID_TOOL_ARGS_JSON,
+        )
         == 1
     )
 

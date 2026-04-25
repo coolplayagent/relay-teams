@@ -80,7 +80,10 @@ def test_pr_checks_gate_changed_line_unit_coverage() -> None:
     assert "--cov=src/relay_teams" in pr_workflow
     assert "--cov=src/relay_teams_evals" in pr_workflow
     assert "--cov-report=xml:coverage.xml" in pr_workflow
-    assert "diff-cover coverage.xml --config-file pyproject.toml" in pr_workflow
+    assert "git diff -C1% origin/main...HEAD" in pr_workflow
+    assert "diff-cover coverage.xml" in pr_workflow
+    assert "--config-file pyproject.toml" in pr_workflow
+    assert "--diff-file .tmp/diff-cover-copy-aware.diff" in pr_workflow
 
 
 def test_qodana_code_quality_workflow_uses_cloud_scan() -> None:
@@ -103,21 +106,46 @@ def test_qodana_code_quality_workflow_uses_cloud_scan() -> None:
     assert "QODANA_TOKEN" in qodana_workflow
     assert 'QODANA_ENDPOINT: "https://qodana.cloud"' in qodana_workflow
     assert "fetch-depth: 0" in qodana_workflow
+    assert 'qodana "${qodana_args[@]}"' in qodana_workflow
+    assert "Qodana reported findings" not in qodana_workflow
+    assert "|| true" not in qodana_workflow
     assert "linter: qodana-python-community" in qodana_config
     assert "failThreshold: 0" in qodana_config
     assert "failureConditions" not in qodana_config
 
 
-def test_qodana_excludes_known_false_positives_for_provider_sso_modules() -> None:
+def test_qodana_config_only_excludes_non_source_output_paths() -> None:
     qodana_config = (_project_root() / "qodana.yaml").read_text(encoding="utf-8")
+    allowed_paths = {
+        ".agent_teams",
+        ".codex",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tmp",
+        ".venv",
+        "docs",
+        "frontend/dist",
+        "openspec",
+    }
 
-    assert "name: PyInconsistentReturnsInspection" in qodana_config
-    assert "name: PyMethodMayBeStaticInspection" in qodana_config
-    assert "src/relay_teams/interfaces/server/routers/system.py" in qodana_config
-    assert "src/relay_teams/providers/codeagent_auth.py" in qodana_config
-    assert "src/relay_teams/providers/model_config.py" in qodana_config
-    assert "src/relay_teams/providers/model_config_manager.py" in qodana_config
-    assert "src/relay_teams/providers/model_connectivity.py" in qodana_config
+    assert "exclude:" in qodana_config
+    assert "name: All" in qodana_config
+    for path in allowed_paths:
+        assert f"- {path}" in qodana_config
+    assert "src/relay_teams/" not in qodana_config
+    assert "PyTypeHintsInspection" not in qodana_config
+    assert "PyMethodMayBeStaticInspection" not in qodana_config
+    assert "PyProtectedMemberInspection" not in qodana_config
+    assert "PyInconsistentReturnsInspection" not in qodana_config
+
+
+def test_agents_guidelines_forbid_qodana_source_excludes() -> None:
+    agents_guidelines = (_project_root() / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "Do not fix Qodana CI failures by adding source-file" in agents_guidelines
+    assert "Only non-source generated/cache/output directories may be excluded" in (
+        agents_guidelines
+    )
 
 
 def test_pptx_craft_package_metadata_preserves_esm_runtime_contract() -> None:

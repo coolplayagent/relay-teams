@@ -12,10 +12,11 @@ from typing import Callable, cast
 import pytest
 from pydantic import JsonValue
 
+import relay_teams.triggers.service as trigger_service_module
 from relay_teams.monitors import MonitorService
 from relay_teams.automation.automation_service import AutomationService
 from relay_teams.env.github_config_models import GitHubConfig
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.triggers import (
@@ -114,6 +115,14 @@ class _FakeGitHubApiClient:
     def __init__(self) -> None:
         self.deleted_webhooks: list[tuple[str, str, str]] = []
         self.registered_webhooks: list[tuple[str, str, str, tuple[str, ...], str]] = []
+        self.created_comments: list[tuple[str, str, int, str]] = []
+        self.added_labels: list[tuple[str, str, int, tuple[str, ...]]] = []
+        self.removed_labels: list[tuple[str, str, int, str]] = []
+        self.added_assignees: list[tuple[str, str, int, tuple[str, ...]]] = []
+        self.removed_assignees: list[tuple[str, str, int, tuple[str, ...]]] = []
+        self.commit_statuses: list[
+            tuple[str, str, str, str, str, str | None, str | None]
+        ] = []
         self.pull_request_files: tuple[str, ...] = ()
         self.available_repositories: tuple[dict[str, JsonValue], ...] = (
             {
@@ -191,6 +200,88 @@ class _FakeGitHubApiClient:
         _ = (owner, repo, pull_request_number)
         return self.pull_request_files
 
+    def create_issue_comment(
+        self,
+        *,
+        token: str,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        body: str,
+    ) -> dict[str, JsonValue]:
+        assert token == "ghp_test"
+        self.created_comments.append((owner, repo, issue_number, body))
+        return {"id": 1001}
+
+    def add_labels(
+        self,
+        *,
+        token: str,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        labels: tuple[str, ...],
+    ) -> dict[str, JsonValue]:
+        assert token == "ghp_test"
+        self.added_labels.append((owner, repo, issue_number, labels))
+        return {"labels": list(labels)}
+
+    def remove_label(
+        self,
+        *,
+        token: str,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        label: str,
+    ) -> None:
+        assert token == "ghp_test"
+        self.removed_labels.append((owner, repo, issue_number, label))
+
+    def add_assignees(
+        self,
+        *,
+        token: str,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        assignees: tuple[str, ...],
+    ) -> dict[str, JsonValue]:
+        assert token == "ghp_test"
+        self.added_assignees.append((owner, repo, issue_number, assignees))
+        return {"assignees": list(assignees)}
+
+    def remove_assignees(
+        self,
+        *,
+        token: str,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        assignees: tuple[str, ...],
+    ) -> dict[str, JsonValue]:
+        assert token == "ghp_test"
+        self.removed_assignees.append((owner, repo, issue_number, assignees))
+        return {"assignees": list(assignees)}
+
+    def set_commit_status(
+        self,
+        *,
+        token: str,
+        owner: str,
+        repo: str,
+        sha: str,
+        state: str,
+        context: str,
+        description: str | None,
+        target_url: str | None,
+    ) -> dict[str, JsonValue]:
+        assert token == "ghp_test"
+        self.commit_statuses.append(
+            (owner, repo, sha, state, context, description, target_url)
+        )
+        return {"id": "status-1"}
+
 
 class _FakeEventLog:
     def list_by_trace_with_ids(self, trace_id: str) -> tuple[dict[str, JsonValue], ...]:
@@ -230,7 +321,7 @@ def _build_service(
         github_client=cast(GitHubApiClient, github_client),
         automation_service=cast(AutomationService, object()),
         session_service=cast(SessionService, object()),
-        run_service=cast(RunManager, object()),
+        run_service=cast(SessionRunService, object()),
         run_runtime_repo=cast(RunRuntimeRepository, object()),
         event_log=_FakeEventLog(),
         monitor_service=cast(MonitorService | None, monitor_service),
@@ -259,9 +350,235 @@ def _create_account(service: GitHubTriggerService) -> str:
     return account.account_id
 
 
+def _create_repo_subscription(service: GitHubTriggerService) -> str:
+    account_id = _create_account(service)
+    created = service.create_repo_subscription(
+        GitHubRepoSubscriptionCreateInput(
+            account_id=account_id,
+            owner="coolplayagent",
+            repo_name="relay-teams",
+            callback_url="https://example.test/webhooks/github",
+            subscribed_events=("pull_request",),
+        )
+    )
+    return created.repo_subscription_id
+
+
 def _build_signature(*, body: bytes, secret: str) -> str:
     digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     return f"sha256={digest}"
+
+
+def test_execute_github_actions_returns_request_and_response_payloads(
+    tmp_path: Path,
+) -> None:
+    service, repository, _, github_client = _build_service(tmp_path)
+    repo = repository.get_repo_subscription(_create_repo_subscription(service))
+    context = {
+        "pull_request_number": "42",
+        "head_sha": "abc123",
+        "title": "Fix issue",
+    }
+
+    comment_payload, comment_response, comment_resource_id = service._execute_action(
+        action_spec=GitHubActionSpec(
+            action_type=GitHubActionType.COMMENT,
+            body_template="Review {title}",
+        ),
+        token="ghp_test",
+        repo=repo,
+        context=context,
+    )
+    assert comment_payload == {"body": "Review Fix issue"}
+    assert comment_response == {"id": 1001}
+    assert comment_resource_id == "1001"
+
+    label_payload, label_response, label_resource_id = service._execute_action(
+        action_spec=GitHubActionSpec(
+            action_type=GitHubActionType.ADD_LABELS,
+            labels=("needs-review",),
+        ),
+        token="ghp_test",
+        repo=repo,
+        context=context,
+    )
+    assert label_payload == {"labels": ["needs-review"]}
+    assert label_response == {"labels": ["needs-review"]}
+    assert label_resource_id is None
+
+    removed_payload, removed_response, removed_resource_id = service._execute_action(
+        action_spec=GitHubActionSpec(
+            action_type=GitHubActionType.REMOVE_LABELS,
+            labels=("stale",),
+        ),
+        token="ghp_test",
+        repo=repo,
+        context=context,
+    )
+    assert removed_payload == {"labels": ["stale"]}
+    assert removed_response == {}
+    assert removed_resource_id is None
+
+    assignee_payload, assignee_response, assignee_resource_id = service._execute_action(
+        action_spec=GitHubActionSpec(
+            action_type=GitHubActionType.ASSIGN_USERS,
+            assignees=("alice",),
+        ),
+        token="ghp_test",
+        repo=repo,
+        context=context,
+    )
+    assert assignee_payload == {"assignees": ["alice"]}
+    assert assignee_response == {"assignees": ["alice"]}
+    assert assignee_resource_id is None
+
+    unassign_payload, unassign_response, unassign_resource_id = service._execute_action(
+        action_spec=GitHubActionSpec(
+            action_type=GitHubActionType.UNASSIGN_USERS,
+            assignees=("bob",),
+        ),
+        token="ghp_test",
+        repo=repo,
+        context=context,
+    )
+    assert unassign_payload == {"assignees": ["bob"]}
+    assert unassign_response == {"assignees": ["bob"]}
+    assert unassign_resource_id is None
+
+    status_payload, status_response, status_resource_id = service._execute_action(
+        action_spec=GitHubActionSpec(
+            action_type=GitHubActionType.SET_COMMIT_STATUS,
+            commit_status_state="success",
+            commit_status_context="ci/unit",
+            commit_status_description_template="Done {title}",
+            commit_status_target_url_template="https://example.test/{head_sha}",
+        ),
+        token="ghp_test",
+        repo=repo,
+        context=context,
+    )
+    assert status_payload == {
+        "sha": "abc123",
+        "state": "success",
+        "context": "ci/unit",
+        "description": "Done Fix issue",
+        "target_url": "https://example.test/abc123",
+    }
+    assert status_response == {"id": "status-1"}
+    assert status_resource_id == "status-1"
+    assert github_client.created_comments == [
+        ("coolplayagent", "relay-teams", 42, "Review Fix issue")
+    ]
+    assert github_client.removed_labels == [
+        ("coolplayagent", "relay-teams", 42, "stale")
+    ]
+
+
+def test_match_rule_reports_each_mismatch_reason(tmp_path: Path) -> None:
+    service, _repository, _, _github_client = _build_service(tmp_path)
+    match_config = TriggerRuleMatchConfig(
+        event_name="pull_request",
+        actions=("closed",),
+        base_branches=("main",),
+        draft_pr=False,
+        check_conclusions=("success",),
+    )
+
+    def delivery(
+        *,
+        event_name: str = "pull_request",
+        event_action: str | None = "closed",
+        normalized_payload: dict[str, JsonValue] | None = None,
+    ) -> TriggerDeliveryRecord:
+        return TriggerDeliveryRecord(
+            trigger_delivery_id="delivery-1",
+            event_name=event_name,
+            event_action=event_action,
+            signature_status=TriggerDeliverySignatureStatus.VALID,
+            ingest_status=TriggerDeliveryIngestStatus.RECEIVED,
+            payload={},
+            normalized_payload=normalized_payload
+            or {
+                "base_branch": "main",
+                "draft_pr": False,
+                "check_conclusion": "success",
+            },
+        )
+
+    assert service._match_rule(
+        match_config, delivery=delivery(event_name="issues")
+    ) == (False, "event_mismatch", "event_name did not match")
+    assert service._match_rule(
+        match_config, delivery=delivery(event_action="opened")
+    ) == (False, "action_mismatch", "event_action did not match")
+    assert service._match_rule(
+        match_config,
+        delivery=delivery(normalized_payload={"base_branch": "dev"}),
+    ) == (False, "base_branch_mismatch", "base_branch did not match")
+    assert service._match_rule(
+        match_config,
+        delivery=delivery(
+            normalized_payload={
+                "base_branch": "main",
+                "draft_pr": True,
+                "check_conclusion": "success",
+            }
+        ),
+    ) == (False, "draft_pr_mismatch", "draft_pr did not match")
+    assert service._match_rule(
+        match_config,
+        delivery=delivery(
+            normalized_payload={
+                "base_branch": "main",
+                "draft_pr": False,
+                "check_conclusion": "failure",
+            }
+        ),
+    ) == (
+        False,
+        "check_conclusion_mismatch",
+        "check_conclusion did not match",
+    )
+    assert service._match_rule(match_config, delivery=delivery()) == (
+        True,
+        "matched",
+        None,
+    )
+
+
+def test_github_payload_helpers_handle_invalid_and_fallback_shapes() -> None:
+    parsed, error = trigger_service_module._decode_json_payload(b"{")
+    assert parsed == {}
+    assert error is not None
+    parsed, error = trigger_service_module._decode_json_payload(b"[]")
+    assert parsed == {}
+    assert error == "GitHub webhook payload must be a JSON object"
+    parsed, error = trigger_service_module._decode_json_payload(
+        b'{"repository":{"name":"relay-teams"}}'
+    )
+    assert parsed == {"repository": {"name": "relay-teams"}}
+    assert error is None
+
+    assert trigger_service_module._resolve_repository_identity(
+        {"full_name": "coolplayagent/relay-teams"},
+        owner="fallback",
+        repo_name="repo",
+    ) == ("coolplayagent", "relay-teams", "coolplayagent/relay-teams")
+    assert trigger_service_module._resolve_repository_identity(
+        {"owner": {"login": "owner"}, "name": "repo"},
+        owner="fallback",
+        repo_name="fallback-repo",
+    ) == ("owner", "repo", "owner/repo")
+    assert trigger_service_module._resolve_repository_identity(
+        {},
+        owner="fallback",
+        repo_name="fallback-repo",
+    ) == ("fallback", "fallback-repo", "fallback/fallback-repo")
+    assert trigger_service_module._json_string_tuple(None) == ()
+    assert trigger_service_module._json_string_tuple(["a", "", " b ", 3]) == (
+        "a",
+        "b",
+    )
 
 
 def test_create_repo_subscription_starts_unregistered_without_rules(

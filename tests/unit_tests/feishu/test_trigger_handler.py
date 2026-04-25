@@ -30,7 +30,7 @@ from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
 from relay_teams.sessions.session_service import SessionService
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from relay_teams.sessions.session_models import SessionMode, SessionRecord
 
@@ -335,7 +335,7 @@ def _build_handler(
     im_tool_service = _FakeImToolService(feishu_client)
     im_session_command_service = ImSessionCommandService(
         session_service=cast(SessionService, session_service),
-        run_service=cast(RunManager, _FakeRunService()),
+        run_service=cast(SessionRunService, _FakeRunService()),
         external_session_binding_repo=bindings,
         gateway_session_service=cast(
             GatewaySessionService,

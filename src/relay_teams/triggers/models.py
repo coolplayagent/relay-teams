@@ -379,6 +379,7 @@ class TriggerActionAttemptRecord(BaseModel):
 __all__ = [
     "GitHubActionSpec",
     "GitHubActionType",
+    "GitHubAvailableRepositoryRecord",
     "GitHubRepoSubscriptionCreateInput",
     "GitHubRepoSubscriptionRecord",
     "GitHubRepoSubscriptionUpdateInput",

@@ -37,7 +37,7 @@ from relay_teams.gateway.wechat.service import WeChatGatewayService
 from relay_teams.media import content_parts_from_text
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.runs.enums import RunEventType
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_models import RunEvent, RunResult
 from relay_teams.sessions.session_models import SessionMode
 
@@ -288,7 +288,6 @@ def test_handle_message_intercepts_session_command() -> None:
 
     service._handle_message(
         _account(),
-        "bot-token",
         WeChatInboundMessage(
             from_user_id="wx-peer-1",
             item_list=(_text_item("help"),),
@@ -324,7 +323,6 @@ def test_handle_message_sends_receipt_before_starting_run() -> None:
 
     service._handle_message(
         _account(),
-        "bot-token",
         WeChatInboundMessage(
             from_user_id="wx-peer-1",
             context_token="ctx-1",
@@ -354,7 +352,6 @@ def test_handle_message_queues_when_run_is_already_active() -> None:
 
     service._handle_message(
         _account(),
-        "bot-token",
         WeChatInboundMessage(
             from_user_id="wx-peer-1",
             item_list=(_text_item("follow up"),),
@@ -959,6 +956,10 @@ class _FakeRunService:
         self.created_intents: list[dict[str, str | bool]] = []
         self.ensured_run_ids: list[str] = []
 
+    @property
+    def bound_event_loop(self) -> asyncio.AbstractEventLoop | None:
+        return self._event_loop
+
     async def stream_run_events(self, run_id: str) -> AsyncIterator[RunEvent]:
         for event in self._events:
             assert event.run_id == run_id
@@ -1026,7 +1027,7 @@ def _build_service(
         GatewaySessionService,
         gateway_session_service,
     )
-    service._run_service = cast(RunManager, run_service)
+    service._run_service = cast(SessionRunService, run_service)
     service._session_service = cast(
         SessionService,
         _FakeSessionService(has_active_run=has_active_run),

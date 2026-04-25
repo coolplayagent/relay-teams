@@ -19,7 +19,7 @@ from relay_teams.media import (
     MediaRefContentPart,
 )
 from relay_teams.monitors import MonitorActionType, MonitorRule, MonitorSourceKind
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.enums import ExecutionMode, InjectionSource
 from relay_teams.sessions.runs.user_question_models import (
     UserQuestionAnswerSubmission,
@@ -89,7 +89,7 @@ class CreateRunRequest(BaseModel):
     input: tuple[ContentPart, ...] = Field(default_factory=tuple)
     display_input: tuple[ContentPart, ...] = Field(default_factory=tuple)
     run_kind: RunKind = RunKind.CONVERSATION
-    generation_config: MediaGenerationConfig | None = None
+    generation_config: MediaGenerationConfig | None = Field(default=None)
     execution_mode: ExecutionMode = ExecutionMode.AI
     yolo: bool = False
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
@@ -197,7 +197,7 @@ class MonitorResponse(BaseModel):
 async def create_run(
     request: Request,
     req: CreateRunRequest,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
     skill_registry: Annotated[SkillRegistry, Depends(get_skill_registry)],
 ) -> CreateRunResponse:
     started = time.perf_counter()
@@ -301,7 +301,7 @@ async def create_run(
 @router.get("/{run_id}/events")
 async def stream_run_events(
     run_id: RequiredIdentifierStr,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
     after_event_id: int = 0,
 ) -> StreamingResponse:
     async def event_generator():
@@ -356,7 +356,7 @@ async def stream_run_events(
 @router.get("/{run_id}/monitors")
 async def list_monitors(
     run_id: RequiredIdentifierStr,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
         monitors = await asyncio.to_thread(service.list_monitors, run_id)
@@ -372,7 +372,7 @@ async def list_monitors(
 async def create_monitor(
     run_id: RequiredIdentifierStr,
     req: CreateMonitorRequest,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> MonitorResponse:
     try:
         monitor = await asyncio.to_thread(
@@ -404,7 +404,7 @@ async def create_monitor(
 async def stop_monitor(
     run_id: RequiredIdentifierStr,
     monitor_id: RequiredIdentifierStr,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> MonitorResponse:
     try:
         monitor = await asyncio.to_thread(
@@ -424,7 +424,7 @@ async def stop_monitor(
 async def inject_message(
     run_id: RequiredIdentifierStr,
     req: InjectMessageRequest,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
         result = await asyncio.to_thread(
@@ -452,7 +452,7 @@ async def inject_message(
 @router.get("/{run_id}/tool-approvals")
 async def list_tool_approvals(
     run_id: RequiredIdentifierStr,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> list[dict[str, str]]:
     with bind_trace_context(trace_id=run_id, run_id=run_id):
         result = await asyncio.to_thread(service.list_open_tool_approvals, run_id)
@@ -469,7 +469,7 @@ async def list_tool_approvals(
 @router.get("/{run_id}/questions")
 async def list_user_questions(
     run_id: RequiredIdentifierStr,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> list[dict[str, object]]:
     try:
         questions = await asyncio.to_thread(service.list_user_questions, run_id)
@@ -483,7 +483,7 @@ async def answer_user_question(
     run_id: RequiredIdentifierStr,
     question_id: RequiredIdentifierStr,
     req: AnswerUserQuestionRequest,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
         submission = UserQuestionAnswerSubmission.model_validate(
@@ -520,7 +520,7 @@ async def answer_user_question(
 @router.get("/{run_id}/background-tasks")
 async def list_background_tasks(
     run_id: RequiredIdentifierStr,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
         background_tasks = await asyncio.to_thread(
@@ -534,7 +534,7 @@ async def list_background_tasks(
 @router.get("/{run_id}/todo")
 async def get_todo(
     run_id: RequiredIdentifierStr,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
         todo = await asyncio.to_thread(service.get_todo, run_id)
@@ -547,7 +547,7 @@ async def get_todo(
 async def get_background_task(
     run_id: RequiredIdentifierStr,
     background_task_id: RequiredIdentifierStr,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> dict[str, object]:
     try:
         background_task = await asyncio.to_thread(
@@ -567,7 +567,7 @@ async def get_background_task(
 async def stop_background_task(
     run_id: RequiredIdentifierStr,
     background_task_id: RequiredIdentifierStr,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> StopBackgroundTaskResponse:
     try:
         result = await service.stop_background_task(
@@ -584,7 +584,7 @@ async def resolve_tool_approval(
     run_id: RequiredIdentifierStr,
     tool_call_id: RequiredIdentifierStr,
     req: ResolveToolApprovalRequest,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> dict[str, str]:
     try:
         await asyncio.to_thread(
@@ -615,7 +615,7 @@ async def resolve_tool_approval(
 async def stop_run(
     run_id: RequiredIdentifierStr,
     req: StopRunRequest,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> dict[str, str]:
     try:
         if req.scope == "main":
@@ -662,7 +662,7 @@ async def stop_run(
 @router.post("/{run_id}:resume")
 async def resume_run(
     run_id: RequiredIdentifierStr,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> dict[str, str]:
     try:
 
@@ -692,7 +692,7 @@ async def inject_subagent(
     run_id: RequiredIdentifierStr,
     instance_id: RequiredIdentifierStr,
     req: InjectSubagentRequest,
-    service: Annotated[RunManager, Depends(get_run_service)],
+    service: Annotated[SessionRunService, Depends(get_run_service)],
 ) -> dict[str, str]:
     try:
         await asyncio.to_thread(

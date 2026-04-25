@@ -152,7 +152,7 @@ from relay_teams.sessions.runs.active_run_registry import ActiveSessionRunRegist
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig, load_runtime_config
 from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
@@ -700,7 +700,7 @@ class ServerContainer:
             run_event_hub=self.run_event_hub,
         )
         self.meta_agent: MetaAgent = MetaAgent(coordinator=coordinator)
-        self.run_service: RunManager = RunManager(
+        self.run_service: SessionRunService = SessionRunService(
             meta_agent=self.meta_agent,
             provider_factory=self._provider_factory,
             role_registry=self.role_registry,
