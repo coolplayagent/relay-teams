@@ -1,0 +1,50 @@
+.message {
+    margin-bottom: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    animation: slideUp 0.3s ease backwards;
+}
+
+.msg-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.msg-role {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.125rem 0.5rem;
+    border-radius: 4px;
+}
+
+.role-user {
+    background-color: var(--bg-hover-strong);
+    color: var(--text-primary);
+}
+
+.role-agent {
+    background-color: color-mix(in srgb, var(--primary) 18%, transparent);
+    color: var(--primary-hover);
+}
+
+.role-coordinator {
+    background-color: rgba(245, 158, 11, 0.2);
+    color: var(--warning);
+}
+
+.msg-content {
+    font-size: 0.9375rem;
+    line-height: 1.72;
+    color: var(--text-msg-content);
+}
+
+.msg-text.plain-stream-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* Markdown styling inside message content */

@@ -135,10 +135,10 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "syncPendingRoundSelection" in timeline_script
     assert "clearPendingRoundSelection" in timeline_script
     assert "emphasizeRoundSection" in timeline_script
-    assert "round-nav-toggle" in navigator_script
-    assert "ROUND_NAV_COLLAPSED_KEY" in navigator_script
-    assert "let scheduledOffsetFrame = 0;" in navigator_script
-    assert "function scheduleOffsetApply(nav) {" in navigator_script
+    assert "round-nav-timeline" in navigator_script
+    assert "ROUND_NAV_VISIBLE_CLASS" in navigator_script
+    assert "function setTimelineVisibility(visible) {" in navigator_script
+    assert "round-nav-dot" in navigator_script
     assert "round.intent || t('rounds.no_intent')" in navigator_script
     assert "alert(" not in model_profiles_script
     assert "confirm(" not in model_profiles_script
@@ -274,8 +274,7 @@ def test_light_theme_workspace_uses_shared_surface_hierarchy() -> None:
         in components_css
     )
     assert (
-        "border-color: color-mix(in srgb, var(--primary) 22%, var(--border-color) 78%);"
-        in components_css
+        '.round-nav-node[data-state-tone="success"] .round-nav-dot {' in components_css
     )
     assert "body.light-theme .round-state-pill," in components_css
     assert "background: transparent;" in components_css

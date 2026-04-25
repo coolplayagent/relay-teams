@@ -26,8 +26,10 @@ from relay_teams.sessions.runs.runtime_config import RuntimeConfig
 from relay_teams.sessions.session_rounds_projection import (
     approvals_to_projection,
     build_session_rounds,
+    build_session_timeline_rounds,
     find_round_by_run_id,
     paginate_rounds,
+    timeline_rounds,
 )
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
@@ -939,6 +941,10 @@ class SessionService:
             if self._todo_service is not None
             else {}
         )
+        intent_input_parts_by_run = self._session_run_intent_input_parts_by_run(
+            session_id
+        )
+        runtime_by_run = self._session_run_runtime_by_run(session_id)
         rounds = build_session_rounds(
             session_id=session_id,
             agent_repo=self._agent_repo,
@@ -955,18 +961,20 @@ class SessionService:
                     include_hidden_from_context=True,
                 ),
             ),
-            get_run_intent_input=self._get_run_intent_input_parts,
+            get_run_intent_input=intent_input_parts_by_run.get,
             get_session_history_markers=self._get_session_history_markers,
             get_session_events=self.get_global_events,
             excluded_run_ids=excluded_run_ids,
+            run_runtime_by_run=runtime_by_run,
         )
+        question_counts_by_run = self._pending_user_question_counts_by_run(session_id)
         for round_item in rounds:
-            runtime = self._run_runtime_repo.get(str(round_item.get("run_id") or ""))
+            runtime = runtime_by_run.get(str(round_item.get("run_id") or ""))
             pending = round_item.get("pending_tool_approvals")
             approval_count = len(pending) if isinstance(pending, list) else 0
             if runtime is None:
                 continue
-            question_count = self._pending_user_question_count(runtime.run_id)
+            question_count = question_counts_by_run.get(runtime.run_id, 0)
             round_item["run_status"] = runtime.status.value
             round_item["run_phase"] = self._public_phase(
                 runtime,
@@ -981,6 +989,77 @@ class SessionService:
                 round_item["todo"] = todo
         return rounds
 
+    def build_session_timeline_rounds(self, session_id: str) -> list[dict[str, object]]:
+        excluded_run_ids = self._subagent_run_ids(session_id)
+        todos_by_run_id = (
+            {
+                snapshot.run_id: snapshot.model_dump(mode="json")
+                for snapshot in self._todo_service.list_for_session(session_id)
+            }
+            if self._todo_service is not None
+            else {}
+        )
+        intent_input_parts_by_run = self._session_run_intent_input_parts_by_run(
+            session_id
+        )
+        runtime_by_run = self._session_run_runtime_by_run(session_id)
+        rounds = build_session_timeline_rounds(
+            session_id=session_id,
+            task_repo=self._task_repo,
+            approval_tickets_by_run=approvals_to_projection(
+                self._approval_ticket_repo.list_open_by_session(session_id)
+            ),
+            run_runtime_repo=self._run_runtime_repo,
+            get_session_user_messages=lambda current_session_id: cast(
+                list[dict[str, object]],
+                self._message_repo.get_user_messages_by_session(
+                    current_session_id,
+                    include_cleared=True,
+                    include_hidden_from_context=True,
+                ),
+            ),
+            get_run_intent_input=intent_input_parts_by_run.get,
+            get_session_history_markers=self._get_session_history_markers,
+            get_session_events=self.get_global_events,
+            excluded_run_ids=excluded_run_ids,
+            run_runtime_by_run=runtime_by_run,
+        )
+        question_counts_by_run = self._pending_user_question_counts_by_run(session_id)
+        for round_item in rounds:
+            runtime = runtime_by_run.get(str(round_item.get("run_id") or ""))
+            raw_approval_count = round_item.get("pending_tool_approval_count")
+            approval_count = (
+                raw_approval_count
+                if isinstance(raw_approval_count, int)
+                and not isinstance(raw_approval_count, bool)
+                else 0
+            )
+            if runtime is None:
+                continue
+            question_count = question_counts_by_run.get(runtime.run_id, 0)
+            round_item["run_status"] = runtime.status.value
+            round_item["run_phase"] = self._public_phase(
+                runtime,
+                approval_count,
+                question_count,
+            )
+            round_item["is_recoverable"] = self._is_runtime_publicly_recoverable(
+                runtime
+            )
+            todo = todos_by_run_id.get(str(round_item.get("run_id") or ""))
+            if todo is not None:
+                round_item["todo"] = todo
+        return rounds
+
+    def _session_run_runtime_by_run(
+        self,
+        session_id: str,
+    ) -> dict[str, RunRuntimeRecord]:
+        return {
+            runtime.run_id: runtime
+            for runtime in self._run_runtime_repo.list_by_session(session_id)
+        }
+
     def _get_run_intent_input_parts(
         self, run_id: str
     ) -> tuple[ContentPart, ...] | None:
@@ -992,13 +1071,29 @@ class SessionService:
             return None
         return intent.display_input or intent.input
 
+    def _session_run_intent_input_parts_by_run(
+        self, session_id: str
+    ) -> dict[str, tuple[ContentPart, ...]]:
+        if self._run_intent_repo is None:
+            return {}
+        return {
+            run_id: intent.display_input or intent.input
+            for run_id, intent in self._run_intent_repo.list_by_session(
+                session_id
+            ).items()
+        }
+
     def get_session_rounds(
         self,
         session_id: str,
         *,
         limit: int = 8,
         cursor_run_id: str | None = None,
+        timeline: bool = False,
     ) -> dict[str, object]:
+        if timeline:
+            rounds = self.build_session_timeline_rounds(session_id)
+            return timeline_rounds(rounds)
         rounds = self.build_session_rounds(session_id)
         return paginate_rounds(rounds, limit=limit, cursor_run_id=cursor_run_id)
 
@@ -1471,6 +1566,14 @@ class SessionService:
         if self._user_question_repo is None:
             return 0
         return len(self._user_question_repo.list_by_run(run_id))
+
+    def _pending_user_question_counts_by_run(self, session_id: str) -> dict[str, int]:
+        if self._user_question_repo is None:
+            return {}
+        counts: dict[str, int] = {}
+        for record in self._user_question_repo.list_by_session(session_id):
+            counts[record.run_id] = counts.get(record.run_id, 0) + 1
+        return counts
 
     def _list_resolvable_user_questions_for_session(
         self, session_id: str

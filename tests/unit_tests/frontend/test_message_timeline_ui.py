@@ -1,0 +1,167 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+
+def test_message_timeline_scopes_and_deduplicates_stream_events() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    runner = """
+import {
+  applyRunEventToTimeline,
+} from './frontend/dist/js/components/messageTimeline/actions.js';
+import {
+  clearTimelineState,
+  getRunTimelineSnapshot,
+} from './frontend/dist/js/components/messageTimeline/store.js';
+
+clearTimelineState();
+
+applyRunEventToTimeline(
+  'text_delta',
+  { text: 'hello', instance_id: 'inst-orch', role_id: 'writer' },
+  { event_id: 1, run_id: 'run-parent' },
+  { view: 'orchestration-panel' },
+);
+applyRunEventToTimeline(
+  'text_delta',
+  { text: 'hello', instance_id: 'inst-orch', role_id: 'writer' },
+  { event_id: 1, run_id: 'run-parent' },
+  { view: 'orchestration-panel' },
+);
+applyRunEventToTimeline(
+  'tool_call',
+  {
+    tool_name: 'shell',
+    tool_call_id: 'call-1',
+    args: { command: 'echo ok' },
+    instance_id: 'inst-child',
+    role_id: 'runner',
+  },
+  { event_id: 2, run_id: 'subagent_run_1' },
+  { view: 'normal-child-session' },
+);
+
+console.log(JSON.stringify({
+  orchestration: getRunTimelineSnapshot('run-parent').byInstance['inst-orch'],
+  normalChild: getRunTimelineSnapshot('subagent_run_1').byInstance['inst-child'],
+}));
+"""
+
+    completed = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=10,
+    )
+
+    payload = json.loads(completed.stdout)
+    orchestration = payload["orchestration"]
+    normal_child = payload["normalChild"]
+
+    assert orchestration["scope"]["view"] == "orchestration-panel"
+    assert orchestration["parts"] == [
+        {
+            "id": "session::run-parent::orchestration-panel::inst-orch::text::1",
+            "kind": "text",
+            "content": "hello",
+            "streaming": True,
+            "updatedAt": orchestration["parts"][0]["updatedAt"],
+        }
+    ]
+    assert normal_child["scope"]["view"] == "normal-child-session"
+    assert normal_child["parts"][0]["kind"] == "tool"
+    assert normal_child["parts"][0]["tool_call_id"] == "call-1"
+
+
+def test_message_timeline_gives_disconnected_text_without_event_ids_unique_ids() -> (
+    None
+):
+    repo_root = Path(__file__).resolve().parents[3]
+    runner = """
+import {
+  applyRunEventToTimeline,
+} from './frontend/dist/js/components/messageTimeline/actions.js';
+import {
+  clearTimelineState,
+  getRunTimelineSnapshot,
+} from './frontend/dist/js/components/messageTimeline/store.js';
+
+clearTimelineState();
+
+applyRunEventToTimeline('text_delta', { text: 'first' }, { run_id: 'run-1' });
+applyRunEventToTimeline(
+  'tool_call',
+  { tool_name: 'shell', tool_call_id: 'call-1', args: { command: 'pwd' } },
+  { run_id: 'run-1' },
+);
+applyRunEventToTimeline('text_delta', { text: 'second' }, { run_id: 'run-1' });
+
+console.log(JSON.stringify(getRunTimelineSnapshot('run-1').coordinator.parts));
+""".strip()
+
+    completed = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=10,
+    )
+
+    parts = json.loads(completed.stdout)
+    assert [part["kind"] for part in parts] == ["text", "tool", "text"]
+    assert parts[0]["id"].endswith("::text::text-0")
+    assert parts[2]["id"].endswith("::text::text-1")
+    assert parts[0]["id"] != parts[2]["id"]
+
+
+def test_message_timeline_gives_media_parts_without_event_ids_unique_ids() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    runner = """
+import {
+  applyRunEventToTimeline,
+} from './frontend/dist/js/components/messageTimeline/actions.js';
+import {
+  clearTimelineState,
+  getRunTimelineSnapshot,
+} from './frontend/dist/js/components/messageTimeline/store.js';
+
+clearTimelineState();
+
+applyRunEventToTimeline(
+  'output_delta',
+  { output: [{ kind: 'media_ref', url: '/first.png' }] },
+  { run_id: 'run-1' },
+);
+applyRunEventToTimeline(
+  'output_delta',
+  { output: [{ kind: 'media_ref', url: '/second.png' }] },
+  { run_id: 'run-1' },
+);
+
+console.log(JSON.stringify(getRunTimelineSnapshot('run-1').coordinator.parts));
+""".strip()
+
+    completed = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=10,
+    )
+
+    parts = json.loads(completed.stdout)
+    assert [part["kind"] for part in parts] == ["media_ref", "media_ref"]
+    assert [part["url"] for part in parts] == ["/first.png", "/second.png"]
+    assert parts[0]["id"].endswith("::media_ref::media-0")
+    assert parts[1]["id"].endswith("::media_ref::media-1")
+    assert parts[0]["id"] != parts[1]["id"]

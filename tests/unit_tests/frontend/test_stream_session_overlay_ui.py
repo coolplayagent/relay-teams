@@ -118,6 +118,116 @@ console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-acp")));
     assert payload["byInstance"] == {}
 
 
+def test_stream_overlay_snapshot_ignores_hydrated_timeline_store_after_dom_state_clears(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "stream_timeline_overlay_no_fallback"
+    temp_dir.mkdir()
+
+    (temp_dir / "stream.js").write_text(
+        source.replace("../../core/state.js", "./mockState.mjs")
+        .replace("./helpers.js", "./mockHelpers.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs"),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        """
+export function getRunPrimaryRoleId(runId) {
+    return runId === "run-1" ? "Main Agent" : "";
+}
+
+export function isPrimaryRoleId() {
+    return false;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockHelpers.mjs").write_text(
+        """
+export function applyToolReturn() {}
+export function appendStructuredContentPart() {}
+export function appendThinkingText() { return {}; }
+export function buildPendingToolBlock() { return { querySelector() { return null; } }; }
+export function findToolBlock() { return null; }
+export function findToolBlockInContainer() { return null; }
+export function indexPendingToolBlock() {}
+export function renderMessageBlock() {
+    return {
+        wrapper: { dataset: {}, querySelector() { return null; }, closest() { return null; } },
+        contentEl: { appendChild() {}, querySelector() { return null; }, querySelectorAll() { return []; } },
+    };
+}
+export function resolvePendingToolBlock() { return null; }
+export function scrollBottom() {}
+export function setToolStatus() {}
+export function setToolValidationFailureState() {}
+export function syncStreamingCursor() {}
+export function updateThinkingText() {}
+export function updateMessageText() {}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+export function formatMessage(_key, values = {}) {
+    return JSON.stringify(values);
+}
+
+export function t(key) {
+    return key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner = """
+globalThis.__relayTeamsMessageTimelineGetRunSnapshot = runId => ({
+  coordinator: {
+    scope: {
+      runId,
+      instanceId: "primary",
+      roleId: "Main Agent",
+      streamKey: "primary",
+    },
+    parts: [
+      { kind: "thinking", part_index: 0, content: "plan", streaming: true },
+      {
+        kind: "tool",
+        tool_name: "shell",
+        tool_call_id: "call-1",
+        args: { command: "date" },
+        status: "pending",
+      },
+    ],
+    textStreaming: false,
+    idleCursor: false,
+  },
+  byInstance: {},
+});
+
+import { getRunStreamOverlaySnapshot } from "./stream.js";
+
+console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-1")));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["coordinator"] is None
+    assert payload["byInstance"] == {}
+
+
 def test_history_overlay_renders_live_cursor_placeholder_for_stream_tail(
     tmp_path: Path,
 ) -> None:
@@ -255,6 +365,40 @@ renderHistoricalMessageList(container, [], {
   },
 });
 
+const duplicateContainer = {
+  dataset: {},
+  messages: [],
+  appendChild(child) {
+    this.messages.push(child);
+  },
+  querySelectorAll() {
+    return [];
+  },
+  querySelector() {
+    return null;
+  },
+};
+
+renderHistoricalMessageList(duplicateContainer, [{
+  role: "assistant",
+  role_id: "external-role",
+  instance_id: "external-instance",
+  message: {
+    parts: [{ part_kind: "text", content: "already persisted" }],
+  },
+}], {
+  runId: "run-1",
+  pendingToolApprovals: [],
+  streamOverlayEntry: {
+    roleId: "external-role",
+    instanceId: "external-instance",
+    streamKey: "primary",
+    label: "External ACP",
+    parts: [{ kind: "text", content: "already persisted" }],
+    textStreaming: true,
+  },
+});
+
 console.log(JSON.stringify(globalThis.__appendCalls));
 """.strip()
 
@@ -269,7 +413,10 @@ console.log(JSON.stringify(globalThis.__appendCalls));
     )
 
     payload = json.loads(result.stdout)
-    assert payload == [{"text": "", "streaming": True}]
+    assert payload == [
+        {"text": "", "streaming": True},
+        {"text": "", "streaming": True},
+    ]
 
 
 def test_history_overlay_renders_live_cursor_placeholder_for_idle_gap(
@@ -425,6 +572,232 @@ console.log(JSON.stringify(globalThis.__appendCalls));
 
     payload = json.loads(result.stdout)
     assert payload == [{"text": "", "streaming": True}]
+
+
+def test_history_overlay_does_not_replay_parts_already_persisted_in_history(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/history.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "history_overlay_dedupe"
+    temp_dir.mkdir()
+
+    (temp_dir / "history.js").write_text(
+        source.replace("../../core/state.js", "./mockState.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs")
+        .replace("./helpers.js", "./mockHelpers.mjs"),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        """
+export function isRunPrimaryRoleId() {
+    return true;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+export function formatMessage(key, values = {}) {
+    return `${key}:${JSON.stringify(values)}`;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockHelpers.mjs").write_text(
+        """
+export function applyToolReturn() {}
+export function appendStructuredContentPart() {}
+export function appendThinkingText(contentEl, text) {
+  contentEl.children.push({ type: "thinking", text });
+  return { closest() { return null; } };
+}
+export function buildToolBlock(toolName, args, toolCallId) {
+  return { type: "tool", toolName, args, toolCallId, dataset: {}, querySelector() { return null; } };
+}
+export function decoratePendingApprovalBlock() {}
+export function findToolBlockInContainer() { return null; }
+export function indexPendingToolBlock() {}
+export function labelFromRole(_role, roleId) { return roleId || "Agent"; }
+export function parseApprovalArgsPreview() { return {}; }
+export function renderMessageBlock(container, role, label, _parts = [], options = {}) {
+  const contentEl = {
+    children: [],
+    childNodes: [],
+    appendChild(child) { this.children.push(child); this.childNodes.push(child); },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+  };
+  const wrapper = {
+    dataset: {
+      createdAt: String(options.createdAt || ""),
+      runId: String(options.runId || ""),
+    },
+    querySelector(selector) {
+      if (selector === ".msg-content") return contentEl;
+      return null;
+    },
+    querySelectorAll() { return []; },
+  };
+  container.messages.push({ wrapper, contentEl, role, label });
+  return { wrapper, contentEl };
+}
+export function renderParts(contentEl, parts) {
+  contentEl.children.push({ type: "history-parts", parts });
+}
+export function resolvePendingToolBlock() { return null; }
+export function forceScrollBottom() {}
+export function setToolStatus() {}
+export function setToolValidationFailureState() {}
+export function appendMessageText(contentEl, text, options = {}) {
+  contentEl.children.push({ type: "text", text, streaming: options.streaming === true });
+  return { closest() { return null; } };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner = """
+import { renderHistoricalMessageList } from "./history.js";
+
+const container = {
+  dataset: {},
+  messages: [],
+  appendChild() {},
+  querySelectorAll() {
+    return this.messages.map(item => item.wrapper);
+  },
+  querySelector() {
+    return null;
+  },
+};
+
+renderHistoricalMessageList(container, [
+  {
+    role: "assistant",
+    role_id: "Main Agent",
+    instance_id: "primary",
+    created_at: "2026-04-25T12:00:00",
+    message: {
+      parts: [
+        { part_kind: "thinking", content: "same thought" },
+        { part_kind: "tool-call", tool_name: "shell", tool_call_id: "call-1", args: { command: "date" } },
+        { part_kind: "tool-return", tool_name: "shell", tool_call_id: "call-1", result: { ok: true } },
+        { part_kind: "text", content: "done" },
+      ],
+    },
+  },
+], {
+  runId: "run-1",
+  streamOverlayEntry: {
+    roleId: "Main Agent",
+    instanceId: "primary",
+    label: "Main Agent",
+    parts: [
+      { kind: "thinking", content: "same thought", finished: true, part_index: 0 },
+      { kind: "tool", tool_name: "shell", tool_call_id: "call-1", args: { command: "date" }, status: "completed", result: { ok: true } },
+      { kind: "text", content: "done" },
+    ],
+    textStreaming: true,
+    idleCursor: true,
+  },
+  isLatestRound: true,
+  runStatus: "running",
+});
+
+const tailContainer = {
+  dataset: {},
+  messages: [],
+  appendChild() {},
+  querySelectorAll() {
+    return this.messages.map(item => item.wrapper);
+  },
+  querySelector() {
+    return null;
+  },
+};
+
+renderHistoricalMessageList(tailContainer, [
+  {
+    role: "assistant",
+    role_id: "Main Agent",
+    instance_id: "primary",
+    created_at: "2026-04-25T12:00:00",
+    message: {
+      parts: [{ part_kind: "text", content: "done" }],
+    },
+  },
+  {
+    role: "assistant",
+    role_id: "Main Agent",
+    instance_id: "primary",
+    created_at: "2026-04-25T12:00:01",
+    message: {
+      parts: [{ part_kind: "text", content: "different tail" }],
+    },
+  },
+], {
+  runId: "run-1",
+  streamOverlayEntry: {
+    roleId: "Main Agent",
+    instanceId: "primary",
+    label: "Main Agent",
+    parts: [{ kind: "text", content: "done" }],
+    textStreaming: true,
+  },
+  isLatestRound: true,
+  runStatus: "running",
+});
+
+console.log(JSON.stringify({
+  wrapperCount: container.messages.length,
+  children: container.messages[0].contentEl.children,
+  tailChildren: tailContainer.messages[1].contentEl.children,
+}));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["wrapperCount"] == 1
+    assert payload["children"] == [
+        {
+            "type": "history-parts",
+            "parts": [
+                {"part_kind": "thinking", "content": "same thought"},
+                {
+                    "part_kind": "tool-call",
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "args": {"command": "date"},
+                },
+                {
+                    "part_kind": "tool-return",
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "result": {"ok": True},
+                },
+                {"part_kind": "text", "content": "done"},
+            ],
+        },
+        {"type": "text", "text": "", "streaming": True},
+    ]
+    assert payload["tailChildren"] == [
+        {
+            "type": "history-parts",
+            "parts": [{"part_kind": "text", "content": "different tail"}],
+        },
+        {"type": "text", "text": "done", "streaming": True},
+    ]
 
 
 def test_history_overlay_renders_media_refs_from_stream_overlay(

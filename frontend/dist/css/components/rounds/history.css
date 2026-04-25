@@ -1,0 +1,332 @@
+.session-round-section {
+    margin-bottom: 1.75rem;
+    scroll-margin-top: 0.75rem;
+}
+
+.round-history-segment {
+    display: flex;
+    flex-direction: column;
+}
+
+.chat-scroll.round-history-prepended .round-history-segment:first-child {
+    animation: round-history-prepend-fade 0.18s ease;
+}
+
+@keyframes round-history-prepend-fade {
+    from {
+        opacity: 0.72;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.round-history-segment-body[hidden] {
+    display: none;
+}
+
+.round-history-load-more {
+    display: flex;
+    justify-content: center;
+    min-height: 2rem;
+    margin: 0.15rem 0 1.1rem;
+}
+
+.round-history-load-more-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.38rem;
+    min-height: 1.7rem;
+    padding: 0.26rem 0.66rem;
+    border: 1px solid color-mix(in srgb, var(--success) 18%, var(--border-color));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--success) 7%, var(--bg-surface));
+    color: color-mix(in srgb, var(--success) 72%, var(--text-primary));
+    cursor: pointer;
+    font-size: 0.74rem;
+    font-weight: 600;
+    line-height: 1.35;
+    transition: border-color 0.14s ease, color 0.14s ease, background-color 0.14s ease;
+}
+
+.round-history-load-more-btn:hover,
+.round-history-load-more-btn:focus-visible {
+    border-color: color-mix(in srgb, var(--success) 30%, var(--border-color));
+    background: color-mix(in srgb, var(--success) 10%, var(--bg-surface));
+    color: color-mix(in srgb, var(--success) 84%, var(--text-primary));
+    outline: none;
+}
+
+.round-history-load-more-btn:disabled {
+    cursor: default;
+    opacity: 0.86;
+}
+
+.round-history-load-more-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 0.86rem;
+    height: 0.86rem;
+    flex: 0 0 auto;
+}
+
+.round-history-load-more-arrow,
+.round-history-load-more-spinner {
+    width: 0.86rem;
+    height: 0.86rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.round-history-load-more-spinner-track {
+    opacity: 0.24;
+}
+
+.round-history-load-more-spinner-mark {
+    stroke-dasharray: 10 24;
+}
+
+.round-history-load-more[data-loading="true"] .round-history-load-more-spinner {
+    transform-origin: center;
+    animation: round-history-load-spin 0.72s linear infinite;
+}
+
+.round-history-load-more[data-failed="true"] .round-history-load-more-btn {
+    border-color: color-mix(in srgb, var(--danger) 34%, var(--border-color));
+    color: color-mix(in srgb, var(--danger) 78%, var(--text-primary));
+}
+
+@keyframes round-history-load-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.round-scroll-bottom-btn {
+    position: absolute;
+    left: 50%;
+    bottom: calc(var(--round-timeline-bottom, 9.5rem) + 0.45rem);
+    z-index: 8;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.15rem;
+    height: 2.15rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+    border-radius: 999px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 0.45rem);
+    transition:
+        opacity 0.16s ease,
+        transform 0.16s ease,
+        border-color 0.14s ease,
+        color 0.14s ease,
+        background-color 0.14s ease;
+}
+
+.round-scroll-bottom-btn[data-visible="true"] {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, 0);
+}
+
+.round-scroll-bottom-btn:hover,
+.round-scroll-bottom-btn:focus-visible {
+    border-color: color-mix(in srgb, var(--primary) 28%, var(--border-color));
+    color: var(--primary);
+    outline: none;
+}
+
+.round-scroll-bottom-btn:disabled {
+    cursor: default;
+}
+
+.round-scroll-bottom-icon {
+    width: 1.05rem;
+    height: 1.05rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.round-clear-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    width: 100%;
+    margin: 0.15rem 0 1.9rem;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.round-clear-divider:hover .round-clear-divider-chip {
+    border-color: color-mix(in srgb, var(--primary) 30%, var(--border-color));
+    color: var(--text-primary);
+}
+
+.round-clear-divider-line {
+    flex: 1 1 auto;
+    height: 1px;
+    background: color-mix(in srgb, var(--border-color) 82%, transparent);
+}
+
+.round-clear-divider-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-surface-muted) 78%, transparent);
+    transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+}
+
+.round-clear-divider-title {
+    color: var(--text-primary);
+    font-size: 0.76rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+body.light-theme .round-todo-card {
+    background: var(--bg-surface);
+    border-color: color-mix(in srgb, var(--border-color) 92%, transparent);
+}
+
+body.light-theme .round-todo-count,
+body.light-theme .round-todo-status[data-status="pending"] {
+    background: color-mix(in srgb, var(--bg-surface-muted) 92%, transparent);
+}
+
+.round-clear-divider-copy {
+    font-size: 0.72rem;
+    white-space: nowrap;
+}
+
+.round-history-divider,
+.message-history-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    margin: 0.35rem 0 1rem;
+    color: var(--text-secondary);
+}
+
+.round-history-divider-line,
+.message-history-divider-line {
+    flex: 1 1 auto;
+    height: 1px;
+    background: color-mix(in srgb, var(--border-color) 82%, transparent);
+}
+
+.round-history-divider-chip,
+.message-history-divider-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.32rem 0.68rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-surface-muted) 74%, transparent);
+    color: var(--text-primary);
+    font-size: 0.74rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.session-round-section.round-section-emphasis .round-detail-header {
+    border-color: color-mix(in srgb, var(--primary) 48%, var(--border-color) 52%);
+    background: color-mix(in srgb, var(--bg-surface) 86%, var(--primary) 14%);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent);
+    animation: roundSectionEmphasis 1.2s ease-out;
+}
+
+.live-badge {
+    display: inline-block;
+    margin-left: 0.35rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    background: rgba(16, 185, 129, 0.2);
+    color: var(--success);
+    font-size: 0.7rem;
+    vertical-align: middle;
+}
+
+.round-state-pill,
+.round-nav-state,
+.recovery-status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 1.45rem;
+    padding: 0.12rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 0.7rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.round-state-running,
+.round-nav-state-running,
+.recovery-status-running {
+    color: var(--primary-hover);
+    border-color: color-mix(in srgb, var(--primary) 38%, transparent);
+    background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.round-state-warning,
+.round-nav-state-warning,
+.recovery-status-warning {
+    color: var(--warning);
+    border-color: rgba(245, 158, 11, 0.35);
+    background: rgba(245, 158, 11, 0.12);
+}
+
+.round-state-success,
+.round-nav-state-success,
+.recovery-status-success {
+    color: var(--success);
+    border-color: rgba(16, 185, 129, 0.35);
+    background: rgba(16, 185, 129, 0.12);
+}
+
+.round-state-danger,
+.round-nav-state-danger,
+.recovery-status-danger {
+    color: var(--danger);
+    border-color: rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.12);
+}
+
+.round-state-stopped,
+.round-nav-state-stopped,
+.recovery-status-stopped {
+    color: var(--text-secondary);
+    border-color: rgba(148, 163, 184, 0.32);
+    background: rgba(148, 163, 184, 0.1);
+}
+
+.round-state-idle,
+.round-nav-state-idle,
+.recovery-status-idle {
+    color: var(--text-secondary);
+    border-color: rgba(148, 163, 184, 0.28);
+    background: rgba(148, 163, 184, 0.08);
+}
+

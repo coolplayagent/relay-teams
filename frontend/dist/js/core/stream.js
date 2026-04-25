@@ -337,7 +337,11 @@ async function refreshRoundsAfterCompletion(sessionId) {
     try {
         const recoveryModule = await import('../app/recovery.js');
         if (typeof recoveryModule.hydrateSessionView === 'function' && state.currentSessionId === sessionId) {
-            await recoveryModule.hydrateSessionView(sessionId, { includeRounds: true, quiet: true });
+            await recoveryModule.hydrateSessionView(sessionId, {
+                includeRounds: true,
+                quiet: true,
+                roundsScrollPolicy: 'completion-auto',
+            });
         }
     } catch (e) {
         logError(
@@ -571,6 +575,7 @@ function applyBackgroundRunEvent(connection, evType, payload, eventMeta) {
             instanceId: streamInstanceId,
             roleId: isPrimary ? primaryRoleId : roleId,
             label,
+            eventId: eventMeta?.event_id || '',
             cleanupDelayMs: 4000,
         });
     }

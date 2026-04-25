@@ -380,7 +380,11 @@ export async function handleSend() {
     promptPreviewText,
     state.currentSessionId,
     async (sid) =>
-      hydrateSessionView(sid, { includeRounds: true, quiet: true }),
+      hydrateSessionView(sid, {
+        includeRounds: true,
+        quiet: true,
+        roundsScrollPolicy: "completion-auto",
+      }),
     {
       inputParts,
       displayInputParts,

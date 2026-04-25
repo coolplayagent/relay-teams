@@ -2450,7 +2450,7 @@ async def _run_gateway_observability_probe(server: AcpGatewayServer) -> None:
     assert prompt_result.get("runStatus") == "completed"
 
 
-def test_browser_round_todo_card_renders_and_collapses(
+def test_browser_round_timeline_renders_todo_detail(
     browser_page: Page,
     integration_env: IntegrationEnvironment,
     api_client: httpx.Client,
@@ -2476,62 +2476,47 @@ def test_browser_round_todo_card_renders_and_collapses(
     run_id = _wait_for_run_id(api_client, session_id)
     round_nav = page.locator("#round-nav-float")
     round_node = round_nav.locator(f'.round-nav-node[data-run-id="{run_id}"]')
-    todo_card = round_node.locator(".round-nav-todo-branch .round-todo-card")
+    todo_detail = round_node.locator(".round-nav-todo")
 
-    expect(todo_card).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
+    expect(todo_detail).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
     expect(round_node).to_have_class(
         re.compile(r".*\bactive\b.*"), timeout=_WAIT_TIMEOUT_MS
     )
+    expect(round_nav.locator(".idx")).to_have_count(
+        0,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
     expect(round_nav.locator(".round-nav-resizer")).to_have_count(
+        0,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(round_nav.locator(".round-nav-dot")).to_have_count(
         1,
         timeout=_WAIT_TIMEOUT_MS,
     )
-    expect(todo_card).not_to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
-    todo_card.locator(".round-todo-summary").click()
-    expect(todo_card).to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
-    expect(todo_card.locator(".round-todo-item")).to_have_count(
+    round_node.locator(".round-nav-item").hover()
+    expect(todo_detail).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    expect(todo_detail.locator(".round-nav-todo-item")).to_have_count(
         3,
         timeout=_WAIT_TIMEOUT_MS,
     )
-    expect(todo_card).to_contain_text(
+    expect(todo_detail).to_contain_text(
         "Inspect issue 399 requirements",
         timeout=_WAIT_TIMEOUT_MS,
     )
-    expect(todo_card).to_contain_text(
+    expect(todo_detail).to_contain_text(
         "Implement run todo persistence",
         timeout=_WAIT_TIMEOUT_MS,
     )
-    expect(todo_card.locator(".round-todo-item-text").first).to_have_attribute(
+    expect(todo_detail.locator(".round-nav-todo-text").first).to_have_attribute(
         "title",
         "Inspect issue 399 requirements",
         timeout=_WAIT_TIMEOUT_MS,
     )
-    expect(page.locator(".round-todo-card")).to_have_count(1, timeout=_WAIT_TIMEOUT_MS)
-    expect(page.locator(".session-round-section .round-todo-card")).to_have_count(
+    expect(page.locator(".round-todo-card")).to_have_count(0, timeout=_WAIT_TIMEOUT_MS)
+    expect(page.locator(".session-round-section .round-nav-todo")).to_have_count(
         0,
         timeout=_WAIT_TIMEOUT_MS,
-    )
-
-    expanded_width = round_nav.evaluate(
-        "element => element.getBoundingClientRect().width"
-    )
-    round_nav.locator(".round-nav-toggle").click()
-    collapsed_width = round_nav.evaluate(
-        "element => element.getBoundingClientRect().width"
-    )
-    assert collapsed_width < expanded_width
-
-    round_nav.locator(".round-nav-toggle").click()
-    expect(todo_card).to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
-
-    todo_card.locator(".round-todo-summary").click()
-    expect(todo_card).not_to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
-    expect(todo_card.locator(".round-todo-body")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
-
-    todo_card.locator(".round-todo-summary").click()
-    expect(todo_card).to_have_attribute("open", "", timeout=_WAIT_TIMEOUT_MS)
-    expect(todo_card.locator(".round-todo-body")).to_be_visible(
-        timeout=_WAIT_TIMEOUT_MS
     )
 
 

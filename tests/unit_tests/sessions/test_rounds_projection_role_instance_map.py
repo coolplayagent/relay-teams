@@ -8,6 +8,7 @@ from relay_teams.media import InlineMediaContentPart
 from relay_teams.media import MediaModality
 from relay_teams.media import TextContentPart
 from relay_teams.sessions.session_rounds_projection import build_session_rounds
+from relay_teams.sessions.session_rounds_projection import build_session_timeline_rounds
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_runtime_repo import (
@@ -553,6 +554,63 @@ def test_build_session_rounds_only_keeps_active_retry_card() -> None:
     assert retry_events[0]["phase"] == "scheduled"
     assert retry_events[0]["is_active"] is True
 
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=cast(AgentInstanceRepository, cast(object, _FakeAgentRepo())),
+        task_repo=cast(TaskRepository, cast(object, _FakeTaskRepo((root_task,)))),
+        approval_tickets_by_run={},
+        run_runtime_repo=cast(
+            RunRuntimeRepository,
+            cast(object, _FakeRunRuntimeRepo((runtime,))),
+        ),
+        get_session_messages=lambda _: [],
+        get_session_events=lambda _: [
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.LLM_RETRY_SCHEDULED.value,
+                "occurred_at": "2026-03-19T12:00:00Z",
+                "payload_json": '{"attempt_number":2,"total_attempts":6,"retry_in_ms":1000,"error_code":"network_error"}',
+            },
+            {
+                "trace_id": run_id,
+                "event_type": "unrelated_event",
+                "occurred_at": "2026-03-19T12:00:01Z",
+                "payload_json": "{}",
+            },
+        ],
+    )
+
+    retry_events = cast(list[dict[str, object]], rounds[0]["retry_events"])
+    assert retry_events[0]["phase"] == "scheduled"
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=cast(AgentInstanceRepository, cast(object, _FakeAgentRepo())),
+        task_repo=cast(TaskRepository, cast(object, _FakeTaskRepo((root_task,)))),
+        approval_tickets_by_run={},
+        run_runtime_repo=cast(
+            RunRuntimeRepository,
+            cast(object, _FakeRunRuntimeRepo((runtime,))),
+        ),
+        get_session_messages=lambda _: [],
+        get_session_events=lambda _: [
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.LLM_RETRY_SCHEDULED.value,
+                "occurred_at": "2026-03-19T12:00:00Z",
+                "payload_json": '{"attempt_number":2,"total_attempts":6,"retry_in_ms":1000,"error_code":"network_error"}',
+            },
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.RUN_FAILED.value,
+                "occurred_at": "2026-03-19T12:00:01Z",
+                "payload_json": '{"error":"network_error"}',
+            },
+        ],
+    )
+
+    assert rounds[0]["retry_events"] == []
+
 
 def test_build_session_rounds_keeps_exhausted_retry_card_after_run_failed() -> None:
     session_id = "session-1"
@@ -776,6 +834,184 @@ def test_build_session_rounds_keeps_fallback_history_when_retry_follows() -> Non
     assert retry_events[0]["kind"] == "fallback"
     assert retry_events[0]["to_profile_id"] == "secondary"
     assert retry_events[0]["phase"] == "activated"
+
+
+def test_build_session_timeline_rounds_projects_lightweight_run_overlays() -> None:
+    session_id = "session-1"
+    run_id = "run-1"
+    exhausted_run_id = "run-exhausted"
+    fallback_run_id = "run-fallback"
+    failed_after_retry_run_id = "run-failed-after-retry"
+    excluded_run_id = "run-excluded"
+    root_task = TaskRecord(
+        envelope=TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="Coordinator",
+            objective="fallback objective",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    child_task = TaskRecord(
+        envelope=TaskEnvelope(
+            task_id="task-child",
+            session_id=session_id,
+            parent_task_id="task-root",
+            trace_id=run_id,
+            role_id="Worker",
+            objective="child task",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    excluded_task = TaskRecord(
+        envelope=TaskEnvelope(
+            task_id="task-excluded",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=excluded_run_id,
+            objective="excluded",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    runtimes = (
+        RunRuntimeRecord(
+            run_id=run_id,
+            session_id=session_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.COORDINATOR_RUNNING,
+        ),
+        RunRuntimeRecord(
+            run_id=exhausted_run_id,
+            session_id=session_id,
+            status=RunRuntimeStatus.FAILED,
+            phase=RunRuntimePhase.TERMINAL,
+        ),
+        RunRuntimeRecord(
+            run_id=fallback_run_id,
+            session_id=session_id,
+            status=RunRuntimeStatus.COMPLETED,
+            phase=RunRuntimePhase.TERMINAL,
+        ),
+        RunRuntimeRecord(
+            run_id=failed_after_retry_run_id,
+            session_id=session_id,
+            status=RunRuntimeStatus.FAILED,
+            phase=RunRuntimePhase.TERMINAL,
+        ),
+    )
+
+    rounds = build_session_timeline_rounds(
+        session_id=session_id,
+        task_repo=cast(
+            TaskRepository,
+            cast(object, _FakeTaskRepo((root_task, child_task, excluded_task))),
+        ),
+        approval_tickets_by_run={run_id: [{"ticket_id": "approval-1"}]},
+        run_runtime_repo=cast(
+            RunRuntimeRepository,
+            cast(object, _FakeRunRuntimeRepo(runtimes)),
+        ),
+        get_session_user_messages=lambda _: [
+            {
+                "trace_id": run_id,
+                "created_at": "2026-03-19T12:00:00Z",
+                "message": {
+                    "parts": [{"part_kind": "user-prompt", "content": "from message"}]
+                },
+            },
+            {"trace_id": "", "created_at": "2026-03-19T12:00:00Z", "message": {}},
+        ],
+        get_run_intent_input=lambda current_run_id: (
+            (TextContentPart(text="persisted intent"),)
+            if current_run_id == run_id
+            else None
+        ),
+        get_session_events=lambda _: [
+            {
+                "trace_id": "",
+                "event_type": RunEventType.LLM_RETRY_SCHEDULED.value,
+                "occurred_at": "2026-03-19T12:00:00Z",
+                "payload_json": "{}",
+            },
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.LLM_RETRY_SCHEDULED.value,
+                "occurred_at": "2026-03-19T12:00:01Z",
+                "payload_json": '{"attempt_number":2,"total_attempts":4,"retry_in_ms":1000,"error_code":"network_error"}',
+            },
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.MODEL_STEP_STARTED.value,
+                "occurred_at": "2026-03-19T12:00:02Z",
+                "payload_json": '{"microcompact_applied":true,"estimated_tokens_before_microcompact":120,"estimated_tokens_after_microcompact":60,"microcompact_compacted_message_count":2,"microcompact_compacted_part_count":3}',
+            },
+            {
+                "trace_id": run_id,
+                "event_type": RunEventType.MODEL_STEP_FINISHED.value,
+                "occurred_at": "2026-03-19T12:00:03Z",
+                "payload_json": '{"microcompact_applied":false,"estimated_tokens_before_microcompact":0,"estimated_tokens_after_microcompact":0,"microcompact_compacted_message_count":0,"microcompact_compacted_part_count":0}',
+            },
+            {
+                "trace_id": exhausted_run_id,
+                "event_type": RunEventType.LLM_RETRY_EXHAUSTED.value,
+                "occurred_at": "2026-03-19T12:00:04Z",
+                "payload_json": '{"attempt_number":4,"total_attempts":4,"error_code":"rate_limit","error_message":"still limited"}',
+            },
+            {
+                "trace_id": fallback_run_id,
+                "event_type": RunEventType.LLM_FALLBACK_ACTIVATED.value,
+                "occurred_at": "2026-03-19T12:00:05Z",
+                "payload_json": '{"from_profile_id":"primary","to_profile_id":"secondary","from_provider":"openai","to_provider":"backup","from_model":"a","to_model":"b","strategy_id":"default","hop":1,"reason":"timeout"}',
+            },
+            {
+                "trace_id": fallback_run_id,
+                "event_type": RunEventType.LLM_FALLBACK_EXHAUSTED.value,
+                "occurred_at": "2026-03-19T12:00:06Z",
+                "payload_json": '{"from_profile_id":"secondary","from_provider":"backup","from_model":"b","hop":2,"error_code":"all_failed","error_message":"done"}',
+            },
+            {
+                "trace_id": failed_after_retry_run_id,
+                "event_type": RunEventType.LLM_RETRY_SCHEDULED.value,
+                "occurred_at": "2026-03-19T12:00:07Z",
+                "payload_json": '{"attempt_number":2,"total_attempts":4,"retry_in_ms":1000,"error_code":"network_error"}',
+            },
+            {
+                "trace_id": failed_after_retry_run_id,
+                "event_type": RunEventType.RUN_FAILED.value,
+                "occurred_at": "2026-03-19T12:00:08Z",
+                "payload_json": '{"error":"network_error"}',
+            },
+        ],
+        excluded_run_ids={excluded_run_id},
+    )
+
+    rounds_by_run = {str(item["run_id"]): item for item in rounds}
+
+    assert excluded_run_id not in rounds_by_run
+    assert rounds_by_run[run_id]["intent"] == "persisted intent"
+    assert rounds_by_run[run_id]["primary_role_id"] == "Coordinator"
+    assert rounds_by_run[run_id]["pending_tool_approval_count"] == 1
+    assert rounds_by_run[run_id]["has_user_messages"] is True
+    assert rounds_by_run[run_id]["retry_events"] == []
+    assert rounds_by_run[run_id]["microcompact"] is None
+
+    exhausted_retry_events = cast(
+        list[dict[str, object]],
+        rounds_by_run[exhausted_run_id]["retry_events"],
+    )
+    assert exhausted_retry_events[0]["phase"] == "failed"
+    assert exhausted_retry_events[0]["error_message"] == "still limited"
+
+    fallback_events = cast(
+        list[dict[str, object]],
+        rounds_by_run[fallback_run_id]["retry_events"],
+    )
+    assert [event["phase"] for event in fallback_events] == ["activated", "failed"]
+    assert fallback_events[0]["to_profile_id"] == "secondary"
+    assert fallback_events[1]["error_code"] == "all_failed"
+    assert rounds_by_run[failed_after_retry_run_id]["retry_events"] == []
 
 
 def test_build_session_rounds_excludes_background_subagent_runs() -> None:

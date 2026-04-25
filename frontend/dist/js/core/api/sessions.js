@@ -48,9 +48,13 @@ export async function updateSessionTopology(sessionId, payload) {
     );
 }
 
-export async function fetchSessionRounds(sessionId, { limit = 8, cursorRunId = null } = {}) {
+export async function fetchSessionRounds(sessionId, { limit = 8, cursorRunId = null, timeline = false } = {}) {
     const params = new URLSearchParams();
-    params.set('limit', String(limit));
+    if (timeline) {
+        params.set('timeline', 'true');
+    } else {
+        params.set('limit', String(limit));
+    }
     if (cursorRunId) params.set('cursor_run_id', cursorRunId);
     const data = await requestJson(
         `/api/sessions/${sessionId}/rounds?${params.toString()}`,

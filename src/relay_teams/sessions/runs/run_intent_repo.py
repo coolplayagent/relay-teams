@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from sqlite3 import Row
 from typing import Literal, Optional
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
+from relay_teams.logger import get_logger, log_event
 from relay_teams.media import (
     ContentPartsAdapter,
     content_parts_from_text,
@@ -26,9 +29,29 @@ from relay_teams.sessions.runs.run_models import (
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.validation import normalize_persisted_text
 
+LOGGER = get_logger(__name__)
+
 type _ThinkingEffort = Literal["minimal", "low", "medium", "high"] | None
 _MediaGenerationConfigAdapter = TypeAdapter(MediaGenerationConfig)
 _SkillsAdapter = TypeAdapter(tuple[str, ...])
+_RUN_INTENT_SELECT_COLUMNS = """
+    session_id,
+    intent,
+    input_json,
+    display_input_json,
+    run_kind,
+    generation_config_json,
+    execution_mode,
+    yolo,
+    reuse_root_instance,
+    thinking_enabled,
+    thinking_effort,
+    target_role_id,
+    skills_json,
+    session_mode,
+    topology_json,
+    conversation_context_json
+"""
 
 
 class RunIntentRepository(SharedSqliteRepository):
@@ -259,24 +282,8 @@ class RunIntentRepository(SharedSqliteRepository):
     ) -> IntentInput:
         row = self._run_read(
             lambda: self._conn.execute(
-                """
-                SELECT
-                    session_id,
-                    intent,
-                    input_json,
-                    display_input_json,
-                    run_kind,
-                    generation_config_json,
-                    execution_mode,
-                    yolo,
-                    reuse_root_instance,
-                    thinking_enabled,
-                    thinking_effort,
-                    target_role_id,
-                    skills_json,
-                    session_mode,
-                    topology_json,
-                    conversation_context_json
+                f"""
+                SELECT {_RUN_INTENT_SELECT_COLUMNS}
                 FROM run_intents
                 WHERE run_id=?
                 """,
@@ -285,35 +292,71 @@ class RunIntentRepository(SharedSqliteRepository):
         )
         if row is None:
             raise KeyError(f"Unknown run_id: {run_id}")
-        session_id = _coerce_session_id(
-            row["session_id"],
-            fallback_session_id=fallback_session_id,
+        return _intent_input_from_row(row, fallback_session_id=fallback_session_id)
+
+    def list_by_session(self, session_id: str) -> dict[str, IntentInput]:
+        rows = self._run_read(
+            lambda: self._conn.execute(
+                f"""
+                SELECT
+                    run_id,
+                    {_RUN_INTENT_SELECT_COLUMNS}
+                FROM run_intents
+                WHERE session_id=?
+                ORDER BY created_at ASC
+                """,
+                (session_id,),
+            ).fetchall()
         )
-        if session_id is None:
-            raise KeyError(f"Unknown run_id: {run_id}")
-        return IntentInput(
-            session_id=session_id,
-            input=_coerce_input_parts(row["input_json"], row["intent"]),
-            display_input=_coerce_input_parts(row["display_input_json"], ""),
-            run_kind=RunKind(str(row["run_kind"] or RunKind.CONVERSATION.value)),
-            generation_config=_coerce_generation_config(row["generation_config_json"]),
-            execution_mode=ExecutionMode(str(row["execution_mode"])),
-            yolo=str(row["yolo"]).strip().lower() == "true",
-            reuse_root_instance=(
-                str(row["reuse_root_instance"]).strip().lower() != "false"
-            ),
-            thinking=RunThinkingConfig(
-                enabled=str(row["thinking_enabled"]).strip().lower() == "true",
-                effort=_coerce_thinking_effort(row["thinking_effort"]),
-            ),
-            target_role_id=normalize_persisted_text(row["target_role_id"]),
-            skills=_coerce_skills(row["skills_json"]),
-            session_mode=SessionMode(str(row["session_mode"] or "normal")),
-            topology=_coerce_topology(row["topology_json"]),
-            conversation_context=_coerce_conversation_context(
-                row["conversation_context_json"]
-            ),
-        )
+        records: dict[str, IntentInput] = {}
+        for row in rows:
+            run_id = str(row["run_id"] or "").strip()
+            if not run_id:
+                continue
+            try:
+                records[run_id] = _intent_input_from_row(
+                    row,
+                    fallback_session_id=session_id,
+                )
+            except (KeyError, ValueError, ValidationError) as exc:
+                _log_invalid_run_intent_row(row=row, error=exc)
+        return records
+
+
+def _intent_input_from_row(
+    row: Row,
+    *,
+    fallback_session_id: str | None,
+) -> IntentInput:
+    session_id = _coerce_session_id(
+        row["session_id"],
+        fallback_session_id=fallback_session_id,
+    )
+    if session_id is None:
+        raise KeyError("Unknown run_id")
+    return IntentInput(
+        session_id=session_id,
+        input=_coerce_input_parts(row["input_json"], row["intent"]),
+        display_input=_coerce_input_parts(row["display_input_json"], ""),
+        run_kind=RunKind(str(row["run_kind"] or RunKind.CONVERSATION.value)),
+        generation_config=_coerce_generation_config(row["generation_config_json"]),
+        execution_mode=ExecutionMode(str(row["execution_mode"])),
+        yolo=str(row["yolo"]).strip().lower() == "true",
+        reuse_root_instance=(
+            str(row["reuse_root_instance"]).strip().lower() != "false"
+        ),
+        thinking=RunThinkingConfig(
+            enabled=str(row["thinking_enabled"]).strip().lower() == "true",
+            effort=_coerce_thinking_effort(row["thinking_effort"]),
+        ),
+        target_role_id=normalize_persisted_text(row["target_role_id"]),
+        skills=_coerce_skills(row["skills_json"]),
+        session_mode=SessionMode(str(row["session_mode"] or "normal")),
+        topology=_coerce_topology(row["topology_json"]),
+        conversation_context=_coerce_conversation_context(
+            row["conversation_context_json"]
+        ),
+    )
 
 
 def _coerce_session_id(
@@ -385,3 +428,27 @@ def _coerce_skills(value: object) -> Optional[tuple[str, ...]]:
         str(skill or "").strip() for skill in _SkillsAdapter.validate_json(value)
     )
     return tuple(skill for skill in skills if skill) or None
+
+
+def _persisted_value_preview(value: object) -> str:
+    if value is None:
+        return "<null>"
+    return str(value)[:200]
+
+
+def _log_invalid_run_intent_row(*, row: Row, error: Exception) -> None:
+    payload: dict[str, JsonValue] = {
+        "run_id": _persisted_value_preview(row["run_id"]),
+        "session_id": _persisted_value_preview(row["session_id"]),
+        "execution_mode": _persisted_value_preview(row["execution_mode"]),
+        "session_mode": _persisted_value_preview(row["session_mode"]),
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="sessions.run_intent_repo.row_invalid",
+        message="Skipping invalid persisted run intent row",
+        payload=payload,
+    )

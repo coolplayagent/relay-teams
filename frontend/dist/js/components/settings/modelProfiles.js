@@ -2635,11 +2635,12 @@ function hasDraftMaasPassword(maasAuth) {
 
 function syncDraftModelFieldPlacement(maasProvider, codeagentProvider = false) {
     const primaryCredentialsRow = document.getElementById('profile-primary-credentials-row');
+    const modelFieldHome = document.getElementById('profile-model-field-home');
     const apiKeyGroup = document.getElementById('profile-api-key-group');
     const modelGroup = document.getElementById('profile-model-group');
     const maasModelSlot = document.getElementById('profile-maas-model-slot');
     const codeagentModelSlot = document.getElementById('profile-codeagent-model-slot');
-    if (!primaryCredentialsRow || !apiKeyGroup || !modelGroup || !maasModelSlot || !codeagentModelSlot) {
+    if (!primaryCredentialsRow || !modelFieldHome || !apiKeyGroup || !modelGroup || !maasModelSlot || !codeagentModelSlot) {
         return;
     }
 
@@ -2658,8 +2659,8 @@ function syncDraftModelFieldPlacement(maasProvider, codeagentProvider = false) {
         return;
     }
 
-    if (modelGroup.parentElement !== primaryCredentialsRow && typeof primaryCredentialsRow.appendChild === 'function') {
-        primaryCredentialsRow.appendChild(modelGroup);
+    if (modelGroup.parentElement !== modelFieldHome && typeof modelFieldHome.appendChild === 'function') {
+        modelFieldHome.appendChild(modelGroup);
     }
     primaryCredentialsRow.style.display = 'grid';
 }

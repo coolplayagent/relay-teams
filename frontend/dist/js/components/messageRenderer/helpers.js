@@ -13,6 +13,8 @@ export {
     updateMessageText,
     updateThinkingText,
     syncStreamingCursor,
+    clearThinkingOpenState,
+    clearThinkingOpenStateForRun,
 } from './helpers/block.js';
 
 export {

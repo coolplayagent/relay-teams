@@ -498,9 +498,16 @@ export function setToolStatus(toolBlock, status) {
 }
 
 export function indexPendingToolBlock(pendingToolBlocks, toolBlock, toolName, toolCallId) {
-    pendingToolBlocks[pendingToolKey(toolName, toolCallId)] = toolBlock;
+    if (toolCallId) {
+        pendingToolBlocks[pendingToolKey(toolName, toolCallId)] = toolBlock;
+    }
     if (toolName) {
-        pendingToolBlocks[pendingToolKey(toolName, null)] = toolBlock;
+        const nameKey = pendingToolKey(toolName, null);
+        const bucket = Array.isArray(pendingToolBlocks[nameKey])
+            ? pendingToolBlocks[nameKey]
+            : [];
+        bucket.push(toolBlock);
+        pendingToolBlocks[nameKey] = bucket;
     }
 }
 
@@ -509,7 +516,17 @@ export function resolvePendingToolBlock(pendingToolBlocks, toolName, toolCallId)
         const byId = pendingToolBlocks[pendingToolKey(toolName, toolCallId)];
         if (byId) return byId;
     }
-    return pendingToolBlocks[pendingToolKey(toolName, null)] || null;
+    const byName = pendingToolBlocks[pendingToolKey(toolName, null)];
+    if (Array.isArray(byName)) {
+        const liveCandidates = byName.filter(block => {
+            const status = String(block?.dataset?.status || '').trim().toLowerCase();
+            return !['completed', 'error', 'validation_failed'].includes(status);
+        });
+        if (liveCandidates.length === 1) return liveCandidates[0];
+        if (byName.length === 1) return byName[0];
+        return null;
+    }
+    return byName || null;
 }
 
 export function findToolBlockInContainer(container, toolName, toolCallId, preferIdOnly = false) {
@@ -520,7 +537,7 @@ export function findToolBlockInContainer(container, toolName, toolCallId, prefer
     }
     if (!toolName) return null;
     const blocks = container.querySelectorAll(`.tool-block[data-tool-name="${toolName}"]`);
-    return blocks.length > 0 ? blocks[blocks.length - 1] : null;
+    return blocks.length === 1 ? blocks[0] : null;
 }
 
 function findLatestToolBlock(contentEl, toolName) {

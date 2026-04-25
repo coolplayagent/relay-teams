@@ -224,6 +224,49 @@ class MessageRepository:
             )
         return _dedupe_duplicate_objective_messages(results)
 
+    def get_user_messages_by_session(
+        self,
+        session_id: str,
+        *,
+        include_cleared: bool = False,
+        include_hidden_from_context: bool = False,
+    ) -> list[dict[str, JsonValue]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, session_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at, hidden_from_context, hidden_reason, hidden_at, hidden_marker_id "
+                "FROM messages WHERE session_id=? AND role='user' ORDER BY id ASC",
+                (session_id,),
+            ).fetchall()
+        rows = self._filter_rows_for_read(
+            rows,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+        if not include_hidden_from_context:
+            rows = _truncate_message_rows_to_safe_boundary(rows)
+
+        results: list[dict[str, JsonValue]] = []
+        for row in rows:
+            msg_list = _load_message_list(str(row["message_json"]))
+            msg = msg_list[0] if msg_list and isinstance(msg_list[0], dict) else {}
+            results.append(
+                {
+                    "conversation_id": str(row["conversation_id"] or ""),
+                    "agent_role_id": str(row["agent_role_id"] or ""),
+                    "instance_id": str(row["instance_id"]),
+                    "task_id": str(row["task_id"]),
+                    "trace_id": str(row["trace_id"]),
+                    "role": str(row["role"]),
+                    "created_at": str(row["created_at"]),
+                    "hidden_from_context": bool(int(row["hidden_from_context"] or 0)),
+                    "hidden_reason": str(row["hidden_reason"] or ""),
+                    "hidden_at": str(row["hidden_at"] or ""),
+                    "hidden_marker_id": str(row["hidden_marker_id"] or ""),
+                    "message": msg,
+                }
+            )
+        return _dedupe_duplicate_objective_messages(results)
+
     def get_messages_for_instance(
         self,
         session_id: str,

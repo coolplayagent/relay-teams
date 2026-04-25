@@ -1,0 +1,95 @@
+/* Round Card */
+.round-card {
+    margin-bottom: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    overflow: hidden;
+}
+
+.round-card.active {
+    border-color: var(--primary);
+}
+
+.round-header {
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    background: var(--bg-surface-glass);
+    transition: background-color 0.2s ease;
+}
+
+.round-header:hover {
+    background-color: var(--bg-hover);
+}
+
+.round-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.round-label {
+    font-weight: 600;
+    color: var(--primary);
+    font-size: 0.875rem;
+}
+
+.round-time {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.round-intent {
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.round-content {
+    padding: 1rem;
+}
+
+.round-messages {
+    margin-bottom: 1rem;
+}
+
+.round-messages .message {
+    padding: 0.5rem 0;
+    margin-bottom: 0.5rem;
+}
+
+.round-messages .message-user {
+    border-left: 3px solid var(--primary);
+    padding-left: 0.75rem;
+}
+
+.round-messages .message-assistant {
+    border-left: 3px solid var(--success);
+    padding-left: 0.75rem;
+}
+
+.tool-call {
+    background: var(--bg-code);
+    padding: 0.5rem;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    margin: 0.25rem 0;
+    overflow-x: auto;
+}
+
+.tool-result {
+    background: var(--bg-tool-block);
+    padding: 0.5rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    margin: 0.25rem 0;
+    max-height: 200px;
+    overflow-y: auto;
+}
+

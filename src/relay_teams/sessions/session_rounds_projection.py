@@ -16,6 +16,7 @@ from relay_teams.media import text_part
 from relay_teams.media import user_prompt_content_to_text
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRecord
 from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRecord
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.runs.terminal_payload import extract_terminal_output
 from relay_teams.sessions.session_history_marker_models import (
@@ -37,6 +38,7 @@ def build_session_rounds(
     get_session_history_markers: Callable[[str], list[dict[str, object]]] | None = None,
     get_session_events: Callable[[str], list[dict[str, object]]] | None = None,
     excluded_run_ids: set[str] | None = None,
+    run_runtime_by_run: dict[str, RunRuntimeRecord] | None = None,
 ) -> list[dict[str, object]]:
     session_tasks = task_repo.list_by_session(session_id)
     session_agents = agent_repo.list_session_role_instances(session_id)
@@ -45,9 +47,14 @@ def build_session_rounds(
         get_session_history_markers(session_id) if get_session_history_markers else []
     )
     session_events = get_session_events(session_id) if get_session_events else []
-    run_runtime = {
-        record.run_id: record for record in run_runtime_repo.list_by_session(session_id)
-    }
+    run_runtime = (
+        dict(run_runtime_by_run)
+        if run_runtime_by_run is not None
+        else {
+            record.run_id: record
+            for record in run_runtime_repo.list_by_session(session_id)
+        }
+    )
 
     instance_role_by_session: dict[str, str] = {}
     role_instance_by_run: dict[str, dict[str, str]] = defaultdict(dict)
@@ -229,7 +236,11 @@ def build_session_rounds(
         if (
             active_event is not None
             and active_event.get("kind") == "retry"
-            and event_type in retry_clear_events
+            and _should_clear_active_retry_event(
+                active_event,
+                event_type=event_type,
+                retry_clear_events=retry_clear_events,
+            )
         ):
             active_retry_by_run.pop(run_id, None)
             continue
@@ -324,6 +335,105 @@ def build_session_rounds(
     return rounds
 
 
+def build_session_timeline_rounds(
+    *,
+    session_id: str,
+    task_repo: TaskRepository,
+    approval_tickets_by_run: dict[str, list[dict[str, object]]],
+    run_runtime_repo: RunRuntimeRepository,
+    get_session_user_messages: Callable[[str], list[dict[str, object]]],
+    get_run_intent_input: Callable[[str], tuple[ContentPart, ...] | None] | None = None,
+    get_session_history_markers: Callable[[str], list[dict[str, object]]] | None = None,
+    get_session_events: Callable[[str], list[dict[str, object]]] | None = None,
+    excluded_run_ids: set[str] | None = None,
+    run_runtime_by_run: dict[str, RunRuntimeRecord] | None = None,
+) -> list[dict[str, object]]:
+    session_tasks = task_repo.list_by_session(session_id)
+    session_messages = get_session_user_messages(session_id)
+    session_markers = (
+        get_session_history_markers(session_id) if get_session_history_markers else []
+    )
+    session_events = get_session_events(session_id) if get_session_events else []
+    run_runtime = (
+        dict(run_runtime_by_run)
+        if run_runtime_by_run is not None
+        else {
+            record.run_id: record
+            for record in run_runtime_repo.list_by_session(session_id)
+        }
+    )
+    retry_events_by_run, microcompact_by_run = _project_timeline_event_overlays(
+        session_events
+    )
+
+    root_task_by_run: dict[str, object] = {}
+    primary_role_by_run: dict[str, str] = {}
+    for task in session_tasks:
+        run_id = task.envelope.trace_id
+        if task.envelope.parent_task_id is not None:
+            continue
+        root_task_by_run[run_id] = task
+        if task.envelope.role_id:
+            primary_role_by_run[run_id] = task.envelope.role_id
+
+    messages_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for message in session_messages:
+        run_id = str(message.get("trace_id") or "")
+        if run_id:
+            messages_by_run[run_id].append(message)
+
+    run_ids = set(root_task_by_run.keys())
+    run_ids.update(messages_by_run.keys())
+    run_ids.update(retry_events_by_run.keys())
+    run_ids.update(run_runtime.keys())
+    if excluded_run_ids:
+        run_ids.difference_update(excluded_run_ids)
+
+    rounds: list[dict[str, object]] = []
+    for run_id in run_ids:
+        root_task = root_task_by_run.get(run_id)
+        run_messages = messages_by_run.get(run_id, [])
+        intent_input_parts = (
+            get_run_intent_input(run_id) if get_run_intent_input is not None else None
+        )
+        intent_parts = _round_intent_parts(
+            root_task,
+            run_messages,
+            intent_input_parts=intent_input_parts,
+        )
+        runtime = run_runtime.get(run_id)
+        pending_approvals = list(approval_tickets_by_run.get(run_id, []))
+        rounds.append(
+            {
+                "run_id": run_id,
+                "created_at": _round_created_at(root_task, run_messages),
+                "intent": _round_intent(
+                    root_task, run_messages, intent_parts=intent_parts
+                ),
+                "intent_parts": intent_parts,
+                "primary_role_id": primary_role_by_run.get(run_id),
+                "retry_events": retry_events_by_run.get(run_id, []),
+                "has_user_messages": bool(run_messages) or bool(intent_input_parts),
+                "pending_tool_approval_count": len(pending_approvals),
+                "run_status": runtime.status.value if runtime is not None else None,
+                "run_phase": runtime.phase.value if runtime is not None else None,
+                "is_recoverable": (
+                    runtime.is_recoverable if runtime is not None else False
+                ),
+                "clear_marker_before": None,
+                "compaction_marker_before": None,
+                "microcompact": microcompact_by_run.get(run_id),
+            }
+        )
+
+    rounds.sort(key=lambda item: str(item.get("created_at") or ""))
+    _attach_history_markers(
+        session_id=session_id, rounds=rounds, session_markers=session_markers
+    )
+    rounds.reverse()
+    return rounds
+
+
 def paginate_rounds(
     rounds: list[dict[str, object]],
     *,
@@ -345,6 +455,184 @@ def paginate_rounds(
         "items": items,
         "has_more": has_more,
         "next_cursor": next_cursor,
+    }
+
+
+def _project_timeline_event_overlays(
+    session_events: list[dict[str, object]],
+) -> tuple[dict[str, list[dict[str, object]]], dict[str, dict[str, object]]]:
+    retry_events_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
+    fallback_events_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
+    microcompact_by_run: dict[str, dict[str, object]] = {}
+    active_retry_by_run: dict[str, dict[str, object]] = {}
+    retry_clear_events = {
+        RunEventType.MODEL_STEP_STARTED.value,
+        RunEventType.MODEL_STEP_FINISHED.value,
+        RunEventType.RUN_COMPLETED.value,
+        RunEventType.RUN_STOPPED.value,
+    }
+    sorted_session_events = sorted(
+        session_events,
+        key=lambda item: str(item.get("occurred_at") or ""),
+    )
+    for event in sorted_session_events:
+        event_type = str(event.get("event_type") or "")
+        run_id = str(event.get("trace_id") or "")
+        if not run_id:
+            continue
+        if event_type == RunEventType.LLM_RETRY_SCHEDULED.value:
+            payload = _parse_event_payload(event.get("payload_json"))
+            active_retry_by_run[run_id] = {
+                "kind": "retry",
+                "occurred_at": str(event.get("occurred_at") or ""),
+                "instance_id": payload.get("instance_id", ""),
+                "role_id": payload.get("role_id", ""),
+                "attempt_number": payload.get("attempt_number", 0),
+                "total_attempts": payload.get("total_attempts", 0),
+                "retry_in_ms": payload.get("retry_in_ms", 0),
+                "phase": "scheduled",
+                "is_active": True,
+                "error_code": payload.get("error_code", ""),
+                "error_message": payload.get("error_message", ""),
+            }
+            continue
+        if event_type == RunEventType.LLM_RETRY_EXHAUSTED.value:
+            payload = _parse_event_payload(event.get("payload_json"))
+            active_retry_by_run[run_id] = {
+                "kind": "retry",
+                "occurred_at": str(event.get("occurred_at") or ""),
+                "instance_id": payload.get("instance_id", ""),
+                "role_id": payload.get("role_id", ""),
+                "attempt_number": payload.get("attempt_number", 0),
+                "total_attempts": payload.get("total_attempts", 0),
+                "retry_in_ms": 0,
+                "phase": "failed",
+                "is_active": False,
+                "error_code": payload.get("error_code", ""),
+                "error_message": payload.get("error_message", ""),
+            }
+            continue
+        if event_type == RunEventType.LLM_FALLBACK_ACTIVATED.value:
+            payload = _parse_event_payload(event.get("payload_json"))
+            fallback_events_by_run[run_id].append(
+                {
+                    "kind": "fallback",
+                    "occurred_at": str(event.get("occurred_at") or ""),
+                    "instance_id": payload.get("instance_id", ""),
+                    "role_id": payload.get("role_id", ""),
+                    "attempt_number": payload.get("attempt_number", 0),
+                    "total_attempts": payload.get("total_attempts", 0),
+                    "retry_in_ms": 0,
+                    "phase": "activated",
+                    "is_active": False,
+                    "error_code": payload.get("reason", ""),
+                    "error_message": "",
+                    "from_profile_id": payload.get("from_profile_id", ""),
+                    "to_profile_id": payload.get("to_profile_id", ""),
+                    "from_provider": payload.get("from_provider", ""),
+                    "to_provider": payload.get("to_provider", ""),
+                    "from_model": payload.get("from_model", ""),
+                    "to_model": payload.get("to_model", ""),
+                    "hop": payload.get("hop", 0),
+                    "strategy_id": payload.get("strategy_id", ""),
+                }
+            )
+            continue
+        if event_type == RunEventType.LLM_FALLBACK_EXHAUSTED.value:
+            payload = _parse_event_payload(event.get("payload_json"))
+            fallback_events_by_run[run_id].append(
+                {
+                    "kind": "fallback",
+                    "occurred_at": str(event.get("occurred_at") or ""),
+                    "instance_id": payload.get("instance_id", ""),
+                    "role_id": payload.get("role_id", ""),
+                    "attempt_number": payload.get("attempt_number", 0),
+                    "total_attempts": payload.get("total_attempts", 0),
+                    "retry_in_ms": 0,
+                    "phase": "failed",
+                    "is_active": False,
+                    "error_code": payload.get("error_code", ""),
+                    "error_message": payload.get("error_message", ""),
+                    "from_profile_id": payload.get("from_profile_id", ""),
+                    "from_provider": payload.get("from_provider", ""),
+                    "from_model": payload.get("from_model", ""),
+                    "hop": payload.get("hop", 0),
+                }
+            )
+            continue
+        if event_type in {
+            RunEventType.MODEL_STEP_STARTED.value,
+            RunEventType.MODEL_STEP_FINISHED.value,
+        }:
+            payload = _parse_event_payload(event.get("payload_json"))
+            projected_microcompact = _project_microcompact_payload(payload)
+            if projected_microcompact is not None:
+                microcompact_by_run[run_id] = projected_microcompact
+            elif _payload_reports_microcompact_state(payload):
+                microcompact_by_run.pop(run_id, None)
+        active_event = active_retry_by_run.get(run_id)
+        if (
+            active_event is not None
+            and active_event.get("kind") == "retry"
+            and _should_clear_active_retry_event(
+                active_event,
+                event_type=event_type,
+                retry_clear_events=retry_clear_events,
+            )
+        ):
+            active_retry_by_run.pop(run_id, None)
+            continue
+    for run_id, fallback_events in fallback_events_by_run.items():
+        retry_events_by_run[run_id].extend(fallback_events)
+    for run_id, retry_event in active_retry_by_run.items():
+        retry_events_by_run[run_id].append(retry_event)
+    return dict(retry_events_by_run), microcompact_by_run
+
+
+def _should_clear_active_retry_event(
+    active_event: dict[str, object],
+    *,
+    event_type: str,
+    retry_clear_events: set[str],
+) -> bool:
+    if event_type in retry_clear_events:
+        return True
+    if event_type != RunEventType.RUN_FAILED.value:
+        return False
+    return str(active_event.get("phase") or "") != "failed"
+
+
+_TIMELINE_ROUND_KEYS = (
+    "run_id",
+    "created_at",
+    "intent",
+    "intent_parts",
+    "primary_role_id",
+    "retry_events",
+    "has_user_messages",
+    "pending_tool_approval_count",
+    "run_status",
+    "run_phase",
+    "is_recoverable",
+    "clear_marker_before",
+    "compaction_marker_before",
+    "microcompact",
+    "todo",
+    "tool_call_count",
+    "total_tool_calls",
+)
+
+
+def timeline_rounds(
+    rounds: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "items": [
+            {key: round_item[key] for key in _TIMELINE_ROUND_KEYS if key in round_item}
+            for round_item in rounds
+        ],
+        "has_more": False,
+        "next_cursor": None,
     }
 
 

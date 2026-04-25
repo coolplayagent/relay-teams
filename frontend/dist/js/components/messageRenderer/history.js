@@ -36,6 +36,8 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
         : null;
     const pendingToolBlocks = {};
     const historyMessages = Array.isArray(messages) ? messages.slice() : [];
+    const persistedOverlayIndex = buildPersistedOverlayIndex(historyMessages, runId);
+    const timelineHydration = new Map();
     let lastRenderedMessage = null;
 
     historyMessages.forEach(msgItem => {
@@ -72,6 +74,13 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
             ? String(options.userRoleLabel || '').trim()
             : labelFromRole(role, msgItem.role_id, msgItem.instance_id);
         const streamKey = resolveHistoryStreamKey(runId, msgItem.instance_id, msgItem.role_id);
+        collectHydratedParts(timelineHydration, {
+            runId,
+            instanceId: String(msgItem.instance_id || '').trim(),
+            roleId: String(msgItem.role_id || '').trim(),
+            streamKey,
+            view: String(options.timelineView || '').trim(),
+        }, parts);
         const { wrapper, contentEl } = renderMessageBlock(container, role, label, [], {
             runId,
             instanceId: String(msgItem.instance_id || '').trim(),
@@ -95,6 +104,15 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
         };
     });
 
+    timelineHydration.forEach((entry) => {
+        applyTimelineAction({
+            type: 'hydrate_parts',
+            scope: entry.scope,
+            parts: entry.parts,
+            status: options.runStatus || '',
+        });
+    });
+
     // Store the last message timestamp from raw data (including tool-return
     // messages not rendered as .message elements) so the collapse group can
     // compute duration from round start to the final message.
@@ -108,21 +126,23 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
         }
     }
 
-    if (shouldCollapseIntermediateMessages(streamOverlayEntry, options)) {
-        collapseIntermediateMessages(container);
-    }
+    const filteredOverlayEntry = filterPersistedOverlayParts(
+        streamOverlayEntry,
+        persistedOverlayIndex,
+        runId,
+    );
 
     if (
-        streamOverlayEntry
+        filteredOverlayEntry
         && (
-            (Array.isArray(streamOverlayEntry.parts) && streamOverlayEntry.parts.length > 0)
-            || streamOverlayEntry.textStreaming === true
-            || streamOverlayEntry.idleCursor === true
+            (Array.isArray(filteredOverlayEntry.parts) && filteredOverlayEntry.parts.length > 0)
+            || filteredOverlayEntry.textStreaming === true
+            || filteredOverlayEntry.idleCursor === true
         )
     ) {
         renderStreamOverlayEntry(
             container,
-            streamOverlayEntry,
+            filteredOverlayEntry,
             pendingToolBlocks,
             lastRenderedMessage,
             runId,
@@ -131,6 +151,9 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
     }
 
     applyPendingApprovalsToHistory(container, pendingToolApprovals, runId);
+    if (shouldCollapseIntermediateMessages(filteredOverlayEntry, options)) {
+        collapseIntermediateMessages(container);
+    }
     forceScrollBottom(container);
 }
 
@@ -145,6 +168,174 @@ function renderHistoryMarker(container, marker) {
         <span class="message-history-divider-line" aria-hidden="true"></span>
     `;
     container.appendChild(markerEl);
+}
+
+function applyTimelineAction() {
+    globalThis.__relayTeamsMessageTimelineApplyAction?.(...arguments);
+}
+
+function collectHydratedParts(groups, scope, parts) {
+    const safeRunId = String(scope.runId || '').trim();
+    if (!safeRunId) return;
+    const streamKey = String(scope.streamKey || 'primary').trim();
+    const groupKey = `${safeRunId}::${streamKey}::${scope.view || 'history'}`;
+    let entry = groups.get(groupKey);
+    if (!entry) {
+        entry = {
+            scope: {
+                runId: safeRunId,
+                instanceId: String(scope.instanceId || '').trim(),
+                roleId: String(scope.roleId || '').trim(),
+                streamKey,
+                view: String(scope.view || (safeRunId.startsWith('subagent_run_') ? 'normal-child-session' : 'main')).trim(),
+            },
+            parts: [],
+        };
+        groups.set(groupKey, entry);
+    }
+    (Array.isArray(parts) ? parts : []).forEach((part, index) => {
+        const normalized = normalizeHistoryPart(part, index);
+        if (normalized) {
+            entry.parts.push(normalized);
+        }
+    });
+}
+
+function normalizeHistoryPart(part, index) {
+    if (!part || typeof part !== 'object') return null;
+    const kind = String(part.part_kind || part.kind || '').trim();
+    if (kind === 'text') {
+        return {
+            kind: 'text',
+            content: String(part.content || part.text || ''),
+            streaming: false,
+            part_index: index,
+        };
+    }
+    if (kind === 'thinking') {
+        return {
+            kind: 'thinking',
+            content: String(part.content || ''),
+            part_index: part.part_index ?? index,
+            streaming: false,
+            finished: true,
+        };
+    }
+    if (kind === 'tool-call' || (part.tool_name && part.args !== undefined)) {
+        return {
+            kind: 'tool',
+            tool_name: String(part.tool_name || 'unknown_tool'),
+            tool_call_id: String(part.tool_call_id || ''),
+            args: part.args || {},
+            status: 'pending',
+            part_index: index,
+        };
+    }
+    if (kind === 'tool-return') {
+        return {
+            kind: 'tool',
+            tool_name: String(part.tool_name || 'unknown_tool'),
+            tool_call_id: String(part.tool_call_id || ''),
+            result: part.content,
+            status: 'completed',
+            part_index: index,
+        };
+    }
+    if (kind === 'file') {
+        return null;
+    }
+    return null;
+}
+
+function buildPersistedOverlayIndex(historyMessages, runId) {
+    const index = {
+        toolCallIds: new Set(),
+        thinkingTailByStream: new Map(),
+        textTailByStream: new Map(),
+    };
+    (Array.isArray(historyMessages) ? historyMessages : []).forEach(msgItem => {
+        const parts = Array.isArray(msgItem?.message?.parts)
+            ? msgItem.message.parts
+            : [];
+        const streamKey = resolveHistoryStreamKey(
+            runId,
+            msgItem?.instance_id,
+            msgItem?.role_id,
+        );
+        const messageThinkingText = new Set();
+        const messageText = new Set();
+        parts.forEach(part => {
+            if (!part || typeof part !== 'object') return;
+            const kind = String(part.part_kind || part.kind || '').trim();
+            const toolCallId = String(part.tool_call_id || '').trim();
+            if ((kind === 'tool-call' || kind === 'tool-return' || part.tool_name) && toolCallId) {
+                index.toolCallIds.add(toolCallId);
+            }
+            if (kind === 'thinking') {
+                const text = normalizeOverlayTextSignature(part.content);
+                if (text) messageThinkingText.add(text);
+            }
+            if (kind === 'text') {
+                const text = normalizeOverlayTextSignature(part.content || part.text);
+                if (text) messageText.add(text);
+            }
+        });
+        if (messageThinkingText.size > 0) {
+            index.thinkingTailByStream.set(streamKey, messageThinkingText);
+        }
+        if (messageText.size > 0) {
+            index.textTailByStream.set(streamKey, messageText);
+        }
+    });
+    return index;
+}
+
+function filterPersistedOverlayParts(streamOverlayEntry, persistedIndex, runId) {
+    if (!streamOverlayEntry || typeof streamOverlayEntry !== 'object') {
+        return null;
+    }
+    const parts = Array.isArray(streamOverlayEntry.parts)
+        ? streamOverlayEntry.parts
+        : [];
+    const streamKey = String(streamOverlayEntry.streamKey || '').trim()
+        || resolveHistoryStreamKey(
+            runId,
+            streamOverlayEntry.instanceId,
+            streamOverlayEntry.roleId,
+        );
+    const emptySet = new Set();
+    const persistedThinkingText = persistedIndex.thinkingTailByStream.get(streamKey) || emptySet;
+    const persistedText = persistedIndex.textTailByStream.get(streamKey) || emptySet;
+    const filteredParts = parts.filter(part => {
+        if (!part || typeof part !== 'object') return false;
+        if (part.kind === 'tool') {
+            const toolCallId = String(part.tool_call_id || '').trim();
+            return !(toolCallId && persistedIndex.toolCallIds.has(toolCallId));
+        }
+        if (part.kind === 'thinking') {
+            const text = normalizeOverlayTextSignature(part.content);
+            return !(text && persistedThinkingText.has(text));
+        }
+        if (part.kind === 'text') {
+            const text = normalizeOverlayTextSignature(part.content || part.text);
+            return !(text && persistedText.has(text));
+        }
+        return true;
+    });
+    const hasRenderableState = filteredParts.length > 0
+        || streamOverlayEntry.textStreaming === true
+        || streamOverlayEntry.idleCursor === true;
+    if (!hasRenderableState) {
+        return null;
+    }
+    return {
+        ...streamOverlayEntry,
+        parts: filteredParts,
+    };
+}
+
+function normalizeOverlayTextSignature(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
 function applyPendingApprovalsToHistory(container, approvals, runId) {
@@ -204,6 +395,12 @@ function renderStreamOverlayEntry(
     let combinedText = '';
     let renderedLiveTextTail = false;
     const overlayParts = Array.isArray(streamOverlayEntry.parts) ? streamOverlayEntry.parts : [];
+    const overlayRunId = runId || lastRenderedMessage?.runId || '';
+    const overlayStreamKey = resolveHistoryStreamKey(
+        overlayRunId,
+        streamOverlayEntry?.instanceId,
+        streamOverlayEntry?.roleId,
+    );
     const hasLiveTextTail = streamOverlayEntry.textStreaming === true;
     const hasIdleCursor = streamOverlayEntry.idleCursor === true;
     const trailingTextPart = [...overlayParts]
@@ -236,6 +433,9 @@ function renderStreamOverlayEntry(
             appendThinkingText(contentEl, String(part.content || ''), {
                 partIndex: part._key ?? part.part_index ?? '',
                 streaming: part.finished !== true,
+                runId: overlayRunId,
+                instanceId: String(streamOverlayEntry?.instanceId || '').trim(),
+                streamKey: overlayStreamKey,
             });
             return;
         }
