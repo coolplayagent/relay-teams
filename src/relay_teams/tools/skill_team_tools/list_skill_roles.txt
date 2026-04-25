@@ -1,0 +1,11 @@
+List the lightweight role summaries bundled inside an authorized skill.
+
+Arguments:
+- `skill_name`: skill name to inspect.
+
+Returns role ids, effective role ids, names, descriptions, tools, MCP servers, skills, model profile, and skill-relative source paths. It does not return role system prompts.
+
+Usage rules:
+- Call this after `load_skill` or skill routing indicates a skill may contain a team workflow.
+- Use the returned `role_id` values with `activate_skill_roles`.
+- Use the returned `effective_role_id` values only after activation.

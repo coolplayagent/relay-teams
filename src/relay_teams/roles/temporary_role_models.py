@@ -15,6 +15,7 @@ from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 class TemporaryRoleSource(str, Enum):
     META_AGENT_GENERATED = "meta_agent_generated"
+    SKILL_TEAM = "skill_team"
 
 
 class TemporaryRoleSpec(BaseModel):

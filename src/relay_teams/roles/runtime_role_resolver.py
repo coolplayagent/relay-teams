@@ -36,6 +36,12 @@ class RuntimeRoleResolver:
                 return temp.role.to_role_definition()
         return self._role_registry.get(role_id)
 
+    def get_temporary_role(self, *, run_id: str | None, role_id: str) -> RoleDefinition:
+        if run_id is None:
+            raise KeyError(f"Unknown temporary role_id: {role_id}")
+        temp = self._temporary_role_repository.get(run_id=run_id, role_id=role_id)
+        return temp.role.to_role_definition()
+
     def list_effective_roles(self, *, run_id: str | None) -> tuple[RoleDefinition, ...]:
         static_roles = list(self._role_registry.list_roles())
         if run_id is None:

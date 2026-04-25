@@ -21,7 +21,13 @@ class ToolSource(str, Enum):
     MCP = "mcp"
 
 
-SKILL_TOOL_NAMES = frozenset({"load_skill"})
+SKILL_TOOL_NAMES = frozenset(
+    {
+        "activate_skill_roles",
+        "list_skill_roles",
+        "load_skill",
+    }
+)
 
 
 def record_tool_execution(

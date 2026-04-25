@@ -544,6 +544,10 @@ class ExternalAcpHostToolBridge:
             instance_id=request.instance_id,
             role_id=request.role_id,
             role_registry=self._get_role_registry(),
+            skill_registry=cast(
+                Callable[[], SkillRegistry | None],
+                getattr(self, "_get_skill_registry", lambda: None),
+            )(),
             mcp_registry=self._get_mcp_registry(),
             task_service=self._get_task_service(),
             task_execution_service=self._get_task_execution_service(),

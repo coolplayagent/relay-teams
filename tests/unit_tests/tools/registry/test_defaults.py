@@ -15,6 +15,7 @@ def test_registry_rejects_unknown_tools() -> None:
 def test_registry_contains_registered_local_tools() -> None:
     registry = build_default_registry()
     assert registry.list_names() == (
+        "activate_skill_roles",
         "ask_question",
         "capture_screen",
         "click_at",
@@ -30,6 +31,7 @@ def test_registry_contains_registered_local_tools() -> None:
         "launch_app",
         "list_background_tasks",
         "list_monitors",
+        "list_skill_roles",
         "list_windows",
         "notebook_edit",
         "office_read_markdown",

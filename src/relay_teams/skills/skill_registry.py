@@ -200,6 +200,20 @@ class SkillRegistry(BaseModel):
             if missing:
                 raise ValueError(f"Unknown skills: {list(missing)}")
 
+    def resolve_authorized_name_for_role(
+        self,
+        *,
+        role: object,
+        requested_name: str,
+        consumer: str | None = None,
+    ) -> str | None:
+        return _resolve_skill_name_for_role(
+            skill_registry=self,
+            role=role,
+            requested_name=requested_name,
+            consumer=consumer,
+        )
+
     def list_names(self) -> tuple[str, ...]:
         return tuple(skill.ref for skill in self.list_skill_definitions())
 
@@ -297,10 +311,10 @@ class SkillRegistry(BaseModel):
                     skill_registry=self,
                     ctx=ctx,
                 )
-                resolved_name = _resolve_skill_name_for_role(
-                    skill_registry=self,
+                resolved_name = self.resolve_authorized_name_for_role(
                     role=role,
                     requested_name=requested_name,
+                    consumer=f"skills.registry.load_skill.role:{getattr(role, 'role_id', '')}",
                 )
                 if resolved_name is None:
                     raise PermissionError(
@@ -560,6 +574,7 @@ def _raise_if_skill_unauthorized(
         skill_registry=skill_registry,
         role=role,
         requested_name=skill_name,
+        consumer=f"skills.registry.load_skill.role:{getattr(role, 'role_id', '')}",
     )
     if resolved_name is not None:
         return
@@ -591,6 +606,7 @@ def _resolve_skill_name_for_role(
     skill_registry: SkillRegistry,
     role: object,
     requested_name: str,
+    consumer: str | None = None,
 ) -> str | None:
     requested = requested_name.strip()
     if not requested:
@@ -607,7 +623,7 @@ def _resolve_skill_name_for_role(
         resolved_names = skill_registry.resolve_known(
             (requested,),
             strict=False,
-            consumer=f"skills.registry.load_skill.role:{getattr(role, 'role_id', '')}",
+            consumer=consumer,
         )
         if resolved_names:
             return resolved_names[0]

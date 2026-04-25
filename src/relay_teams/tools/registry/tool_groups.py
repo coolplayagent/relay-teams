@@ -80,6 +80,15 @@ DEFAULT_TOOL_GROUPS: tuple[ToolGroupDefinition, ...] = (
         ),
     ),
     ToolGroupDefinition(
+        group_id="skill-teams",
+        name="Skill Teams",
+        description="Skill-local role discovery and activation tools for team-style workflows.",
+        tools=(
+            "list_skill_roles",
+            "activate_skill_roles",
+        ),
+    ),
+    ToolGroupDefinition(
         group_id="task",
         name="Task",
         description="Task-adjacent tools for spawning subagents or asking the user questions.",

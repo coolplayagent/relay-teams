@@ -63,6 +63,18 @@ class ImToolServiceLike(Protocol):
     ) -> str: ...
 
 
+class SkillRegistryLike(Protocol):
+    def get_skill_definition(self, name: str) -> object | None: ...
+
+    def resolve_authorized_name_for_role(
+        self,
+        *,
+        role: object,
+        requested_name: str,
+        consumer: str | None = None,
+    ) -> str | None: ...
+
+
 class ToolDeps(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -97,6 +109,7 @@ class ToolDeps(BaseModel):
     role_id: str
     role_registry: SkipValidation[RoleRegistry]
     runtime_role_resolver: SkipValidation[RuntimeRoleResolver | None] = None
+    skill_registry: SkipValidation[SkillRegistryLike | None] = None
     mcp_registry: SkipValidation[McpRegistry]
     task_service: SkipValidation[TaskOrchestrationServiceLike]
     task_execution_service: SkipValidation[TaskExecutionServiceLike]

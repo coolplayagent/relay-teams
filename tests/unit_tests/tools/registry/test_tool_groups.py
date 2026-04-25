@@ -23,6 +23,7 @@ def test_default_tool_groups_include_expected_buckets() -> None:
         "web",
         "computer",
         "orchestration",
+        "skill-teams",
         "task",
         "todo",
     ]
@@ -37,6 +38,10 @@ def test_default_tool_groups_include_expected_buckets() -> None:
     )
     assert "orch_dispatch_task" in orchestration_group.tools
     assert "orch_create_tasks" in orchestration_group.tools
+    skill_teams_group = next(
+        group for group in groups if group.group_id == "skill-teams"
+    )
+    assert skill_teams_group.tools == ("list_skill_roles", "activate_skill_roles")
     task_group = next(group for group in groups if group.group_id == "task")
     assert task_group.tools == ("spawn_subagent", "ask_question")
     todo_group = next(group for group in groups if group.group_id == "todo")

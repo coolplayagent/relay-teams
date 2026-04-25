@@ -155,6 +155,26 @@ class _CapturingBackgroundTaskService:
         )
 
 
+class _RuntimeRoleResolverWithTemporaryRole:
+    def __init__(self, role: RoleDefinition) -> None:
+        self._role = role
+
+    def get_temporary_role(self, *, run_id: str | None, role_id: str) -> RoleDefinition:
+        _ = run_id
+        if role_id == self._role.role_id:
+            return self._role
+        raise KeyError(f"Unknown temporary role: {role_id}")
+
+
+class _RuntimeRoleResolverWithoutTemporaryRole:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def get_temporary_role(self, *, run_id: str | None, role_id: str) -> RoleDefinition:
+        self.calls.append({"run_id": run_id, "role_id": role_id})
+        raise KeyError(f"Unknown temporary role: {role_id}")
+
+
 @pytest.mark.asyncio
 async def test_shell_passes_none_tool_call_id_without_validation_error(
     monkeypatch: pytest.MonkeyPatch,
@@ -227,6 +247,7 @@ async def test_spawn_subagent_runs_synchronously_by_default(
             background_task_service=service,
             workspace=workspace,
             role_registry=role_registry,
+            runtime_role_resolver=None,
             run_id="run-1",
             session_id="session-1",
             instance_id="inst-1",
@@ -265,6 +286,7 @@ async def test_spawn_subagent_runs_synchronously_by_default(
         "session_id": "session-1",
         "workspace_id": "workspace-1",
         "subagent_role_id": "Crafter",
+        "subagent_role": None,
         "title": "Investigate test failures",
         "prompt": "Inspect the failing tests and summarize the root cause.",
     }
@@ -272,6 +294,205 @@ async def test_spawn_subagent_runs_synchronously_by_default(
         "completed": True,
         "output": "root cause found",
     }
+
+
+@pytest.mark.asyncio
+async def test_spawn_subagent_falls_back_to_static_role_when_temp_role_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_spawn_subagent(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["spawn_subagent"],
+    )
+    service = _CapturingBackgroundTaskService()
+    workspace = _FakeWorkspace(tmp_path)
+    runtime_role_resolver = _RuntimeRoleResolverWithoutTemporaryRole()
+    role_registry = SimpleNamespace(resolve_subagent_role_id=lambda role_id: role_id)
+    ctx = SimpleNamespace(
+        tool_call_id="call-1",
+        deps=SimpleNamespace(
+            background_task_service=service,
+            workspace=workspace,
+            role_registry=role_registry,
+            runtime_role_resolver=runtime_role_resolver,
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+        ),
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
+        approval_request=None,
+        approval_request_factory=None,
+        **_: object,
+    ) -> dict[str, object]:
+        del ctx, tool_name, approval_request, approval_request_factory
+        projected = await _invoke_tool_action(action, raw_args)
+        return cast(dict[str, object], projected.visible_data)
+
+    from relay_teams.tools.task_tools import spawn_subagent as spawn_subagent_module
+
+    monkeypatch.setattr(spawn_subagent_module, "execute_tool_call", _fake_execute_tool)
+
+    result = await tool(
+        ctx,
+        role_id="Crafter",
+        description="Investigate test failures",
+        prompt="Inspect the failing tests and summarize the root cause.",
+    )
+
+    assert runtime_role_resolver.calls == [{"run_id": "run-1", "role_id": "Crafter"}]
+    assert service.calls[0]["subagent_role_id"] == "Crafter"
+    assert service.calls[0]["subagent_role"] is None
+    assert result["output"] == "root cause found"
+
+
+@pytest.mark.asyncio
+async def test_spawn_subagent_passes_temporary_role_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_spawn_subagent(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["spawn_subagent"],
+    )
+    service = _CapturingBackgroundTaskService()
+    workspace = _FakeWorkspace(tmp_path)
+    role = RoleDefinition(
+        role_id="skill_team_review_analyst_12345678",
+        name="Analyst",
+        description="Collects evidence.",
+        version="1",
+        mode=RoleMode.SUBAGENT,
+        tools=(),
+        system_prompt="Analyze.",
+    )
+    role_registry = SimpleNamespace(
+        is_coordinator_role=lambda role_id: False,
+        is_main_agent_role=lambda role_id: False,
+    )
+    ctx = SimpleNamespace(
+        tool_call_id="call-1",
+        deps=SimpleNamespace(
+            background_task_service=service,
+            workspace=workspace,
+            role_registry=role_registry,
+            runtime_role_resolver=_RuntimeRoleResolverWithTemporaryRole(role),
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+        ),
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
+        approval_request=None,
+        approval_request_factory=None,
+        **_: object,
+    ) -> dict[str, object]:
+        del ctx, tool_name, approval_request, approval_request_factory
+        projected = await _invoke_tool_action(action, raw_args)
+        return cast(dict[str, object], projected.visible_data)
+
+    from relay_teams.tools.task_tools import spawn_subagent as spawn_subagent_module
+
+    monkeypatch.setattr(spawn_subagent_module, "execute_tool_call", _fake_execute_tool)
+
+    result = await tool(
+        ctx,
+        role_id=role.role_id,
+        description="Investigate test failures",
+        prompt="Inspect the failing tests and summarize the root cause.",
+    )
+
+    assert service.calls[0]["subagent_role_id"] == role.role_id
+    assert service.calls[0]["subagent_role"] == role
+    assert result["output"] == "root cause found"
+
+
+@pytest.mark.asyncio
+async def test_spawn_subagent_rejects_unspawnable_temporary_role(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_agent = _FakeAgent()
+    register_spawn_subagent(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["spawn_subagent"],
+    )
+    workspace = _FakeWorkspace(tmp_path)
+    role = RoleDefinition(
+        role_id="skill_team_review_analyst_12345678",
+        name="Analyst",
+        description="Collects evidence.",
+        version="1",
+        mode=RoleMode.PRIMARY,
+        tools=(),
+        system_prompt="Analyze.",
+    )
+    role_registry = SimpleNamespace(
+        is_coordinator_role=lambda role_id: False,
+        is_main_agent_role=lambda role_id: False,
+    )
+    ctx = SimpleNamespace(
+        tool_call_id="call-1",
+        deps=SimpleNamespace(
+            background_task_service=_CapturingBackgroundTaskService(),
+            workspace=workspace,
+            role_registry=role_registry,
+            runtime_role_resolver=_RuntimeRoleResolverWithTemporaryRole(role),
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+        ),
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object] | None = None,
+        approval_request=None,
+        approval_request_factory=None,
+        **_: object,
+    ) -> dict[str, object]:
+        del ctx, tool_name, approval_request, approval_request_factory
+        projected = await _invoke_tool_action(action, raw_args)
+        return cast(dict[str, object], projected.visible_data)
+
+    from relay_teams.tools.task_tools import spawn_subagent as spawn_subagent_module
+
+    monkeypatch.setattr(spawn_subagent_module, "execute_tool_call", _fake_execute_tool)
+
+    with pytest.raises(ValueError, match="Role cannot be used as a subagent"):
+        await tool(
+            ctx,
+            role_id=role.role_id,
+            description="Investigate test failures",
+            prompt="Inspect the failing tests and summarize the root cause.",
+        )
 
 
 @pytest.mark.asyncio
@@ -294,6 +515,7 @@ async def test_spawn_subagent_starts_background_subagent_task_when_requested(
             background_task_service=service,
             workspace=workspace,
             role_registry=role_registry,
+            runtime_role_resolver=None,
             run_id="run-1",
             session_id="session-1",
             instance_id="inst-1",

@@ -46,6 +46,10 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert background_task_tools.issubset(set(gater.tools))
     assert background_task_tools.issubset(set(main_agent.tools))
     assert "spawn_subagent" in main_agent.tools
+    assert "list_skill_roles" in main_agent.tools
+    assert "activate_skill_roles" in main_agent.tools
+    assert "list_skill_roles" in coordinator.tools
+    assert "activate_skill_roles" in coordinator.tools
     assert background_task_tools.issubset(set(daily_ai_report.tools))
     assert main_agent.mode == RoleMode.PRIMARY
     assert crafter.mode == RoleMode.SUBAGENT

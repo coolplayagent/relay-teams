@@ -13,6 +13,8 @@ def test_coordinator_uses_task_tools_and_not_emit_event() -> None:
     assert tools == {
         "orch_create_tasks",
         "orch_create_temporary_role",
+        "list_skill_roles",
+        "activate_skill_roles",
         "orch_update_task",
         "orch_list_available_roles",
         "orch_list_delegated_tasks",
