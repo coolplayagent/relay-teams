@@ -41,6 +41,10 @@ from relay_teams.skills.skill_routing_service import (
     SkillRoutingService,
     build_skill_routing_query_text,
 )
+from relay_teams.skills.skill_team_roles import (
+    SkillTeamRoleDefinition,
+    SkillTeamRoleSummary,
+)
 
 __all__ = [
     "Skill",
@@ -61,6 +65,8 @@ __all__ = [
     "SkillRoutingService",
     "SkillSource",
     "SkillScript",
+    "SkillTeamRoleDefinition",
+    "SkillTeamRoleSummary",
     "SkillSummaryEntry",
     "SkillsDirectory",
     "SkillRegistry",

@@ -52,6 +52,7 @@ from relay_teams.providers.openai_support import build_model_request_headers
 from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
 from relay_teams.reminders import SystemReminderService
 from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_models import RunEvent
@@ -167,6 +168,7 @@ class ExternalAcpSessionManager:
         user_question_manager: UserQuestionManager | None,
         tool_approval_policy: ToolApprovalPolicy,
         get_notification_service: Callable[[], NotificationService | None],
+        runtime_role_resolver: RuntimeRoleResolver | None = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
         resolve_model_config: (
             Callable[[RoleDefinition, LLMRequest], ModelEndpointConfig | None] | None
@@ -209,6 +211,7 @@ class ExternalAcpSessionManager:
         self._tool_approval_policy = tool_approval_policy
         self._shell_approval_repo = shell_approval_repo
         self._get_notification_service = get_notification_service
+        self._runtime_role_resolver = runtime_role_resolver
         self._resolve_model_config = resolve_model_config
         self._metric_recorder = metric_recorder
         self._im_tool_service = im_tool_service
@@ -969,6 +972,7 @@ class ExternalAcpSessionManager:
             tool_approval_manager=self._tool_approval_manager,
             user_question_manager=self._user_question_manager,
             tool_approval_policy=self._tool_approval_policy,
+            runtime_role_resolver=self._runtime_role_resolver,
             shell_approval_repo=self._shell_approval_repo,
             get_notification_service=self._get_notification_service,
             resolve_model_config=self._resolve_model_config,

@@ -45,6 +45,7 @@ from relay_teams.reminders import SystemReminderService
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
@@ -180,6 +181,7 @@ class ExternalAcpHostToolBridge:
         user_question_manager: UserQuestionManager | None,
         tool_approval_policy: ToolApprovalPolicy,
         get_notification_service: Callable[[], NotificationService | None],
+        runtime_role_resolver: RuntimeRoleResolver | None = None,
         resolve_model_config: (
             Callable[[RoleDefinition, LLMRequest], ModelEndpointConfig | None] | None
         ) = None,
@@ -218,6 +220,7 @@ class ExternalAcpHostToolBridge:
         self._user_question_manager = user_question_manager
         self._tool_approval_policy = tool_approval_policy
         self._get_notification_service = get_notification_service
+        self._runtime_role_resolver = runtime_role_resolver
         self._resolve_model_config = resolve_model_config
         self._metric_recorder = metric_recorder
         self._im_tool_service = im_tool_service
@@ -544,6 +547,8 @@ class ExternalAcpHostToolBridge:
             instance_id=request.instance_id,
             role_id=request.role_id,
             role_registry=self._get_role_registry(),
+            skill_registry=self._get_skill_registry(),
+            runtime_role_resolver=self._runtime_role_resolver,
             mcp_registry=self._get_mcp_registry(),
             task_service=self._get_task_service(),
             task_execution_service=self._get_task_execution_service(),

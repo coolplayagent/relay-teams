@@ -1,0 +1,12 @@
+Activate one or more roles bundled inside an authorized skill as run-scoped temporary roles.
+
+Arguments:
+- `skill_name`: skill name that contains the roles.
+- `role_ids`: role ids returned by `list_skill_roles`.
+
+Returns activated role summaries. Use each returned `effective_role_id` with `spawn_subagent` in normal mode or `orch_dispatch_task` in orchestration mode.
+
+Usage rules:
+- Call `list_skill_roles` first so you can select only the roles needed for the current task.
+- Activate only the roles you intend to use in this run.
+- This tool does not load role system prompts into the current agent prompt; it stores the selected role definitions for later subagent/task execution.

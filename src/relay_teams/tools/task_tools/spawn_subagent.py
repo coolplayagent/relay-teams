@@ -4,7 +4,9 @@ from __future__ import annotations
 from pydantic import JsonValue
 from pydantic_ai import Agent
 
+from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.role_registry import is_reserved_system_role_definition
 from relay_teams.tools._description_loader import load_tool_description
 from relay_teams.tools.runtime.context import (
     ToolContext,
@@ -39,7 +41,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             background: bool = False,
         ) -> ToolResultProjection:
             service = require_background_task_service(ctx)
-            resolved_role_id = ctx.deps.role_registry.resolve_subagent_role_id(role_id)
+            resolved_role_id, role_snapshot = _resolve_subagent_role(ctx, role_id)
             if background:
                 record = await service.start_subagent(
                     run_id=ctx.deps.run_id,
@@ -50,6 +52,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     workspace_id=ctx.deps.workspace.ref.workspace_id,
                     cwd=ctx.deps.workspace.resolve_workdir(),
                     subagent_role_id=resolved_role_id,
+                    subagent_role=role_snapshot,
                     title=description,
                     prompt=prompt,
                 )
@@ -63,6 +66,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 session_id=ctx.deps.session_id,
                 workspace_id=ctx.deps.workspace.ref.workspace_id,
                 subagent_role_id=resolved_role_id,
+                subagent_role=role_snapshot,
                 title=description,
                 prompt=prompt,
             )
@@ -111,6 +115,50 @@ def _role_registry_from_agent(
     if isinstance(registry, RoleRegistry):
         return registry
     return None
+
+
+def _resolve_subagent_role(
+    ctx: ToolContext,
+    role_id: str,
+) -> tuple[str, RoleDefinition | None]:
+    normalized_role_id = role_id.strip()
+    if not normalized_role_id:
+        raise ValueError("role_id must not be empty")
+    runtime_role_resolver = ctx.deps.runtime_role_resolver
+    if runtime_role_resolver is not None:
+        try:
+            role = runtime_role_resolver.get_temporary_role(
+                run_id=ctx.deps.run_id,
+                role_id=normalized_role_id,
+            )
+        except KeyError:
+            pass
+        else:
+            _raise_if_role_unspawnable(ctx.deps.role_registry, role)
+            return role.role_id, role
+    return ctx.deps.role_registry.resolve_subagent_role_id(normalized_role_id), None
+
+
+def _raise_if_role_unspawnable(
+    role_registry: RoleRegistry,
+    role: RoleDefinition,
+) -> None:
+    if role_registry.is_coordinator_role(role.role_id):
+        raise ValueError(
+            f"Coordinator role cannot be used as a subagent: {role.role_id}"
+        )
+    if role_registry.is_main_agent_role(role.role_id):
+        raise ValueError(
+            f"Main agent role cannot be used as a subagent: {role.role_id}"
+        )
+    if is_reserved_system_role_definition(role):
+        raise ValueError(
+            f"Reserved system role cannot be used as a subagent: {role.role_id}"
+        )
+    if role.mode not in {RoleMode.SUBAGENT, RoleMode.ALL}:
+        raise ValueError(
+            f"Role cannot be used as a subagent: {role.role_id} (mode={role.mode.value})"
+        )
 
 
 def _build_subagent_capability_block(role_registry: RoleRegistry | None) -> str:

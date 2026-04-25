@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Optional, Protocol, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,6 +20,12 @@ from relay_teams.agents.tasks.ids import new_task_id
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.logger import get_logger, log_event
 from relay_teams.media import content_parts_from_text
+from relay_teams.roles.role_models import RoleDefinition, RoleMode
+from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
+from relay_teams.roles.temporary_role_models import (
+    TemporaryRoleSource,
+    TemporaryRoleSpec,
+)
 from relay_teams.sessions.runs.background_tasks.command_runtime import (
     normalize_timeout,
 )
@@ -348,6 +354,7 @@ class BackgroundTaskService:
         workspace_id: str,
         cwd: Path,
         subagent_role_id: str,
+        subagent_role: RoleDefinition | None = None,
         title: str,
         prompt: str,
     ) -> BackgroundTaskRecord:
@@ -359,6 +366,7 @@ class BackgroundTaskService:
             session_id=session_id,
             workspace_id=workspace_id,
             subagent_role_id=subagent_role_id,
+            subagent_role=subagent_role,
             title=title,
             prompt=prompt,
         )
@@ -453,6 +461,7 @@ class BackgroundTaskService:
         session_id: str,
         workspace_id: str,
         subagent_role_id: str,
+        subagent_role: RoleDefinition | None = None,
         title: str,
         prompt: str,
         suppress_hooks: bool = False,
@@ -464,6 +473,7 @@ class BackgroundTaskService:
             session_id=session_id,
             workspace_id=workspace_id,
             subagent_role_id=subagent_role_id,
+            subagent_role=subagent_role,
             title=title,
             prompt=prompt,
             suppress_hooks=suppress_hooks,
@@ -765,12 +775,16 @@ class BackgroundTaskService:
             output_text=summarized_output,
         )
         runtime = self._subagent_runtimes.pop(background_task_id, None)
-        if runtime is not None:
+        subagent_run_id = (
+            runtime.subagent_run_id if runtime is not None else record.subagent_run_id
+        )
+        if subagent_run_id:
             self._finalize_subagent_run_runtime(
-                subagent_run_id=runtime.subagent_run_id,
+                subagent_run_id=subagent_run_id,
                 status=status,
                 output=summarized_output,
             )
+        if runtime is not None:
             self._require_run_control_manager().unregister_run_task(
                 runtime.subagent_run_id
             )
@@ -1033,6 +1047,7 @@ class BackgroundTaskService:
         session_id: str,
         workspace_id: str,
         subagent_role_id: str,
+        subagent_role: RoleDefinition | None = None,
         title: str,
         prompt: str,
         suppress_hooks: bool = False,
@@ -1103,6 +1118,11 @@ class BackgroundTaskService:
             subagent_role_id=subagent_role_id,
             prompt=normalized_prompt,
         )
+        self._clone_subagent_role_snapshot(
+            subagent_run_id=subagent_run_id,
+            session_id=session_id,
+            subagent_role=subagent_role,
+        )
         if self._run_runtime_repo is not None:
             _ = self._run_runtime_repo.ensure(
                 run_id=subagent_run_id,
@@ -1129,6 +1149,33 @@ class BackgroundTaskService:
             suppress_hooks=suppress_hooks,
             subagent_instance=subagent_instance,
             subagent_task=subagent_task,
+        )
+
+    def _clone_subagent_role_snapshot(
+        self,
+        *,
+        subagent_run_id: str,
+        session_id: str,
+        subagent_role: RoleDefinition | None,
+    ) -> None:
+        if subagent_role is None:
+            return
+        runtime_role_resolver = self._get_runtime_role_resolver()
+        if runtime_role_resolver is None:
+            return
+        runtime_role_resolver.create_temporary_role(
+            run_id=subagent_run_id,
+            session_id=session_id,
+            source=TemporaryRoleSource.SKILL_TEAM,
+            role=_temporary_role_spec_from_definition(subagent_role),
+        )
+
+    def _get_runtime_role_resolver(self) -> RuntimeRoleResolver | None:
+        if self._task_execution_service is None:
+            return None
+        return cast(
+            RuntimeRoleResolver | None,
+            getattr(self._task_execution_service, "runtime_role_resolver", None),
         )
 
     def _prime_subagent_hook_snapshot(self, *, subagent_run_id: str) -> None:
@@ -1284,6 +1331,9 @@ class BackgroundTaskService:
     ) -> None:
         if self._hook_service is not None:
             self._hook_service.clear_run(subagent_run_id)
+        runtime_role_resolver = self._get_runtime_role_resolver()
+        if runtime_role_resolver is not None:
+            runtime_role_resolver.cleanup_run(run_id=subagent_run_id)
         run_runtime_repo = self._run_runtime_repo
         if run_runtime_repo is None:
             return
@@ -1324,6 +1374,24 @@ class BackgroundTaskService:
             active_subagent_instance_id=None,
             last_error=output or "Task failed",
         )
+
+
+def _temporary_role_spec_from_definition(role: RoleDefinition) -> TemporaryRoleSpec:
+    return TemporaryRoleSpec(
+        role_id=role.role_id,
+        name=role.name,
+        description=role.description,
+        version=role.version,
+        tools=role.tools,
+        mcp_servers=role.mcp_servers,
+        skills=role.skills,
+        model_profile=role.model_profile,
+        bound_agent_id=role.bound_agent_id,
+        execution_surface=role.execution_surface,
+        mode=RoleMode.SUBAGENT,
+        memory_profile=role.memory_profile,
+        system_prompt=role.system_prompt,
+    )
 
 
 def _default_subagent_title(*, role_id: str, prompt: str) -> str:

@@ -43,6 +43,10 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 from relay_teams.hooks.hook_models import HookRuntimeSnapshot
 from relay_teams.hooks import HookService
+from relay_teams.roles.role_models import RoleDefinition, RoleMode
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
+from relay_teams.roles.temporary_role_repository import TemporaryRoleRepository
 from relay_teams.workspace import WorkspaceHandle
 
 
@@ -192,9 +196,11 @@ class _FakeTaskExecutionService:
         *,
         result: TaskExecutionResult,
         gate: asyncio.Event | None = None,
+        runtime_role_resolver: RuntimeRoleResolver | None = None,
     ) -> None:
         self._result = result
         self._gate = gate
+        self.runtime_role_resolver = runtime_role_resolver
         self.calls: list[dict[str, object]] = []
 
     async def execute(
@@ -754,6 +760,127 @@ async def test_background_task_service_start_subagent_completes_and_persists_res
     assert runtime is not None
     assert runtime.status == RunRuntimeStatus.COMPLETED
     assert runtime.phase == RunRuntimePhase.TERMINAL
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_clones_temporary_subagent_role(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-temp-role.db"
+    )
+    runtime_role_resolver = RuntimeRoleResolver(
+        role_registry=RoleRegistry(),
+        temporary_role_repository=TemporaryRoleRepository(
+            tmp_path / "temporary-roles.db"
+        ),
+    )
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        ),
+        runtime_role_resolver=runtime_role_resolver,
+    )
+    role = RoleDefinition(
+        role_id="skill_team_review_analyst_12345678",
+        name="Analyst",
+        description="Collects evidence.",
+        version="1",
+        mode=RoleMode.SUBAGENT,
+        tools=("read",),
+        system_prompt="Analyze.",
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+    )
+
+    started = await service.start_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="MainAgent",
+        tool_call_id="call-1",
+        workspace_id="workspace-1",
+        cwd=Path("C:/workspace"),
+        subagent_role_id=role.role_id,
+        subagent_role=role,
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+
+    assert started.subagent_run_id is not None
+    cloned_role = runtime_role_resolver.get_temporary_role(
+        run_id=started.subagent_run_id,
+        role_id=role.role_id,
+    )
+    assert cloned_role.role_id == role.role_id
+    assert cloned_role.system_prompt == "Analyze."
+    assert cloned_role.tools == ("read", "office_read_markdown")
+    _, completed = await service.wait_for_run(
+        run_id="run-1",
+        background_task_id=started.background_task_id,
+    )
+    assert completed is True
+    with pytest.raises(KeyError, match="Unknown temporary role"):
+        runtime_role_resolver.get_temporary_role(
+            run_id=started.subagent_run_id,
+            role_id=role.role_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_skips_role_clone_without_runtime_resolver(
+    tmp_path: Path,
+) -> None:
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=BackgroundTaskRepository(tmp_path / "background-tasks.db"),
+        task_execution_service=_FakeTaskExecutionService(
+            result=TaskExecutionResult(
+                output="analysis complete",
+                completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+            )
+        ),
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+    )
+    role = RoleDefinition(
+        role_id="skill_team_review_analyst_12345678",
+        name="Analyst",
+        description="Collects evidence.",
+        version="1",
+        mode=RoleMode.SUBAGENT,
+        tools=("read",),
+        system_prompt="Analyze.",
+    )
+
+    started = await service.start_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="MainAgent",
+        tool_call_id="call-1",
+        workspace_id="workspace-1",
+        cwd=Path("C:/workspace"),
+        subagent_role_id=role.role_id,
+        subagent_role=role,
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+    _, completed = await service.wait_for_run(
+        run_id="run-1",
+        background_task_id=started.background_task_id,
+    )
+    assert completed is True
 
 
 @pytest.mark.asyncio

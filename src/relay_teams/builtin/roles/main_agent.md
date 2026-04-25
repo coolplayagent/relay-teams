@@ -20,6 +20,8 @@ tools:
   - shell
   - ask_question
   - spawn_subagent
+  - list_skill_roles
+  - activate_skill_roles
   - list_background_tasks
   - wait_background_task
   - stop_background_task

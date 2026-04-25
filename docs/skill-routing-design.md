@@ -32,10 +32,13 @@ reuse or narrowing `load_skill` into a hard blocker.
 ## Non-Goals
 
 - Do not inline full skill bodies into any system prompt.
+- Do not inline skill-local role prompts into any system prompt.
 - Do not shrink the runtime tool catalog on every routing decision.
 - Do not change ACP wire protocol payloads.
 - Do not make execution fail when an existing role references a missing skill; runtime
   consumers must filter missing capabilities and log warnings.
+- Do not introduce a backend workflow engine for team skills. The model decides whether
+  to use skill-local roles after progressive discovery.
 
 ## Invariants
 
@@ -61,11 +64,19 @@ Document projection:
 
 - `document_id = skill_name`
 - `title = skill_name`
-- `body = description + instructions + scripts summary + resources summary`
+- `body = description + instructions + scripts summary + resources summary +
+  lightweight team-role signals`
 - `keywords = normalized tokens from skill name, scope, script names, and resource names`
 
 If both app and builtin scopes provide the same skill name, routing and prompt rendering
 use the app-scoped variant as the preferred document/source of truth.
+
+Team-role signals are intentionally small. When a skill contains `agents/` or `roles/`
+with role Markdown files, the index may include the directory names plus each role's
+`role_id`, `name`, and `description`. It must not include member role system prompts.
+Optional files such as `workflow.md`, `bind.md`, or `dependencies.yaml` may contribute
+their filenames as discovery signals, but their full content is not part of the
+retrieval document by default.
 
 The index is rebuilt at startup and on `skills:reload`.
 
@@ -133,6 +144,36 @@ relevant skills on each turn.
 
 This rule applies equally to local runtime tools and external ACP host tools.
 
+The same authorization boundary applies to skill-team tools. A role may list or
+activate skill-local roles only for skills already authorized by its capability set.
+The built-in `MainAgent` and `Coordinator` roles both use the wildcard skill
+capability so normal and orchestration mode can activate team roles without
+manual role edits.
+
+## Skill-Team Role Tools
+
+Skill teams are discovered progressively by the model, not by a required manifest
+flag. The normal flow is:
+
+1. BM25 routing recommends candidate skills.
+2. The model uses `load_skill` to inspect the selected skill's lightweight manifest
+   and file index.
+3. If the skill appears to contain team members, the model uses the `skill-teams`
+   tool group to inspect and activate those members.
+
+The `skill-teams` group contains:
+
+- `list_skill_roles(skill_name)`: scans skill-local markdown files that expose role
+  front matter and returns role summaries only; directory and workflow file names
+  are not part of the contract.
+- `activate_skill_roles(skill_name, role_ids)`: materializes selected skill-local
+  roles as run-scoped effective roles. Returned `effective_role_id` values may be
+  passed to existing `spawn_subagent` or `orch_dispatch_task`.
+
+These tools are registered in the default tool registry so role configuration and
+tool-group UI can expose them. They are not dynamic tools produced by
+`SkillRegistry.get_toolset_tools()`.
+
 ## Interface Changes
 
 ### `POST /api/prompts:preview`
@@ -194,4 +235,3 @@ Minimum coverage:
 - runtime stores routed skill candidates in user prompt history, not system prompt
 - external ACP packages skill candidates inside `User Prompt`
 - gateway ACP protocol behavior remains unchanged
-

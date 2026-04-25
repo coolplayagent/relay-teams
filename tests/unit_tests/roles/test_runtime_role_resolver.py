@@ -68,6 +68,18 @@ def test_runtime_role_resolver_prefers_run_temporary_roles(tmp_path: Path) -> No
     assert role.tools == ("write", "office_read_markdown")
 
 
+def test_runtime_role_resolver_get_temporary_role_rejects_missing_run_id(
+    tmp_path: Path,
+) -> None:
+    resolver = RuntimeRoleResolver(
+        role_registry=_base_registry(),
+        temporary_role_repository=TemporaryRoleRepository(tmp_path / "roles.db"),
+    )
+
+    with pytest.raises(KeyError, match="Unknown temporary role_id"):
+        resolver.get_temporary_role(run_id=None, role_id="tmp_writer")
+
+
 def test_runtime_role_resolver_rejects_reserved_ids(tmp_path: Path) -> None:
     resolver = RuntimeRoleResolver(
         role_registry=_base_registry(),

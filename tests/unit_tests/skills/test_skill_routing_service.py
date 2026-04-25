@@ -65,6 +65,56 @@ def test_skill_index_documents_include_instruction_script_and_resource_summaries
     assert "builtin" not in document.keywords
 
 
+def test_skill_index_documents_include_lightweight_team_role_signals(
+    tmp_path: Path,
+) -> None:
+    skill_dir = tmp_path / "skills" / "team-review"
+    contributors_dir = skill_dir / "contributors"
+    contributors_dir.mkdir(parents=True)
+    (skill_dir / "playbook.md").write_text("Full workflow text.\n", encoding="utf-8")
+    (contributors_dir / "analyst.md").write_text(
+        "---\n"
+        "role_id: analyst\n"
+        "name: Research Analyst\n"
+        "description: Collects evidence for review.\n"
+        "version: 1\n"
+        "mode: subagent\n"
+        "tools:\n"
+        "  - read\n"
+        "---\n"
+        "SYSTEM PROMPT SHOULD NOT BE INDEXED.\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: team-review\n"
+        "description: Coordinate a review team.\n"
+        "---\n"
+        "Use the review workflow.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(
+        directory=SkillsDirectory(
+            sources=((SkillSource.USER_RELAY_TEAMS, tmp_path / "skills"),)
+        )
+    )
+    index_service = SkillIndexService(
+        retrieval_service=_build_retrieval_service(tmp_path)
+    )
+
+    documents = index_service.build_documents(skill_registry=registry)
+
+    assert len(documents) == 1
+    document = documents[0]
+    assert "Team Skill Signals" in document.body
+    assert "- Inferred skill team roles: 1" in document.body
+    assert "Role analyst: Research Analyst - Collects evidence for review." in (
+        document.body
+    )
+    assert "contributors/analyst.md" in document.body
+    assert "SYSTEM PROMPT SHOULD NOT BE INDEXED" not in document.body
+
+
 def test_build_skill_routing_query_text_uses_stable_context_fields() -> None:
     query_text = build_skill_routing_query_text(
         SkillRoutingContext(

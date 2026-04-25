@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from relay_teams.gateway.feishu.inbound_runtime import FeishuInboundRuntime
 from relay_teams.gateway.feishu.models import (
     FEISHU_METADATA_MESSAGE_ID_KEY,
@@ -201,6 +203,7 @@ def _build_message(
     )
 
 
+@pytest.mark.timeout(5)
 def test_start_run_creates_group_session_and_run(tmp_path: Path) -> None:
     session_service = _FakeSessionService()
     run_service = _FakeRunService()

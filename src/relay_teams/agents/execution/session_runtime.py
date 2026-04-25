@@ -290,6 +290,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 runtime_role_resolver=getattr(
                     self._task_execution_service, "runtime_role_resolver", None
                 ),
+                skill_registry=getattr(self, "_skill_registry", None),
                 mcp_registry=self._mcp_registry,
                 task_service=self._task_service,
                 task_execution_service=self._task_execution_service,

@@ -645,6 +645,7 @@ class ServerContainer:
             tool_approval_manager=self.tool_approval_manager,
             user_question_manager=self.user_question_manager,
             tool_approval_policy=self.tool_approval_policy,
+            runtime_role_resolver=self.runtime_role_resolver,
             shell_approval_repo=self.shell_approval_repo,
             get_notification_service=lambda: self.notification_service,
             resolve_model_config=self.resolve_external_agent_model_config,

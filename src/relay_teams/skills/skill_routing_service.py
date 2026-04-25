@@ -23,6 +23,7 @@ from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.sessions.runs.run_models import RuntimePromptConversationContext
 from relay_teams.skills.skill_models import Skill, SkillInstructionEntry
 from relay_teams.skills.skill_registry import SkillRegistry
+from relay_teams.skills.skill_team_roles import build_skill_team_routing_signals
 from relay_teams.skills.skill_routing_models import (
     SkillPromptResult,
     SkillRouteCandidate,
@@ -474,6 +475,9 @@ def _build_skill_document_body(skill: Skill) -> str:
     ]
     if resource_lines:
         sections.append("Resources\n" + "\n".join(resource_lines))
+    team_role_lines = build_skill_team_routing_signals(skill)
+    if team_role_lines:
+        sections.append("Team Skill Signals\n" + "\n".join(team_role_lines))
     return "\n\n".join(sections)
 
 
