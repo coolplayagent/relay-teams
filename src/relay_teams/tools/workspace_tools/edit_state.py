@@ -37,14 +37,15 @@ def fingerprint_file(path: Path) -> FileReadState:
 def record_file_read(
     *,
     shared_store: SharedStateRepository,
-    task_id: str,
+    session_id: str,
+    conversation_id: str,
     path: Path,
 ) -> FileReadState:
     state = fingerprint_file(path)
     shared_store.manage_state(
         StateMutation(
-            scope=_task_scope(task_id),
-            key=_state_key(path),
+            scope=_session_scope(session_id),
+            key=_state_key(conversation_id=conversation_id, path=path),
             value_json=state.model_dump_json(),
         )
     )
@@ -54,10 +55,14 @@ def record_file_read(
 def load_file_read_state(
     *,
     shared_store: SharedStateRepository,
-    task_id: str,
+    session_id: str,
+    conversation_id: str,
     path: Path,
 ) -> FileReadState | None:
-    raw = shared_store.get_state(_task_scope(task_id), _state_key(path))
+    raw = shared_store.get_state(
+        _session_scope(session_id),
+        _state_key(conversation_id=conversation_id, path=path),
+    )
     if raw is None:
         return None
     try:
@@ -75,10 +80,16 @@ def load_file_read_state(
 def assert_file_was_read(
     *,
     shared_store: SharedStateRepository,
-    task_id: str,
+    session_id: str,
+    conversation_id: str,
     path: Path,
 ) -> FileReadState:
-    state = load_file_read_state(shared_store=shared_store, task_id=task_id, path=path)
+    state = load_file_read_state(
+        shared_store=shared_store,
+        session_id=session_id,
+        conversation_id=conversation_id,
+        path=path,
+    )
     if state is None:
         raise ValueError("You must read file before editing it.")
     return state
@@ -87,19 +98,25 @@ def assert_file_was_read(
 def assert_file_unchanged_since_read(
     *,
     shared_store: SharedStateRepository,
-    task_id: str,
+    session_id: str,
+    conversation_id: str,
     path: Path,
 ) -> FileReadState:
-    state = assert_file_was_read(shared_store=shared_store, task_id=task_id, path=path)
+    state = assert_file_was_read(
+        shared_store=shared_store,
+        session_id=session_id,
+        conversation_id=conversation_id,
+        path=path,
+    )
     current = fingerprint_file(path)
     if current.mtime_ns != state.mtime_ns or current.size != state.size:
         raise ValueError("File has been modified since it was last read.")
     return state
 
 
-def _task_scope(task_id: str) -> ScopeRef:
-    return ScopeRef(scope_type=ScopeType.TASK, scope_id=task_id)
+def _session_scope(session_id: str) -> ScopeRef:
+    return ScopeRef(scope_type=ScopeType.SESSION, scope_id=session_id)
 
 
-def _state_key(path: Path) -> str:
-    return READ_STATE_PREFIX + normalize_resolved_path(path)
+def _state_key(*, conversation_id: str, path: Path) -> str:
+    return READ_STATE_PREFIX + conversation_id + ":" + normalize_resolved_path(path)

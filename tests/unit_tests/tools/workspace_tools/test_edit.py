@@ -101,7 +101,8 @@ def test_edit_file_with_guard_requires_read_first(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="You must read file"):
         edit_file_with_guard(
             shared_store=shared_store,
-            task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
             file_path=file_path,
             old_string="content",
             new_string="updated",
@@ -112,11 +113,17 @@ def test_edit_file_with_guard_succeeds_after_read(tmp_path: Path) -> None:
     shared_store = SharedStateRepository(tmp_path / "state.db")
     file_path = tmp_path / "file.txt"
     file_path.write_text("content", encoding="utf-8")
-    record_file_read(shared_store=shared_store, task_id="task-1", path=file_path)
+    record_file_read(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        path=file_path,
+    )
 
     result = edit_file_with_guard(
         shared_store=shared_store,
-        task_id="task-1",
+        session_id="session-1",
+        conversation_id="conversation-1",
         file_path=file_path,
         old_string="content",
         new_string="updated",
@@ -125,9 +132,60 @@ def test_edit_file_with_guard_succeeds_after_read(tmp_path: Path) -> None:
     assert file_path.read_text(encoding="utf-8") == "updated"
     assert "Edit applied successfully." in result["output"]
     state = load_file_read_state(
-        shared_store=shared_store, task_id="task-1", path=file_path
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        path=file_path,
     )
     assert state is not None
+
+
+def test_edit_file_with_guard_reuses_read_state_for_same_session(
+    tmp_path: Path,
+) -> None:
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    file_path = tmp_path / "file.txt"
+    file_path.write_text("content", encoding="utf-8")
+    record_file_read(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        path=file_path,
+    )
+
+    result = edit_file_with_guard(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        file_path=file_path,
+        old_string="content",
+        new_string="updated",
+    )
+
+    assert file_path.read_text(encoding="utf-8") == "updated"
+    assert "Edit applied successfully." in result["output"]
+
+
+def test_file_read_state_does_not_leak_between_conversations(tmp_path: Path) -> None:
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    file_path = tmp_path / "file.txt"
+    file_path.write_text("content", encoding="utf-8")
+    record_file_read(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        path=file_path,
+    )
+
+    assert (
+        load_file_read_state(
+            shared_store=shared_store,
+            session_id="session-1",
+            conversation_id="conversation-2",
+            path=file_path,
+        )
+        is None
+    )
 
 
 def test_edit_file_with_guard_rejects_external_change_after_read(
@@ -136,13 +194,19 @@ def test_edit_file_with_guard_rejects_external_change_after_read(
     shared_store = SharedStateRepository(tmp_path / "state.db")
     file_path = tmp_path / "file.txt"
     file_path.write_text("content", encoding="utf-8")
-    record_file_read(shared_store=shared_store, task_id="task-1", path=file_path)
+    record_file_read(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        path=file_path,
+    )
     file_path.write_text("changed externally", encoding="utf-8")
 
     with pytest.raises(ValueError, match="modified since it was last read"):
         edit_file_with_guard(
             shared_store=shared_store,
-            task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
             file_path=file_path,
             old_string="changed externally",
             new_string="updated",
@@ -157,14 +221,20 @@ def test_edit_file_with_guard_allows_new_file_without_prior_read(
 
     edit_file_with_guard(
         shared_store=shared_store,
-        task_id="task-1",
+        session_id="session-1",
+        conversation_id="conversation-1",
         file_path=file_path,
         old_string="",
         new_string="created",
     )
 
     assert file_path.read_text(encoding="utf-8") == "created"
-    assert_file_was_read(shared_store=shared_store, task_id="task-1", path=file_path)
+    assert_file_was_read(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        path=file_path,
+    )
 
 
 def test_project_edit_result_keeps_only_output_visible() -> None:

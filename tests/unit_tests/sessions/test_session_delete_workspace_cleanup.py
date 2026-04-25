@@ -28,6 +28,10 @@ from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.tools.workspace_tools.edit_state import (
+    load_file_read_state,
+    record_file_read,
+)
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_runtime_repo import (
@@ -493,6 +497,21 @@ def test_delete_normal_mode_subagent_cleans_child_session_state(tmp_path: Path) 
             value_json='"conversation"',
         )
     )
+    read_state_path = project_root / "source.py"
+    read_state_path.write_text("print('hello')\n", encoding="utf-8")
+    record_file_read(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id=conversation_id,
+        path=read_state_path,
+    )
+    main_conversation_id = build_conversation_id("session-1", "MainAgent")
+    record_file_read(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id=main_conversation_id,
+        path=read_state_path,
+    )
 
     background_task_repository = BackgroundTaskRepository(db_path)
     workspace_manager = WorkspaceManager(
@@ -568,6 +587,24 @@ def test_delete_normal_mode_subagent_cleans_child_session_state(tmp_path: Path) 
             ScopeRef(scope_type=ScopeType.CONVERSATION, scope_id=conversation_id)
         )
         == ()
+    )
+    assert (
+        load_file_read_state(
+            shared_store=shared_store,
+            session_id="session-1",
+            conversation_id=conversation_id,
+            path=read_state_path,
+        )
+        is None
+    )
+    assert (
+        load_file_read_state(
+            shared_store=shared_store,
+            session_id="session-1",
+            conversation_id=main_conversation_id,
+            path=read_state_path,
+        )
+        is not None
     )
 
 

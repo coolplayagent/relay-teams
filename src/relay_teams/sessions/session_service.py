@@ -51,6 +51,7 @@ from relay_teams.sessions.runs.user_question_repository import UserQuestionRepos
 from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
+from relay_teams.tools.workspace_tools.edit_state import READ_STATE_PREFIX
 from relay_teams.sessions.session_models import (
     ProjectKind,
     SessionMetadataPatch,
@@ -625,6 +626,10 @@ class SessionService:
                 ),
                 conversation_id=agent.conversation_id,
                 task_ids=task_ids,
+            )
+            self._shared_store.delete_by_scope_key_prefix(
+                ScopeRef(scope_type=ScopeType.SESSION, scope_id=session_id),
+                READ_STATE_PREFIX + agent.conversation_id + ":",
             )
         self._approval_ticket_repo.delete_by_run(agent.run_id)
         for background_task_record in background_task_records:
@@ -1526,7 +1531,10 @@ class SessionService:
             ScopeRef(scope_type=ScopeType.ROLE, scope_id=f"{session_id}:{role_id}"),
             ScopeRef(scope_type=ScopeType.CONVERSATION, scope_id=conversation_id),
         )
-        return self._shared_store.snapshot_many(scopes)
+        return self._shared_store.snapshot_many(
+            scopes,
+            exclude_key_prefixes=(READ_STATE_PREFIX,),
+        )
 
 
 def _history_marker_label(marker: SessionHistoryMarkerRecord) -> str:

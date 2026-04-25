@@ -149,6 +149,8 @@ async def test_office_read_markdown_tool_converts_supported_pdf(
             workspace=_FakeWorkspace(tmp_path),
             shared_store=shared_store,
             task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
         )
     )
 
@@ -214,7 +216,8 @@ async def test_office_read_markdown_tool_converts_supported_pdf(
     assert (
         load_file_read_state(
             shared_store=shared_store,
-            task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
             path=file_path,
         )
         is not None
@@ -258,6 +261,8 @@ async def test_office_read_markdown_preserves_markdown_tables(
             workspace=_FakeWorkspace(tmp_path),
             shared_store=SharedStateRepository(tmp_path / "state.db"),
             task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
         )
     )
 
@@ -342,6 +347,8 @@ async def test_office_read_markdown_allows_explicit_line_numbers(
             workspace=_FakeWorkspace(tmp_path),
             shared_store=SharedStateRepository(tmp_path / "state.db"),
             task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
         )
     )
 
@@ -412,6 +419,8 @@ async def test_office_read_markdown_surfaces_office_ocr_error(
             workspace=_FakeWorkspace(tmp_path),
             shared_store=SharedStateRepository(tmp_path / "state.db"),
             task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
         )
     )
 
@@ -474,6 +483,8 @@ async def test_office_read_markdown_rejects_non_office_files(
             workspace=_FakeWorkspace(tmp_path),
             shared_store=SharedStateRepository(tmp_path / "state.db"),
             task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
         )
     )
 
@@ -529,6 +540,8 @@ async def test_office_read_markdown_rejects_non_positive_limit_before_conversion
             workspace=_FakeWorkspace(tmp_path),
             shared_store=SharedStateRepository(tmp_path / "state.db"),
             task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
         )
     )
 

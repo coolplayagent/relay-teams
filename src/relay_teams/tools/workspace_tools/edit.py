@@ -452,7 +452,8 @@ def apply_edit(
 def edit_file_with_guard(
     *,
     shared_store: SharedStateRepository,
-    task_id: str,
+    session_id: str,
+    conversation_id: str,
     file_path: Path,
     old_string: str,
     new_string: str,
@@ -466,7 +467,8 @@ def edit_file_with_guard(
     if old_string != "":
         assert_file_unchanged_since_read(
             shared_store=shared_store,
-            task_id=task_id,
+            session_id=session_id,
+            conversation_id=conversation_id,
             path=file_path,
         )
     result = apply_edit(
@@ -475,7 +477,12 @@ def edit_file_with_guard(
         new_string=new_string,
         replace_all=replace_all,
     )
-    record_file_read(shared_store=shared_store, task_id=task_id, path=file_path)
+    record_file_read(
+        shared_store=shared_store,
+        session_id=session_id,
+        conversation_id=conversation_id,
+        path=file_path,
+    )
     return result
 
 
@@ -507,7 +514,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             file_path = ctx.deps.workspace.resolve_path(path, write=True)
             result = edit_file_with_guard(
                 shared_store=ctx.deps.shared_store,
-                task_id=ctx.deps.task_id,
+                session_id=ctx.deps.session_id,
+                conversation_id=ctx.deps.conversation_id,
                 file_path=file_path,
                 old_string=old_string,
                 new_string=new_string,
