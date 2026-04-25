@@ -186,7 +186,8 @@ def test_notebook_edit_file_requires_prior_read(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="read file before editing"):
         notebook_edit_file_with_guard(
             shared_store=shared_store,
-            task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
             file_path=file_path,
             cell_id="calc",
             new_source="print(2)\n",
@@ -197,13 +198,19 @@ def test_notebook_edit_file_rejects_external_change_after_read(tmp_path: Path) -
     file_path = tmp_path / "demo.ipynb"
     _write_notebook(file_path)
     shared_store = SharedStateRepository(tmp_path / "state.db")
-    record_file_read(shared_store=shared_store, task_id="task-1", path=file_path)
+    record_file_read(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        path=file_path,
+    )
     _write_notebook(file_path, {**_notebook(), "metadata": {"changed": True}})
 
     with pytest.raises(ValueError, match="modified since it was last read"):
         notebook_edit_file_with_guard(
             shared_store=shared_store,
-            task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
             file_path=file_path,
             cell_id="calc",
             new_source="print(2)\n",
@@ -216,11 +223,17 @@ def test_notebook_edit_file_writes_cell_and_preserves_notebook_metadata(
     file_path = tmp_path / "demo.ipynb"
     _write_notebook(file_path)
     shared_store = SharedStateRepository(tmp_path / "state.db")
-    record_file_read(shared_store=shared_store, task_id="task-1", path=file_path)
+    record_file_read(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        path=file_path,
+    )
 
     result = notebook_edit_file_with_guard(
         shared_store=shared_store,
-        task_id="task-1",
+        session_id="session-1",
+        conversation_id="conversation-1",
         file_path=file_path,
         cell_id="calc",
         new_source="print(2)\n",

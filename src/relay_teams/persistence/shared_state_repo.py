@@ -92,10 +92,14 @@ class SharedStateRepository(SharedSqliteRepository):
     def snapshot_many(
         self,
         scopes: tuple[ScopeRef, ...],
+        *,
+        exclude_key_prefixes: tuple[str, ...] = (),
     ) -> tuple[tuple[str, str], ...]:
         merged: dict[str, str] = {}
         for scope in scopes:
             for key, value in self.snapshot(scope):
+                if key.startswith(exclude_key_prefixes):
+                    continue
                 merged[key] = value
         ordered_items = sorted(merged.items(), key=lambda item: item[0])
         return tuple((key, value) for key, value in ordered_items)
@@ -107,6 +111,24 @@ class SharedStateRepository(SharedSqliteRepository):
                 self._conn.execute(
                     "DELETE FROM shared_state WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP"
                 ).rowcount
+            ),
+        )
+
+    def delete_by_scope_key_prefix(self, scope: ScopeRef, key_prefix: str) -> None:
+        self._run_write(
+            operation_name="delete_by_scope_key_prefix",
+            operation=lambda: self._conn.execute(
+                """
+                DELETE FROM shared_state
+                WHERE scope_type=? AND scope_id=?
+                  AND substr(state_key, 1, ?) = ?
+                """,
+                (
+                    scope.scope_type.value,
+                    scope.scope_id,
+                    len(key_prefix),
+                    key_prefix,
+                ),
             ),
         )
 

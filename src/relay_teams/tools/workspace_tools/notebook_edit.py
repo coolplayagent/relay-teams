@@ -45,7 +45,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             file_path = ctx.deps.workspace.resolve_path(path, write=True)
             result = notebook_edit_file_with_guard(
                 shared_store=ctx.deps.shared_store,
-                task_id=ctx.deps.task_id,
+                session_id=ctx.deps.session_id,
+                conversation_id=ctx.deps.conversation_id,
                 file_path=file_path,
                 cell_id=cell_id,
                 new_source=new_source,

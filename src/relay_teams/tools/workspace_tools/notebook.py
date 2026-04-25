@@ -428,7 +428,8 @@ def dump_notebook(
 def notebook_edit_file_with_guard(
     *,
     shared_store: SharedStateRepository,
-    task_id: str,
+    session_id: str,
+    conversation_id: str,
     file_path: Path,
     cell_id: str | None,
     new_source: str,
@@ -437,7 +438,8 @@ def notebook_edit_file_with_guard(
 ) -> dict[str, JsonValue]:
     assert_file_unchanged_since_read(
         shared_store=shared_store,
-        task_id=task_id,
+        session_id=session_id,
+        conversation_id=conversation_id,
         path=file_path,
     )
     notebook, original_content, newline = load_notebook(file_path)
@@ -454,7 +456,12 @@ def notebook_edit_file_with_guard(
         trailing_newline=original_content.endswith(("\n", "\r\n")),
     )
     atomic_write(file_path, updated_content, encoding="utf-8", newline="")
-    record_file_read(shared_store=shared_store, task_id=task_id, path=file_path)
+    record_file_read(
+        shared_store=shared_store,
+        session_id=session_id,
+        conversation_id=conversation_id,
+        path=file_path,
+    )
     diff_summary = format_diff_summary(original_content, updated_content)
     diff = generate_diff(str(file_path), original_content, updated_content)
     output = (
