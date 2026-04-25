@@ -140,6 +140,8 @@ const FEATURE_GITHUB_FIELD_IDS = Object.freeze({
 const FEISHU_PLATFORM = 'feishu';
 const XIAOLUBAN_PLATFORM = 'xiaoluban';
 const WECHAT_PLATFORM = 'wechat';
+const XIAOLUBAN_NO_WORKSPACES_VALUE = '__no_xiaoluban_notification_workspaces__';
+const XIAOLUBAN_ALL_WORKSPACES_VALUE = '__all_xiaoluban_notification_workspaces__';
 const DEFAULT_TRIGGER_RULE = 'mention_only';
 const DEFAULT_SESSION_MODE = 'normal';
 const DEFAULT_THINKING_EFFORT = 'medium';
@@ -1756,6 +1758,10 @@ function normalizeXiaolubanAccounts(payload) {
             base_url: String(account?.base_url || '').trim(),
             status: String(account?.status || 'disabled').trim() || 'disabled',
             derived_uid: String(account?.derived_uid || '').trim(),
+            notification_workspace_ids: Array.isArray(account?.notification_workspace_ids)
+                ? account.notification_workspace_ids.map(value => String(value || '').trim()).filter(Boolean)
+                : [],
+            notification_receiver: String(account?.notification_receiver || '').trim(),
             secret_status: account?.secret_status && typeof account.secret_status === 'object'
                 ? { ...account.secret_status }
                 : {},
@@ -1834,6 +1840,50 @@ function resolveWorkspaceOptionValues(workspaces) {
         label: formatWorkspaceOptionLabel(workspace),
         description: formatWorkspaceOptionDescription(workspace),
     })).filter(option => option.value);
+}
+
+function resolveXiaolubanNotificationWorkspaceOptions(workspaces) {
+    const workspaceOptions = resolveWorkspaceOptionValues(workspaces);
+    const baseOptions = [
+        {
+            value: XIAOLUBAN_NO_WORKSPACES_VALUE,
+            label: t('settings.gateway.xiaoluban_notification_workspaces_none'),
+            description: '',
+        },
+    ];
+    if (workspaceOptions.length === 0) {
+        return baseOptions;
+    }
+    return [
+        ...baseOptions,
+        {
+            value: XIAOLUBAN_ALL_WORKSPACES_VALUE,
+            label: t('settings.gateway.xiaoluban_notification_workspaces_all'),
+            description: '',
+        },
+        ...workspaceOptions,
+    ];
+}
+
+function normalizeXiaolubanNotificationWorkspaceSelection(values, options) {
+    const selected = Array.isArray(values)
+        ? values.map(value => String(value || '').trim()).filter(Boolean)
+        : [];
+    const workspaceIds = (Array.isArray(options) ? options : [])
+        .map(option => String(option?.value || '').trim())
+        .filter(value => (
+            value
+            && value !== XIAOLUBAN_NO_WORKSPACES_VALUE
+            && value !== XIAOLUBAN_ALL_WORKSPACES_VALUE
+        ));
+    if (selected.includes(XIAOLUBAN_NO_WORKSPACES_VALUE)) {
+        return [];
+    }
+    if (selected.includes(XIAOLUBAN_ALL_WORKSPACES_VALUE)) {
+        return workspaceIds;
+    }
+    const workspaceSet = new Set(workspaceIds);
+    return selected.filter(value => workspaceSet.has(value));
 }
 
 function resolveRoleOptionsForForms(roles) {
@@ -2846,6 +2896,15 @@ async function requestXiaolubanAccountInput(account, submitHandler = null) {
     const fallbackDisplayName = String(
         account?.display_name || t('settings.gateway.xiaoluban_title'),
     ).trim();
+    const workspaceOptions = resolveXiaolubanNotificationWorkspaceOptions(
+        currentGatewayFeatureState.workspaces,
+    );
+    const selectedWorkspaceIds = Array.isArray(account?.notification_workspace_ids)
+        ? account.notification_workspace_ids.map(value => String(value || '').trim()).filter(Boolean)
+        : [];
+    const selectedWorkspaceValues = selectedWorkspaceIds.length > 0
+        ? selectedWorkspaceIds
+        : [XIAOLUBAN_NO_WORKSPACES_VALUE];
     const values = await showFormDialog({
         title: isEditing
             ? t('settings.gateway.xiaoluban_account_editor')
@@ -2868,21 +2927,49 @@ async function requestXiaolubanAccountInput(account, submitHandler = null) {
                 id: 'token',
                 label: t('settings.gateway.xiaoluban_token'),
                 value: '',
-                placeholder: isEditing ? '' : 'uid_xxx...',
+                placeholder: isEditing && tokenConfigured
+                    ? t('settings.gateway.xiaoluban_token_edit_placeholder')
+                    : 'uid_xxx...',
                 description: isEditing && tokenConfigured
                     ? t('settings.gateway.xiaoluban_token_edit_copy')
                     : t('settings.gateway.xiaoluban_token_copy'),
+            },
+            {
+                id: 'notification_workspace_ids',
+                label: t('settings.gateway.xiaoluban_notification_workspaces'),
+                type: 'multiselect',
+                value: selectedWorkspaceValues,
+                options: workspaceOptions,
+                placeholder: t('settings.gateway.xiaoluban_notification_workspaces_placeholder'),
+                description: t('settings.gateway.xiaoluban_notification_workspaces_copy'),
+                summaryMode: 'count',
+                summaryKey: 'settings.gateway.xiaoluban_notification_workspace_count',
+                summaryAllValue: XIAOLUBAN_ALL_WORKSPACES_VALUE,
+                summaryNoneValue: XIAOLUBAN_NO_WORKSPACES_VALUE,
+            },
+            {
+                id: 'notification_receiver',
+                label: t('settings.gateway.xiaoluban_notification_receiver'),
+                value: String(account?.notification_receiver || '').trim(),
+                placeholder: t('settings.gateway.xiaoluban_notification_receiver_placeholder'),
+                description: t('settings.gateway.xiaoluban_notification_receiver_copy'),
             },
         ],
         submitHandler: typeof submitHandler === 'function'
             ? async formValues => {
                 const displayName = String(formValues?.display_name || '').trim() || fallbackDisplayName;
                 const token = String(formValues?.token || '').trim();
+                const notificationWorkspaceIds = normalizeXiaolubanNotificationWorkspaceSelection(
+                    formValues?.notification_workspace_ids,
+                    workspaceOptions,
+                );
                 if (!isEditing && !token) {
                     throw new Error(t('settings.gateway.xiaoluban_missing_token'));
                 }
                 const payload = {
                     display_name: displayName,
+                    notification_workspace_ids: notificationWorkspaceIds,
+                    notification_receiver: String(formValues?.notification_receiver || '').trim() || null,
                 };
                 if (token) {
                     payload.token = token;
@@ -2906,11 +2993,17 @@ async function requestXiaolubanAccountInput(account, submitHandler = null) {
     }
     const displayName = String(values.display_name || '').trim() || fallbackDisplayName;
     const token = String(values.token || '').trim();
+    const notificationWorkspaceIds = normalizeXiaolubanNotificationWorkspaceSelection(
+        values.notification_workspace_ids,
+        workspaceOptions,
+    );
     if (!isEditing && !token) {
         throw new Error(t('settings.gateway.xiaoluban_missing_token'));
     }
     const payload = {
         display_name: displayName,
+        notification_workspace_ids: notificationWorkspaceIds,
+        notification_receiver: String(values.notification_receiver || '').trim() || null,
     };
     if (token) {
         payload.token = token;
@@ -4375,6 +4468,11 @@ function renderGatewayXiaolubanRecords(accounts) {
                 const status = String(account?.status || 'disabled').trim() || 'disabled';
                 const derivedUid = String(account?.derived_uid || '').trim();
                 const tokenConfigured = account?.secret_status?.token_configured === true;
+                const workspaceIds = Array.isArray(account?.notification_workspace_ids)
+                    ? account.notification_workspace_ids.map(value => String(value || '').trim()).filter(Boolean)
+                    : [];
+                const receiver = String(account?.notification_receiver || '').trim();
+                const receiverLabel = receiver || t('settings.gateway.xiaoluban_notification_receiver_self');
                 return `
                     <div class="role-record gateway-feature-record" data-feature-xiaoluban-record="${escapeHtml(accountId)}">
                         <div class="role-record-main">
@@ -4383,11 +4481,13 @@ function renderGatewayXiaolubanRecords(accounts) {
                                 <div class="profile-card-chips role-record-chips">
                                     <span class="profile-card-chip">${escapeHtml(t(`automation.status.${status}`))}</span>
                                     <span class="profile-card-chip">${escapeHtml(tokenConfigured ? t('settings.triggers.credentials_ready') : t('settings.triggers.credentials_missing'))}</span>
+                                    <span class="profile-card-chip">${escapeHtml(formatMessage('settings.gateway.xiaoluban_notification_workspace_count', { count: workspaceIds.length }))}</span>
                                     ${derivedUid ? `<span class="profile-card-chip">${escapeHtml(derivedUid)}</span>` : ''}
                                 </div>
                             </div>
                             <div class="role-record-meta trigger-record-meta">
                                 ${accountId ? `<span>${escapeHtml(formatMessage('settings.gateway.xiaoluban_internal_id_copy', { account_id: accountId }))}</span>` : ''}
+                                <span>${escapeHtml(formatMessage('settings.gateway.xiaoluban_notification_receiver_summary', { receiver: receiverLabel }))}</span>
                             </div>
                         </div>
                         <div class="role-record-actions trigger-record-actions">

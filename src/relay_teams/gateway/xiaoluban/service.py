@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Protocol, Tuple
 from uuid import uuid4
 
 from relay_teams.gateway.xiaoluban.account_repository import XiaolubanAccountRepository
@@ -23,6 +23,10 @@ from relay_teams.gateway.xiaoluban.secret_store import (
 from relay_teams.validation import require_force_delete
 
 
+class WorkspaceLookup(Protocol):
+    def get_workspace(self, workspace_id: str) -> object: ...
+
+
 class XiaolubanGatewayService:
     def __init__(
         self,
@@ -31,6 +35,7 @@ class XiaolubanGatewayService:
         repository: XiaolubanAccountRepository,
         secret_store: Optional[XiaolubanSecretStore] = None,
         client: Optional[XiaolubanClient] = None,
+        workspace_lookup: Optional[WorkspaceLookup] = None,
     ) -> None:
         self._config_dir = config_dir
         self._repository = repository
@@ -38,6 +43,7 @@ class XiaolubanGatewayService:
             get_xiaoluban_secret_store() if secret_store is None else secret_store
         )
         self._client = XiaolubanClient() if client is None else client
+        self._workspace_lookup = workspace_lookup
 
     def list_accounts(self) -> Tuple[XiaolubanAccountRecord, ...]:
         return tuple(
@@ -51,6 +57,7 @@ class XiaolubanGatewayService:
         self,
         request: XiaolubanAccountCreateInput,
     ) -> XiaolubanAccountRecord:
+        self._validate_notification_workspaces(request.notification_workspace_ids)
         normalized_token = _validate_token(request.token)
         derived_uid = derive_uid_from_token(normalized_token)
         now = datetime.now(tz=timezone.utc)
@@ -64,6 +71,8 @@ class XiaolubanGatewayService:
                 else XiaolubanAccountStatus.DISABLED
             ),
             derived_uid=derived_uid,
+            notification_workspace_ids=request.notification_workspace_ids,
+            notification_receiver=request.notification_receiver,
             created_at=now,
             updated_at=now,
         )
@@ -79,6 +88,13 @@ class XiaolubanGatewayService:
         request: XiaolubanAccountUpdateInput,
     ) -> XiaolubanAccountRecord:
         existing = self._repository.get_account(account_id)
+        notification_workspace_ids = (
+            existing.notification_workspace_ids
+            if request.notification_workspace_ids is None
+            else request.notification_workspace_ids
+        )
+        if request.notification_workspace_ids is not None:
+            self._validate_notification_workspaces(request.notification_workspace_ids)
         token = None
         derived_uid = existing.derived_uid
         if request.token is not None:
@@ -102,6 +118,12 @@ class XiaolubanGatewayService:
                     )
                 ),
                 "derived_uid": derived_uid,
+                "notification_workspace_ids": notification_workspace_ids,
+                "notification_receiver": (
+                    request.notification_receiver
+                    if "notification_receiver" in request.model_fields_set
+                    else existing.notification_receiver
+                ),
                 "updated_at": datetime.now(tz=timezone.utc),
             }
         )
@@ -145,7 +167,9 @@ class XiaolubanGatewayService:
             raise RuntimeError("missing_xiaoluban_token")
         response = self._client.send_text_message(
             text=text,
-            receiver_uid=(receiver_uid or account.derived_uid).strip()
+            receiver_uid=(
+                receiver_uid or account.notification_receiver or account.derived_uid
+            ).strip()
             or account.derived_uid,
             auth_token=token,
             base_url=account.base_url,
@@ -178,6 +202,17 @@ class XiaolubanGatewayService:
                 )
             }
         )
+
+    def _validate_notification_workspaces(self, workspace_ids: tuple[str, ...]) -> None:
+        if self._workspace_lookup is None:
+            return
+        for workspace_id in workspace_ids:
+            try:
+                _ = self._workspace_lookup.get_workspace(workspace_id)
+            except KeyError as exc:
+                raise ValueError(
+                    f"Unknown notification workspace: {workspace_id}"
+                ) from exc
 
 
 def derive_uid_from_token(token: str) -> str:

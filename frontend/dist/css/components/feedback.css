@@ -167,6 +167,33 @@
     cursor: pointer;
 }
 
+.feedback-dialog-multiselect {
+    min-width: 0;
+}
+
+.feedback-dialog-multiselect-trigger {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.feedback-dialog-multiselect-menu {
+    max-height: min(220px, 32vh);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.feedback-dialog-multiselect-option {
+    min-width: 0;
+}
+
+.feedback-dialog-multiselect-option span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .feedback-dialog-checkbox-wrap {
     gap: 0.2rem;
 }

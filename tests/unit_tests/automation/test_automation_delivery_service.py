@@ -36,6 +36,7 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
+from relay_teams.sessions.session_models import SessionRecord
 
 
 class _FakeRuntimeConfigLookup:
@@ -134,6 +135,16 @@ class _FakeNotificationService:
         return True
 
 
+class _FakeSessionLookup:
+    def get(self, session_id: str) -> SessionRecord:
+        return SessionRecord(session_id=session_id, workspace_id="default")
+
+
+class _MissingSessionLookup:
+    def get(self, session_id: str) -> SessionRecord:
+        raise KeyError(session_id)
+
+
 class _FakeXiaolubanGatewayService:
     def __init__(self) -> None:
         self.sent_messages: list[dict[str, object]] = []
@@ -201,6 +212,8 @@ def _build_xiaoluban_project() -> AutomationProjectRecord:
 
 def _build_service(
     tmp_path: Path,
+    *,
+    session_lookup: _FakeSessionLookup | _MissingSessionLookup | None = None,
 ) -> tuple[
     AutomationDeliveryService,
     _FakeFeishuClient,
@@ -222,6 +235,7 @@ def _build_service(
         run_runtime_repo=run_runtime_repo,
         event_log=event_log,
         notification_service=notification_service,
+        session_lookup=session_lookup,
     )
     return (
         service,
@@ -257,6 +271,7 @@ def _build_service_with_xiaoluban(
         run_runtime_repo=run_runtime_repo,
         event_log=event_log,
         notification_service=_FakeNotificationService(),
+        session_lookup=_FakeSessionLookup(),
     )
     return (
         service,
@@ -266,6 +281,31 @@ def _build_service_with_xiaoluban(
         event_log,
         repository,
     )
+
+
+def test_resolve_workspace_id_handles_blank_lookup_and_missing_session(
+    tmp_path: Path,
+) -> None:
+    service, _feishu_client, _run_runtime_repo, _event_log, _repository, _ = (
+        _build_service(tmp_path)
+    )
+    missing_lookup_path = tmp_path / "missing-lookup"
+    missing_lookup_path.mkdir()
+    (
+        missing_session_service,
+        _feishu_client_2,
+        _run_runtime_repo_2,
+        _event_log_2,
+        _repository_2,
+        _notification_service_2,
+    ) = _build_service(
+        missing_lookup_path,
+        session_lookup=_MissingSessionLookup(),
+    )
+
+    assert service._resolve_workspace_id("") == ""
+    assert service._resolve_workspace_id("session-1") == ""
+    assert missing_session_service._resolve_workspace_id("session-1") == ""
 
 
 def test_register_run_sends_started_message_immediately(tmp_path: Path) -> None:
@@ -585,6 +625,32 @@ def test_delivery_service_suppresses_generic_terminal_notification_for_owned_run
 
     assert service.should_suppress_terminal_notification("run-1") is True
     assert service.should_suppress_terminal_notification("missing-run") is False
+    assert service.should_suppress_xiaoluban_terminal_notification("run-1") is False
+
+
+def test_delivery_service_suppresses_xiaoluban_terminal_notification_only_for_xiaoluban_binding(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        _feishu_client,
+        _xiaoluban_gateway_service,
+        _run_runtime_repo,
+        _event_log,
+        _repository,
+    ) = _build_service_with_xiaoluban(tmp_path)
+    _ = service.register_run(
+        project=_build_xiaoluban_project(),
+        session_id="session-1",
+        run_id="run-1",
+        reason="schedule",
+    )
+
+    assert service.should_suppress_terminal_notification("run-1") is True
+    assert service.should_suppress_xiaoluban_terminal_notification("run-1") is True
+    assert (
+        service.should_suppress_xiaoluban_terminal_notification("missing-run") is False
+    )
 
 
 def test_delivery_service_does_not_suppress_when_terminal_delivery_is_disabled(
@@ -656,6 +722,64 @@ def test_delivery_service_emits_fallback_notification_after_terminal_delivery_fa
         }
     ]
     assert service.should_suppress_terminal_notification("run-1") is False
+
+
+def test_delivery_service_emits_fallback_through_rebound_notification_service(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        feishu_client,
+        run_runtime_repo,
+        event_log,
+        _repository,
+        original_notifications,
+    ) = _build_service(tmp_path)
+    rebound_notifications = _FakeNotificationService()
+    service.bind_notification_service(rebound_notifications)
+    _ = service.register_run(
+        project=_build_project(),
+        session_id="session-1",
+        run_id="run-1",
+        reason="schedule",
+    )
+    feishu_client.fail_reply_error = RuntimeError("reply_failed")
+    run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.COMPLETED,
+            phase=RunRuntimePhase.TERMINAL,
+        )
+    )
+    event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed","output":"Daily report is ready."}',
+            occurred_at=datetime.now(tz=timezone.utc),
+        )
+    )
+
+    for _ in range(5):
+        assert service.process_pending() is True
+
+    assert original_notifications.emit_calls == []
+    assert rebound_notifications.emit_calls == [
+        {
+            "notification_type": NotificationType.RUN_COMPLETED,
+            "title": "Run Completed",
+            "body": "Daily report is ready.",
+            "context": NotificationContext(
+                session_id="session-1",
+                run_id="run-1",
+                trace_id="run-1",
+            ),
+            "dedupe_key": "automation-terminal-fallback:run-1",
+        }
+    ]
 
 
 def test_automation_delivery_worker_start_wake_stop() -> None:
@@ -745,7 +869,12 @@ def test_register_run_sends_started_message_to_xiaoluban_account(
     assert xiaoluban_gateway_service.sent_messages == [
         {
             "account_id": "xlb_main",
-            "text": "定时任务 Daily Briefing 开始执行",
+            "text": (
+                "【relay-teams】\n"
+                "session-1\n"
+                "────────────────────\n"
+                "定时任务 Daily Briefing 开始执行"
+            ),
             "receiver_uid": None,
         }
     ]
@@ -823,12 +952,22 @@ def test_process_pending_sends_default_completed_message_to_xiaoluban(
     assert xiaoluban_gateway_service.sent_messages == [
         {
             "account_id": "xlb_main",
-            "text": "定时任务 Daily Briefing 开始执行",
+            "text": (
+                "【relay-teams】\n"
+                "session-1\n"
+                "────────────────────\n"
+                "定时任务 Daily Briefing 开始执行"
+            ),
             "receiver_uid": None,
         },
         {
             "account_id": "xlb_main",
-            "text": "定时任务 Daily Briefing 执行完成。",
+            "text": (
+                "【relay-teams】\n"
+                "session-1\n"
+                "────────────────────\n"
+                "定时任务 Daily Briefing 执行完成。"
+            ),
             "receiver_uid": None,
         },
     ]

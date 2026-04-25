@@ -10,7 +10,8 @@ Current scope:
 - personal token based account setup
 - server-side secret storage through the shared secret store/keyring path
 - automation `started`, `completed`, and `failed` notifications
-- delivery to the account owner's derived UID
+- delivery to the account owner's derived UID or a configured Xiaoluban receiver/group ID
+- workspace-scoped run completion notifications from selected workspaces
 
 Current non-goals for this phase:
 
@@ -28,6 +29,8 @@ Each Xiaoluban account stores:
 - `base_url`
 - `status`
 - `derived_uid`
+- `notification_workspace_ids`
+- `notification_receiver`
 - `created_at`
 - `updated_at`
 - `secret_status.token_configured`
@@ -60,6 +63,8 @@ The Xiaoluban section supports:
 
 - create account
 - edit account display name / token
+- choose workspaces that should send run completion notifications
+- set an optional notification recipient/group ID
 - enable or disable account
 - delete account
 
@@ -67,6 +72,8 @@ The UI only asks for:
 
 - `display_name`, prefilled as `小鲁班`
 - personal token, which can be obtained by sending `获取发送token` to Xiaoluban in WeLink
+- notification workspaces, defaulting to none selected
+- optional notification recipient/group ID
 
 The delivery endpoint is fixed to `http://xiaoluban.rnd.huawei.com:80/` and is not exposed for editing in the UI.
 
@@ -81,24 +88,39 @@ The `Binding and Notifications` section now uses the shared delivery provider pi
 For Xiaoluban candidates:
 
 - provider is `xiaoluban`
-- the candidate label is `发送给自己（uid）`
+- the candidate label is `发送给自己（uid）` or `发送给 {receiver}` when a recipient/group is configured
 - binding does not require an IM session
 
 ## Delivery Semantics
 
-Xiaoluban delivery is handled by the shared automation delivery dispatcher.
+Xiaoluban automation delivery is handled by the shared automation delivery dispatcher.
 
 Provider behavior in this phase:
 
 - `supports_bound_session_reuse = false`
-- notifications are always sent to the account's `derived_uid`
+- notifications are sent to the account's `notification_receiver` when configured, otherwise to `derived_uid`
 - no inbound session is created or reused
+- Xiaoluban notification bodies are prefixed through the shared Xiaoluban formatter:
+
+```text
+【relay-teams】
+session: <session_id>
+────────────────────
+<message body>
+```
 
 Event behavior:
 
 - `started`: sends `定时任务 {project_name} 开始执行。`
 - `completed`: always sends one completion message; if terminal output exists it is included, otherwise a default completion summary is sent
 - `failed`: sends a failure summary plus terminal error or fallback error text
+
+Workspace completion behavior:
+
+- `notification_workspace_ids` is empty by default, so regular workspace run completion notifications are disabled until the user selects one or more workspaces
+- when a normal run completes, the Xiaoluban notification dispatcher checks the session's `workspace_id`
+- matching enabled accounts with usable credentials receive the run completion body
+- automation-owned terminal notifications are suppressed from the workspace dispatcher to avoid duplicate Xiaoluban messages
 
 ## APIs
 
