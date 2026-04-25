@@ -18,6 +18,7 @@ from relay_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 __all__ = [
     "build_llm_http_client",
     "clear_llm_http_client_cache",
+    "clear_llm_http_client_cache_async",
     "reset_llm_http_client_cache_entry",
 ]
 
@@ -84,6 +85,15 @@ def clear_llm_http_client_cache() -> None:
     _SHARED_LLM_HTTP_CLIENT_CACHE.clear()
     _SCOPED_LLM_HTTP_CLIENT_CACHE.clear()
     _close_llm_http_clients(clients)
+
+
+async def clear_llm_http_client_cache_async() -> None:
+    clients = tuple(_SHARED_LLM_HTTP_CLIENT_CACHE.values()) + tuple(
+        _SCOPED_LLM_HTTP_CLIENT_CACHE.values()
+    )
+    _SHARED_LLM_HTTP_CLIENT_CACHE.clear()
+    _SCOPED_LLM_HTTP_CLIENT_CACHE.clear()
+    await _close_llm_http_clients_async(clients)
 
 
 async def reset_llm_http_client_cache_entry(

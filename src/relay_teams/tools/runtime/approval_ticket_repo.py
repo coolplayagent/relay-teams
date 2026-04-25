@@ -7,12 +7,13 @@ import logging
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from threading import RLock
 
+import aiosqlite
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence import async_fetchall, async_fetchone
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.validation import (
     RequiredIdentifierStr,
     normalize_persisted_text,
@@ -93,12 +94,9 @@ def approval_signature_key(
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-class ApprovalTicketRepository:
+class ApprovalTicketRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -145,13 +143,60 @@ class ApprovalTicketRepository:
                 "CREATE INDEX IF NOT EXISTS idx_approval_tickets_signature ON approval_tickets(signature_key, updated_at DESC)"
             )
 
-        run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
-            operation=operation,
-            lock=self._lock,
-            repository_name="ApprovalTicketRepository",
+        self._run_write(
             operation_name="init_tables",
+            operation=operation,
+        )
+
+    async def _init_tables_async(self) -> None:
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS approval_tickets (
+                    tool_call_id   TEXT PRIMARY KEY,
+                    signature_key  TEXT NOT NULL,
+                    run_id         TEXT NOT NULL,
+                    session_id     TEXT NOT NULL,
+                    task_id        TEXT NOT NULL,
+                    instance_id    TEXT NOT NULL,
+                    role_id        TEXT NOT NULL,
+                    tool_name      TEXT NOT NULL,
+                    args_preview   TEXT NOT NULL DEFAULT '',
+                    metadata_json  TEXT NOT NULL DEFAULT '{}',
+                    status         TEXT NOT NULL,
+                    feedback       TEXT NOT NULL DEFAULT '',
+                    created_at     TEXT NOT NULL,
+                    updated_at     TEXT NOT NULL,
+                    resolved_at    TEXT
+                )
+                """
+            )
+            await cursor.close()
+            rows = await async_fetchall(conn, "PRAGMA table_info(approval_tickets)")
+            columns = {str(row["name"]) for row in rows}
+            if "metadata_json" not in columns:
+                cursor = await conn.execute(
+                    "ALTER TABLE approval_tickets "
+                    "ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'"
+                )
+                await cursor.close()
+            cursor = await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_approval_tickets_run_status ON approval_tickets(run_id, status, created_at ASC)"
+            )
+            await cursor.close()
+            cursor = await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_approval_tickets_session_status ON approval_tickets(session_id, status, created_at ASC)"
+            )
+            await cursor.close()
+            cursor = await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_approval_tickets_signature ON approval_tickets(signature_key, updated_at DESC)"
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="init_tables_async",
+            operation=lambda _conn: operation(),
         )
 
     def upsert_requested(
@@ -237,15 +282,103 @@ class ApprovalTicketRepository:
                 ),
             )
 
-        run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
-            operation=operation,
-            lock=self._lock,
-            repository_name="ApprovalTicketRepository",
+        self._run_write(
             operation_name="upsert_requested",
+            operation=operation,
         )
         record = self.get(tool_call_id)
+        if record is None:
+            raise RuntimeError(f"Failed to persist approval ticket {tool_call_id}")
+        return record
+
+    async def upsert_requested_async(
+        self,
+        *,
+        tool_call_id: str,
+        run_id: str,
+        session_id: str,
+        task_id: str,
+        instance_id: str,
+        role_id: str,
+        tool_name: str,
+        args_preview: str,
+        metadata: dict[str, JsonValue] | None = None,
+        cache_key: str = "",
+        signature_args_preview: str | None = None,
+    ) -> ApprovalTicketRecord:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        metadata_json = json.dumps(
+            {} if metadata is None else metadata,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        signature_key = approval_signature_key(
+            run_id=run_id,
+            task_id=task_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            tool_name=tool_name,
+            args_preview=(
+                args_preview
+                if signature_args_preview is None
+                else signature_args_preview
+            ),
+            cache_key=cache_key,
+        )
+        existing = await self.get_async(tool_call_id)
+        created_at = existing.created_at.isoformat() if existing is not None else now
+        resolved_at = (
+            existing.resolved_at.isoformat()
+            if existing and existing.resolved_at
+            else None
+        )
+
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                INSERT INTO approval_tickets(tool_call_id, signature_key, run_id, session_id, task_id, instance_id,
+                                             role_id, tool_name, args_preview, metadata_json, status, feedback, created_at, updated_at, resolved_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tool_call_id)
+                DO UPDATE SET
+                    signature_key=excluded.signature_key,
+                    run_id=excluded.run_id,
+                    session_id=excluded.session_id,
+                    task_id=excluded.task_id,
+                    instance_id=excluded.instance_id,
+                    role_id=excluded.role_id,
+                    tool_name=excluded.tool_name,
+                    args_preview=excluded.args_preview,
+                    metadata_json=excluded.metadata_json,
+                    status=excluded.status,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    tool_call_id,
+                    signature_key,
+                    run_id,
+                    session_id,
+                    task_id,
+                    instance_id,
+                    role_id,
+                    tool_name,
+                    args_preview,
+                    metadata_json,
+                    ApprovalTicketStatus.REQUESTED.value,
+                    "",
+                    created_at,
+                    now,
+                    resolved_at,
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="upsert_requested_async",
+            operation=lambda _conn: operation(),
+        )
+        record = await self.get_async(tool_call_id)
         if record is None:
             raise RuntimeError(f"Failed to persist approval ticket {tool_call_id}")
         return record
@@ -260,9 +393,8 @@ class ApprovalTicketRepository:
     ) -> ApprovalTicketRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
         resolved_at = now if status != ApprovalTicketStatus.REQUESTED else None
-        rowcount = run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
+        rowcount = self._run_write(
+            operation_name="resolve",
             operation=lambda: self._resolve_row(
                 tool_call_id=tool_call_id,
                 status=status,
@@ -271,11 +403,41 @@ class ApprovalTicketRepository:
                 resolved_at=resolved_at,
                 expected_status=expected_status,
             ),
-            lock=self._lock,
-            repository_name="ApprovalTicketRepository",
-            operation_name="resolve",
         )
         record = self.get(tool_call_id)
+        if record is None:
+            raise KeyError(f"Unknown approval ticket: {tool_call_id}")
+        if rowcount == 0 and expected_status is not None:
+            raise ApprovalTicketStatusConflictError(
+                tool_call_id=tool_call_id,
+                expected_status=expected_status,
+                actual_status=record.status,
+            )
+        return record
+
+    async def resolve_async(
+        self,
+        *,
+        tool_call_id: str,
+        status: ApprovalTicketStatus,
+        feedback: str = "",
+        expected_status: ApprovalTicketStatus | None = None,
+    ) -> ApprovalTicketRecord:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        resolved_at = now if status != ApprovalTicketStatus.REQUESTED else None
+        rowcount = await self._run_async_write(
+            operation_name="resolve_async",
+            operation=lambda conn: self._resolve_row_async(
+                conn=conn,
+                tool_call_id=tool_call_id,
+                status=status,
+                feedback=feedback,
+                updated_at=now,
+                resolved_at=resolved_at,
+                expected_status=expected_status,
+            ),
+        )
+        record = await self.get_async(tool_call_id)
         if record is None:
             raise KeyError(f"Unknown approval ticket: {tool_call_id}")
         if rowcount == 0 and expected_status is not None:
@@ -296,12 +458,36 @@ class ApprovalTicketRepository:
             feedback=record.feedback,
         )
 
+    async def mark_completed_async(
+        self, tool_call_id: str
+    ) -> ApprovalTicketRecord | None:
+        record = await self.get_async(tool_call_id)
+        if record is None:
+            return None
+        return await self.resolve_async(
+            tool_call_id=tool_call_id,
+            status=ApprovalTicketStatus.COMPLETED,
+            feedback=record.feedback,
+        )
+
     def get(self, tool_call_id: str) -> ApprovalTicketRecord | None:
         with self._lock:
             row = self._conn.execute(
                 "SELECT * FROM approval_tickets WHERE tool_call_id=?",
                 (tool_call_id,),
             ).fetchone()
+        if row is None:
+            return None
+        return self._record_or_none(row, fallback_invalid_timestamps=True)
+
+    async def get_async(self, tool_call_id: str) -> ApprovalTicketRecord | None:
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT * FROM approval_tickets WHERE tool_call_id=?",
+                (tool_call_id,),
+            )
+        )
         if row is None:
             return None
         return self._record_or_none(row, fallback_invalid_timestamps=True)
@@ -316,12 +502,40 @@ class ApprovalTicketRepository:
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
 
+    async def list_open_by_run_async(
+        self, run_id: str
+    ) -> tuple[ApprovalTicketRecord, ...]:
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT * FROM approval_tickets WHERE run_id=? AND status=? ORDER BY created_at ASC",
+                (run_id, ApprovalTicketStatus.REQUESTED.value),
+            )
+        )
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
+
     def list_open_by_session(self, session_id: str) -> tuple[ApprovalTicketRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM approval_tickets WHERE session_id=? AND status=? ORDER BY created_at ASC",
                 (session_id, ApprovalTicketStatus.REQUESTED.value),
             ).fetchall()
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
+
+    async def list_open_by_session_async(
+        self, session_id: str
+    ) -> tuple[ApprovalTicketRecord, ...]:
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT * FROM approval_tickets WHERE session_id=? AND status=? ORDER BY created_at ASC",
+                (session_id, ApprovalTicketStatus.REQUESTED.value),
+            )
+        )
         return tuple(
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
@@ -371,29 +585,95 @@ class ApprovalTicketRepository:
                 return record
         return None
 
+    async def find_reusable_async(
+        self,
+        *,
+        run_id: str,
+        task_id: str,
+        instance_id: str,
+        role_id: str,
+        tool_name: str,
+        args_preview: str,
+        cache_key: str = "",
+        signature_args_preview: str | None = None,
+    ) -> ApprovalTicketRecord | None:
+        signature_key = approval_signature_key(
+            run_id=run_id,
+            task_id=task_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            tool_name=tool_name,
+            args_preview=(
+                args_preview
+                if signature_args_preview is None
+                else signature_args_preview
+            ),
+            cache_key=cache_key,
+        )
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM approval_tickets
+                WHERE signature_key=?
+                  AND status IN (?, ?)
+                ORDER BY updated_at DESC
+                """,
+                (
+                    signature_key,
+                    ApprovalTicketStatus.REQUESTED.value,
+                    ApprovalTicketStatus.APPROVED.value,
+                ),
+            )
+        )
+        for row in rows:
+            record = self._record_or_none(row, fallback_invalid_timestamps=True)
+            if record is not None:
+                return record
+        return None
+
     def delete_by_session(self, session_id: str) -> None:
-        run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
+        self._run_write(
+            operation_name="delete_by_session",
             operation=lambda: self._conn.execute(
                 "DELETE FROM approval_tickets WHERE session_id=?", (session_id,)
             ),
-            lock=self._lock,
-            repository_name="ApprovalTicketRepository",
-            operation_name="delete_by_session",
+        )
+
+    async def delete_by_session_async(self, session_id: str) -> None:
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                "DELETE FROM approval_tickets WHERE session_id=?", (session_id,)
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_session_async",
+            operation=lambda _conn: operation(),
         )
 
     def delete_by_run(self, run_id: str) -> None:
-        run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
+        self._run_write(
+            operation_name="delete_by_run",
             operation=lambda: self._conn.execute(
                 "DELETE FROM approval_tickets WHERE run_id=?",
                 (run_id,),
             ),
-            lock=self._lock,
-            repository_name="ApprovalTicketRepository",
-            operation_name="delete_by_run",
+        )
+
+    async def delete_by_run_async(self, run_id: str) -> None:
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                "DELETE FROM approval_tickets WHERE run_id=?",
+                (run_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_run_async",
+            operation=lambda _conn: operation(),
         )
 
     def _resolve_row(
@@ -432,6 +712,49 @@ class ApprovalTicketRepository:
             ),
         )
         return int(cursor.rowcount or 0)
+
+    # noinspection PyMethodMayBeStatic
+    async def _resolve_row_async(
+        self,
+        *,
+        conn: aiosqlite.Connection,
+        tool_call_id: str,
+        status: ApprovalTicketStatus,
+        feedback: str,
+        updated_at: str,
+        resolved_at: str | None,
+        expected_status: ApprovalTicketStatus | None,
+    ) -> int:
+        if expected_status is None:
+            cursor = await conn.execute(
+                """
+                UPDATE approval_tickets
+                SET status=?, feedback=?, updated_at=?, resolved_at=?
+                WHERE tool_call_id=?
+                """,
+                (status.value, feedback, updated_at, resolved_at, tool_call_id),
+            )
+            rowcount = int(cursor.rowcount or 0)
+            await cursor.close()
+            return rowcount
+        cursor = await conn.execute(
+            """
+            UPDATE approval_tickets
+            SET status=?, feedback=?, updated_at=?, resolved_at=?
+            WHERE tool_call_id=? AND status=?
+            """,
+            (
+                status.value,
+                feedback,
+                updated_at,
+                resolved_at,
+                tool_call_id,
+                expected_status.value,
+            ),
+        )
+        rowcount = int(cursor.rowcount or 0)
+        await cursor.close()
+        return rowcount
 
     def _to_record(
         self,

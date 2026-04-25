@@ -487,9 +487,9 @@ def test_execute_tool_honors_persisted_approval_when_timeout_loses_race(
     )
     ctx = _FakeCtx(deps)
     ctx.tool_call_id = "call-model-race"
-    original_resolve = deps.approval_ticket_repo.resolve
+    original_resolve_async = deps.approval_ticket_repo.resolve_async
 
-    def resolve_with_approved_race(
+    async def resolve_with_approved_race(
         *,
         tool_call_id: str,
         status: ApprovalTicketStatus,
@@ -501,7 +501,7 @@ def test_execute_tool_honors_persisted_approval_when_timeout_loses_race(
             and status == ApprovalTicketStatus.TIMED_OUT
             and expected_status == ApprovalTicketStatus.REQUESTED
         ):
-            _ = original_resolve(
+            _ = await original_resolve_async(
                 tool_call_id=tool_call_id,
                 status=ApprovalTicketStatus.APPROVED,
                 feedback="approved elsewhere",
@@ -511,7 +511,7 @@ def test_execute_tool_honors_persisted_approval_when_timeout_loses_race(
                 expected_status=ApprovalTicketStatus.REQUESTED,
                 actual_status=ApprovalTicketStatus.APPROVED,
             )
-        return original_resolve(
+        return await original_resolve_async(
             tool_call_id=tool_call_id,
             status=status,
             feedback=feedback,
@@ -519,7 +519,7 @@ def test_execute_tool_honors_persisted_approval_when_timeout_loses_race(
         )
 
     monkeypatch.setattr(
-        deps.approval_ticket_repo, "resolve", resolve_with_approved_race
+        deps.approval_ticket_repo, "resolve_async", resolve_with_approved_race
     )
 
     result = asyncio.run(

@@ -27,12 +27,12 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Update a task contract that is still in the created state."""
 
-        def _action(
+        async def _action(
             task_id: str,
             objective: str | None = None,
             title: str | None = None,
         ) -> dict[str, JsonValue]:
-            return ctx.deps.task_service.update_task(
+            return await ctx.deps.task_service.update_task_async(
                 run_id=ctx.deps.run_id,
                 task_id=task_id,
                 update=TaskUpdate(

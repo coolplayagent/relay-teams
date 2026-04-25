@@ -42,7 +42,7 @@ from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
 from relay_teams.sessions.runs.enums import ExecutionMode, RunEventType
-from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
 from relay_teams.sessions.runs.run_models import (
     IntentInput,
@@ -658,6 +658,13 @@ class BackgroundTaskService:
             if record.execution_mode == "background"
         )
 
+    async def list_for_run_async(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
+        return tuple(
+            record
+            for record in await self._repository.list_by_run_async(run_id)
+            if record.execution_mode == "background"
+        )
+
     def get_for_run(
         self,
         *,
@@ -673,38 +680,56 @@ class BackgroundTaskService:
             raise KeyError(f"Unknown background task: {background_task_id}")
         return record
 
+    async def get_for_run_async(
+        self,
+        *,
+        run_id: str,
+        background_task_id: str,
+    ) -> BackgroundTaskRecord:
+        record = await self._repository.get_async(background_task_id)
+        if (
+            record is None
+            or record.run_id != run_id
+            or record.execution_mode != "background"
+        ):
+            raise KeyError(f"Unknown background task: {background_task_id}")
+        return record
+
     async def wait_for_run(
         self,
         *,
         run_id: str,
         background_task_id: str,
     ) -> tuple[BackgroundTaskRecord, bool]:
-        record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
+        record = await self.get_for_run_async(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
         if not record.is_active:
-            return self._mark_completion_consumed(record), True
+            return await self._mark_completion_consumed_async(record), True
         if record.kind == BackgroundTaskKind.SUBAGENT:
             runtime = self._subagent_runtimes.get(background_task_id)
             if runtime is None:
-                refreshed = self.get_for_run(
+                refreshed = await self.get_for_run_async(
                     run_id=run_id,
                     background_task_id=background_task_id,
                 )
                 if not refreshed.is_active:
-                    return self._mark_completion_consumed(refreshed), True
+                    return await self._mark_completion_consumed_async(refreshed), True
                 return refreshed, False
             await asyncio.shield(runtime.worker_task)
-            updated = self.get_for_run(
+            updated = await self.get_for_run_async(
                 run_id=run_id,
                 background_task_id=background_task_id,
             )
-            return self._mark_completion_consumed(updated), True
+            return await self._mark_completion_consumed_async(updated), True
         updated, completed = await self._require_manager().wait_for_run(
             run_id=run_id,
             background_task_id=background_task_id,
         )
         if not completed:
             return updated, False
-        return self._mark_completion_consumed(updated), True
+        return await self._mark_completion_consumed_async(updated), True
 
     async def stop_for_run(
         self,
@@ -712,7 +737,10 @@ class BackgroundTaskService:
         run_id: str,
         background_task_id: str,
     ) -> BackgroundTaskRecord:
-        record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
+        record = await self.get_for_run_async(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
         if record.kind == BackgroundTaskKind.SUBAGENT:
             runtime = self._subagent_runtimes.get(background_task_id)
             if runtime is None:
@@ -728,7 +756,7 @@ class BackgroundTaskService:
                 runtime.subagent_run_id
             )
             await asyncio.gather(runtime.worker_task, return_exceptions=True)
-            updated = self.get_for_run(
+            updated = await self.get_for_run_async(
                 run_id=run_id,
                 background_task_id=background_task_id,
             )
@@ -753,12 +781,12 @@ class BackgroundTaskService:
         exit_code: int | None,
         output: str,
     ) -> BackgroundTaskRecord:
-        current = self._repository.get(background_task_id)
+        current = await self._repository.get_async(background_task_id)
         if current is None:
             raise KeyError(f"Unknown background task: {background_task_id}")
         completed_at = datetime.now(tz=timezone.utc)
         summarized_output = output.strip()
-        record = self._repository.upsert(
+        record = await self._repository.upsert_async(
             current.model_copy(
                 update={
                     "status": status,
@@ -788,7 +816,7 @@ class BackgroundTaskService:
             self._require_run_control_manager().unregister_run_task(
                 runtime.subagent_run_id
             )
-        self._publish_background_task_event(
+        await self._publish_background_task_event_async(
             event_type=(
                 RunEventType.BACKGROUND_TASK_STOPPED
                 if status == BackgroundTaskStatus.STOPPED
@@ -973,6 +1001,21 @@ class BackgroundTaskService:
             )
         )
 
+    async def _mark_completion_consumed_async(
+        self, record: BackgroundTaskRecord
+    ) -> BackgroundTaskRecord:
+        if not self._should_notify_completion(record):
+            return record
+        completed_at = datetime.now(tz=timezone.utc)
+        return await self._repository.upsert_async(
+            record.model_copy(
+                update={
+                    "completion_notified_at": completed_at,
+                    "updated_at": completed_at,
+                }
+            )
+        )
+
     def _should_notify_completion(self, record: BackgroundTaskRecord) -> bool:
         return (
             record.execution_mode == "background"
@@ -1000,6 +1043,28 @@ class BackgroundTaskService:
                 event_type=event_type,
                 payload_json=record.model_dump_json(),
             )
+        )
+
+    async def _publish_background_task_event_async(
+        self,
+        *,
+        event_type: RunEventType,
+        record: BackgroundTaskRecord,
+    ) -> None:
+        if self._run_event_hub is None:
+            return
+        await publish_run_event_async(
+            self._run_event_hub,
+            RunEvent(
+                session_id=record.session_id,
+                run_id=record.run_id,
+                trace_id=record.run_id,
+                task_id=None,
+                instance_id=record.instance_id,
+                role_id=record.role_id,
+                event_type=event_type,
+                payload_json=record.model_dump_json(),
+            ),
         )
 
     def _upsert_subagent_intent(

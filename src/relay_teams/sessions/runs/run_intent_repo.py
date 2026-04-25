@@ -244,6 +244,13 @@ class RunIntentRepository(SharedSqliteRepository):
             ),
         )
 
+    async def upsert_async(
+        self, *, run_id: str, session_id: str, intent: IntentInput
+    ) -> None:
+        return await self._call_sync_async(
+            self.upsert, run_id=run_id, session_id=session_id, intent=intent
+        )
+
     def append_followup(self, *, run_id: str, content: str) -> None:
         def operation() -> None:
             row = self._conn.execute(
@@ -273,6 +280,11 @@ class RunIntentRepository(SharedSqliteRepository):
             )
 
         self._run_write(operation_name="append_followup", operation=operation)
+
+    async def append_followup_async(self, *, run_id: str, content: str) -> None:
+        return await self._call_sync_async(
+            self.append_followup, run_id=run_id, content=content
+        )
 
     def get(
         self,
@@ -357,6 +369,13 @@ def _intent_input_from_row(
             row["conversation_context_json"]
         ),
     )
+
+    async def get_async(
+        self, run_id: str, *, fallback_session_id: str | None = None
+    ) -> IntentInput:
+        return await self._call_sync_async(
+            self.get, run_id, fallback_session_id=fallback_session_id
+        )
 
 
 def _coerce_session_id(

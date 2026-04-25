@@ -7,6 +7,8 @@ from pathlib import Path
 import sqlite3
 from threading import Barrier
 
+import pytest
+
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
@@ -181,6 +183,57 @@ def test_run_runtime_repo_upsert_recovers_existing_dirty_rows(tmp_path: Path) ->
 
     assert updated.status == RunRuntimeStatus.PAUSED
     assert updated.phase == RunRuntimePhase.AWAITING_TOOL_APPROVAL
+
+
+@pytest.mark.asyncio
+async def test_run_runtime_repo_async_methods_share_persisted_state(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_runtime_async.db"
+    repo = RunRuntimeRepository(db_path)
+    try:
+        created = await repo.ensure_async(
+            run_id="run-async",
+            session_id="session-1",
+            root_task_id="task-1",
+        )
+
+        assert created.run_id == "run-async"
+        assert repo.get("run-async") is not None
+
+        updated = await repo.update_async(
+            "run-async",
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.SUBAGENT_RUNNING,
+            active_instance_id="instance-1",
+        )
+        listed = await repo.list_by_session_async("session-1")
+        recoverable = await repo.list_recoverable_async()
+
+        assert updated.status == RunRuntimeStatus.RUNNING
+        assert [record.run_id for record in listed] == ["run-async"]
+        assert "run-async" in {record.run_id for record in recoverable}
+
+        affected = await repo.mark_transient_runs_interrupted_async()
+        interrupted = await repo.get_async("run-async")
+
+        assert affected == 1
+        assert interrupted is not None
+        assert interrupted.status == RunRuntimeStatus.STOPPED
+        assert interrupted.phase == RunRuntimePhase.IDLE
+        assert interrupted.last_error == "interrupted_by_process_restart"
+
+        await repo.ensure_async(
+            run_id="run-delete",
+            session_id="session-1",
+            root_task_id="task-delete",
+        )
+        await repo.delete_by_session_async("session-1")
+
+        assert await repo.get_async("run-async") is None
+        assert repo.get("run-delete") is None
+    finally:
+        await repo.close_async()
 
 
 def _insert_run_runtime_row(

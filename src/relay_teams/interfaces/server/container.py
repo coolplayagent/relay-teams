@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
-from typing import FrozenSet, List, Optional, Tuple
+from typing import FrozenSet, List, Optional, Protocol, Tuple
 
 from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from relay_teams.automation.automation_bound_session_queue_repository import (
@@ -122,7 +122,10 @@ from relay_teams.providers.model_fallback_config_manager import (
     ModelFallbackConfigManager,
 )
 from relay_teams.providers.model_fallback import LlmFallbackMiddleware
-from relay_teams.net.llm_client import clear_llm_http_client_cache
+from relay_teams.net import (
+    clear_llm_http_client_cache,
+    clear_llm_http_client_cache_async,
+)
 from relay_teams.net.clawhub_connectivity import ClawHubConnectivityProbeService
 from relay_teams.net.github_connectivity import (
     GitHubConnectivityProbeService,
@@ -236,6 +239,10 @@ from relay_teams.workspace import (
 
 
 LOGGER = get_logger(__name__)
+
+
+class AsyncCloseableRepository(Protocol):
+    async def close_async(self) -> None: ...
 
 
 class ServerContainer:
@@ -978,6 +985,45 @@ class ServerContainer:
             config_dir=app_config_dir,
             on_skill_mutated=self._reload_skills_config,
         )
+        self._async_closeables: tuple[AsyncCloseableRepository, ...] = (
+            self.task_repo,
+            self.shared_store,
+            self.workspace_repo,
+            self.ssh_profile_repo,
+            self.media_asset_repo,
+            self.event_log,
+            self.agent_repo,
+            self.session_history_marker_repo,
+            self.message_repo,
+            self.approval_ticket_repo,
+            self.user_question_repo,
+            self.shell_approval_repo,
+            self.run_runtime_repo,
+            self.run_intent_repo,
+            self.background_task_repository,
+            self.todo_repository,
+            self.run_state_repo,
+            self.trigger_repository,
+            self.session_repo,
+            self.external_session_binding_repo,
+            self.external_agent_session_repo,
+            self.gateway_session_repository,
+            self.token_usage_repo,
+            self.metrics_store,
+            self.retrieval_store,
+            self.feishu_message_pool_repo,
+            self.feishu_account_repository,
+            self.automation_repo,
+            self.automation_event_repo,
+            self.automation_delivery_repo,
+            self.automation_bound_session_queue_repo,
+            self.role_memory_repo,
+            self.temporary_role_repo,
+            self.monitor_repository,
+            self.xiaoluban_account_repository,
+            self.wechat_account_repository,
+            self.wechat_inbound_queue_repo,
+        )
 
     def _build_runtime_services(self) -> None:
         def get_task_execution_service() -> TaskExecutionService:
@@ -1163,7 +1209,20 @@ class ServerContainer:
         self.localhost_run_tunnel_service.stop()
         await self.external_acp_session_manager.close()
         await self.background_task_manager.close()
+        await self._close_async_repositories()
+        await clear_llm_http_client_cache_async()
         return None
+
+    async def _close_async_repositories(self) -> None:
+        for repository in reversed(self._async_closeables):
+            # noinspection PyBroadException
+            try:
+                await repository.close_async()
+            except Exception:
+                LOGGER.warning(
+                    "Failed to close async SQLite repository connection",
+                    exc_info=True,
+                )
 
     def _sanitize_role_registry(self, role_registry: RoleRegistry) -> RoleRegistry:
         sanitized_registry = RoleRegistry()

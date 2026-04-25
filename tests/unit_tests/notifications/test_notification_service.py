@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from typing import cast
 
+import pytest
+
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.notifications import (
@@ -95,6 +97,35 @@ def test_emit_returns_false_when_type_is_disabled() -> None:
     assert hub.events == []
 
 
+@pytest.mark.asyncio
+async def test_emit_async_returns_false_when_type_is_disabled() -> None:
+    hub = _FakeRunEventHub()
+    config = NotificationConfig(
+        tool_approval_requested=NotificationRule(
+            enabled=False,
+            channels=(NotificationChannel.TOAST,),
+        ),
+    )
+    service = NotificationService(
+        run_event_hub=cast(RunEventHub, cast(object, hub)),
+        get_config=lambda: config,
+    )
+
+    emitted = await service.emit_async(
+        notification_type=NotificationType.TOOL_APPROVAL_REQUESTED,
+        title="Approval Required",
+        body="approval pending",
+        context=NotificationContext(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="trace-1",
+        ),
+    )
+
+    assert emitted is False
+    assert hub.events == []
+
+
 def test_emit_dispatches_to_custom_dispatchers() -> None:
     hub = _FakeRunEventHub()
     dispatcher = _FakeDispatcher()
@@ -142,6 +173,39 @@ def test_emit_continues_after_dispatcher_failure() -> None:
     )
 
     emitted = service.emit(
+        notification_type=NotificationType.RUN_COMPLETED,
+        title="Run Completed",
+        body="Run run-1 completed successfully.",
+        context=NotificationContext(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="trace-1",
+        ),
+    )
+
+    assert emitted is True
+    assert len(hub.events) == 1
+    assert len(succeeding_dispatcher.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_emit_async_continues_after_dispatcher_failure() -> None:
+    hub = _FakeRunEventHub()
+    failing_dispatcher = _FailingDispatcher()
+    succeeding_dispatcher = _FakeDispatcher()
+    config = NotificationConfig(
+        run_completed=NotificationRule(
+            enabled=True,
+            channels=(NotificationChannel.FEISHU,),
+        ),
+    )
+    service = NotificationService(
+        run_event_hub=cast(RunEventHub, cast(object, hub)),
+        get_config=lambda: config,
+        dispatchers=(failing_dispatcher, succeeding_dispatcher),
+    )
+
+    emitted = await service.emit_async(
         notification_type=NotificationType.RUN_COMPLETED,
         title="Run Completed",
         body="Run run-1 completed successfully.",

@@ -5,8 +5,9 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
-from threading import RLock
+from threading import Condition, RLock, get_ident
 from typing import Awaitable, Callable, Optional, TypeVar
+from weakref import WeakKeyDictionary
 
 import aiosqlite
 
@@ -20,11 +21,78 @@ SQLITE_WRITE_RETRY_INITIAL_DELAY_SECONDS = 0.01
 SQLITE_WRITE_RETRY_MAX_DELAY_SECONDS = 0.2
 
 LOGGER = get_logger(__name__)
+type _WriteOwnerToken = tuple[str, int]
+_CROSS_WRITE_COORDINATORS: dict[str, CrossModeWriteCoordinator] = {}
 _WRITE_COORDINATORS: dict[str, RLock] = {}
 _WRITE_COORDINATORS_LOCK = RLock()
-_ASYNC_WRITE_COORDINATORS: dict[str, asyncio.Lock] = {}
+_ASYNC_WRITE_COORDINATORS: dict[
+    str, WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]
+] = {}
 _RESOLVED_DB_PATH_KEYS: dict[str, str] = {}
 ResultT = TypeVar("ResultT")
+
+
+class CrossModeWriteCoordinator:
+    def __init__(self) -> None:
+        self._condition = Condition()
+        self._owner: _WriteOwnerToken | None = None
+        self._depth = 0
+
+    def acquire_sync(self) -> _WriteOwnerToken:
+        token = ("thread", get_ident())
+        with self._condition:
+            while self._owner is not None and self._owner != token:
+                self._condition.wait()
+            self._owner = token
+            self._depth += 1
+        return token
+
+    async def acquire_async(self) -> _WriteOwnerToken:
+        task = asyncio.current_task()
+        token = (
+            "async",
+            id(task) if task is not None else id(asyncio.get_running_loop()),
+        )
+        initial_depth = self._owned_depth(token)
+        try:
+            while not await asyncio.to_thread(self._try_acquire, token):
+                await asyncio.sleep(0.001)
+        except asyncio.CancelledError:
+            self._release_cancelled_acquire(token, initial_depth)
+            raise
+        return token
+
+    def release(self, token: _WriteOwnerToken) -> None:
+        with self._condition:
+            if self._owner != token:
+                raise RuntimeError("SQLite write coordinator released by non-owner")
+            self._depth -= 1
+            if self._depth > 0:
+                return
+            self._owner = None
+            self._condition.notify_all()
+
+    def _try_acquire(self, token: _WriteOwnerToken) -> bool:
+        with self._condition:
+            if self._owner is not None and self._owner != token:
+                return False
+            self._owner = token
+            self._depth += 1
+            return True
+
+    def _owned_depth(self, token: _WriteOwnerToken) -> int:
+        with self._condition:
+            if self._owner != token:
+                return 0
+            return self._depth
+
+    def _release_cancelled_acquire(
+        self, token: _WriteOwnerToken, initial_depth: int
+    ) -> None:
+        with self._condition:
+            if self._owner != token or self._depth <= initial_depth:
+                return
+        self.release(token)
 
 
 def _configure_connection(
@@ -156,18 +224,26 @@ async def run_async_sqlite_write_with_retry(
     max_retries: int = SQLITE_WRITE_RETRY_ATTEMPTS,
 ) -> ResultT:
     delay = SQLITE_WRITE_RETRY_INITIAL_DELAY_SECONDS
+    cross_write_lock = _cross_write_coordinator_for(db_path)
     write_lock = _async_write_coordinator_for(db_path)
     for attempt in range(max_retries + 1):
+        operation_started = False
         try:
-            async with write_lock:
-                if lock is not None:
-                    async with lock:
-                        result = await operation()
-                        await conn.commit()
-                        return result
-                result = await operation()
-                await conn.commit()
-                return result
+            cross_write_token = await cross_write_lock.acquire_async()
+            try:
+                async with write_lock:
+                    if lock is not None:
+                        async with lock:
+                            operation_started = True
+                            result = await operation()
+                            await conn.commit()
+                            return result
+                    operation_started = True
+                    result = await operation()
+                    await conn.commit()
+                    return result
+            finally:
+                cross_write_lock.release(cross_write_token)
         except sqlite3.OperationalError as exc:
             await _async_rollback_quietly(conn)
             if not is_retryable_sqlite_error(exc) or attempt >= max_retries:
@@ -187,6 +263,10 @@ async def run_async_sqlite_write_with_retry(
             )
             await asyncio.sleep(delay)
             delay = min(delay * 2, SQLITE_WRITE_RETRY_MAX_DELAY_SECONDS)
+        except BaseException:
+            if operation_started:
+                await _async_rollback_quietly(conn)
+            raise
     raise RuntimeError(
         f"SQLite write helper exhausted retries for {repository_name}.{operation_name}"
     )
@@ -204,18 +284,26 @@ def run_sqlite_write_with_retry(
     max_retries: int = SQLITE_WRITE_RETRY_ATTEMPTS,
 ) -> ResultT:
     delay = SQLITE_WRITE_RETRY_INITIAL_DELAY_SECONDS
+    cross_write_lock = _cross_write_coordinator_for(db_path)
     write_lock = _write_coordinator_for(db_path)
     for attempt in range(max_retries + 1):
+        operation_started = False
         try:
-            with write_lock:
-                if lock is not None:
-                    with lock:
-                        result = operation()
-                        conn.commit()
-                        return result
-                result = operation()
-                conn.commit()
-                return result
+            cross_write_token = cross_write_lock.acquire_sync()
+            try:
+                with write_lock:
+                    if lock is not None:
+                        with lock:
+                            operation_started = True
+                            result = operation()
+                            conn.commit()
+                            return result
+                    operation_started = True
+                    result = operation()
+                    conn.commit()
+                    return result
+            finally:
+                cross_write_lock.release(cross_write_token)
         except sqlite3.OperationalError as exc:
             _rollback_quietly(conn)
             if not is_retryable_sqlite_error(exc) or attempt >= max_retries:
@@ -235,6 +323,10 @@ def run_sqlite_write_with_retry(
             )
             time.sleep(delay)
             delay = min(delay * 2, SQLITE_WRITE_RETRY_MAX_DELAY_SECONDS)
+        except BaseException:
+            if operation_started:
+                _rollback_quietly(conn)
+            raise
     raise RuntimeError(
         f"SQLite write helper exhausted retries for {repository_name}.{operation_name}"
     )
@@ -268,12 +360,28 @@ def _write_coordinator_for(db_path: Path) -> RLock:
     return coordinator
 
 
+def _cross_write_coordinator_for(db_path: Path) -> CrossModeWriteCoordinator:
+    key = _resolved_db_path_key(db_path)
+    with _WRITE_COORDINATORS_LOCK:
+        coordinator = _CROSS_WRITE_COORDINATORS.get(key)
+        if coordinator is None:
+            coordinator = CrossModeWriteCoordinator()
+            _CROSS_WRITE_COORDINATORS[key] = coordinator
+    return coordinator
+
+
 def _async_write_coordinator_for(db_path: Path) -> asyncio.Lock:
     key = _resolved_db_path_key(db_path)
-    coordinator = _ASYNC_WRITE_COORDINATORS.get(key)
-    if coordinator is None:
-        coordinator = asyncio.Lock()
-        _ASYNC_WRITE_COORDINATORS[key] = coordinator
+    loop = asyncio.get_running_loop()
+    with _WRITE_COORDINATORS_LOCK:
+        locks_by_loop = _ASYNC_WRITE_COORDINATORS.get(key)
+        if locks_by_loop is None:
+            locks_by_loop = WeakKeyDictionary()
+            _ASYNC_WRITE_COORDINATORS[key] = locks_by_loop
+        coordinator = locks_by_loop.get(loop)
+        if coordinator is None:
+            coordinator = asyncio.Lock()
+            locks_by_loop[loop] = coordinator
     return coordinator
 
 

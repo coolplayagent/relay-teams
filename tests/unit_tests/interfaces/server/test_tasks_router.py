@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import Callable
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -90,19 +88,7 @@ def _create_test_client(service: _FakeTaskService | None = None) -> TestClient:
     return TestClient(app)
 
 
-def test_task_routes_run_sync_service_calls_in_threadpool(monkeypatch) -> None:
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-
-    async def fake_to_thread(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        calls.append((func.__name__, args, kwargs))
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(tasks.asyncio, "to_thread", fake_to_thread)
+def test_task_routes_call_service() -> None:
     client = _create_test_client()
 
     responses = [
@@ -119,12 +105,6 @@ def test_task_routes_run_sync_service_calls_in_threadpool(monkeypatch) -> None:
     ]
 
     assert [response.status_code for response in responses] == [200] * len(responses)
-    assert [call[0] for call in calls] == [
-        "list_tasks",
-        "list_delegated_tasks",
-        "get_task",
-        "update_task",
-    ]
 
 
 def test_create_tasks_for_run_uses_async_service_directly() -> None:

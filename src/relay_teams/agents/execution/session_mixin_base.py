@@ -160,7 +160,24 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
     ) -> None:
         raise NotImplementedError
 
+    async def _persist_hook_system_context_if_needed_async(
+        self,
+        *,
+        request: LLMRequest,
+        contexts: tuple[str, ...],
+    ) -> None:
+        raise NotImplementedError
+
     def _persist_user_prompt_if_needed(
+        self,
+        *,
+        request: LLMRequest,
+        history: list[ModelRequest | ModelResponse],
+        content: UserPromptContent | None,
+    ) -> tuple[list[ModelRequest | ModelResponse], bool]:
+        raise NotImplementedError
+
+    async def _persist_user_prompt_if_needed_async(
         self,
         *,
         request: LLMRequest,
@@ -251,6 +268,19 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
     ) -> bool:
         raise NotImplementedError
 
+    async def _handle_model_stream_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        stream_event: object,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
+    ) -> bool:
+        raise NotImplementedError
+
     def _apply_streamed_text_fallback(
         self,
         messages: list[ModelRequest | ModelResponse],
@@ -260,6 +290,14 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
         raise NotImplementedError
 
     def _publish_text_delta_event(
+        self,
+        *,
+        request: LLMRequest,
+        text: str,
+    ) -> None:
+        raise NotImplementedError
+
+    async def _publish_text_delta_event_async(
         self,
         *,
         request: LLMRequest,
@@ -287,7 +325,24 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
     ) -> bool:
         raise NotImplementedError
 
+    async def _publish_tool_call_events_from_messages_async(
+        self,
+        *,
+        request: LLMRequest,
+        messages: Sequence[ModelResponse | ModelRequest],
+        published_tool_call_ids: set[str] | None = None,
+    ) -> bool:
+        raise NotImplementedError
+
     def _publish_committed_tool_outcome_events_from_messages(
+        self,
+        *,
+        request: LLMRequest,
+        messages: Sequence[ModelResponse | ModelRequest],
+    ) -> None:
+        raise NotImplementedError
+
+    async def _publish_committed_tool_outcome_events_from_messages_async(
         self,
         *,
         request: LLMRequest,
@@ -315,7 +370,35 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
     ]:
         raise NotImplementedError
 
+    async def _commit_ready_messages_async(
+        self,
+        *,
+        request: LLMRequest,
+        history: list[ModelRequest | ModelResponse],
+        pending_messages: list[ModelRequest | ModelResponse],
+    ) -> tuple[
+        list[ModelRequest | ModelResponse],
+        list[ModelRequest | ModelResponse],
+        bool,
+        bool,
+    ]:
+        raise NotImplementedError
+
     def _commit_all_safe_messages(
+        self,
+        *,
+        request: LLMRequest,
+        history: list[ModelRequest | ModelResponse],
+        pending_messages: list[ModelRequest | ModelResponse],
+    ) -> tuple[
+        list[ModelRequest | ModelResponse],
+        list[ModelRequest | ModelResponse],
+        bool,
+        bool,
+    ]:
+        raise NotImplementedError
+
+    async def _commit_all_safe_messages_async(
         self,
         *,
         request: LLMRequest,

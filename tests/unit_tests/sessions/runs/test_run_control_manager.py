@@ -5,6 +5,7 @@ import pytest
 from pydantic_ai.messages import UserPromptPart
 
 from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
+from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
@@ -253,6 +254,51 @@ def test_get_coordinator_instance_id_uses_assigned_ephemeral_root(
         == "inst-ephemeral-root"
     )
     assert agent_repo.get_session_role_instance_id("session-1", "Coordinator") is None
+
+
+@pytest.mark.asyncio
+async def test_inject_to_running_agents_async_publishes_event(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_control_async_injection.db"
+    event_log = EventLog(db_path)
+    injection_manager = RunInjectionManager()
+    injection_manager.activate("run-1")
+    agent_repo = AgentInstanceRepository(db_path)
+    mgr = RunControlManager()
+    mgr.bind_runtime(
+        run_event_hub=RunEventHub(
+            event_log=event_log,
+            run_state_repo=RunStateRepository(db_path),
+        ),
+        injection_manager=injection_manager,
+        agent_repo=agent_repo,
+        task_repo=TaskRepository(db_path),
+        message_repo=MessageRepository(db_path),
+        event_bus=event_log,
+        run_runtime_repo=RunRuntimeRepository(db_path),
+    )
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="worker",
+        workspace_id="workspace-1",
+        status=InstanceStatus.RUNNING,
+    )
+
+    message = await mgr.inject_to_running_agents_async(
+        run_id="run-1",
+        source=InjectionSource.USER,
+        content="continue",
+    )
+
+    assert message.recipient_instance_id == "inst-1"
+    queued = injection_manager.drain_at_boundary("run-1", "inst-1")
+    assert len(queued) == 1
+    events = await event_log.list_by_session_with_ids_async("session-1")
+    assert events[-1]["event_type"] == RunEventType.INJECTION_ENQUEUED.value
 
 
 def test_context_raises_when_cancelled() -> None:

@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
 from typing import cast
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -14,8 +15,10 @@ from relay_teams.media import (
     InlineMediaContentPart,
     MediaModality,
     MediaRefContentPart,
+    content_parts_from_text,
 )
 from relay_teams.sessions.runs.run_models import IntentInput
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.user_question_models import UserQuestionAnswer
 
 
@@ -68,9 +71,15 @@ class _FakeRunService:
         self.created_run_inputs.append(intent_input)
         return ("run-1", "session-1")
 
+    async def create_run_async(self, intent_input) -> tuple[str, str]:
+        return self.create_run(intent_input)
+
     def resume_run(self, run_id: str) -> str:
         self.resumed_run_ids.append(run_id)
         return "session-1"
+
+    async def resume_run_async(self, run_id: str) -> str:
+        return self.resume_run(run_id)
 
     def resolve_tool_approval(
         self,
@@ -85,8 +94,26 @@ class _FakeRunService:
             )
         self.resolved_tool_approvals.append((run_id, tool_call_id, action, feedback))
 
+    async def resolve_tool_approval_async(
+        self,
+        *,
+        run_id: str,
+        tool_call_id: str,
+        action: str,
+        feedback: str = "",
+    ) -> None:
+        self.resolve_tool_approval(
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            action=action,
+            feedback=feedback,
+        )
+
     def ensure_run_started(self, run_id: str) -> None:
         self.started_run_ids.append(run_id)
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        self.ensure_run_started(run_id)
 
     def inject_message(self, *, run_id: str, source, content: str):
         if self.raise_on_inject:
@@ -97,6 +124,9 @@ class _FakeRunService:
             (),
             {"model_dump": lambda self: {"run_id": run_id, "content": content}},
         )()
+
+    async def inject_message_async(self, *, run_id: str, source, content: str):
+        return self.inject_message(run_id=run_id, source=source, content=content)
 
     def inject_subagent_message(
         self,
@@ -109,13 +139,35 @@ class _FakeRunService:
             raise ValueError("Injection content must not be empty")
         self.subagent_inject_calls.append((run_id, instance_id, content))
 
+    async def inject_subagent_message_async(
+        self,
+        *,
+        run_id: str,
+        instance_id: str,
+        content: str,
+    ) -> None:
+        self.inject_subagent_message(
+            run_id=run_id,
+            instance_id=instance_id,
+            content=content,
+        )
+
     def list_background_tasks(self, run_id: str) -> tuple[dict[str, object], ...]:
         _ = run_id
         return tuple(self.background_tasks.values())
 
+    async def list_background_tasks_async(
+        self,
+        run_id: str,
+    ) -> tuple[dict[str, object], ...]:
+        return self.list_background_tasks(run_id)
+
     def get_todo(self, run_id: str) -> dict[str, object]:
         _ = run_id
         return dict(self.todo)
+
+    async def get_todo_async(self, run_id: str) -> dict[str, object]:
+        return self.get_todo(run_id)
 
     def get_background_task(
         self,
@@ -127,6 +179,17 @@ class _FakeRunService:
         if background_task_id not in self.background_tasks:
             raise KeyError(background_task_id)
         return self.background_tasks[background_task_id]
+
+    async def get_background_task_async(
+        self,
+        *,
+        run_id: str,
+        background_task_id: str,
+    ) -> dict[str, object]:
+        return self.get_background_task(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
 
     async def stop_background_task(
         self,
@@ -145,6 +208,12 @@ class _FakeRunService:
     def list_monitors(self, run_id: str) -> tuple[dict[str, object], ...]:
         _ = run_id
         return tuple(self.monitors.values())
+
+    async def list_monitors_async(
+        self,
+        run_id: str,
+    ) -> tuple[dict[str, object], ...]:
+        return self.list_monitors(run_id)
 
     def create_monitor(
         self,
@@ -178,11 +247,42 @@ class _FakeRunService:
         self.monitors["mon-2"] = monitor
         return monitor
 
+    async def create_monitor_async(
+        self,
+        *,
+        run_id: str,
+        source_kind,
+        source_key: str,
+        rule,
+        action_type,
+        created_by_instance_id: str | None = None,
+        created_by_role_id: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> dict[str, object]:
+        return self.create_monitor(
+            run_id=run_id,
+            source_kind=source_kind,
+            source_key=source_key,
+            rule=rule,
+            action_type=action_type,
+            created_by_instance_id=created_by_instance_id,
+            created_by_role_id=created_by_role_id,
+            tool_call_id=tool_call_id,
+        )
+
     def stop_monitor(self, *, run_id: str, monitor_id: str) -> dict[str, object]:
         _ = run_id
         monitor = self.monitors[monitor_id]
         monitor["status"] = "stopped"
         return monitor
+
+    async def stop_monitor_async(
+        self,
+        *,
+        run_id: str,
+        monitor_id: str,
+    ) -> dict[str, object]:
+        return self.stop_monitor(run_id=run_id, monitor_id=monitor_id)
 
     def answer_user_question(
         self,
@@ -198,6 +298,67 @@ class _FakeRunService:
             "question_id": question_id,
             "answer_count": len(answers.answers),
         }
+
+    async def answer_user_question_async(
+        self,
+        *,
+        run_id: str,
+        question_id: str,
+        answers,
+    ) -> dict[str, object]:
+        return self.answer_user_question(
+            run_id=run_id,
+            question_id=question_id,
+            answers=answers,
+        )
+
+    def list_open_tool_approvals(self, run_id: str) -> list[dict[str, str]]:
+        _ = run_id
+        return []
+
+    async def list_open_tool_approvals_async(
+        self,
+        run_id: str,
+    ) -> list[dict[str, str]]:
+        return self.list_open_tool_approvals(run_id)
+
+    def list_user_questions(self, run_id: str) -> list[dict[str, object]]:
+        _ = run_id
+        return []
+
+    async def list_user_questions_async(
+        self,
+        run_id: str,
+    ) -> list[dict[str, object]]:
+        return self.list_user_questions(run_id)
+
+    async def stop_run_async(self, run_id: str) -> None:
+        _ = run_id
+
+    async def stop_subagent_async(
+        self,
+        run_id: str,
+        instance_id: str,
+    ) -> dict[str, str]:
+        return {"instance_id": instance_id, "run_id": run_id}
+
+
+class _CancellationAwareRunService(_FakeRunService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.create_entered = asyncio.Event()
+        self.release_create = asyncio.Event()
+        self.run_started = asyncio.Event()
+
+    async def create_run_async(self, intent_input) -> tuple[str, str]:
+        self.created_run_inputs.append(intent_input)
+        self.create_entered.set()
+        await self.release_create.wait()
+        return ("run-1", "session-1")
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        self.started_run_ids.append(run_id)
+        self.run_started.set()
 
 
 class _FakeSkillRegistry:
@@ -296,6 +457,28 @@ def test_resume_route_marks_run_for_resume_and_starts_worker() -> None:
         "session_id": "session-1",
     }
     assert fake_service.resumed_run_ids == ["run-1"]
+    assert fake_service.started_run_ids == ["run-1"]
+
+
+@pytest.mark.asyncio
+async def test_create_and_start_run_finishes_startup_after_cancellation() -> None:
+    fake_service = _CancellationAwareRunService()
+    intent_input = IntentInput(
+        session_id="session-1",
+        input=content_parts_from_text("hello"),
+    )
+
+    task = asyncio.create_task(
+        runs._create_and_start_run(cast(SessionRunService, fake_service), intent_input)
+    )
+    await fake_service.create_entered.wait()
+    task.cancel()
+    fake_service.release_create.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(fake_service.run_started.wait(), timeout=1)
+
     assert fake_service.started_run_ids == ["run-1"]
 
 
@@ -678,23 +861,9 @@ def test_stop_monitor_route_returns_updated_monitor() -> None:
     }
 
 
-def test_answer_user_question_route_offloads_service_call(monkeypatch) -> None:
+def test_answer_user_question_route_awaits_service_call() -> None:
     fake_service = _FakeRunService()
     client = _create_client(fake_service)
-    captured: dict[str, object] = {}
-
-    async def fake_to_thread(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        captured["func"] = func
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(runs.asyncio, "to_thread", fake_to_thread)
 
     response = client.post(
         "/api/runs/run-1/questions/question-1:answer",
@@ -708,14 +877,6 @@ def test_answer_user_question_route_offloads_service_call(monkeypatch) -> None:
         "question_id": "question-1",
         "answer_count": 1,
     }
-    captured_kwargs = cast(dict[str, object], captured["kwargs"])
-    assert captured["func"] == fake_service.answer_user_question
-    assert captured["args"] == ()
-    assert captured_kwargs == {
-        "run_id": "run-1",
-        "question_id": "question-1",
-        "answers": captured_kwargs["answers"],
-    }
     answered = fake_service.answered_user_questions
     assert len(answered) == 1
     assert answered[0][0] == "run-1"
@@ -724,28 +885,11 @@ def test_answer_user_question_route_offloads_service_call(monkeypatch) -> None:
     assert answered[0][2][0].selections[0].label == "A"
 
 
-def test_list_monitors_route_offloads_service_call(monkeypatch) -> None:
+def test_list_monitors_route_awaits_service_call() -> None:
     fake_service = _FakeRunService()
     client = _create_client(fake_service)
-    captured: dict[str, object] = {}
-
-    async def fake_to_thread(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        captured["func"] = func
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(runs.asyncio, "to_thread", fake_to_thread)
 
     response = client.get("/api/runs/run-1/monitors")
 
     assert response.status_code == 200
     assert response.json() == {"items": [fake_service.monitors["mon-1"]]}
-    assert captured["func"] == fake_service.list_monitors
-    assert captured["args"] == ("run-1",)
-    assert captured["kwargs"] == {}

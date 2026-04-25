@@ -309,6 +309,20 @@ class RunControlManager:
             )
         )
 
+    async def publish_run_stopped_async(
+        self, *, session_id: str, run_id: str, reason: str
+    ) -> None:
+        await self._require_run_event_hub().publish_async(
+            RunEvent(
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=None,
+                event_type=RunEventType.RUN_STOPPED,
+                payload_json=dumps({"reason": reason}),
+            )
+        )
+
     def inject_to_running_agents(
         self,
         *,
@@ -329,6 +343,32 @@ class RunControlManager:
                 content=content,
             )
             self._publish_injection_event(run_id=run_id, record=record, created=created)
+        if created is None:
+            raise KeyError(f"No RUNNING agent for run_id={run_id}")
+        return created
+
+    async def inject_to_running_agents_async(
+        self,
+        *,
+        run_id: str,
+        source: InjectionSource,
+        content: str,
+    ) -> InjectionMessage:
+        agent_repo = self._require_agent_repo()
+        created: InjectionMessage | None = None
+        running = await agent_repo.list_running_async(run_id)
+        if not running:
+            raise KeyError(f"No RUNNING agent for run_id={run_id}")
+        for record in running:
+            created = self._require_injection_manager().enqueue(
+                run_id=run_id,
+                recipient_instance_id=record.instance_id,
+                source=source,
+                content=content,
+            )
+            await self._publish_injection_event_async(
+                run_id=run_id, record=record, created=created
+            )
         if created is None:
             raise KeyError(f"No RUNNING agent for run_id={run_id}")
         return created
@@ -404,6 +444,78 @@ class RunControlManager:
         )
         if self._run_runtime_repo is not None:
             self._run_runtime_repo.update(
+                run_id,
+                status=RunRuntimeStatus.PAUSED,
+                phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
+                active_instance_id=instance_id,
+                active_task_id=paused.task_id,
+                active_role_id=record.role_id,
+                active_subagent_instance_id=instance_id,
+                last_error="Subagent stopped by user",
+            )
+        return {
+            "status": "paused",
+            "instance_id": instance_id,
+            "role_id": record.role_id,
+            "task_id": paused.task_id or "",
+            "run_id": run_id,
+        }
+
+    async def stop_subagent_async(
+        self, *, run_id: str, instance_id: str
+    ) -> dict[str, str]:
+        record = await self._require_agent_repo().get_instance_async(instance_id)
+        if record.run_id != run_id:
+            raise KeyError(f"Instance {instance_id} does not belong to run {run_id}")
+        if await self._is_coordinator_role_for_run_async(
+            run_id=run_id, role_id=record.role_id
+        ):
+            raise ValueError("Stopping coordinator via subagent API is not allowed")
+
+        paused = self.request_subagent_stop(run_id=run_id, instance_id=instance_id)
+        if paused is None:
+            paused = self.pause_subagent(
+                session_id=record.session_id,
+                run_id=run_id,
+                instance_id=instance_id,
+                role_id=record.role_id,
+                task_id=await self._find_task_for_instance_async(
+                    run_id=run_id, instance_id=instance_id
+                ),
+            )
+
+        if paused.task_id:
+            await self._require_task_repo().update_status_async(
+                task_id=paused.task_id,
+                status=TaskStatus.STOPPED,
+                assigned_instance_id=instance_id,
+                error_message="Task stopped by user",
+            )
+        await self._require_agent_repo().mark_status_async(
+            instance_id, InstanceStatus.STOPPED
+        )
+
+        await self._require_run_event_hub().publish_async(
+            RunEvent(
+                session_id=record.session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=paused.task_id,
+                instance_id=instance_id,
+                role_id=record.role_id,
+                event_type=RunEventType.SUBAGENT_STOPPED,
+                payload_json=dumps(
+                    {
+                        "instance_id": instance_id,
+                        "role_id": record.role_id,
+                        "task_id": paused.task_id,
+                        "reason": paused.reason,
+                    }
+                ),
+            )
+        )
+        if self._run_runtime_repo is not None:
+            await self._run_runtime_repo.update_async(
                 run_id,
                 status=RunRuntimeStatus.PAUSED,
                 phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
@@ -668,8 +780,22 @@ class RunControlManager:
             coordinator_role_id == role_id if coordinator_role_id is not None else False
         )
 
+    async def _is_coordinator_role_for_run_async(
+        self, *, run_id: str, role_id: str
+    ) -> bool:
+        coordinator_role_id = await self._root_role_id_for_run_async(run_id)
+        return (
+            coordinator_role_id == role_id if coordinator_role_id is not None else False
+        )
+
     def _root_role_id_for_run(self, run_id: str) -> str | None:
         for record in self._require_task_repo().list_by_trace(run_id):
+            if record.envelope.parent_task_id is None:
+                return record.envelope.role_id
+        return None
+
+    async def _root_role_id_for_run_async(self, run_id: str) -> str | None:
+        for record in await self._require_task_repo().list_by_trace_async(run_id):
             if record.envelope.parent_task_id is None:
                 return record.envelope.role_id
         return None
@@ -687,10 +813,41 @@ class RunControlManager:
                 return record.envelope.task_id
         return None
 
+    async def _find_task_for_instance_async(
+        self, *, run_id: str, instance_id: str
+    ) -> str | None:
+        for record in await self._require_task_repo().list_by_trace_async(run_id):
+            if record.assigned_instance_id != instance_id:
+                continue
+            if record.status in (
+                TaskStatus.RUNNING,
+                TaskStatus.ASSIGNED,
+                TaskStatus.CREATED,
+                TaskStatus.STOPPED,
+            ):
+                return record.envelope.task_id
+        return None
+
     def _publish_injection_event(
         self, *, run_id: str, record: AgentRuntimeRecord, created: InjectionMessage
     ) -> None:
         self._require_run_event_hub().publish(
+            RunEvent(
+                session_id=record.session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=None,
+                instance_id=record.instance_id,
+                role_id=record.role_id,
+                event_type=RunEventType.INJECTION_ENQUEUED,
+                payload_json=created.model_dump_json(),
+            )
+        )
+
+    async def _publish_injection_event_async(
+        self, *, run_id: str, record: AgentRuntimeRecord, created: InjectionMessage
+    ) -> None:
+        await self._require_run_event_hub().publish_async(
             RunEvent(
                 session_id=record.session_id,
                 run_id=run_id,

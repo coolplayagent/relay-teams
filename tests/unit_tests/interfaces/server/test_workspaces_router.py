@@ -669,7 +669,7 @@ def test_get_workspace_tree_listing_runs_service_call_in_threadpool(
         workspace_id="project-alpha",
         root_path=tmp_path,
     )
-    monkeypatch.setattr(workspaces.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(workspaces, "call_maybe_async", fake_to_thread)
 
     response = client.get("/api/workspaces/project-alpha/tree?path=src&mount=ops")
 
@@ -744,7 +744,7 @@ def test_workspace_diff_routes_run_service_calls_in_threadpool(
         workspace_id="project-alpha",
         root_path=tmp_path,
     )
-    monkeypatch.setattr(workspaces.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(workspaces, "call_maybe_async", fake_to_thread)
 
     diffs_response = client.get("/api/workspaces/project-alpha/diffs?mount=ops")
     diff_file_response = client.get(
@@ -842,7 +842,7 @@ def test_pick_workspace_runs_picker_and_create_in_thread(
         calls.append(func.__name__)
         return func()
 
-    monkeypatch.setattr(workspaces.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(workspaces, "call_maybe_async", fake_to_thread)
     monkeypatch.setattr(
         workspaces,
         "pick_workspace_directory",

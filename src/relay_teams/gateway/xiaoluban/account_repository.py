@@ -6,7 +6,6 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 from typing import Dict, List, Tuple
 
 from pydantic import JsonValue, ValidationError
@@ -16,7 +15,8 @@ from relay_teams.gateway.xiaoluban.models import (
     XiaolubanAccountStatus,
 )
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.validation import (
     normalize_identifier_tuple,
     parse_persisted_datetime_or_none,
@@ -26,12 +26,9 @@ from relay_teams.validation import (
 LOGGER = get_logger(__name__)
 
 
-class XiaolubanAccountRepository:
+class XiaolubanAccountRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -89,6 +86,9 @@ class XiaolubanAccountRepository:
                 _log_invalid_row(row=row, error=exc)
         return tuple(records)
 
+    async def list_accounts_async(self) -> Tuple[XiaolubanAccountRecord, ...]:
+        return await self._call_sync_async(self.list_accounts)
+
     def get_account(self, account_id: str) -> XiaolubanAccountRecord:
         row = self._conn.execute(
             "SELECT * FROM xiaoluban_accounts WHERE account_id=?",
@@ -101,6 +101,9 @@ class XiaolubanAccountRepository:
         except (ValidationError, ValueError) as exc:
             _log_invalid_row(row=row, error=exc)
             raise KeyError(f"Unknown Xiaoluban account_id: {account_id}") from exc
+
+    async def get_account_async(self, account_id: str) -> XiaolubanAccountRecord:
+        return await self._call_sync_async(self.get_account, account_id)
 
     def upsert_account(self, record: XiaolubanAccountRecord) -> XiaolubanAccountRecord:
         run_sqlite_write_with_retry(
@@ -147,6 +150,11 @@ class XiaolubanAccountRepository:
         )
         return self.get_account(record.account_id)
 
+    async def upsert_account_async(
+        self, record: XiaolubanAccountRecord
+    ) -> XiaolubanAccountRecord:
+        return await self._call_sync_async(self.upsert_account, record)
+
     def delete_account(self, account_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -159,6 +167,9 @@ class XiaolubanAccountRepository:
             repository_name="XiaolubanAccountRepository",
             operation_name="delete_account",
         )
+
+    async def delete_account_async(self, account_id: str) -> None:
+        return await self._call_sync_async(self.delete_account, account_id)
 
     @staticmethod
     def _to_record(row: sqlite3.Row) -> XiaolubanAccountRecord:

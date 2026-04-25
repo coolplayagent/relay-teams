@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Callable
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -335,16 +333,7 @@ def test_create_session_route_returns_created_session() -> None:
     assert fake_service.created_calls == [("session-1", "default", None)]
 
 
-def test_create_session_route_runs_service_call_in_threadpool(monkeypatch) -> None:
-    calls: list[str] = []
-
-    async def fake_run_in_threadpool(
-        func: Callable[[], SessionRecord],
-    ) -> SessionRecord:
-        calls.append("create")
-        return func()
-
-    monkeypatch.setattr(sessions, "run_in_threadpool", fake_run_in_threadpool)
+def test_create_session_route_calls_service() -> None:
     fake_service = _FakeSessionService()
     client = _create_client(fake_service)
 
@@ -354,20 +343,10 @@ def test_create_session_route_runs_service_call_in_threadpool(monkeypatch) -> No
     )
 
     assert response.status_code == 200
-    assert calls == ["create"]
     assert fake_service.created_calls == [("session-1", "default", None)]
 
 
-def test_list_sessions_route_runs_service_call_in_threadpool(monkeypatch) -> None:
-    calls: list[str] = []
-
-    async def fake_run_in_threadpool(
-        func: Callable[[], tuple[SessionRecord, ...]],
-    ) -> tuple[SessionRecord, ...]:
-        calls.append("list")
-        return func()
-
-    monkeypatch.setattr(sessions, "run_in_threadpool", fake_run_in_threadpool)
+def test_list_sessions_route_calls_service() -> None:
     fake_service = _FakeSessionService()
     client = _create_client(fake_service)
 
@@ -375,23 +354,10 @@ def test_list_sessions_route_runs_service_call_in_threadpool(monkeypatch) -> Non
 
     assert response.status_code == 200
     assert response.json()[0]["session_id"] == "session-listed"
-    assert calls == ["list"]
     assert fake_service.list_calls == 1
 
 
-def test_sync_session_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-
-    async def fake_run_in_threadpool(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        calls.append((func.__name__, args, kwargs))
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(sessions, "run_in_threadpool", fake_run_in_threadpool)
+def test_session_routes_call_service() -> None:
     fake_service = _FakeSessionService()
     client = _create_client(fake_service)
 
@@ -424,27 +390,6 @@ def test_sync_session_routes_run_service_calls_in_threadpool(monkeypatch) -> Non
     ]
 
     assert [response.status_code for response in requests] == [200] * len(requests)
-    assert [call[0] for call in calls] == [
-        "get_session",
-        "update_session",
-        "_update_session_topology",
-        "_delete_session",
-        "_get_session_rounds",
-        "get_recovery_snapshot",
-        "get_round",
-        "list_agents_in_session",
-        "list_normal_mode_subagents",
-        "delete_normal_mode_subagent",
-        "get_agent_reflection",
-        "_update_agent_reflection",
-        "delete_agent_reflection",
-        "get_global_events",
-        "get_session_messages",
-        "get_agent_messages",
-        "get_session_tasks",
-        "get_token_usage_by_session",
-        "get_token_usage_by_run",
-    ]
 
 
 def test_create_session_route_accepts_explicit_metadata_payload() -> None:

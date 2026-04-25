@@ -6,7 +6,6 @@ import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import RLock
 
 from pydantic import JsonValue, ValidationError
 
@@ -17,7 +16,8 @@ from relay_teams.gateway.feishu.models import (
     FeishuGatewayAccountStatus,
 )
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.validation import (
     normalize_persisted_text,
     parse_persisted_datetime_or_none,
@@ -27,12 +27,9 @@ from relay_teams.validation import (
 LOGGER = get_logger(__name__)
 
 
-class FeishuAccountRepository:
+class FeishuAccountRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -167,6 +164,11 @@ class FeishuAccountRepository:
             raise
         return record
 
+    async def create_account_async(
+        self, record: FeishuGatewayAccountRecord
+    ) -> FeishuGatewayAccountRecord:
+        return await self._call_sync_async(self.create_account, record)
+
     def update_account(
         self,
         record: FeishuGatewayAccountRecord,
@@ -210,6 +212,11 @@ class FeishuAccountRepository:
             raise
         return record
 
+    async def update_account_async(
+        self, record: FeishuGatewayAccountRecord
+    ) -> FeishuGatewayAccountRecord:
+        return await self._call_sync_async(self.update_account, record)
+
     def get_account(self, account_id: str) -> FeishuGatewayAccountRecord:
         row = self._conn.execute(
             """
@@ -227,6 +234,9 @@ class FeishuAccountRepository:
             _log_invalid_feishu_account_row(row=row, error=exc)
             raise KeyError(f"Unknown Feishu account: {account_id}") from exc
 
+    async def get_account_async(self, account_id: str) -> FeishuGatewayAccountRecord:
+        return await self._call_sync_async(self.get_account, account_id)
+
     def list_accounts(self) -> tuple[FeishuGatewayAccountRecord, ...]:
         rows = self._conn.execute(
             """
@@ -243,6 +253,9 @@ class FeishuAccountRepository:
                 _log_invalid_feishu_account_row(row=row, error=exc)
         return tuple(records)
 
+    async def list_accounts_async(self) -> tuple[FeishuGatewayAccountRecord, ...]:
+        return await self._call_sync_async(self.list_accounts)
+
     def delete_account(self, account_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -255,6 +268,9 @@ class FeishuAccountRepository:
             repository_name="FeishuAccountRepository",
             operation_name="delete_account",
         )
+
+    async def delete_account_async(self, account_id: str) -> None:
+        return await self._call_sync_async(self.delete_account, account_id)
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> FeishuGatewayAccountRecord:

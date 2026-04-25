@@ -54,7 +54,7 @@ from relay_teams.reminders import SystemReminderService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.enums import RunEventType
-from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.workspace import WorkspaceManager
 
@@ -256,7 +256,8 @@ class ExternalAcpSessionManager:
             state = _ActivePromptState(request=request)
             handle.active_prompt = state
             handle.host_tool_bridge.bind_active_request(request)
-            self._run_event_hub.publish(
+            await publish_run_event_async(
+                self._run_event_hub,
                 RunEvent(
                     session_id=request.session_id,
                     run_id=request.run_id,
@@ -272,7 +273,7 @@ class ExternalAcpSessionManager:
                         },
                         ensure_ascii=False,
                     ),
-                )
+                ),
             )
             output = ""
             try:
@@ -288,7 +289,8 @@ class ExternalAcpSessionManager:
                 raise
             finally:
                 if state.thinking_started:
-                    self._run_event_hub.publish(
+                    await publish_run_event_async(
+                        self._run_event_hub,
                         RunEvent(
                             session_id=request.session_id,
                             run_id=request.run_id,
@@ -305,9 +307,10 @@ class ExternalAcpSessionManager:
                                 },
                                 ensure_ascii=False,
                             ),
-                        )
+                        ),
                     )
-                self._run_event_hub.publish(
+                await publish_run_event_async(
+                    self._run_event_hub,
                     RunEvent(
                         session_id=request.session_id,
                         run_id=request.run_id,
@@ -323,7 +326,7 @@ class ExternalAcpSessionManager:
                             },
                             ensure_ascii=False,
                         ),
-                    )
+                    ),
                 )
                 handle.active_prompt = None
                 handle.host_tool_bridge.clear_active_request()
@@ -491,7 +494,10 @@ class ExternalAcpSessionManager:
                 },
             )
             state.text_chunks.append(fallback_output)
-            self._publish_text_delta(request=state.request, text=fallback_output)
+            await self._publish_text_delta(
+                request=state.request,
+                text=fallback_output,
+            )
             return
         log_event(
             LOGGER,
@@ -738,7 +744,7 @@ class ExternalAcpSessionManager:
         if method == "initialized":
             return {}
         if method == "session/update":
-            self._handle_session_update(
+            await self._handle_session_update(
                 key=key,
                 params=params,
             )
@@ -784,7 +790,7 @@ class ExternalAcpSessionManager:
                 raise AcpProtocolError(-32602, str(exc)) from exc
         raise AcpProtocolError(-32601, f"Method not found: {method}")
 
-    def _handle_session_update(
+    async def _handle_session_update(
         self,
         *,
         key: str,
@@ -802,7 +808,7 @@ class ExternalAcpSessionManager:
             if not text:
                 return
             handle.active_prompt.text_chunks.append(text)
-            self._publish_text_delta(request=request, text=text)
+            await self._publish_text_delta(request=request, text=text)
             return
         if update_name == "agent_thought_chunk":
             text = _extract_content_text(update.get("content"))
@@ -810,7 +816,8 @@ class ExternalAcpSessionManager:
                 return
             if not handle.active_prompt.thinking_started:
                 handle.active_prompt.thinking_started = True
-                self._run_event_hub.publish(
+                await publish_run_event_async(
+                    self._run_event_hub,
                     RunEvent(
                         session_id=request.session_id,
                         run_id=request.run_id,
@@ -827,9 +834,10 @@ class ExternalAcpSessionManager:
                             },
                             ensure_ascii=False,
                         ),
-                    )
+                    ),
                 )
-            self._run_event_hub.publish(
+            await publish_run_event_async(
+                self._run_event_hub,
                 RunEvent(
                     session_id=request.session_id,
                     run_id=request.run_id,
@@ -847,7 +855,7 @@ class ExternalAcpSessionManager:
                         },
                         ensure_ascii=False,
                     ),
-                )
+                ),
             )
             return
         if update_name == "tool_call":
@@ -858,7 +866,8 @@ class ExternalAcpSessionManager:
             raw_input = update.get("rawInput")
             if raw_input is not None:
                 payload["args"] = raw_input
-            self._run_event_hub.publish(
+            await publish_run_event_async(
+                self._run_event_hub,
                 RunEvent(
                     session_id=request.session_id,
                     run_id=request.run_id,
@@ -868,7 +877,7 @@ class ExternalAcpSessionManager:
                     role_id=request.role_id,
                     event_type=RunEventType.TOOL_CALL,
                     payload_json=json.dumps(payload, ensure_ascii=False, default=str),
-                )
+                ),
             )
             return
         if update_name == "tool_call_update":
@@ -879,7 +888,8 @@ class ExternalAcpSessionManager:
                 tool_result=tool_result,
             )
             handle.active_prompt.note_tool_result(tool_result)
-            self._run_event_hub.publish(
+            await publish_run_event_async(
+                self._run_event_hub,
                 RunEvent(
                     session_id=request.session_id,
                     run_id=request.run_id,
@@ -898,7 +908,7 @@ class ExternalAcpSessionManager:
                         ensure_ascii=False,
                         default=str,
                     ),
-                )
+                ),
             )
 
     def _resolve_workspace(self, request: LLMRequest):
@@ -1015,8 +1025,9 @@ class ExternalAcpSessionManager:
             {"sessionId": handle.external_session_id},
         )
 
-    def _publish_text_delta(self, *, request: LLMRequest, text: str) -> None:
-        self._run_event_hub.publish(
+    async def _publish_text_delta(self, *, request: LLMRequest, text: str) -> None:
+        await publish_run_event_async(
+            self._run_event_hub,
             RunEvent(
                 session_id=request.session_id,
                 run_id=request.run_id,
@@ -1033,7 +1044,7 @@ class ExternalAcpSessionManager:
                     },
                     ensure_ascii=False,
                 ),
-            )
+            ),
         )
 
     def _append_assistant_message(

@@ -127,3 +127,86 @@ def test_clear_for_run_persists_empty_list(tmp_path: Path) -> None:
 
     assert cleared.version == 2
     assert cleared.items == ()
+
+
+@pytest.mark.asyncio
+async def test_async_replace_for_run_persists_snapshot_and_publishes_event(
+    tmp_path: Path,
+) -> None:
+    service, event_log = _build_service(tmp_path / "todo-async.db")
+
+    try:
+        snapshot = await service.replace_for_run_async(
+            run_id="run-1",
+            session_id="session-1",
+            items=(TodoItem(content="Inspect repo", status=TodoStatus.COMPLETED),),
+            updated_by_role_id="MainAgent",
+            updated_by_instance_id="inst-1",
+        )
+        persisted = await service.get_for_run_async(
+            run_id="run-1",
+            session_id="session-1",
+        )
+        events = await event_log.list_by_trace_async("run-1")
+    finally:
+        await event_log.close_async()
+
+    assert snapshot.version == 1
+    assert persisted.items == snapshot.items
+    assert len(events) == 1
+    assert events[0]["event_type"] == RunEventType.TODO_UPDATED.value
+
+
+@pytest.mark.asyncio
+async def test_async_todo_service_lists_clears_and_deletes(tmp_path: Path) -> None:
+    service, event_log = _build_service(tmp_path / "todo-async-lifecycle.db")
+
+    try:
+        missing = await service.get_for_run_async(
+            run_id="run-missing",
+            session_id="session-1",
+        )
+        first = await service.replace_for_run_async(
+            run_id="run-1",
+            session_id="session-1",
+            items=(TodoItem(content="Inspect repo", status=TodoStatus.PENDING),),
+        )
+        second = await service.replace_for_run_async(
+            run_id="run-2",
+            session_id="session-1",
+            items=(TodoItem(content="Write tests", status=TodoStatus.PENDING),),
+        )
+        listed = await service.list_for_session_async("session-1")
+        cleared = await service.clear_for_run_async(
+            run_id="run-1",
+            session_id="session-1",
+        )
+        await service.delete_for_run_async("run-2")
+        after_run_delete = await service.list_for_session_async("session-1")
+        await service.delete_for_session_async("session-1")
+        after_session_delete = await service.list_for_session_async("session-1")
+    finally:
+        await event_log.close_async()
+
+    assert missing.items == ()
+    assert {snapshot.run_id for snapshot in listed} == {first.run_id, second.run_id}
+    assert cleared.items == ()
+    assert [snapshot.run_id for snapshot in after_run_delete] == ["run-1"]
+    assert after_session_delete == ()
+
+
+@pytest.mark.asyncio
+async def test_async_todo_service_clear_allows_missing_event_hub(
+    tmp_path: Path,
+) -> None:
+    service = TodoService(
+        repository=TodoRepository(tmp_path / "todo-async-no-hub.db"),
+        run_event_hub=None,
+    )
+
+    snapshot = await service.clear_for_run_async(
+        run_id="run-1",
+        session_id="session-1",
+    )
+
+    assert snapshot.items == ()

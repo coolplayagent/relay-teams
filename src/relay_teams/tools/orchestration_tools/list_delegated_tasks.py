@@ -22,8 +22,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """List delegated tasks associated with the current run."""
 
-        def _action() -> dict[str, JsonValue]:
-            return ctx.deps.task_service.list_delegated_tasks(
+        async def _action() -> dict[str, JsonValue]:
+            return await ctx.deps.task_service.list_delegated_tasks_async(
                 run_id=ctx.deps.run_id,
                 include_root=include_root,
             )

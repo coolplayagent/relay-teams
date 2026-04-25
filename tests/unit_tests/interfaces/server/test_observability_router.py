@@ -129,7 +129,7 @@ def test_observability_routes_offload_sync_service_calls(monkeypatch) -> None:
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(observability.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(observability, "call_maybe_async", fake_to_thread)
     client = _create_client()
 
     overview = client.get(

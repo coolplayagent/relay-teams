@@ -11,7 +11,7 @@ from relay_teams.notifications import (
     NotificationService,
     NotificationType,
 )
-from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRecord,
@@ -112,6 +112,29 @@ class RunEventPublisher:
     ) -> None:
         try:
             self._run_event_hub.publish(event)
+        except Exception as exc:
+            with bind_trace_context(
+                trace_id=event.trace_id,
+                run_id=event.run_id,
+                session_id=event.session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event=failure_event,
+                    message="Run event publish failed",
+                    payload={"event_type": event.event_type.value},
+                    exc_info=exc,
+                )
+
+    async def safe_publish_run_event_async(
+        self,
+        event: RunEvent,
+        *,
+        failure_event: str,
+    ) -> None:
+        try:
+            await publish_run_event_async(self._run_event_hub, event)
         except Exception as exc:
             with bind_trace_context(
                 trace_id=event.trace_id,

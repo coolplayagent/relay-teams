@@ -1,10 +1,32 @@
 from __future__ import annotations
 
 import asyncio
+from threading import Lock
+from typing import Protocol, runtime_checkable
 
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
+
+
+@runtime_checkable
+class AsyncRunEventPublisher(Protocol):
+    async def publish_async(self, event: RunEvent) -> None: ...
+
+
+@runtime_checkable
+class SyncRunEventPublisher(Protocol):
+    def publish(self, event: RunEvent) -> None: ...
+
+
+async def publish_run_event_async(
+    publisher: AsyncRunEventPublisher | SyncRunEventPublisher,
+    event: RunEvent,
+) -> None:
+    if isinstance(publisher, AsyncRunEventPublisher):
+        await publisher.publish_async(event)
+        return
+    publisher.publish(event)
 
 
 class RunEventHub:
@@ -16,6 +38,7 @@ class RunEventHub:
         self._subscribers: dict[str, list[asyncio.Queue[RunEvent]]] = {}
         self._event_log = event_log
         self._run_state_repo = run_state_repo
+        self._publish_lock = Lock()
 
     def subscribe(self, run_id: str) -> asyncio.Queue[RunEvent]:
         queue: asyncio.Queue[RunEvent] = asyncio.Queue()
@@ -31,6 +54,28 @@ class RunEventHub:
             self._subscribers.pop(run_id, None)
 
     def publish(self, event: RunEvent) -> None:
+        if self._publish_from_running_loop(event):
+            return
+        with self._publish_lock:
+            self._publish_sync_with_lock(event)
+
+    def _publish_from_running_loop(self, event: RunEvent) -> bool:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        if self._publish_lock.acquire(blocking=False):
+            try:
+                self._publish_sync_with_lock(event)
+            finally:
+                self._publish_lock.release()
+            return True
+        raise RuntimeError(
+            "RunEventHub.publish cannot wait for an in-flight async publish from "
+            "a running event loop; use publish_async instead."
+        )
+
+    def _publish_sync_with_lock(self, event: RunEvent) -> None:
         event_id = 0
         if self._event_log:
             event_id = self._event_log.emit_run_event(event)
@@ -43,6 +88,39 @@ class RunEventHub:
         listeners = self._subscribers.get(event.run_id, [])
         for queue in listeners:
             queue.put_nowait(event)
+
+    async def publish_async(self, event: RunEvent) -> None:
+        await self._acquire_publish_lock_async()
+        task = asyncio.create_task(self._publish_async_with_lock(event))
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await task
+            raise
+
+    async def _publish_async_with_lock(self, event: RunEvent) -> None:
+        try:
+            event_id = 0
+            if self._event_log:
+                event_id = await self._event_log.emit_run_event_async(event)
+            if self._run_state_repo is not None and event_id > 0:
+                await self._run_state_repo.apply_event_async(
+                    event_id=event_id,
+                    event=event,
+                )
+
+            if event_id > 0:
+                event = event.model_copy(update={"event_id": event_id})
+
+            listeners = self._subscribers.get(event.run_id, [])
+            for queue in listeners:
+                queue.put_nowait(event)
+        finally:
+            self._publish_lock.release()
+
+    async def _acquire_publish_lock_async(self) -> None:
+        while not self._publish_lock.acquire(blocking=False):
+            await asyncio.sleep(0.001)
 
     def unsubscribe_all(self, run_id: str) -> None:
         self._subscribers.pop(run_id, None)

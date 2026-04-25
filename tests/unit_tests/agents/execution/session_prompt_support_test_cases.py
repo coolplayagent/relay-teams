@@ -545,6 +545,10 @@ async def test_build_agent_iteration_context_does_not_override_proxy_env_when_ho
     )
 
     assert captured["merged_env"] is None
+    assert (
+        captured["llm_http_client_cache_scope"]
+        == "run-1:session-1:task-1:inst-1:writer"
+    )
 
 
 @pytest.mark.asyncio

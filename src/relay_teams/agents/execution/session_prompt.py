@@ -26,6 +26,9 @@ from relay_teams.agents.execution.message_commit import MessageCommitService
 from relay_teams.agents.execution.prompt_history import (
     PreparedPromptContext,
 )
+from relay_teams.agents.execution.llm_transport_scope import (
+    llm_http_client_cache_scope_for_request,
+)
 from relay_teams.agents.execution.session_mixin_base import AgentLlmSessionMixinBase
 from relay_teams.agents.execution.tool_args_repair import repair_tool_args
 from relay_teams.computer import (
@@ -40,7 +43,10 @@ from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.providers.openai_model_profiles import (
     resolve_openai_chat_model_profile,
 )
-from relay_teams.tools.runtime.persisted_state import load_tool_call_state
+from relay_teams.tools.runtime.persisted_state import (
+    load_tool_call_state,
+    load_tool_call_state_async,
+)
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.workspace import build_conversation_id
 
@@ -110,6 +116,35 @@ class _NullCommitMessageRepo:
     ) -> list[ModelRequest | ModelResponse]:
         _ = conversation_id
         return []
+
+    async def append_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: list[ModelRequest | ModelResponse],
+    ) -> None:
+        self.append(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=agent_role_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            messages=messages,
+        )
+
+    async def get_history_for_conversation_async(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        return self.get_history_for_conversation(conversation_id)
 
 
 class SessionPromptMixin(AgentLlmSessionMixinBase):
@@ -197,7 +232,9 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
                 )
                 else None
             ),
-            llm_http_client_cache_scope=request.run_id,
+            llm_http_client_cache_scope=llm_http_client_cache_scope_for_request(
+                request
+            ),
             allowed_mcp_servers=allowed_mcp_servers,
             allowed_skills=allowed_skills,
             tool_registry=self._tool_registry,
@@ -415,6 +452,19 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             contexts=contexts,
         )
 
+    async def _persist_hook_system_context_if_needed_async(
+        self,
+        *,
+        request: LLMRequest,
+        contexts: tuple[str, ...],
+    ) -> None:
+        await (
+            self._prompt_history_service().persist_hook_system_context_if_needed_async(
+                request=request,
+                contexts=contexts,
+            )
+        )
+
     def _persist_user_prompt_if_needed(
         self,
         *,
@@ -423,6 +473,20 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         content: UserPromptContent | None,
     ) -> tuple[list[ModelRequest | ModelResponse], bool]:
         return self._prompt_history_service().persist_user_prompt_if_needed(
+            request=request,
+            history=history,
+            content=content,
+            filter_model_messages=self._filter_model_messages,
+        )
+
+    async def _persist_user_prompt_if_needed_async(
+        self,
+        *,
+        request: LLMRequest,
+        history: list[ModelRequest | ModelResponse],
+        content: UserPromptContent | None,
+    ) -> tuple[list[ModelRequest | ModelResponse], bool]:
+        return await self._prompt_history_service().persist_user_prompt_if_needed_async(
             request=request,
             history=history,
             content=content,
@@ -602,6 +666,36 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             has_tool_side_effect_messages=self._has_tool_side_effect_messages,
         )
 
+    async def _commit_ready_messages_async(
+        self,
+        *,
+        request: LLMRequest,
+        history: list[ModelRequest | ModelResponse],
+        pending_messages: list[ModelRequest | ModelResponse],
+    ) -> tuple[
+        list[ModelRequest | ModelResponse],
+        list[ModelRequest | ModelResponse],
+        bool,
+        bool,
+    ]:
+        return await self._message_commit_service().commit_ready_messages_async(
+            request=request,
+            history=history,
+            pending_messages=pending_messages,
+            last_committable_index=self._last_committable_index,
+            has_tool_input_validation_failures=(
+                self._has_tool_input_validation_failures
+            ),
+            normalize_committable_messages=self._normalize_committable_messages,
+            workspace_id=self._workspace_id,
+            conversation_id=self._conversation_id,
+            publish_committed_tool_outcome_events_from_messages=(
+                self._publish_committed_tool_outcome_events_from_messages_async
+            ),
+            filter_model_messages=self._filter_model_messages,
+            has_tool_side_effect_messages=self._has_tool_side_effect_messages,
+        )
+
     def _commit_all_safe_messages(
         self,
         *,
@@ -619,6 +713,26 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             history=history,
             pending_messages=pending_messages,
             commit_ready_messages=self._commit_ready_messages,
+            last_committable_index=self._last_committable_index,
+        )
+
+    async def _commit_all_safe_messages_async(
+        self,
+        *,
+        request: LLMRequest,
+        history: list[ModelRequest | ModelResponse],
+        pending_messages: list[ModelRequest | ModelResponse],
+    ) -> tuple[
+        list[ModelRequest | ModelResponse],
+        list[ModelRequest | ModelResponse],
+        bool,
+        bool,
+    ]:
+        return await self._message_commit_service().commit_all_safe_messages_async(
+            request=request,
+            history=history,
+            pending_messages=pending_messages,
+            commit_ready_messages=self._commit_ready_messages_async,
             last_committable_index=self._last_committable_index,
         )
 
@@ -758,6 +872,19 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             published_tool_call_ids=published_tool_call_ids,
         )
 
+    async def _publish_tool_call_events_from_messages_async(
+        self,
+        *,
+        request: LLMRequest,
+        messages: Sequence[ModelResponse | ModelRequest],
+        published_tool_call_ids: set[str] | None = None,
+    ) -> bool:
+        return await self._event_publishing_service().publish_tool_call_events_from_messages_async(
+            request=request,
+            messages=messages,
+            published_tool_call_ids=published_tool_call_ids,
+        )
+
     def _publish_committed_tool_outcome_events_from_messages(
         self,
         *,
@@ -771,6 +898,22 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             maybe_enrich_tool_result_payload=self._maybe_enrich_tool_result_payload,
             tool_result_already_emitted_from_runtime=(
                 self._tool_result_already_emitted_from_runtime
+            ),
+        )
+
+    async def _publish_committed_tool_outcome_events_from_messages_async(
+        self,
+        *,
+        request: LLMRequest,
+        messages: Sequence[ModelResponse | ModelRequest],
+    ) -> None:
+        await self._event_publishing_service().publish_committed_tool_outcome_events_from_messages_async(
+            request=request,
+            messages=messages,
+            to_json_compatible=self._to_json_compatible,
+            maybe_enrich_tool_result_payload=self._maybe_enrich_tool_result_payload,
+            tool_result_already_emitted_from_runtime=(
+                self._tool_result_already_emitted_from_runtime_async
             ),
         )
 
@@ -789,6 +932,21 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
                 shared_store=self._shared_store,
                 load_tool_call_state=load_tool_call_state,
             )
+        )
+
+    async def _tool_result_already_emitted_from_runtime_async(
+        self,
+        *,
+        request: LLMRequest,
+        tool_name: str,
+        tool_call_id: str,
+    ) -> bool:
+        return await self._tool_result_state_service().tool_result_already_emitted_from_runtime_async(
+            request=request,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            shared_store=self._shared_store,
+            load_tool_call_state=load_tool_call_state_async,
         )
 
     def _to_json(self, obj: object) -> str:

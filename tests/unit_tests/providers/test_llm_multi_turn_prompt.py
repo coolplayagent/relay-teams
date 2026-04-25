@@ -2652,11 +2652,11 @@ async def test_subagent_resume_after_tool_result_before_commit_retries_cleanly(
         user_prompt=None,
     )
 
-    def _interrupt_commit(*args, **kwargs):
+    async def _interrupt_commit(*args, **kwargs):
         _ = (args, kwargs)
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(provider, "_commit_all_safe_messages", _interrupt_commit)
+    monkeypatch.setattr(provider, "_commit_all_safe_messages_async", _interrupt_commit)
 
     with pytest.raises(asyncio.CancelledError):
         await provider.generate(request)

@@ -283,11 +283,11 @@ async def test_ask_question_returns_persisted_answer_when_timeout_loses_race(
         return cast(dict[str, object], projected.visible_data)
 
     monkeypatch.setattr(ask_question_module, "execute_tool_call", _fake_execute_tool)
-    original_resolve = user_question_repo.resolve
+    original_resolve_async = user_question_repo.resolve_async
 
-    def resolve_with_answered_race(*, question_id: str, **kwargs: object):
+    async def resolve_with_answered_race(*, question_id: str, **kwargs: object):
         _ = kwargs
-        _ = original_resolve(
+        _ = await original_resolve_async(
             question_id=question_id,
             status=UserQuestionRequestStatus.ANSWERED,
             answers=(
@@ -300,7 +300,11 @@ async def test_ask_question_returns_persisted_answer_when_timeout_loses_race(
             actual_status=UserQuestionRequestStatus.ANSWERED,
         )
 
-    monkeypatch.setattr(user_question_repo, "resolve", resolve_with_answered_race)
+    monkeypatch.setattr(
+        user_question_repo,
+        "resolve_async",
+        resolve_with_answered_race,
+    )
 
     result = await tool(
         ctx,
@@ -416,7 +420,11 @@ async def test_ask_question_publishes_resolution_event_on_timeout(
     def publish(event: RunEvent) -> None:
         published_events.append(event)
 
+    async def publish_async(event: RunEvent) -> None:
+        published_events.append(event)
+
     setattr(ctx.deps.run_event_hub, "publish", publish)
+    setattr(ctx.deps.run_event_hub, "publish_async", publish_async)
 
     async def _fake_execute_tool(
         ctx,
@@ -506,9 +514,9 @@ async def test_ask_question_completes_without_publishing_request_when_closed_dur
         return cast(dict[str, object], projected.visible_data)
 
     monkeypatch.setattr(ask_question_module, "execute_tool_call", _fake_execute_tool)
-    original_upsert = user_question_repo.upsert_requested
+    original_upsert_async = user_question_repo.upsert_requested_async
 
-    def upsert_and_close(
+    async def upsert_and_close(
         *,
         question_id: str,
         run_id: str,
@@ -523,7 +531,7 @@ async def test_ask_question_completes_without_publishing_request_when_closed_dur
             run_id=run_id,
             reason="run_stopped",
         )
-        return original_upsert(
+        return await original_upsert_async(
             question_id=question_id,
             run_id=run_id,
             session_id=session_id,
@@ -534,7 +542,11 @@ async def test_ask_question_completes_without_publishing_request_when_closed_dur
             questions=questions,
         )
 
-    monkeypatch.setattr(user_question_repo, "upsert_requested", upsert_and_close)
+    monkeypatch.setattr(
+        user_question_repo,
+        "upsert_requested_async",
+        upsert_and_close,
+    )
 
     result = await tool(
         ctx,

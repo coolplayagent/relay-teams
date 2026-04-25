@@ -55,6 +55,14 @@ class TaskOrchestrationServiceLike(Protocol):
         update: TaskUpdate,
     ) -> Dict[str, JsonValue]: ...
 
+    async def update_task_async(
+        self,
+        *,
+        run_id: Optional[str],
+        task_id: str,
+        update: TaskUpdate,
+    ) -> Dict[str, JsonValue]: ...
+
     def list_delegated_tasks(
         self,
         *,
@@ -62,7 +70,21 @@ class TaskOrchestrationServiceLike(Protocol):
         include_root: bool = False,
     ) -> Dict[str, JsonValue]: ...
 
+    async def list_delegated_tasks_async(
+        self,
+        *,
+        run_id: str,
+        include_root: bool = False,
+    ) -> Dict[str, JsonValue]: ...
+
     def list_run_tasks(
+        self,
+        *,
+        run_id: str,
+        include_root: bool = False,
+    ) -> Dict[str, JsonValue]: ...
+
+    async def list_run_tasks_async(
         self,
         *,
         run_id: str,

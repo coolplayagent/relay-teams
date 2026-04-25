@@ -219,7 +219,7 @@ def test_start_wechat_login_route_runs_service_call_in_threadpool(monkeypatch) -
         calls.append(request)
         return func(request)
 
-    monkeypatch.setattr(gateway.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(gateway, "call_maybe_async", fake_to_thread)
     client = _client(_FakeWeChatGatewayService())
 
     response = client.post(
@@ -265,7 +265,7 @@ def test_wait_wechat_login_route_runs_service_call_in_threadpool(monkeypatch) ->
         calls.append(request)
         return func(request)
 
-    monkeypatch.setattr(gateway.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(gateway, "call_maybe_async", fake_to_thread)
     client = _client(_FakeWeChatGatewayService())
 
     response = client.post(
@@ -290,7 +290,7 @@ def test_wechat_account_routes_run_service_calls_in_threadpool(monkeypatch) -> N
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(gateway.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(gateway, "call_maybe_async", fake_to_thread)
     fake_service = _FakeWeChatGatewayService()
     client = _client(fake_service)
 
@@ -385,7 +385,7 @@ def test_xiaoluban_account_routes_run_service_calls_in_threadpool(monkeypatch) -
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(gateway.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(gateway, "call_maybe_async", fake_to_thread)
     fake_xiaoluban_service = _FakeXiaolubanGatewayService()
     client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
 

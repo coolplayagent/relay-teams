@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -140,19 +141,118 @@ def test_resolved_db_path_key_returns_existing_cached_value_after_resolve(
     assert resolved == "cached-after-resolve"
 
 
-def test_write_coordinators_reuse_same_lock_for_same_path(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_write_coordinators_reuse_same_lock_for_same_path(
+    tmp_path: Path,
+) -> None:
     db_path = tmp_path / "relay_teams.db"
+    db_module._CROSS_WRITE_COORDINATORS.clear()
     db_module._WRITE_COORDINATORS.clear()
     db_module._ASYNC_WRITE_COORDINATORS.clear()
     db_module._RESOLVED_DB_PATH_KEYS.clear()
 
+    cross_first = db_module._cross_write_coordinator_for(db_path)
+    cross_second = db_module._cross_write_coordinator_for(db_path)
     sync_first = db_module._write_coordinator_for(db_path)
     sync_second = db_module._write_coordinator_for(db_path)
     async_first = db_module._async_write_coordinator_for(db_path)
     async_second = db_module._async_write_coordinator_for(db_path)
 
+    assert cross_first is cross_second
     assert sync_first is sync_second
     assert async_first is async_second
+
+
+def test_async_write_coordinator_is_scoped_to_event_loop(tmp_path: Path) -> None:
+    db_path = tmp_path / "relay_teams.db"
+    db_module._ASYNC_WRITE_COORDINATORS.clear()
+    db_module._RESOLVED_DB_PATH_KEYS.clear()
+
+    async def bind_lock_to_current_loop() -> asyncio.Lock:
+        lock = db_module._async_write_coordinator_for(db_path)
+        await lock.acquire()
+        waiter = asyncio.create_task(lock.acquire())
+        await asyncio.sleep(0)
+
+        assert not waiter.done()
+
+        lock.release()
+        await waiter
+        lock.release()
+        return lock
+
+    first = asyncio.run(bind_lock_to_current_loop())
+    second = asyncio.run(bind_lock_to_current_loop())
+
+    assert first is not second
+
+
+def test_cross_write_coordinator_allows_sync_reentry() -> None:
+    coordinator = db_module.CrossModeWriteCoordinator()
+
+    first_token = coordinator.acquire_sync()
+    second_token = coordinator.acquire_sync()
+    coordinator.release(second_token)
+    coordinator.release(first_token)
+
+
+@pytest.mark.asyncio
+async def test_cross_write_coordinator_allows_async_reentry() -> None:
+    coordinator = db_module.CrossModeWriteCoordinator()
+
+    first_token = await coordinator.acquire_async()
+    second_token = await coordinator.acquire_async()
+    coordinator.release(second_token)
+    coordinator.release(first_token)
+
+
+@pytest.mark.asyncio
+async def test_cross_write_coordinator_releases_cancelled_async_acquire(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator = db_module.CrossModeWriteCoordinator()
+
+    async def _cancel_after_acquire(
+        func: Callable[[tuple[str, int]], bool],
+        token: tuple[str, int],
+    ) -> bool:
+        assert func(token) is True
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(db_module.asyncio, "to_thread", _cancel_after_acquire)
+
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator.acquire_async()
+
+    assert coordinator._owner is None
+    assert coordinator._depth == 0
+
+
+@pytest.mark.asyncio
+async def test_cross_write_coordinator_cancelled_reentry_preserves_outer_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator = db_module.CrossModeWriteCoordinator()
+    first_token = await coordinator.acquire_async()
+
+    async def _cancel_after_reentry(
+        func: Callable[[tuple[str, int]], bool],
+        token: tuple[str, int],
+    ) -> bool:
+        assert func(token) is True
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(db_module.asyncio, "to_thread", _cancel_after_reentry)
+
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator.acquire_async()
+
+    assert coordinator._owner == first_token
+    assert coordinator._depth == 1
+
+    coordinator.release(first_token)
+    assert coordinator._owner is None
+    assert coordinator._depth == 0
 
 
 def test_run_sqlite_write_with_retry_retries_transient_lock_errors(
@@ -184,6 +284,45 @@ def test_run_sqlite_write_with_retry_retries_transient_lock_errors(
         stored = conn.execute("SELECT value FROM items").fetchall()
         assert result == "done"
         assert attempts == 3
+        assert [row[0] for row in stored] == ["ok"]
+    finally:
+        conn.close()
+
+
+def test_run_sqlite_write_with_retry_rolls_back_failed_operation(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rollback.db"
+    conn = open_sqlite(db_path)
+    try:
+        conn.execute("CREATE TABLE items (value TEXT NOT NULL)")
+        conn.commit()
+
+        def failed_operation() -> None:
+            conn.execute("INSERT INTO items(value) VALUES(?)", ("stale",))
+            raise ValueError("boom")
+
+        with pytest.raises(ValueError, match="boom"):
+            run_sqlite_write_with_retry(
+                conn=conn,
+                db_path=db_path,
+                operation=failed_operation,
+                repository_name="test",
+                operation_name="failed_insert",
+            )
+
+        def committed_operation() -> None:
+            conn.execute("INSERT INTO items(value) VALUES(?)", ("ok",))
+
+        run_sqlite_write_with_retry(
+            conn=conn,
+            db_path=db_path,
+            operation=committed_operation,
+            repository_name="test",
+            operation_name="insert_item",
+        )
+
+        stored = conn.execute("SELECT value FROM items").fetchall()
         assert [row[0] for row in stored] == ["ok"]
     finally:
         conn.close()
@@ -241,6 +380,98 @@ async def test_run_async_sqlite_write_with_retry_retries_transient_lock_errors(
         assert result == "done"
         assert attempts == 3
         assert [row[0] for row in rows] == ["ok"]
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_run_async_sqlite_write_with_retry_rolls_back_cancelled_operation(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "async_rollback.db"
+    conn = await open_async_sqlite(db_path)
+    try:
+        await conn.execute("CREATE TABLE items (value TEXT NOT NULL)")
+        await conn.commit()
+
+        async def cancelled_operation() -> None:
+            await conn.execute("INSERT INTO items(value) VALUES(?)", ("stale",))
+            raise asyncio.CancelledError
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_async_sqlite_write_with_retry(
+                conn=conn,
+                db_path=db_path,
+                operation=cancelled_operation,
+                repository_name="test",
+                operation_name="cancelled_insert",
+            )
+
+        async def committed_operation() -> None:
+            await conn.execute("INSERT INTO items(value) VALUES(?)", ("ok",))
+
+        await run_async_sqlite_write_with_retry(
+            conn=conn,
+            db_path=db_path,
+            operation=committed_operation,
+            repository_name="test",
+            operation_name="insert_item",
+        )
+
+        rows = await (await conn.execute("SELECT value FROM items")).fetchall()
+        assert [row[0] for row in rows] == ["ok"]
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_run_async_sqlite_write_with_retry_does_not_rollback_while_waiting(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "async_waiting_cancel.db"
+    conn = await open_async_sqlite(db_path)
+    try:
+        await conn.execute("CREATE TABLE items (value TEXT NOT NULL)")
+        await conn.commit()
+        first_operation_started = asyncio.Event()
+        release_first_operation = asyncio.Event()
+
+        async def slow_operation() -> None:
+            await conn.execute("INSERT INTO items(value) VALUES(?)", ("first",))
+            first_operation_started.set()
+            await release_first_operation.wait()
+
+        first_task = asyncio.create_task(
+            run_async_sqlite_write_with_retry(
+                conn=conn,
+                db_path=db_path,
+                operation=slow_operation,
+                repository_name="test",
+                operation_name="slow_insert",
+            )
+        )
+        await first_operation_started.wait()
+
+        second_task = asyncio.create_task(
+            run_async_sqlite_write_with_retry(
+                conn=conn,
+                db_path=db_path,
+                operation=lambda: asyncio.sleep(0),
+                repository_name="test",
+                operation_name="waiting_insert",
+            )
+        )
+        await asyncio.sleep(0.01)
+        second_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await second_task
+
+        release_first_operation.set()
+        await first_task
+
+        rows = await (await conn.execute("SELECT value FROM items")).fetchall()
+        assert [row[0] for row in rows] == ["first"]
     finally:
         await conn.close()
 

@@ -66,7 +66,7 @@ def test_frontend_logs_route_runs_batch_in_threadpool(
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(logs, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(logs, "call_maybe_async", fake_run_in_threadpool)
     app = FastAPI()
     app.include_router(logs.router, prefix="/api")
     client = TestClient(app)

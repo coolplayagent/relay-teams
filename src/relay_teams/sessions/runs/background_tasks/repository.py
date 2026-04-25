@@ -5,10 +5,10 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 from typing import Literal
 
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskKind,
     BackgroundTaskRecord,
@@ -21,12 +21,9 @@ from relay_teams.validation import (
 )
 
 
-class BackgroundTaskRepository:
+class BackgroundTaskRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -205,6 +202,9 @@ class BackgroundTaskRepository:
             )
         return persisted
 
+    async def upsert_async(self, record: BackgroundTaskRecord) -> BackgroundTaskRecord:
+        return await self._call_sync_async(self.upsert, record)
+
     def get(self, background_task_id: str) -> BackgroundTaskRecord | None:
         with self._lock:
             row = self._conn.execute(
@@ -219,6 +219,9 @@ class BackgroundTaskRepository:
             return None
         return _row_to_record(row)
 
+    async def get_async(self, background_task_id: str) -> BackgroundTaskRecord | None:
+        return await self._call_sync_async(self.get, background_task_id)
+
     def list_by_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
@@ -231,6 +234,9 @@ class BackgroundTaskRepository:
                 (run_id,),
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
+
+    async def list_by_run_async(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
+        return await self._call_sync_async(self.list_by_run, run_id)
 
     def list_by_session(self, session_id: str) -> tuple[BackgroundTaskRecord, ...]:
         with self._lock:
@@ -245,6 +251,11 @@ class BackgroundTaskRepository:
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
 
+    async def list_by_session_async(
+        self, session_id: str
+    ) -> tuple[BackgroundTaskRecord, ...]:
+        return await self._call_sync_async(self.list_by_session, session_id)
+
     def list_all(self) -> tuple[BackgroundTaskRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
@@ -255,6 +266,9 @@ class BackgroundTaskRepository:
                 """
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
+
+    async def list_all_async(self) -> tuple[BackgroundTaskRecord, ...]:
+        return await self._call_sync_async(self.list_all)
 
     def list_interruptible(self) -> tuple[BackgroundTaskRecord, ...]:
         with self._lock:
@@ -272,6 +286,9 @@ class BackgroundTaskRepository:
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
 
+    async def list_interruptible_async(self) -> tuple[BackgroundTaskRecord, ...]:
+        return await self._call_sync_async(self.list_interruptible)
+
     def delete(self, background_task_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -285,6 +302,9 @@ class BackgroundTaskRepository:
             operation_name="delete",
         )
 
+    async def delete_async(self, background_task_id: str) -> None:
+        return await self._call_sync_async(self.delete, background_task_id)
+
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -297,6 +317,9 @@ class BackgroundTaskRepository:
             repository_name="BackgroundTaskRepository",
             operation_name="delete_by_session",
         )
+
+    async def delete_by_session_async(self, session_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_session, session_id)
 
     def mark_transient_background_tasks_interrupted(
         self,
@@ -354,6 +377,14 @@ class BackgroundTaskRepository:
             operation_name="mark_transient_background_tasks_interrupted",
         )
         return affected
+
+    async def mark_transient_background_tasks_interrupted_async(
+        self, *, background_task_ids: tuple[str, ...] | None = None
+    ) -> int:
+        return await self._call_sync_async(
+            self.mark_transient_background_tasks_interrupted,
+            background_task_ids=background_task_ids,
+        )
 
 
 def _record_params(record: BackgroundTaskRecord) -> tuple[object, ...]:

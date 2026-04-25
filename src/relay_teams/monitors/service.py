@@ -25,7 +25,7 @@ from relay_teams.notifications import (
     NotificationType,
 )
 from relay_teams.sessions.runs.enums import RunEventType
-from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
 from relay_teams.sessions.runs.run_models import RunEvent
 
 LOGGER = get_logger(__name__)
@@ -76,21 +76,16 @@ class MonitorService:
         created_by_role_id: str | None,
         tool_call_id: str | None,
     ) -> MonitorSubscriptionRecord:
-        now = _utc_now()
-        record = MonitorSubscriptionRecord(
-            monitor_id=f"mon_{uuid4().hex[:12]}",
+        record = self._build_monitor_record(
             run_id=run_id,
             session_id=session_id,
             source_kind=source_kind,
-            source_key=source_key.strip(),
-            created_by_instance_id=_normalize_optional_text(created_by_instance_id),
-            created_by_role_id=_normalize_optional_text(created_by_role_id),
-            tool_call_id=_normalize_optional_text(tool_call_id),
-            status=MonitorSubscriptionStatus.ACTIVE,
             rule=rule,
             action=action,
-            created_at=now,
-            updated_at=now,
+            source_key=source_key,
+            created_by_instance_id=created_by_instance_id,
+            created_by_role_id=created_by_role_id,
+            tool_call_id=tool_call_id,
         )
         created = self._repository.create_subscription(record)
         self._publish_monitor_event(
@@ -105,8 +100,50 @@ class MonitorService:
         )
         return created
 
+    async def create_monitor_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        source_kind: MonitorSourceKind,
+        source_key: str,
+        rule: MonitorRule,
+        action: MonitorAction,
+        created_by_instance_id: str | None,
+        created_by_role_id: str | None,
+        tool_call_id: str | None,
+    ) -> MonitorSubscriptionRecord:
+        record = self._build_monitor_record(
+            run_id=run_id,
+            session_id=session_id,
+            source_kind=source_kind,
+            rule=rule,
+            action=action,
+            source_key=source_key,
+            created_by_instance_id=created_by_instance_id,
+            created_by_role_id=created_by_role_id,
+            tool_call_id=tool_call_id,
+        )
+        created = await self._repository.create_subscription_async(record)
+        await self._publish_monitor_event_async(
+            record=created,
+            event_type=RunEventType.MONITOR_CREATED,
+            payload={
+                "monitor_id": created.monitor_id,
+                "source_kind": created.source_kind.value,
+                "source_key": created.source_key,
+                "action_type": created.action.action_type.value,
+            },
+        )
+        return created
+
     def list_for_run(self, run_id: str) -> tuple[MonitorSubscriptionRecord, ...]:
         return self._repository.list_for_run(run_id)
+
+    async def list_for_run_async(
+        self, run_id: str
+    ) -> tuple[MonitorSubscriptionRecord, ...]:
+        return await self._repository.list_for_run_async(run_id)
 
     def stop_for_run(
         self,
@@ -130,6 +167,34 @@ class MonitorService:
             )
         )
         self._publish_monitor_event(
+            record=updated,
+            event_type=RunEventType.MONITOR_STOPPED,
+            payload={"monitor_id": updated.monitor_id},
+        )
+        return updated
+
+    async def stop_for_run_async(
+        self,
+        *,
+        run_id: str,
+        monitor_id: str,
+    ) -> MonitorSubscriptionRecord:
+        record = await self._repository.get_subscription_async(monitor_id)
+        if record.run_id != run_id:
+            raise KeyError(f"Monitor {monitor_id} does not belong to run {run_id}")
+        if record.status == MonitorSubscriptionStatus.STOPPED:
+            return record
+        now = _utc_now()
+        updated = await self._repository.update_subscription_async(
+            record.model_copy(
+                update={
+                    "status": MonitorSubscriptionStatus.STOPPED,
+                    "updated_at": now,
+                    "stopped_at": now,
+                }
+            )
+        )
+        await self._publish_monitor_event_async(
             record=updated,
             event_type=RunEventType.MONITOR_STOPPED,
             payload={"monitor_id": updated.monitor_id},
@@ -167,6 +232,46 @@ class MonitorService:
             self._dispatch_action(updated, envelope)
             if updated.status == MonitorSubscriptionStatus.STOPPED:
                 self._publish_monitor_event(
+                    record=updated,
+                    event_type=RunEventType.MONITOR_STOPPED,
+                    payload={"monitor_id": updated.monitor_id},
+                )
+            triggered.append(trigger)
+        return tuple(triggered)
+
+    async def emit_async(
+        self, envelope: MonitorEventEnvelope
+    ) -> tuple[MonitorTriggerRecord, ...]:
+        triggered: list[MonitorTriggerRecord] = []
+        subscriptions = await self._repository.list_active_for_source_async(
+            source_kind=envelope.source_kind.value,
+            source_key=envelope.source_key,
+        )
+        for subscription in subscriptions:
+            if not _rule_matches(subscription.rule, envelope):
+                continue
+            recorded = await self._repository.record_matching_trigger_async(
+                monitor_id=subscription.monitor_id,
+                envelope=envelope,
+            )
+            if recorded is None:
+                continue
+            updated, trigger = recorded
+            await self._publish_monitor_event_async(
+                record=updated,
+                event_type=RunEventType.MONITOR_TRIGGERED,
+                payload={
+                    "monitor_id": updated.monitor_id,
+                    "monitor_trigger_id": trigger.monitor_trigger_id,
+                    "event_name": envelope.event_name,
+                    "source_kind": envelope.source_kind.value,
+                    "source_key": envelope.source_key,
+                    "action_type": updated.action.action_type.value,
+                },
+            )
+            self._dispatch_action(updated, envelope)
+            if updated.status == MonitorSubscriptionStatus.STOPPED:
+                await self._publish_monitor_event_async(
                     record=updated,
                     event_type=RunEventType.MONITOR_STOPPED,
                     payload={"monitor_id": updated.monitor_id},
@@ -265,6 +370,56 @@ class MonitorService:
                 event_type=event_type,
                 payload_json=json.dumps(payload, ensure_ascii=False),
             )
+        )
+
+    async def _publish_monitor_event_async(
+        self,
+        *,
+        record: MonitorSubscriptionRecord,
+        event_type: RunEventType,
+        payload: dict[str, str],
+    ) -> None:
+        await publish_run_event_async(
+            self._run_event_hub,
+            RunEvent(
+                session_id=record.session_id,
+                run_id=record.run_id,
+                trace_id=record.run_id,
+                instance_id=record.created_by_instance_id,
+                role_id=record.created_by_role_id,
+                event_type=event_type,
+                payload_json=json.dumps(payload, ensure_ascii=False),
+            ),
+        )
+
+    @staticmethod
+    def _build_monitor_record(
+        *,
+        run_id: str,
+        session_id: str,
+        source_kind: MonitorSourceKind,
+        source_key: str,
+        rule: MonitorRule,
+        action: MonitorAction,
+        created_by_instance_id: str | None,
+        created_by_role_id: str | None,
+        tool_call_id: str | None,
+    ) -> MonitorSubscriptionRecord:
+        now = _utc_now()
+        return MonitorSubscriptionRecord(
+            monitor_id=f"mon_{uuid4().hex[:12]}",
+            run_id=run_id,
+            session_id=session_id,
+            source_kind=source_kind,
+            source_key=source_key.strip(),
+            created_by_instance_id=_normalize_optional_text(created_by_instance_id),
+            created_by_role_id=_normalize_optional_text(created_by_role_id),
+            tool_call_id=_normalize_optional_text(tool_call_id),
+            status=MonitorSubscriptionStatus.ACTIVE,
+            rule=rule,
+            action=action,
+            created_at=now,
+            updated_at=now,
         )
 
 

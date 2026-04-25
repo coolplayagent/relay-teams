@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from pathlib import Path
-from typing import Callable, Literal, cast
+from typing import Awaitable, Callable, Literal, cast
 
 import pytest
 from pydantic import JsonValue
@@ -67,6 +68,7 @@ from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
+    RunRuntimeRecord,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
@@ -122,6 +124,9 @@ class _SessionRepo:
             workspace_id="default",
         )
 
+    async def get_async(self, session_id: str) -> SessionRecord:
+        return self.get(session_id)
+
     def create(
         self,
         session_id: str,
@@ -135,6 +140,9 @@ class _SessionRepo:
 
     def mark_started(self, session_id: str) -> SessionRecord:
         return self.get(session_id)
+
+    async def mark_started_async(self, session_id: str) -> SessionRecord:
+        return self.mark_started(session_id)
 
 
 class _EventBus:
@@ -1776,6 +1784,77 @@ def test_stop_subagent_completes_questions_and_emits_resolution_event(
     }
 
 
+@pytest.mark.asyncio
+async def test_stop_subagent_async_completes_questions_without_sync_wrapper(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_stop_subagent_async_question_event.db"
+    manager = _build_manager(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _create_root_task(task_repo)
+    run_runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    _upsert_coordinator(agent_repo)
+    _upsert_instance(
+        agent_repo,
+        instance_id="inst-2",
+        role_id="Writer",
+        status=InstanceStatus.RUNNING,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-async",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-2",
+        role_id="Writer",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+                multiple=False,
+            ),
+        ),
+    )
+    question_manager = manager._user_question_manager
+    assert question_manager is not None
+    question_manager.open_question(
+        run_id="run-existing",
+        question_id="call-question-async",
+        instance_id="inst-2",
+        role_id="Writer",
+    )
+
+    result = await manager.stop_subagent_async("run-existing", "inst-2")
+
+    assert result["instance_id"] == "inst-2"
+    record = await user_question_repo.get_async("call-question-async")
+    assert record is not None
+    assert record.status == UserQuestionRequestStatus.COMPLETED
+    assert (
+        question_manager.get_question(
+            run_id="run-existing",
+            question_id="call-question-async",
+        )
+        is None
+    )
+    events = await EventLog(db_path).list_by_session_with_ids_async("session-1")
+    assert [event["event_type"] for event in events[-2:]] == [
+        RunEventType.SUBAGENT_STOPPED.value,
+        RunEventType.USER_QUESTION_ANSWERED.value,
+    ]
+
+
 def test_resume_run_allows_stopped_run_with_pending_tool_approval(
     tmp_path: Path,
 ) -> None:
@@ -3272,6 +3351,908 @@ def test_answer_user_question_validates_payload_and_auto_resumes_stopped_run(
     record = user_question_repo.get("call-question-1")
     assert record is not None
     assert record.status.value == "answered"
+
+
+@pytest.mark.asyncio
+async def test_answer_user_question_async_uses_async_resume_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_answer_user_question_async.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    user_question_repo = UserQuestionRepository(db_path)
+
+    _create_root_task(task_repo)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+    )
+    user_question_repo.upsert_requested(
+        question_id="call-question-async",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="A", description="Option A"),),
+            ),
+        ),
+    )
+    ensured: list[str] = []
+
+    def _sync_resume_unavailable(run_id: str) -> str:
+        raise AssertionError(f"sync resume must not run for {run_id}")
+
+    def _sync_runtime_unavailable(run_id: str) -> RunRuntimeRecord | None:
+        raise AssertionError(f"sync runtime lookup must not run for {run_id}")
+
+    async def _capture_ensure(run_id: str) -> None:
+        ensured.append(run_id)
+
+    monkeypatch.setattr(manager, "resume_run", _sync_resume_unavailable)
+    monkeypatch.setattr(manager, "_runtime_for_run", _sync_runtime_unavailable)
+    monkeypatch.setattr(manager, "ensure_run_started_async", _capture_ensure)
+
+    result = await manager.answer_user_question_async(
+        run_id="run-existing",
+        question_id="call-question-async",
+        answers=UserQuestionAnswerSubmission.model_validate(
+            {"answers": [{"selections": [{"label": "A"}]}]}
+        ),
+    )
+
+    assert result["status"] == "answered"
+    assert "run-existing" in manager._resume_requested_runs
+    assert ensured == ["run-existing"]
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_async_paths_avoid_sync_scheduler_entrypoints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_lifecycle_async.db"
+    manager = _build_manager(db_path)
+
+    def _sync_entrypoint_unavailable(*args: object, **kwargs: object) -> None:
+        _ = (args, kwargs)
+        raise AssertionError("sync scheduler entrypoint must not run")
+
+    monkeypatch.setattr(manager._scheduler, "create_run", _sync_entrypoint_unavailable)
+    monkeypatch.setattr(manager, "_create_run_local", _sync_entrypoint_unavailable)
+    monkeypatch.setattr(
+        manager._scheduler,
+        "ensure_run_started",
+        _sync_entrypoint_unavailable,
+    )
+    monkeypatch.setattr(manager._scheduler, "resume_run", _sync_entrypoint_unavailable)
+    monkeypatch.setattr(manager._scheduler, "stop_run", _sync_entrypoint_unavailable)
+
+    worker_calls: list[tuple[str, str]] = []
+
+    async def _capture_worker(
+        *,
+        run_id: str,
+        session_id: str,
+        runner: Callable[[], Awaitable[RunResult]],
+    ) -> None:
+        _ = runner
+        worker_calls.append((run_id, session_id))
+
+    monkeypatch.setattr(manager, "_worker", _capture_worker)
+
+    run_id, session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("hello"),
+        )
+    )
+    await manager.ensure_run_started_async(run_id)
+    await asyncio.sleep(0)
+
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.update(
+        run_id,
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.AWAITING_RECOVERY,
+    )
+    manager._running_run_ids.discard(run_id)
+
+    resumed_session_id = await manager.resume_run_async(run_id)
+    await manager.stop_run_async(run_id)
+
+    assert session_id == "session-1"
+    assert worker_calls == [(run_id, "session-1")]
+    assert resumed_session_id == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_create_run_async_merges_followup_into_pending_run(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_async_pending_merge.db"
+    manager = _build_manager(db_path)
+
+    run_id, session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("first"),
+            skills=("skill-a",),
+        )
+    )
+    next_run_id, next_session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("second"),
+            skills=("skill-b", "skill-a"),
+            yolo=True,
+        )
+    )
+
+    pending = manager._pending_runs[run_id]
+    persisted = RunIntentRepository(db_path).get(run_id)
+
+    assert (next_run_id, next_session_id) == (run_id, session_id)
+    assert pending.intent == "first\n\nsecond"
+    assert pending.skills == ("skill-a", "skill-b")
+    assert pending.yolo is True
+    assert persisted.intent == pending.intent
+    assert persisted.skills == pending.skills
+    assert persisted.yolo is True
+
+
+@pytest.mark.asyncio
+async def test_create_run_async_rejects_detached_and_media_followups(
+    tmp_path: Path,
+) -> None:
+    manager = _build_manager(tmp_path / "run_async_followup_rejections.db")
+
+    run_id, _ = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("first"),
+        )
+    )
+
+    with pytest.raises(RuntimeError, match=f"already has active run {run_id}"):
+        await manager.create_detached_run_async(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("detached"),
+            )
+        )
+    with pytest.raises(RuntimeError, match="does not accept follow-up input"):
+        await manager.create_run_async(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("draw"),
+                run_kind=RunKind.GENERATE_IMAGE,
+                generation_config=ImageGenerationConfig(),
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_run_async_enqueues_followup_to_active_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_async_active_followup.db"
+    manager = _build_manager(db_path)
+
+    run_id, session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("first"),
+        )
+    )
+    manager._running_run_ids.add(run_id)
+    manager._injection_manager.activate(run_id)
+    appended: list[tuple[str, str, bool, InjectionSource]] = []
+
+    def _append_followup(
+        run_id: str,
+        content: str,
+        *,
+        enqueue: bool,
+        source: InjectionSource = InjectionSource.USER,
+    ) -> bool:
+        appended.append((run_id, content, enqueue, source))
+        return True
+
+    monkeypatch.setattr(manager, "_append_followup_to_coordinator", _append_followup)
+
+    next_run_id, next_session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("follow"),
+            yolo=True,
+        )
+    )
+
+    persisted = RunIntentRepository(db_path).get(run_id)
+    assert (next_run_id, next_session_id) == (run_id, session_id)
+    assert appended == [(run_id, "follow", True, InjectionSource.USER)]
+    assert persisted.yolo is True
+
+
+@pytest.mark.asyncio
+async def test_create_run_async_queues_followup_for_recoverable_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_async_recoverable_followup.db"
+    manager = _build_manager(db_path)
+
+    run_id, session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("first"),
+        )
+    )
+    _ = manager._pending_runs.pop(run_id)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.update(
+        run_id,
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.AWAITING_RECOVERY,
+    )
+    appended: list[tuple[str, str, bool, InjectionSource]] = []
+
+    def _append_followup(
+        run_id: str,
+        content: str,
+        *,
+        enqueue: bool,
+        source: InjectionSource = InjectionSource.USER,
+    ) -> bool:
+        appended.append((run_id, content, enqueue, source))
+        return False
+
+    monkeypatch.setattr(manager, "_append_followup_to_coordinator", _append_followup)
+
+    next_run_id, next_session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("resume"),
+            yolo=True,
+        )
+    )
+
+    persisted = RunIntentRepository(db_path).get(run_id)
+    assert (next_run_id, next_session_id) == (run_id, session_id)
+    assert appended == [(run_id, "resume", False, InjectionSource.USER)]
+    assert run_id in manager._resume_requested_runs
+    assert persisted.yolo is True
+
+
+@pytest.mark.asyncio
+async def test_async_run_start_helpers_cover_missing_and_failed_startup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_async_start_helper_failures.db"
+    manager = _build_manager(db_path)
+    runtime_repo = manager._run_runtime_repo
+    assert runtime_repo is not None
+
+    assert await manager._active_recoverable_run_async("missing-session") is None
+    with pytest.raises(KeyError, match="Run missing-run not found"):
+        await manager._ensure_run_started_local_async("missing-run")
+    with pytest.raises(KeyError, match="Run missing-run not found"):
+        await manager._start_new_run_worker_async("missing-run")
+    with pytest.raises(KeyError, match="Run missing-run not found"):
+        await manager._start_resume_worker_async("missing-run")
+
+    run_id, _ = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("first"),
+        )
+    )
+
+    async def _raise_update_async(run_id: str, **changes: object) -> RunRuntimeRecord:
+        _ = (run_id, changes)
+        raise RuntimeError("startup write failed")
+
+    monkeypatch.setattr(runtime_repo, "update_async", _raise_update_async)
+    with pytest.raises(RuntimeError, match="startup write failed"):
+        await manager.ensure_run_started_async(run_id)
+
+
+@pytest.mark.asyncio
+async def test_async_resume_startup_failure_and_transition_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_async_resume_startup.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.AWAITING_RECOVERY,
+    )
+
+    async def _raise_transition(
+        *,
+        run_id: str,
+        session_id: str,
+        reason: str,
+    ) -> dict[str, JsonValue]:
+        _ = (run_id, session_id, reason)
+        raise RuntimeError("resume transition failed")
+
+    monkeypatch.setattr(manager, "_transition_run_to_resumed_async", _raise_transition)
+    with pytest.raises(RuntimeError, match="resume transition failed"):
+        await manager._start_resume_worker_async("run-existing")
+
+    manager = _build_manager(db_path)
+    payload = await manager._transition_run_to_resumed_async(
+        run_id="run-existing",
+        session_id="session-1",
+        reason="resume",
+    )
+    runtime = runtime_repo.get("run-existing")
+
+    assert payload == {"session_id": "session-1", "reason": "resume"}
+    assert runtime is not None
+    assert runtime.phase == RunRuntimePhase.AWAITING_RECOVERY
+
+
+@pytest.mark.asyncio
+async def test_async_followup_validation_helpers_cover_edge_paths(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_async_followup_helper_edges.db"
+    manager = _build_manager(db_path)
+
+    await manager._assert_auto_attach_allowed_async("run-missing", None)
+    with pytest.raises(RuntimeError, match="is stopping"):
+        await manager._assert_auto_attach_allowed_async(
+            "run-stopping",
+            RunRuntimeRecord(
+                run_id="run-stopping",
+                session_id="session-1",
+                status=RunRuntimeStatus.STOPPING,
+            ),
+        )
+    with pytest.raises(RuntimeError, match="Subagent inst-1"):
+        await manager._assert_auto_attach_allowed_async(
+            "run-paused-subagent",
+            RunRuntimeRecord(
+                run_id="run-paused-subagent",
+                session_id="session-1",
+                phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
+                active_subagent_instance_id="inst-1",
+            ),
+        )
+
+    await manager._update_run_yolo_async(
+        run_id="missing-run",
+        session_id="session-1",
+        yolo=True,
+    )
+    manager._run_intent_repo = None
+    await manager._update_run_yolo_async(
+        run_id="missing-run",
+        session_id="session-1",
+        yolo=True,
+    )
+
+    assert await manager._run_accepts_followups_async(
+        "missing-run",
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("hello"),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_stop_run_async_cancels_worker_during_startup_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_startup_stop_async.db"
+    manager = _build_manager(db_path)
+    runtime_repo = manager._run_runtime_repo
+    assert runtime_repo is not None
+
+    worker_started = asyncio.Event()
+
+    async def _capture_worker(
+        *,
+        run_id: str,
+        session_id: str,
+        runner: Callable[[], Awaitable[RunResult]],
+    ) -> None:
+        _ = (run_id, session_id, runner)
+        worker_started.set()
+
+    monkeypatch.setattr(manager, "_worker", _capture_worker)
+
+    run_id, session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("hello"),
+        )
+    )
+
+    startup_entered = asyncio.Event()
+    allow_startup = asyncio.Event()
+    original_ensure_async = runtime_repo.ensure_async
+
+    async def _blocking_ensure_async(
+        *,
+        run_id: str,
+        session_id: str,
+        root_task_id: str | None = None,
+        status: RunRuntimeStatus = RunRuntimeStatus.QUEUED,
+        phase: RunRuntimePhase = RunRuntimePhase.IDLE,
+    ) -> RunRuntimeRecord:
+        startup_entered.set()
+        await allow_startup.wait()
+        return await original_ensure_async(
+            run_id=run_id,
+            session_id=session_id,
+            root_task_id=root_task_id,
+            status=status,
+            phase=phase,
+        )
+
+    monkeypatch.setattr(runtime_repo, "ensure_async", _blocking_ensure_async)
+
+    start_task = asyncio.create_task(manager.ensure_run_started_async(run_id))
+    await asyncio.wait_for(startup_entered.wait(), timeout=5)
+
+    await manager.stop_run_async(run_id)
+    allow_startup.set()
+    await asyncio.wait_for(start_task, timeout=5)
+
+    async def _wait_for_finalized_runtime() -> RunRuntimeRecord:
+        while True:
+            runtime = await runtime_repo.get_async(run_id)
+            if (
+                runtime is not None
+                and runtime.status == RunRuntimeStatus.STOPPED
+                and run_id not in manager._pending_runs
+                and run_id not in manager._running_run_ids
+            ):
+                return runtime
+            await asyncio.sleep(0.01)
+
+    runtime = await asyncio.wait_for(_wait_for_finalized_runtime(), timeout=5)
+    await asyncio.sleep(0)
+
+    assert session_id == "session-1"
+    assert not worker_started.is_set()
+    assert run_id not in manager._pending_runs
+    assert run_id not in manager._running_run_ids
+    assert runtime.phase == RunRuntimePhase.IDLE
+    assert runtime.last_error == "stopped_by_user"
+
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    stopped_events = [
+        event
+        for event in events
+        if event["event_type"] == RunEventType.RUN_STOPPED.value
+    ]
+    assert json.loads(str(stopped_events[-1]["payload_json"])) == {
+        "reason": "stopped_by_user"
+    }
+
+
+@pytest.mark.asyncio
+async def test_bound_loop_helpers_dispatch_callbacks_to_service_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _build_manager(tmp_path / "run_bound_loop_helpers.db")
+
+    assert manager._call_in_bound_loop(lambda: "local") == "local"
+    assert await manager._call_in_bound_loop_async(lambda: "local-async") == (
+        "local-async"
+    )
+
+    service_loop = asyncio.new_event_loop()
+    ready = threading.Event()
+    callback_thread_ids: list[int] = []
+
+    def _run_service_loop() -> None:
+        asyncio.set_event_loop(service_loop)
+        ready.set()
+        service_loop.run_forever()
+
+    thread = threading.Thread(target=_run_service_loop)
+    thread.start()
+    assert ready.wait(timeout=5)
+    thread_id = thread.ident
+    assert thread_id is not None
+
+    def _capture_thread() -> str:
+        callback_thread_ids.append(threading.get_ident())
+        return "bound"
+
+    def _sync_error() -> str:
+        raise RuntimeError("sync bound failure")
+
+    def _async_error() -> str:
+        raise RuntimeError("async bound failure")
+
+    lifecycle_calls: list[str] = []
+
+    def _create_run(
+        intent: IntentInput,
+        *,
+        source: InjectionSource = InjectionSource.USER,
+    ) -> tuple[str, str]:
+        lifecycle_calls.append(f"create:{intent.intent}:{source.value}")
+        return "run-created", "session-1"
+
+    def _create_detached_run(intent: IntentInput) -> tuple[str, str]:
+        lifecycle_calls.append(f"detached:{intent.intent}")
+        return "run-detached", "session-1"
+
+    def _ensure_started(run_id: str) -> None:
+        lifecycle_calls.append(f"ensure:{run_id}")
+
+    def _inject_message(
+        run_id: str,
+        source: InjectionSource,
+        content: str,
+    ) -> tuple[str, str, str]:
+        lifecycle_calls.append(f"inject:{run_id}:{source.value}:{content}")
+        return run_id, source.value, content
+
+    def _stop_run(run_id: str) -> None:
+        lifecycle_calls.append(f"stop:{run_id}")
+
+    def _resume_run(run_id: str) -> str:
+        lifecycle_calls.append(f"resume:{run_id}")
+        return "session-1"
+
+    def _resolve_tool_approval(
+        run_id: str,
+        tool_call_id: str,
+        action: str,
+        feedback: str = "",
+    ) -> None:
+        lifecycle_calls.append(f"resolve:{run_id}:{tool_call_id}:{action}:{feedback}")
+
+    monkeypatch.setattr(manager, "create_run", _create_run)
+    monkeypatch.setattr(manager, "create_detached_run", _create_detached_run)
+    monkeypatch.setattr(manager, "ensure_run_started", _ensure_started)
+    monkeypatch.setattr(manager, "inject_message", _inject_message)
+    monkeypatch.setattr(manager, "stop_run", _stop_run)
+    monkeypatch.setattr(manager, "resume_run", _resume_run)
+    monkeypatch.setattr(manager, "resolve_tool_approval", _resolve_tool_approval)
+
+    manager._event_loop = service_loop
+    try:
+        assert manager._should_delegate_to_bound_loop() is True
+        assert manager._call_in_bound_loop(_capture_thread) == "bound"
+        assert await manager._call_in_bound_loop_async(lambda: "bound-async") == (
+            "bound-async"
+        )
+        with pytest.raises(RuntimeError, match="sync bound failure"):
+            manager._call_in_bound_loop(_sync_error)
+        with pytest.raises(RuntimeError, match="async bound failure"):
+            await manager._call_in_bound_loop_async(_async_error)
+        assert await manager.create_run_async(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("create through bound loop"),
+            ),
+            source=InjectionSource.SYSTEM,
+        ) == ("run-created", "session-1")
+        assert await manager.create_detached_run_async(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("detach through bound loop"),
+            )
+        ) == ("run-detached", "session-1")
+        await manager.ensure_run_started_async("run-created")
+        assert await manager.inject_message_async(
+            run_id="run-created",
+            source=InjectionSource.USER,
+            content="wake up",
+        ) == ("run-created", "user", "wake up")
+        await manager.stop_run_async("run-created")
+        assert await manager.resume_run_async("run-created") == "session-1"
+        await manager.resolve_tool_approval_async(
+            run_id="run-created",
+            tool_call_id="call-1",
+            action="approve",
+            feedback="ok",
+        )
+    finally:
+        manager._event_loop = None
+        service_loop.call_soon_threadsafe(service_loop.stop)
+        thread.join(timeout=5)
+        service_loop.close()
+
+    assert callback_thread_ids == [thread_id]
+    assert lifecycle_calls == [
+        "create:create through bound loop:system",
+        "detached:detach through bound loop",
+        "ensure:run-created",
+        "inject:run-created:user:wake up",
+        "stop:run-created",
+        "resume:run-created",
+        "resolve:run-created:call-1:approve:ok",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_intent_stream_starts_run_before_streaming_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _build_manager(tmp_path / "run_intent_stream.db")
+    calls: list[str] = []
+
+    def _create_run(intent: IntentInput) -> tuple[str, str]:
+        calls.append(f"create:{intent.session_id}")
+        return "run-stream", "session-1"
+
+    def _ensure_run_started(run_id: str) -> None:
+        calls.append(f"ensure:{run_id}")
+
+    async def _stream_run_events(run_id: str):
+        calls.append(f"stream:{run_id}")
+        yield RunEvent(
+            session_id="session-1",
+            run_id=run_id,
+            trace_id=run_id,
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json="{}",
+        )
+
+    monkeypatch.setattr(manager, "create_run", _create_run)
+    monkeypatch.setattr(manager, "ensure_run_started", _ensure_run_started)
+    monkeypatch.setattr(manager, "stream_run_events", _stream_run_events)
+
+    events = [
+        event
+        async for event in manager.run_intent_stream(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("hello"),
+            )
+        )
+    ]
+
+    assert calls == ["create:session-1", "ensure:run-stream", "stream:run-stream"]
+    assert [event.event_type for event in events] == [RunEventType.RUN_COMPLETED]
+
+
+@pytest.mark.asyncio
+async def test_ensure_run_started_local_async_validates_recoverable_state(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_ensure_local_async_validation.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+
+    manager._running_run_ids.add("run-running")
+    await manager._ensure_run_started_local_async("run-running")
+
+    manager._pending_runs["run-missing-session"] = IntentInput(
+        session_id="session-1",
+        input=content_parts_from_text("missing session"),
+    ).model_copy(update={"session_id": None})
+    with pytest.raises(RuntimeError, match="missing session id"):
+        await manager._ensure_run_started_local_async("run-missing-session")
+
+    manager._resume_requested_runs.add("run-missing-runtime")
+    with pytest.raises(KeyError, match="Run run-missing-runtime not found"):
+        await manager._ensure_run_started_local_async("run-missing-runtime")
+
+    runtime_repo.ensure(
+        run_id="run-invalid-status",
+        session_id="session-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    manager._resume_requested_runs.add("run-invalid-status")
+    with pytest.raises(RuntimeError, match="cannot be resumed from status running"):
+        await manager._ensure_run_started_local_async("run-invalid-status")
+
+
+@pytest.mark.asyncio
+async def test_stop_run_async_stops_pending_run_without_sync_entrypoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_stop_pending_async.db"
+    manager = _build_manager(db_path)
+
+    def _sync_stop_unavailable(run_id: str) -> None:
+        raise AssertionError(f"sync stop must not run for {run_id}")
+
+    monkeypatch.setattr(manager._scheduler, "stop_run", _sync_stop_unavailable)
+
+    run_id, session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("hello"),
+        )
+    )
+
+    await manager.stop_run_async(run_id)
+
+    assert session_id == "session-1"
+    assert run_id not in manager._pending_runs
+    runtime = RunRuntimeRepository(db_path).get(run_id)
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.STOPPED
+    assert runtime.phase == RunRuntimePhase.IDLE
+    assert runtime.last_error == "stopped_before_start"
+
+    events = EventLog(db_path).list_by_session_with_ids("session-1")
+    assert events[-1]["event_type"] == RunEventType.RUN_STOPPED.value
+    assert json.loads(str(events[-1]["payload_json"])) == {
+        "reason": "stopped_before_start"
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_tool_approval_async_publishes_for_paused_run(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_resolve_approval_async.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-existing",
+        status=RunRuntimeStatus.PAUSED,
+        phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
+    )
+    ApprovalTicketRepository(db_path).upsert_requested(
+        tool_call_id="call-async-1",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="orch_create_tasks",
+        args_preview="{}",
+    )
+    manager._tool_approval_manager.open_approval(
+        run_id="run-existing",
+        tool_call_id="call-async-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="orch_create_tasks",
+        args_preview="{}",
+    )
+
+    await manager.resolve_tool_approval_async(
+        run_id="run-existing",
+        tool_call_id="call-async-1",
+        action="approve",
+    )
+
+    ticket = await ApprovalTicketRepository(db_path).get_async("call-async-1")
+    assert ticket is not None
+    assert ticket.status == ApprovalTicketStatus.APPROVED
+    assert await manager.list_open_tool_approvals_async("run-existing") == []
+
+    events = await EventLog(db_path).list_by_session_with_ids_async("session-1")
+    assert events[-1]["event_type"] == RunEventType.TOOL_APPROVAL_RESOLVED.value
+    payload = json.loads(str(events[-1]["payload_json"]))
+    assert payload["tool_call_id"] == "call-async-1"
+    assert payload["action"] == "approve"
+
+
+@pytest.mark.asyncio
+async def test_resolve_tool_approval_async_rejects_stopped_and_stopping_runs(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_resolve_approval_async_rejected.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-stopped",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.STOPPED,
+        phase=RunRuntimePhase.IDLE,
+    )
+    runtime_repo.ensure(
+        run_id="run-stopping",
+        session_id="session-1",
+        root_task_id="task-root-2",
+        status=RunRuntimeStatus.STOPPING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+
+    with pytest.raises(RuntimeError, match="Resume the run"):
+        await manager.resolve_tool_approval_async(
+            run_id="run-stopped",
+            tool_call_id="call-missing",
+            action="approve",
+        )
+    with pytest.raises(RuntimeError, match="is stopping"):
+        await manager.resolve_tool_approval_async(
+            run_id="run-stopping",
+            tool_call_id="call-missing",
+            action="approve",
+        )
+
+
+@pytest.mark.asyncio
+async def test_answer_user_question_async_rejects_missing_and_stopping_runs(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_answer_user_question_async_rejected.db"
+    manager = _build_manager(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-stopping",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.STOPPING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    submission = UserQuestionAnswerSubmission.model_validate(
+        {"answers": [{"selections": [{"label": "Only"}]}]}
+    )
+
+    with pytest.raises(KeyError, match="Run run-missing not found"):
+        await manager.answer_user_question_async(
+            run_id="run-missing",
+            question_id="call-question-missing",
+            answers=submission,
+        )
+    with pytest.raises(RuntimeError, match="is stopping"):
+        await manager.answer_user_question_async(
+            run_id="run-stopping",
+            question_id="call-question-missing",
+            answers=submission,
+        )
+
+
+@pytest.mark.asyncio
+async def test_resume_run_async_rejects_missing_and_running_runs(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_resume_async_rejected.db"
+    manager = _build_manager(db_path)
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-running",
+        session_id="session-1",
+        root_task_id="task-root-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+
+    with pytest.raises(KeyError, match="Run run-missing not found"):
+        await manager.resume_run_async("run-missing")
+    with pytest.raises(RuntimeError, match="already running"):
+        await manager.resume_run_async("run-running")
+    manager._running_run_ids.add("run-running-local")
+    with pytest.raises(RuntimeError, match="already running"):
+        await manager.resume_run_async("run-running-local")
 
 
 def test_answer_user_question_skips_resume_when_session_has_other_pending_question(

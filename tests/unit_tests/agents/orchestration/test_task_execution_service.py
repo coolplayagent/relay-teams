@@ -2,60 +2,66 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
-
-import pytest
-from pydantic_ai.messages import ModelRequest, UserPromptPart
 from typing import cast
 
+import pytest
+import pytest_asyncio
+from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
+from relay_teams.agents.execution.system_prompts import RuntimePromptSections
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agents.instances.models import create_subagent_instance
+from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.events import EventType
+from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.hooks import HookService
 from relay_teams.media import (
     MediaAssetRepository,
     MediaAssetService,
     content_parts_from_text,
 )
-from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.agents.instances.models import create_subagent_instance
-from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
-from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
-from relay_teams.agents.execution.system_prompts import RuntimePromptSections
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.reminders import ReminderStateRepository, SystemReminderService
 from relay_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
 from relay_teams.roles.memory_repository import RoleMemoryRepository
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
-from relay_teams.sessions.runs.run_control_manager import RunControlManager
-from relay_teams.sessions.runs.event_stream import RunEventHub
-from relay_teams.sessions.runs.injection_queue import RunInjectionManager
-from relay_teams.sessions.runs.system_injection import SystemInjectionSink
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
-from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from relay_teams.sessions.runs.event_log import EventLog
-from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
-from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_models import (
     IntentInput,
     RuntimePromptConversationContext,
     RunThinkingConfig,
 )
-from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
-from relay_teams.sessions.runs.todo_models import TodoItem, TodoStatus
-from relay_teams.sessions.runs.todo_repository import TodoRepository
-from relay_teams.sessions.runs.todo_service import TodoService
+from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
+from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.recoverable_pause import (
     RecoverableRunPauseError,
     RecoverableRunPausePayload,
 )
+from relay_teams.sessions.runs.run_control_manager import RunControlManager
+from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
-from relay_teams.persistence.shared_state_repo import SharedStateRepository
-from relay_teams.reminders import ReminderStateRepository, SystemReminderService
-from relay_teams.agents.tasks.task_repository import TaskRepository
-from relay_teams.skills.skill_registry import SkillRegistry
+from relay_teams.sessions.runs.system_injection import SystemInjectionSink
+from relay_teams.sessions.runs.todo_models import TodoItem, TodoStatus
+from relay_teams.sessions.runs.todo_repository import TodoRepository
+from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.skills.skill_routing_models import (
     SkillPromptResult,
@@ -63,15 +69,25 @@ from relay_teams.skills.skill_routing_models import (
     SkillRoutingMode,
     SkillRoutingResult,
 )
+from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry.defaults import build_default_registry
+from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
 )
-from relay_teams.agents.tasks.enums import TaskStatus
-from relay_teams.agents.tasks.events import EventType
-from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
-from relay_teams.hooks import HookService
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _close_async_sqlite_repositories_after_test() -> AsyncIterator[None]:
+    yield
+    repositories = tuple(
+        repository
+        for repository in gc.get_objects()
+        if isinstance(repository, SharedSqliteRepository)
+    )
+    for repository in repositories:
+        await repository.close_async()
 
 
 class _CapturingProvider:

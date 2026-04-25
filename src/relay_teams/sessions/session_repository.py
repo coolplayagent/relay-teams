@@ -151,6 +151,30 @@ class SessionRepository(SharedSqliteRepository):
         )
         return record
 
+    async def create_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        metadata: dict[str, str] | None = None,
+        project_kind: ProjectKind = ProjectKind.WORKSPACE,
+        project_id: str | None = None,
+        session_mode: SessionMode = SessionMode.NORMAL,
+        normal_root_role_id: str | None = None,
+        orchestration_preset_id: str | None = None,
+    ) -> SessionRecord:
+        return await self._call_sync_async(
+            self.create,
+            session_id=session_id,
+            workspace_id=workspace_id,
+            metadata=metadata,
+            project_kind=project_kind,
+            project_id=project_id,
+            session_mode=session_mode,
+            normal_root_role_id=normal_root_role_id,
+            orchestration_preset_id=orchestration_preset_id,
+        )
+
     def update_topology(
         self,
         session_id: str,
@@ -185,6 +209,22 @@ class SessionRepository(SharedSqliteRepository):
                 raise RuntimeError("Session mode can no longer be changed")
             raise KeyError(f"Unknown session_id: {session_id}")
 
+    async def update_topology_async(
+        self,
+        session_id: str,
+        *,
+        session_mode: SessionMode,
+        normal_root_role_id: str | None,
+        orchestration_preset_id: str | None,
+    ) -> None:
+        return await self._call_sync_async(
+            self.update_topology,
+            session_id,
+            session_mode=session_mode,
+            normal_root_role_id=normal_root_role_id,
+            orchestration_preset_id=orchestration_preset_id,
+        )
+
     def update_metadata(self, session_id: str, metadata: dict[str, str]) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         rowcount = self._run_write(
@@ -202,6 +242,11 @@ class SessionRepository(SharedSqliteRepository):
         )
         if rowcount == 0:
             raise KeyError(f"Unknown session_id: {session_id}")
+
+    async def update_metadata_async(
+        self, session_id: str, metadata: dict[str, str]
+    ) -> None:
+        return await self._call_sync_async(self.update_metadata, session_id, metadata)
 
     def update_workspace(
         self,
@@ -227,6 +272,16 @@ class SessionRepository(SharedSqliteRepository):
         if rowcount == 0:
             raise KeyError(f"Unknown session_id: {session_id}")
 
+    async def update_workspace_async(
+        self, session_id: str, *, workspace_id: str, project_id: str
+    ) -> None:
+        return await self._call_sync_async(
+            self.update_workspace,
+            session_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+        )
+
     def mark_started(self, session_id: str) -> SessionRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
         rowcount = self._run_write(
@@ -245,6 +300,9 @@ class SessionRepository(SharedSqliteRepository):
         if rowcount == 0:
             raise KeyError(f"Unknown session_id: {session_id}")
         return self.get(session_id)
+
+    async def mark_started_async(self, session_id: str) -> SessionRecord:
+        return await self._call_sync_async(self.mark_started, session_id)
 
     def reconcile_orchestration_presets(
         self,
@@ -298,6 +356,15 @@ class SessionRepository(SharedSqliteRepository):
                     orchestration_preset_id=next_preset_id,
                 )
 
+    async def reconcile_orchestration_presets_async(
+        self, *, valid_preset_ids: tuple[str, ...], default_preset_id: str | None
+    ) -> None:
+        return await self._call_sync_async(
+            self.reconcile_orchestration_presets,
+            valid_preset_ids=valid_preset_ids,
+            default_preset_id=default_preset_id,
+        )
+
     def get(self, session_id: str) -> SessionRecord:
         row = self._run_read(
             lambda: self._conn.execute(
@@ -311,6 +378,9 @@ class SessionRepository(SharedSqliteRepository):
         except (ValidationError, ValueError) as exc:
             _log_invalid_session_row(row=row, error=exc)
             raise KeyError(f"Unknown session_id: {session_id}") from exc
+
+    async def get_async(self, session_id: str) -> SessionRecord:
+        return await self._call_sync_async(self.get, session_id)
 
     def list_all(self) -> tuple[SessionRecord, ...]:
         rows = self._run_read(
@@ -326,6 +396,9 @@ class SessionRepository(SharedSqliteRepository):
                 _log_invalid_session_row(row=row, error=exc)
         return tuple(records)
 
+    async def list_all_async(self) -> tuple[SessionRecord, ...]:
+        return await self._call_sync_async(self.list_all)
+
     def delete(self, session_id: str) -> None:
         self._run_write(
             operation_name="delete",
@@ -333,6 +406,9 @@ class SessionRepository(SharedSqliteRepository):
                 "DELETE FROM sessions WHERE session_id=?", (session_id,)
             ),
         )
+
+    async def delete_async(self, session_id: str) -> None:
+        return await self._call_sync_async(self.delete, session_id)
 
     def _to_record(self, row: sqlite3.Row) -> SessionRecord:
         session_id = require_persisted_identifier(

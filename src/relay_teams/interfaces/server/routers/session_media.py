@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
+from relay_teams.interfaces.server.async_call import call_maybe_async
 from relay_teams.interfaces.server.deps import (
     get_media_asset_service,
     get_session_service,
@@ -30,10 +30,10 @@ async def list_session_media(
     media_asset_service: Annotated[MediaAssetService, Depends(get_media_asset_service)],
 ) -> list[MediaRefContentPart]:
     try:
-        await asyncio.to_thread(session_service.get_session, session_id)
+        await call_maybe_async(session_service.get_session, session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
-    records = await asyncio.to_thread(
+    records = await call_maybe_async(
         media_asset_service.list_session_assets,
         session_id,
     )
@@ -49,7 +49,7 @@ async def upload_session_media(
     modality: Annotated[MediaModality | None, Form()] = None,
 ) -> MediaRefContentPart:
     try:
-        session = await asyncio.to_thread(session_service.get_session, session_id)
+        session = await call_maybe_async(session_service.get_session, session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
@@ -73,7 +73,7 @@ async def upload_session_media(
     if not content_type:
         content_type = _default_mime_type(resolved_modality)
 
-    record = await asyncio.to_thread(
+    record = await call_maybe_async(
         media_asset_service.store_bytes,
         session_id=session_id,
         workspace_id=session.workspace_id,
@@ -95,8 +95,8 @@ async def get_session_media(
     media_asset_service: Annotated[MediaAssetService, Depends(get_media_asset_service)],
 ) -> MediaRefContentPart:
     try:
-        await asyncio.to_thread(session_service.get_session, session_id)
-        record = await asyncio.to_thread(media_asset_service.get_asset, asset_id)
+        await call_maybe_async(session_service.get_session, session_id)
+        record = await call_maybe_async(media_asset_service.get_asset, asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if record.session_id != session_id:
@@ -112,8 +112,8 @@ async def get_session_media_file(
     media_asset_service: Annotated[MediaAssetService, Depends(get_media_asset_service)],
 ) -> FileResponse | RedirectResponse:
     try:
-        await asyncio.to_thread(session_service.get_session, session_id)
-        record = await asyncio.to_thread(media_asset_service.get_asset, asset_id)
+        await call_maybe_async(session_service.get_session, session_id)
+        record = await call_maybe_async(media_asset_service.get_asset, asset_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if record.session_id != session_id:
@@ -121,7 +121,7 @@ async def get_session_media_file(
     if record.external_url is not None and record.external_url.strip():
         return RedirectResponse(url=record.external_url.strip())
     try:
-        file_path, media_type = await asyncio.to_thread(
+        file_path, media_type = await call_maybe_async(
             media_asset_service.get_asset_file,
             session_id=session_id,
             asset_id=asset_id,

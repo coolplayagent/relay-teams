@@ -36,6 +36,20 @@ class RuntimeRoleResolver:
                 return temp.role.to_role_definition()
         return self._role_registry.get(role_id)
 
+    async def get_effective_role_async(
+        self, *, run_id: str | None, role_id: str
+    ) -> RoleDefinition:
+        if run_id is not None:
+            try:
+                temp = await self._temporary_role_repository.get_async(
+                    run_id=run_id, role_id=role_id
+                )
+            except KeyError:
+                pass
+            else:
+                return temp.role.to_role_definition()
+        return self._role_registry.get(role_id)
+
     def get_temporary_role(self, *, run_id: str | None, role_id: str) -> RoleDefinition:
         if run_id is None:
             raise KeyError(f"Unknown temporary role_id: {role_id}")
@@ -49,6 +63,20 @@ class RuntimeRoleResolver:
         temp_roles = [
             record.role.to_role_definition()
             for record in self._temporary_role_repository.list_by_run(run_id)
+        ]
+        return tuple(static_roles + temp_roles)
+
+    async def list_effective_roles_async(
+        self, *, run_id: str | None
+    ) -> tuple[RoleDefinition, ...]:
+        static_roles = list(self._role_registry.list_roles())
+        if run_id is None:
+            return tuple(static_roles)
+        temp_roles = [
+            record.role.to_role_definition()
+            for record in await self._temporary_role_repository.list_by_run_async(
+                run_id
+            )
         ]
         return tuple(static_roles + temp_roles)
 

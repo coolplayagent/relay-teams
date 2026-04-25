@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from relay_teams.interfaces.server.async_call import call_maybe_async
 from relay_teams.interfaces.server.deps import get_metrics_service
 from relay_teams.metrics import MetricScope, MetricsService
 
@@ -19,7 +19,7 @@ async def get_observability_overview(
 ) -> dict[str, object]:
     if scope != MetricScope.GLOBAL and not scope_id.strip():
         raise HTTPException(status_code=422, detail="scope_id is required")
-    overview = await asyncio.to_thread(
+    overview = await call_maybe_async(
         service.get_overview,
         scope=scope,
         scope_id=scope_id,
@@ -37,7 +37,7 @@ async def get_observability_breakdowns(
 ) -> dict[str, object]:
     if scope != MetricScope.GLOBAL and not scope_id.strip():
         raise HTTPException(status_code=422, detail="scope_id is required")
-    breakdown = await asyncio.to_thread(
+    breakdown = await call_maybe_async(
         service.get_breakdowns,
         scope=scope,
         scope_id=scope_id,

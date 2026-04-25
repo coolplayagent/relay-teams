@@ -6,12 +6,12 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.validation import (
     parse_persisted_datetime_or_none,
     require_persisted_identifier,
@@ -32,12 +32,9 @@ from relay_teams.workspace.workspace_models import (
 LOGGER = get_logger(__name__)
 
 
-class WorkspaceRepository:
+class WorkspaceRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -179,6 +176,24 @@ class WorkspaceRepository:
         )
         return record
 
+    async def create_async(
+        self,
+        *,
+        workspace_id: str,
+        mounts: tuple[WorkspaceMountRecord, ...] | None = None,
+        default_mount_name: str = "default",
+        root_path: Path | None = None,
+        profile: WorkspaceProfile | None = None,
+    ) -> WorkspaceRecord:
+        return await self._call_sync_async(
+            self.create,
+            workspace_id=workspace_id,
+            mounts=mounts,
+            default_mount_name=default_mount_name,
+            root_path=root_path,
+            profile=profile,
+        )
+
     def get(self, workspace_id: str) -> WorkspaceRecord:
         with self._lock:
             row = self._conn.execute(
@@ -206,6 +221,9 @@ class WorkspaceRepository:
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
             _log_invalid_workspace_row(row=row, error=exc)
             raise KeyError(f"Unknown workspace_id: {workspace_id}") from exc
+
+    async def get_async(self, workspace_id: str) -> WorkspaceRecord:
+        return await self._call_sync_async(self.get, workspace_id)
 
     def update(
         self,
@@ -268,6 +286,20 @@ class WorkspaceRepository:
         )
         return record
 
+    async def update_async(
+        self,
+        *,
+        workspace_id: str,
+        mounts: tuple[WorkspaceMountRecord, ...],
+        default_mount_name: str,
+    ) -> WorkspaceRecord:
+        return await self._call_sync_async(
+            self.update,
+            workspace_id=workspace_id,
+            mounts=mounts,
+            default_mount_name=default_mount_name,
+        )
+
     def list_all(self) -> tuple[WorkspaceRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
@@ -304,6 +336,9 @@ class WorkspaceRepository:
                 _log_invalid_workspace_row(row=row, error=exc)
         return tuple(records)
 
+    async def list_all_async(self) -> tuple[WorkspaceRecord, ...]:
+        return await self._call_sync_async(self.list_all)
+
     def delete(self, workspace_id: str) -> None:
         def operation() -> None:
             self._conn.execute(
@@ -324,6 +359,9 @@ class WorkspaceRepository:
             operation_name="delete",
         )
 
+    async def delete_async(self, workspace_id: str) -> None:
+        return await self._call_sync_async(self.delete, workspace_id)
+
     def exists(self, workspace_id: str) -> bool:
         with self._lock:
             row = self._conn.execute(
@@ -331,6 +369,9 @@ class WorkspaceRepository:
                 (workspace_id,),
             ).fetchone()
         return row is not None
+
+    async def exists_async(self, workspace_id: str) -> bool:
+        return await self._call_sync_async(self.exists, workspace_id)
 
     def _insert_mount_row(
         self,

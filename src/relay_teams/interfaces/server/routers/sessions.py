@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, field_validator
-from starlette.concurrency import run_in_threadpool
 
+from relay_teams.interfaces.server.async_call import call_maybe_async
 from relay_teams.interfaces.server.deps import get_session_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.interfaces.server.write_models import DeleteRequest
@@ -64,7 +64,7 @@ async def create_session(
                 ),
             )
 
-        return await run_in_threadpool(_create_session)
+        return await call_maybe_async(_create_session)
     except (SystemRolesUnavailableError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -79,7 +79,7 @@ async def list_sessions(
     def _list_sessions() -> tuple[SessionRecord, ...]:
         return service.list_sessions()
 
-    records = await run_in_threadpool(_list_sessions)
+    records = await call_maybe_async(_list_sessions)
     return list(records)
 
 
@@ -89,7 +89,7 @@ async def get_session(
     service: SessionService = Depends(get_session_service),
 ) -> SessionRecord:
     try:
-        return await run_in_threadpool(service.get_session, session_id)
+        return await call_maybe_async(service.get_session, session_id)
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
 
@@ -101,7 +101,7 @@ async def update_session(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
     try:
-        await run_in_threadpool(service.update_session, session_id, req)
+        await call_maybe_async(service.update_session, session_id, req)
         return {"status": "ok"}
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
@@ -125,7 +125,7 @@ async def update_session_topology(
                 orchestration_preset_id=req.orchestration_preset_id,
             )
 
-        return await run_in_threadpool(_update_session_topology)
+        return await call_maybe_async(_update_session_topology)
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
     except SystemRolesUnavailableError as exc:
@@ -154,7 +154,7 @@ async def delete_session(
                 cascade=req.cascade if req is not None else False,
             )
 
-        await run_in_threadpool(_delete_session)
+        await call_maybe_async(_delete_session)
         return {"status": "ok"}
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
@@ -178,7 +178,7 @@ async def get_session_rounds(
             timeline=timeline,
         )
 
-    return await run_in_threadpool(_get_session_rounds)
+    return await call_maybe_async(_get_session_rounds)
 
 
 @router.get("/{session_id}/recovery")
@@ -187,7 +187,7 @@ async def get_session_recovery(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return await run_in_threadpool(service.get_recovery_snapshot, session_id)
+        return await call_maybe_async(service.get_recovery_snapshot, session_id)
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
 
@@ -199,7 +199,7 @@ async def get_round(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return await run_in_threadpool(service.get_round, session_id, run_id)
+        return await call_maybe_async(service.get_round, session_id, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -210,7 +210,7 @@ async def list_session_agents(
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     try:
-        agents = await run_in_threadpool(service.list_agents_in_session, session_id)
+        agents = await call_maybe_async(service.list_agents_in_session, session_id)
         return list(agents)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
@@ -222,7 +222,7 @@ async def list_session_subagents(
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     try:
-        subagents = await run_in_threadpool(
+        subagents = await call_maybe_async(
             service.list_normal_mode_subagents,
             session_id,
         )
@@ -238,7 +238,7 @@ async def delete_session_subagent(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
     try:
-        await run_in_threadpool(
+        await call_maybe_async(
             service.delete_normal_mode_subagent,
             session_id,
             instance_id,
@@ -257,7 +257,7 @@ async def get_agent_reflection(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return await run_in_threadpool(
+        return await call_maybe_async(
             service.get_agent_reflection,
             session_id,
             instance_id,
@@ -296,7 +296,7 @@ async def update_agent_reflection(
                 summary=req.summary,
             )
 
-        return await run_in_threadpool(_update_agent_reflection)
+        return await call_maybe_async(_update_agent_reflection)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Agent not found") from exc
     except RuntimeError as exc:
@@ -310,7 +310,7 @@ async def delete_agent_reflection(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return await run_in_threadpool(
+        return await call_maybe_async(
             service.delete_agent_reflection,
             session_id,
             instance_id,
@@ -326,7 +326,7 @@ async def get_session_events(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await run_in_threadpool(service.get_global_events, session_id)
+    return await call_maybe_async(service.get_global_events, session_id)
 
 
 @router.get("/{session_id}/messages")
@@ -334,7 +334,7 @@ async def get_session_messages(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await run_in_threadpool(service.get_session_messages, session_id)
+    return await call_maybe_async(service.get_session_messages, session_id)
 
 
 @router.get("/{session_id}/agents/{instance_id}/messages")
@@ -343,7 +343,7 @@ async def get_agent_messages(
     instance_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await run_in_threadpool(
+    return await call_maybe_async(
         service.get_agent_messages,
         session_id,
         instance_id,
@@ -355,7 +355,7 @@ async def get_session_tasks(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await run_in_threadpool(service.get_session_tasks, session_id)
+    return await call_maybe_async(service.get_session_tasks, session_id)
 
 
 @router.get("/{session_id}/token-usage")
@@ -363,7 +363,7 @@ async def get_session_token_usage(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
-    summary = await run_in_threadpool(service.get_token_usage_by_session, session_id)
+    summary = await call_maybe_async(service.get_token_usage_by_session, session_id)
     return {
         "session_id": summary.session_id,
         "total_input_tokens": summary.total_input_tokens,
@@ -396,7 +396,7 @@ async def get_run_token_usage(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     _ = session_id
-    usage = await run_in_threadpool(service.get_token_usage_by_run, run_id)
+    usage = await call_maybe_async(service.get_token_usage_by_run, run_id)
     return {
         "run_id": usage.run_id,
         "total_input_tokens": usage.total_input_tokens,

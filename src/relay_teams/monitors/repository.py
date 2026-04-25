@@ -147,6 +147,11 @@ class MonitorRepository(SharedSqliteRepository):
         )
         return record
 
+    async def create_subscription_async(
+        self, record: MonitorSubscriptionRecord
+    ) -> MonitorSubscriptionRecord:
+        return await self._call_sync_async(self.create_subscription, record)
+
     def update_subscription(
         self,
         record: MonitorSubscriptionRecord,
@@ -198,6 +203,11 @@ class MonitorRepository(SharedSqliteRepository):
         )
         return record
 
+    async def update_subscription_async(
+        self, record: MonitorSubscriptionRecord
+    ) -> MonitorSubscriptionRecord:
+        return await self._call_sync_async(self.update_subscription, record)
+
     def get_subscription(self, monitor_id: str) -> MonitorSubscriptionRecord:
         row = self._run_read(
             lambda: self._conn.execute(
@@ -212,6 +222,11 @@ class MonitorRepository(SharedSqliteRepository):
             raise KeyError(f"Unknown monitor: {monitor_id}")
         return _subscription_from_row(row)
 
+    async def get_subscription_async(
+        self, monitor_id: str
+    ) -> MonitorSubscriptionRecord:
+        return await self._call_sync_async(self.get_subscription, monitor_id)
+
     def list_for_run(self, run_id: str) -> tuple[MonitorSubscriptionRecord, ...]:
         rows = self._run_read(
             lambda: self._conn.execute(
@@ -224,6 +239,11 @@ class MonitorRepository(SharedSqliteRepository):
             ).fetchall()
         )
         return tuple(_subscription_from_row(row) for row in rows)
+
+    async def list_for_run_async(
+        self, run_id: str
+    ) -> tuple[MonitorSubscriptionRecord, ...]:
+        return await self._call_sync_async(self.list_for_run, run_id)
 
     def delete_by_run(self, run_id: str) -> None:
         self._run_write(
@@ -240,6 +260,9 @@ class MonitorRepository(SharedSqliteRepository):
             ),
         )
 
+    async def delete_by_run_async(self, run_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_run, run_id)
+
     def delete_by_session(self, session_id: str) -> None:
         self._run_write(
             operation_name="delete_by_session",
@@ -254,6 +277,9 @@ class MonitorRepository(SharedSqliteRepository):
                 ),
             ),
         )
+
+    async def delete_by_session_async(self, session_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_session, session_id)
 
     def list_active_for_source(
         self,
@@ -276,6 +302,13 @@ class MonitorRepository(SharedSqliteRepository):
             ).fetchall()
         )
         return tuple(_subscription_from_row(row) for row in rows)
+
+    async def list_active_for_source_async(
+        self, *, source_kind: str, source_key: str
+    ) -> tuple[MonitorSubscriptionRecord, ...]:
+        return await self._call_sync_async(
+            self.list_active_for_source, source_kind=source_kind, source_key=source_key
+        )
 
     def create_trigger(self, record: MonitorTriggerRecord) -> MonitorTriggerRecord:
         self._run_write(
@@ -319,6 +352,11 @@ class MonitorRepository(SharedSqliteRepository):
             ),
         )
         return record
+
+    async def create_trigger_async(
+        self, record: MonitorTriggerRecord
+    ) -> MonitorTriggerRecord:
+        return await self._call_sync_async(self.create_trigger, record)
 
     def record_matching_trigger(
         self,
@@ -465,6 +503,13 @@ class MonitorRepository(SharedSqliteRepository):
             operation=operation,
         )
 
+    async def record_matching_trigger_async(
+        self, *, monitor_id: str, envelope: MonitorEventEnvelope
+    ) -> tuple[MonitorSubscriptionRecord, MonitorTriggerRecord] | None:
+        return await self._call_sync_async(
+            self.record_matching_trigger, monitor_id=monitor_id, envelope=envelope
+        )
+
     def has_trigger_dedupe_key(self, *, monitor_id: str, dedupe_key: str) -> bool:
         row = self._run_read(
             lambda: self._conn.execute(
@@ -478,6 +523,13 @@ class MonitorRepository(SharedSqliteRepository):
             ).fetchone()
         )
         return row is not None
+
+    async def has_trigger_dedupe_key_async(
+        self, *, monitor_id: str, dedupe_key: str
+    ) -> bool:
+        return await self._call_sync_async(
+            self.has_trigger_dedupe_key, monitor_id=monitor_id, dedupe_key=dedupe_key
+        )
 
     def list_triggers_for_monitor(
         self, monitor_id: str
@@ -493,6 +545,11 @@ class MonitorRepository(SharedSqliteRepository):
             ).fetchall()
         )
         return tuple(_trigger_from_row(row) for row in rows)
+
+    async def list_triggers_for_monitor_async(
+        self, monitor_id: str
+    ) -> tuple[MonitorTriggerRecord, ...]:
+        return await self._call_sync_async(self.list_triggers_for_monitor, monitor_id)
 
 
 def _subscription_from_row(row: sqlite3.Row) -> MonitorSubscriptionRecord:

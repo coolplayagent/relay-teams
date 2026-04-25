@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from relay_teams.interfaces.server.async_call import call_maybe_async
 from relay_teams.gateway.wechat.models import (
     WeChatAccountRecord,
     WeChatAccountUpdateInput,
@@ -35,7 +35,7 @@ router = APIRouter(prefix="/gateway", tags=["Gateway"])
 async def list_wechat_accounts(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> list[WeChatAccountRecord]:
-    accounts = await asyncio.to_thread(service.list_accounts)
+    accounts = await call_maybe_async(service.list_accounts)
     return list(accounts)
 
 
@@ -43,7 +43,7 @@ async def list_wechat_accounts(
 async def list_xiaoluban_accounts(
     service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
 ) -> list[XiaolubanAccountRecord]:
-    accounts = await asyncio.to_thread(service.list_accounts)
+    accounts = await call_maybe_async(service.list_accounts)
     return list(accounts)
 
 
@@ -53,7 +53,7 @@ async def create_xiaoluban_account(
     service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
 ) -> XiaolubanAccountRecord:
     try:
-        return await asyncio.to_thread(service.create_account, req)
+        return await call_maybe_async(service.create_account, req)
     except ValueError as exc:
         raise http_exception_for(exc, mappings=((ValueError, 422),)) from exc
 
@@ -65,7 +65,7 @@ async def update_xiaoluban_account(
     service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
 ) -> XiaolubanAccountRecord:
     try:
-        return await asyncio.to_thread(service.update_account, account_id, req)
+        return await call_maybe_async(service.update_account, account_id, req)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -82,7 +82,7 @@ async def enable_xiaoluban_account(
     service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
 ) -> XiaolubanAccountRecord:
     try:
-        return await asyncio.to_thread(service.set_account_enabled, account_id, True)
+        return await call_maybe_async(service.set_account_enabled, account_id, True)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -99,7 +99,7 @@ async def disable_xiaoluban_account(
     service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
 ) -> XiaolubanAccountRecord:
     try:
-        return await asyncio.to_thread(service.set_account_enabled, account_id, False)
+        return await call_maybe_async(service.set_account_enabled, account_id, False)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -114,7 +114,7 @@ async def delete_xiaoluban_account(
     req: DeleteRequest | None = Body(default=None),
 ) -> dict[str, str]:
     try:
-        await asyncio.to_thread(
+        await call_maybe_async(
             service.delete_account,
             account_id,
             force=req.force if req is not None else False,
@@ -132,7 +132,7 @@ async def start_wechat_login(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatLoginStartResponse:
     try:
-        return await asyncio.to_thread(service.start_login, req)
+        return await call_maybe_async(service.start_login, req)
     except RuntimeError as exc:
         raise http_exception_for(exc, mappings=((RuntimeError, 400),)) from exc
 
@@ -143,7 +143,7 @@ async def wait_wechat_login(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatLoginWaitResponse:
     try:
-        return await asyncio.to_thread(service.wait_login, req)
+        return await call_maybe_async(service.wait_login, req)
     except (KeyError, RuntimeError) as exc:
         raise http_exception_for(
             exc,
@@ -158,7 +158,7 @@ async def update_wechat_account(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
     try:
-        return await asyncio.to_thread(service.update_account, account_id, req)
+        return await call_maybe_async(service.update_account, account_id, req)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -172,7 +172,7 @@ async def enable_wechat_account(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
     try:
-        return await asyncio.to_thread(service.set_account_enabled, account_id, True)
+        return await call_maybe_async(service.set_account_enabled, account_id, True)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -188,7 +188,7 @@ async def disable_wechat_account(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
     try:
-        return await asyncio.to_thread(service.set_account_enabled, account_id, False)
+        return await call_maybe_async(service.set_account_enabled, account_id, False)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -203,7 +203,7 @@ async def delete_wechat_account(
     req: DeleteRequest | None = Body(default=None),
 ) -> dict[str, str]:
     try:
-        await asyncio.to_thread(
+        await call_maybe_async(
             service.delete_account,
             account_id,
             force=req.force if req is not None else False,
@@ -219,5 +219,5 @@ async def delete_wechat_account(
 async def reload_wechat_gateway(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> dict[str, str]:
-    await asyncio.to_thread(service.reload)
+    await call_maybe_async(service.reload)
     return {"status": "ok"}

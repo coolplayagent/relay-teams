@@ -7,12 +7,12 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.sessions.session_history_marker_models import (
     SessionHistoryMarkerRecord,
     SessionHistoryMarkerType,
@@ -25,12 +25,9 @@ from relay_teams.validation import (
 LOGGER = get_logger(__name__)
 
 
-class SessionHistoryMarkerRepository:
+class SessionHistoryMarkerRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -106,11 +103,30 @@ class SessionHistoryMarkerRepository:
         )
         return record
 
+    async def create_async(
+        self,
+        *,
+        session_id: str,
+        marker_type: SessionHistoryMarkerType,
+        metadata: dict[str, str] | None = None,
+    ) -> SessionHistoryMarkerRecord:
+        return await self._call_sync_async(
+            self.create,
+            session_id=session_id,
+            marker_type=marker_type,
+            metadata=metadata,
+        )
+
     def create_clear_marker(self, session_id: str) -> SessionHistoryMarkerRecord:
         return self.create(
             session_id=session_id,
             marker_type=SessionHistoryMarkerType.CLEAR,
         )
+
+    async def create_clear_marker_async(
+        self, session_id: str
+    ) -> SessionHistoryMarkerRecord:
+        return await self._call_sync_async(self.create_clear_marker, session_id)
 
     def list_by_session(
         self,
@@ -129,6 +145,11 @@ class SessionHistoryMarkerRepository:
         return tuple(
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
+
+    async def list_by_session_async(
+        self, session_id: str
+    ) -> tuple[SessionHistoryMarkerRecord, ...]:
+        return await self._call_sync_async(self.list_by_session, session_id)
 
     def get_latest(
         self,
@@ -156,6 +177,13 @@ class SessionHistoryMarkerRepository:
                 return record
         return None
 
+    async def get_latest_async(
+        self, session_id: str, *, marker_type: SessionHistoryMarkerType | None = None
+    ) -> SessionHistoryMarkerRecord | None:
+        return await self._call_sync_async(
+            self.get_latest, session_id, marker_type=marker_type
+        )
+
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -168,6 +196,9 @@ class SessionHistoryMarkerRepository:
             repository_name="SessionHistoryMarkerRepository",
             operation_name="delete_by_session",
         )
+
+    async def delete_by_session_async(self, session_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_session, session_id)
 
     def delete_by_conversation(self, session_id: str, conversation_id: str) -> None:
         def operation() -> None:
@@ -203,6 +234,13 @@ class SessionHistoryMarkerRepository:
             lock=self._lock,
             repository_name="SessionHistoryMarkerRepository",
             operation_name="delete_by_conversation",
+        )
+
+    async def delete_by_conversation_async(
+        self, session_id: str, conversation_id: str
+    ) -> None:
+        return await self._call_sync_async(
+            self.delete_by_conversation, session_id, conversation_id
         )
 
     @staticmethod

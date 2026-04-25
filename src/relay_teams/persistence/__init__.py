@@ -20,6 +20,8 @@ from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutat
 from relay_teams.persistence.sqlite_repository import (
     AsyncSharedSqliteRepository,
     SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
 )
 from relay_teams.persistence.shared_state_repo import (
     SharedStateRepository,
@@ -37,6 +39,8 @@ __all__ = [
     "SharedSqliteRepository",
     "SharedStateRepository",
     "StateMutation",
+    "async_fetchall",
+    "async_fetchone",
     "async_sqlite_compile_options",
     "async_sqlite_supports_fts5",
     "build_global_scope_ref",

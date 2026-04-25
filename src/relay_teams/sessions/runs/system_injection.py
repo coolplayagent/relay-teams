@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
-from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 
@@ -54,6 +54,30 @@ class SystemInjectionSink:
         )
         return SystemInjectionResult(enqueued=record is not None)
 
+    async def enqueue_only_async(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        trace_id: str,
+        task_id: Optional[str],
+        instance_id: str,
+        role_id: str,
+        content: str,
+        source: InjectionSource = InjectionSource.SYSTEM,
+    ) -> SystemInjectionResult:
+        record = await self._enqueue_async(
+            session_id=session_id,
+            run_id=run_id,
+            trace_id=trace_id,
+            task_id=task_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            content=content,
+            source=source,
+        )
+        return SystemInjectionResult(enqueued=record is not None)
+
     def append_and_enqueue(
         self,
         *,
@@ -90,6 +114,42 @@ class SystemInjectionSink:
         )
         return SystemInjectionResult(appended=appended, enqueued=record is not None)
 
+    async def append_and_enqueue_async(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        trace_id: str,
+        task_id: str,
+        instance_id: str,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        content: str,
+        source: InjectionSource = InjectionSource.SYSTEM,
+    ) -> SystemInjectionResult:
+        appended = await self._append_async(
+            session_id=session_id,
+            trace_id=trace_id,
+            task_id=task_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            content=content,
+        )
+        record = await self._enqueue_async(
+            session_id=session_id,
+            run_id=run_id,
+            trace_id=trace_id,
+            task_id=task_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            content=content,
+            source=source,
+        )
+        return SystemInjectionResult(appended=appended, enqueued=record is not None)
+
     def append_only(
         self,
         *,
@@ -103,6 +163,30 @@ class SystemInjectionSink:
         content: str,
     ) -> SystemInjectionResult:
         appended = self._append(
+            session_id=session_id,
+            trace_id=trace_id,
+            task_id=task_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            content=content,
+        )
+        return SystemInjectionResult(appended=appended)
+
+    async def append_only_async(
+        self,
+        *,
+        session_id: str,
+        trace_id: str,
+        task_id: str,
+        instance_id: str,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        content: str,
+    ) -> SystemInjectionResult:
+        appended = await self._append_async(
             session_id=session_id,
             trace_id=trace_id,
             task_id=task_id,
@@ -129,6 +213,31 @@ class SystemInjectionSink:
         if self._message_repo is None:
             return False
         return self._message_repo.append_user_prompt_if_missing(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=role_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            content=content,
+        )
+
+    async def _append_async(
+        self,
+        *,
+        session_id: str,
+        trace_id: str,
+        task_id: str,
+        instance_id: str,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        content: str,
+    ) -> bool:
+        if self._message_repo is None:
+            return False
+        return await self._message_repo.append_user_prompt_if_missing_async(
             session_id=session_id,
             workspace_id=workspace_id,
             conversation_id=conversation_id,
@@ -173,5 +282,43 @@ class SystemInjectionSink:
                 event_type=RunEventType.INJECTION_ENQUEUED,
                 payload_json=record.model_dump_json(),
             )
+        )
+        return record
+
+    async def _enqueue_async(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        trace_id: str,
+        task_id: Optional[str],
+        instance_id: str,
+        role_id: str,
+        content: str,
+        source: InjectionSource,
+    ) -> Optional[InjectionMessage]:
+        if not self._injection_manager.is_active(run_id):
+            return None
+        try:
+            record = self._injection_manager.enqueue(
+                run_id=run_id,
+                recipient_instance_id=instance_id,
+                source=source,
+                content=content,
+            )
+        except KeyError:
+            return None
+        await publish_run_event_async(
+            self._run_event_hub,
+            RunEvent(
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=trace_id,
+                task_id=task_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                event_type=RunEventType.INJECTION_ENQUEUED,
+                payload_json=record.model_dump_json(),
+            ),
         )
         return record

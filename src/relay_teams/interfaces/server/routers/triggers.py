@@ -5,8 +5,8 @@ from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import JsonValue
-from starlette.concurrency import run_in_threadpool
 
+from relay_teams.interfaces.server.async_call import call_maybe_async
 from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.env.public_webhook_url import (
     build_public_base_url_path,
@@ -64,7 +64,7 @@ def _github_delivery_callback_url(
 async def list_github_accounts(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> list[GitHubTriggerAccountRecord]:
-    accounts = await run_in_threadpool(service.list_accounts)
+    accounts = await call_maybe_async(service.list_accounts)
     return list(accounts)
 
 
@@ -74,7 +74,7 @@ async def create_github_account(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubTriggerAccountRecord:
     try:
-        return await run_in_threadpool(service.create_account, req)
+        return await call_maybe_async(service.create_account, req)
     except GitHubTriggerAccountNameConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except GitHubApiError as exc:
@@ -92,7 +92,7 @@ async def update_github_account(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubTriggerAccountRecord:
     try:
-        return await run_in_threadpool(service.update_account, account_id, req)
+        return await call_maybe_async(service.update_account, account_id, req)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except GitHubTriggerAccountNameConflictError as exc:
@@ -109,7 +109,7 @@ async def delete_github_account(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> dict[str, JsonValue]:
     try:
-        await run_in_threadpool(service.delete_account, account_id)
+        await call_maybe_async(service.delete_account, account_id)
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -123,7 +123,7 @@ async def enable_github_account(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubTriggerAccountRecord:
     try:
-        return await run_in_threadpool(service.enable_account, account_id)
+        return await call_maybe_async(service.enable_account, account_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except GitHubApiError as exc:
@@ -140,7 +140,7 @@ async def disable_github_account(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubTriggerAccountRecord:
     try:
-        return await run_in_threadpool(service.disable_account, account_id)
+        return await call_maybe_async(service.disable_account, account_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except GitHubApiError as exc:
@@ -153,7 +153,7 @@ async def disable_github_account(
 async def list_github_repo_subscriptions(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> list[GitHubRepoSubscriptionRecord]:
-    subscriptions = await run_in_threadpool(service.list_repo_subscriptions)
+    subscriptions = await call_maybe_async(service.list_repo_subscriptions)
     return list(subscriptions)
 
 
@@ -173,7 +173,7 @@ async def list_github_available_repositories(
         ]:
             return service.list_available_repositories(account_id, query=query)
 
-        repositories = await run_in_threadpool(_list_available_repositories)
+        repositories = await call_maybe_async(_list_available_repositories)
         return list(repositories)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -198,7 +198,7 @@ async def create_github_repo_subscription(
             callback_url = _github_delivery_callback_url(request, github_config_service)
             if callback_url is not None:
                 resolved_req = req.model_copy(update={"callback_url": callback_url})
-        return await run_in_threadpool(service.create_repo_subscription, resolved_req)
+        return await call_maybe_async(service.create_repo_subscription, resolved_req)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except GitHubRepoSubscriptionConflictError as exc:
@@ -219,7 +219,7 @@ async def update_github_repo_subscription(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubRepoSubscriptionRecord:
     try:
-        return await run_in_threadpool(
+        return await call_maybe_async(
             service.update_repo_subscription,
             repo_subscription_id,
             req,
@@ -240,7 +240,7 @@ async def delete_github_repo_subscription(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> dict[str, JsonValue]:
     try:
-        await run_in_threadpool(service.delete_repo_subscription, repo_subscription_id)
+        await call_maybe_async(service.delete_repo_subscription, repo_subscription_id)
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -255,7 +255,7 @@ async def enable_github_repo_subscription(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubRepoSubscriptionRecord:
     try:
-        return await run_in_threadpool(
+        return await call_maybe_async(
             service.enable_repo_subscription,
             repo_subscription_id,
         )
@@ -276,7 +276,7 @@ async def disable_github_repo_subscription(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> GitHubRepoSubscriptionRecord:
     try:
-        return await run_in_threadpool(
+        return await call_maybe_async(
             service.disable_repo_subscription,
             repo_subscription_id,
         )
@@ -292,7 +292,7 @@ async def disable_github_repo_subscription(
 async def list_github_rules(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> list[TriggerRuleRecord]:
-    rules = await run_in_threadpool(service.list_rules)
+    rules = await call_maybe_async(service.list_rules)
     return list(rules)
 
 
@@ -302,7 +302,7 @@ async def create_github_rule(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> TriggerRuleRecord:
     try:
-        return await run_in_threadpool(service.create_rule, req)
+        return await call_maybe_async(service.create_rule, req)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except TriggerRuleNameConflictError as exc:
@@ -320,7 +320,7 @@ async def update_github_rule(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> TriggerRuleRecord:
     try:
-        return await run_in_threadpool(service.update_rule, trigger_rule_id, req)
+        return await call_maybe_async(service.update_rule, trigger_rule_id, req)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except TriggerRuleNameConflictError as exc:
@@ -337,7 +337,7 @@ async def delete_github_rule(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> dict[str, JsonValue]:
     try:
-        await run_in_threadpool(service.delete_rule, trigger_rule_id)
+        await call_maybe_async(service.delete_rule, trigger_rule_id)
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -349,7 +349,7 @@ async def enable_github_rule(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> TriggerRuleRecord:
     try:
-        return await run_in_threadpool(service.enable_rule, trigger_rule_id)
+        return await call_maybe_async(service.enable_rule, trigger_rule_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except GitHubApiError as exc:
@@ -366,7 +366,7 @@ async def disable_github_rule(
     service: Annotated[GitHubTriggerService, Depends(get_github_trigger_service)],
 ) -> TriggerRuleRecord:
     try:
-        return await run_in_threadpool(service.disable_rule, trigger_rule_id)
+        return await call_maybe_async(service.disable_rule, trigger_rule_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except GitHubApiError as exc:
@@ -382,7 +382,7 @@ async def handle_github_delivery(
 ) -> dict[str, JsonValue]:
     body = await request.body()
     headers = {str(key): str(value) for key, value in request.headers.items()}
-    return await run_in_threadpool(
+    return await call_maybe_async(
         service.handle_inbound_github_delivery,
         headers=headers,
         body=body,

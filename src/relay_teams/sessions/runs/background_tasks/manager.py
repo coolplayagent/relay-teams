@@ -584,6 +584,9 @@ class BackgroundTaskManager:
     def list_for_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
         return self._repository.list_by_run(run_id)
 
+    async def list_for_run_async(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
+        return await self._repository.list_by_run_async(run_id)
+
     def get_for_run(
         self,
         *,
@@ -591,6 +594,19 @@ class BackgroundTaskManager:
         background_task_id: str,
     ) -> BackgroundTaskRecord:
         record = self._get_record(background_task_id)
+        if record.run_id != run_id:
+            raise KeyError(
+                f"Background task {background_task_id} does not belong to run {run_id}"
+            )
+        return record
+
+    async def get_for_run_async(
+        self,
+        *,
+        run_id: str,
+        background_task_id: str,
+    ) -> BackgroundTaskRecord:
+        record = await self._get_record_async(background_task_id)
         if record.run_id != run_id:
             raise KeyError(
                 f"Background task {background_task_id} does not belong to run {run_id}"
@@ -1602,6 +1618,12 @@ class BackgroundTaskManager:
 
     def _get_record(self, background_task_id: str) -> BackgroundTaskRecord:
         record = self._repository.get(background_task_id)
+        if record is None:
+            raise KeyError(f"Unknown background task: {background_task_id}")
+        return record
+
+    async def _get_record_async(self, background_task_id: str) -> BackgroundTaskRecord:
+        record = await self._repository.get_async(background_task_id)
         if record is None:
             raise KeyError(f"Unknown background task: {background_task_id}")
         return record

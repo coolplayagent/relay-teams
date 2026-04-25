@@ -11,6 +11,7 @@ from pydantic_ai import Agent
 
 from relay_teams.logger import get_logger, log_event
 from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.event_stream import publish_run_event_async
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
@@ -86,7 +87,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 role_id=ctx.deps.role_id,
             )
             try:
-                _ = repo.upsert_requested(
+                _ = await repo.upsert_requested_async(
                     question_id=question_id,
                     run_id=ctx.deps.run_id,
                     session_id=ctx.deps.session_id,
@@ -110,15 +111,17 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 )
                 is None
             ):
-                return _build_question_result(
+                return await _build_question_result_async(
                     ctx=ctx,
-                    record=_resolve_closed_question(
+                    record=await _resolve_closed_question(
                         repo=repo,
                         question_id=question_id,
                     ),
                 )
-            _set_runtime_phase(ctx, phase=RunRuntimePhase.AWAITING_MANUAL_ACTION)
-            _publish_user_question_event(
+            await _set_runtime_phase_async(
+                ctx, phase=RunRuntimePhase.AWAITING_MANUAL_ACTION
+            )
+            await _publish_user_question_event(
                 ctx=ctx,
                 event_type=RunEventType.USER_QUESTION_REQUESTED,
                 payload={
@@ -156,19 +159,19 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     reason="timed_out",
                 )
                 try:
-                    resolved_record = repo.resolve(
+                    resolved_record = await repo.resolve_async(
                         question_id=question_id,
                         status=UserQuestionRequestStatus.TIMED_OUT,
                         expected_status=UserQuestionRequestStatus.REQUESTED,
                     )
                 except UserQuestionStatusConflictError:
-                    resolved_record = repo.get(question_id)
+                    resolved_record = await repo.get_async(question_id)
                     if resolved_record is None:
                         raise KeyError(
                             f"Unknown user question: {question_id}"
                         ) from None
                 if resolved_record.status == UserQuestionRequestStatus.TIMED_OUT:
-                    _publish_user_question_event(
+                    await _publish_user_question_event(
                         ctx=ctx,
                         event_type=RunEventType.USER_QUESTION_ANSWERED,
                         payload={
@@ -178,7 +181,9 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                             "role_id": ctx.deps.role_id,
                         },
                     )
-                return _build_question_result(ctx=ctx, record=resolved_record)
+                return await _build_question_result_async(
+                    ctx=ctx, record=resolved_record
+                )
             except UserQuestionClosedError:
                 manager.close_question(
                     run_id=ctx.deps.run_id,
@@ -199,10 +204,10 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 question_id=question_id,
                 reason="answered",
             )
-            completed_record = repo.mark_completed(question_id)
+            completed_record = await repo.mark_completed_async(question_id)
             if completed_record is None:
                 raise KeyError(f"Unknown user question: {question_id}")
-            return _build_question_result(
+            return await _build_question_result_async(
                 ctx=ctx,
                 record=completed_record.model_copy(
                     update={
@@ -221,13 +226,14 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         )
 
 
-def _publish_user_question_event(
+async def _publish_user_question_event(
     *,
     ctx: ToolContext,
     event_type: RunEventType,
     payload: dict[str, JsonValue],
 ) -> None:
-    ctx.deps.run_event_hub.publish(
+    await publish_run_event_async(
+        ctx.deps.run_event_hub,
         RunEvent(
             session_id=ctx.deps.session_id,
             run_id=ctx.deps.run_id,
@@ -237,7 +243,38 @@ def _publish_user_question_event(
             role_id=ctx.deps.role_id,
             event_type=event_type,
             payload_json=dumps(payload, ensure_ascii=False),
-        )
+        ),
+    )
+
+
+async def _set_runtime_phase_async(ctx: ToolContext, *, phase: RunRuntimePhase) -> None:
+    runtime = await ctx.deps.run_runtime_repo.ensure_async(
+        run_id=ctx.deps.run_id,
+        session_id=ctx.deps.session_id,
+        root_task_id=ctx.deps.task_id,
+    )
+    if runtime.status in {
+        RunRuntimeStatus.STOPPING,
+        RunRuntimeStatus.STOPPED,
+    }:
+        return
+    await ctx.deps.run_runtime_repo.update_async(
+        ctx.deps.run_id,
+        status=(
+            RunRuntimeStatus.PAUSED
+            if phase == RunRuntimePhase.AWAITING_MANUAL_ACTION
+            else RunRuntimeStatus.RUNNING
+        ),
+        phase=phase,
+        active_instance_id=ctx.deps.instance_id,
+        active_task_id=ctx.deps.task_id,
+        active_role_id=ctx.deps.role_id,
+        active_subagent_instance_id=(
+            None
+            if ctx.deps.role_registry.is_coordinator_role(ctx.deps.role_id)
+            else ctx.deps.instance_id
+        ),
+        last_error=None,
     )
 
 
@@ -278,13 +315,13 @@ def _running_phase(ctx: ToolContext) -> RunRuntimePhase:
     return RunRuntimePhase.SUBAGENT_RUNNING
 
 
-def _build_question_result(
+async def _build_question_result_async(
     *,
     ctx: ToolContext,
     record: UserQuestionRequestRecord,
 ) -> ToolResultProjection:
     if record.status == UserQuestionRequestStatus.ANSWERED:
-        _set_runtime_phase(ctx, phase=_running_phase(ctx))
+        await _set_runtime_phase_async(ctx, phase=_running_phase(ctx))
         answers_payload: list[JsonValue] = [
             answer.model_dump(mode="json") for answer in record.answers
         ]
@@ -298,7 +335,7 @@ def _build_question_result(
             internal_data=payload,
         )
     if record.status == UserQuestionRequestStatus.TIMED_OUT:
-        _set_runtime_phase(ctx, phase=_running_phase(ctx))
+        await _set_runtime_phase_async(ctx, phase=_running_phase(ctx))
         payload = {
             "status": "timed_out",
             "question_id": record.question_id,
@@ -317,20 +354,20 @@ def _build_question_result(
     )
 
 
-def _resolve_closed_question(
+async def _resolve_closed_question(
     *,
     repo: UserQuestionRepository,
     question_id: str,
 ) -> UserQuestionRequestRecord:
     resolved_record = None
     try:
-        resolved_record = repo.resolve(
+        resolved_record = await repo.resolve_async(
             question_id=question_id,
             status=UserQuestionRequestStatus.COMPLETED,
             expected_status=UserQuestionRequestStatus.REQUESTED,
         )
     except UserQuestionStatusConflictError:
-        resolved_record = repo.get(question_id)
+        resolved_record = await repo.get_async(question_id)
     if resolved_record is None:
         raise KeyError(f"Unknown user question: {question_id}")
     return resolved_record

@@ -21,8 +21,11 @@ from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.media_run_executor import MediaRunExecutor
 from relay_teams.sessions.runs.run_event_publisher import RunEventPublisher
 from relay_teams.sessions.runs.run_interactions import parse_tool_approval_action
+from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_models import (
     IntentInput,
+    RunEvent,
     RunKind,
     RunTopologySnapshot,
 )
@@ -64,6 +67,32 @@ def test_parse_tool_approval_action_accepts_all_supported_actions() -> None:
 def test_parse_tool_approval_action_rejects_unknown_action() -> None:
     with pytest.raises(ValueError, match="Unsupported action: later"):
         parse_tool_approval_action("later")
+
+
+@pytest.mark.asyncio
+async def test_run_event_publisher_async_tolerates_publish_failure() -> None:
+    class _FailingAsyncRunEventHub:
+        async def publish_async(self, event: RunEvent) -> None:
+            _ = event
+            raise RuntimeError("publish failed")
+
+    publisher = RunEventPublisher(
+        run_event_hub=cast(RunEventHub, _FailingAsyncRunEventHub()),
+        get_runtime=lambda _run_id: None,
+        get_run_runtime_repo=lambda: None,
+        get_notification_service=lambda: None,
+    )
+
+    await publisher.safe_publish_run_event_async(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json="{}",
+        ),
+        failure_event="run.event.publish_failed",
+    )
 
 
 def test_execute_native_generation_rejects_inline_media_output() -> None:

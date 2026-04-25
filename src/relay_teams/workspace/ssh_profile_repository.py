@@ -5,12 +5,12 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 
 from pydantic import JsonValue
 
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.validation import (
     parse_persisted_datetime_or_none,
     require_persisted_identifier,
@@ -23,12 +23,9 @@ from relay_teams.workspace.ssh_profile_models import (
 LOGGER = get_logger(__name__)
 
 
-class SshProfileRepository:
+class SshProfileRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -76,6 +73,9 @@ class SshProfileRepository:
                 _log_invalid_profile_row(row=row, error=exc)
         return tuple(records)
 
+    async def list_all_async(self) -> tuple[SshProfileRecord, ...]:
+        return await self._call_sync_async(self.list_all)
+
     def get(self, ssh_profile_id: str) -> SshProfileRecord:
         with self._lock:
             row = self._conn.execute(
@@ -89,6 +89,9 @@ class SshProfileRepository:
         except ValueError as exc:
             _log_invalid_profile_row(row=row, error=exc)
             raise KeyError(f"Unknown ssh_profile_id: {ssh_profile_id}") from exc
+
+    async def get_async(self, ssh_profile_id: str) -> SshProfileRecord:
+        return await self._call_sync_async(self.get, ssh_profile_id)
 
     def save(
         self,
@@ -166,6 +169,13 @@ class SshProfileRepository:
         )
         return record
 
+    async def save_async(
+        self, *, ssh_profile_id: str, config: SshProfileStoredConfig
+    ) -> SshProfileRecord:
+        return await self._call_sync_async(
+            self.save, ssh_profile_id=ssh_profile_id, config=config
+        )
+
     def delete(self, ssh_profile_id: str) -> None:
         def operation() -> None:
             self._conn.execute(
@@ -182,6 +192,9 @@ class SshProfileRepository:
             operation_name="delete",
         )
 
+    async def delete_async(self, ssh_profile_id: str) -> None:
+        return await self._call_sync_async(self.delete, ssh_profile_id)
+
     def exists(self, ssh_profile_id: str) -> bool:
         with self._lock:
             row = self._conn.execute(
@@ -189,6 +202,9 @@ class SshProfileRepository:
                 (ssh_profile_id,),
             ).fetchone()
         return row is not None
+
+    async def exists_async(self, ssh_profile_id: str) -> bool:
+        return await self._call_sync_async(self.exists, ssh_profile_id)
 
     def _to_record(self, row: sqlite3.Row) -> SshProfileRecord:
         ssh_profile_id = require_persisted_identifier(

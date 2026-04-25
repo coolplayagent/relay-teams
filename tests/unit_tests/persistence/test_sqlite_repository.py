@@ -164,5 +164,53 @@ async def test_async_shared_sqlite_repository_run_read_uses_lock(
     assert result == "ok"
 
 
+@pytest.mark.asyncio
+async def test_shared_sqlite_repository_async_helpers_use_retry_helper(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    repo = _DummyRepository(tmp_path / "shared_repo_async.db")
+    calls: list[tuple[Path, asyncio.Lock, str, str]] = []
+
+    async def fake_run_async_sqlite_write_with_retry(
+        *,
+        conn: aiosqlite.Connection,
+        db_path: Path,
+        operation: Callable[[], Awaitable[str]],
+        lock: asyncio.Lock,
+        repository_name: str,
+        operation_name: str,
+        max_retries: int = 8,
+    ) -> str:
+        _ = conn
+        _ = max_retries
+        calls.append((db_path, lock, repository_name, operation_name))
+        return await operation()
+
+    monkeypatch.setattr(
+        sqlite_repository_module,
+        "run_async_sqlite_write_with_retry",
+        fake_run_async_sqlite_write_with_retry,
+    )
+
+    try:
+        result = await repo._run_async_write(
+            operation_name="insert_item_async",
+            operation=lambda _conn: _async_value("ok"),
+        )
+    finally:
+        await repo.close_async()
+
+    assert result == "ok"
+    assert calls == [
+        (
+            tmp_path / "shared_repo_async.db",
+            repo._async_lock,
+            "_DummyRepository",
+            "insert_item_async",
+        )
+    ]
+
+
 async def _async_value(value: str) -> str:
     return value

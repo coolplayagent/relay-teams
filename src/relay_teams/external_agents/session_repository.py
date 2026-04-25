@@ -1,20 +1,16 @@
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 
 from relay_teams.external_agents.models import ExternalAgentSessionRecord
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 
 
-class ExternalAgentSessionRepository:
+class ExternalAgentSessionRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -63,6 +59,13 @@ class ExternalAgentSessionRepository:
         if row is None:
             return None
         return ExternalAgentSessionRecord.model_validate(dict(row))
+
+    async def get_async(
+        self, *, session_id: str, role_id: str, agent_id: str
+    ) -> ExternalAgentSessionRecord | None:
+        return await self._call_sync_async(
+            self.get, session_id=session_id, role_id=role_id, agent_id=agent_id
+        )
 
     def upsert(self, record: ExternalAgentSessionRecord) -> ExternalAgentSessionRecord:
         next_record = record.model_copy(
@@ -119,6 +122,11 @@ class ExternalAgentSessionRepository:
             raise RuntimeError("Failed to persist external agent session")
         return persisted
 
+    async def upsert_async(
+        self, record: ExternalAgentSessionRecord
+    ) -> ExternalAgentSessionRecord:
+        return await self._call_sync_async(self.upsert, record)
+
     def delete(self, *, session_id: str, role_id: str, agent_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -133,4 +141,11 @@ class ExternalAgentSessionRepository:
             lock=self._lock,
             repository_name="ExternalAgentSessionRepository",
             operation_name="delete",
+        )
+
+    async def delete_async(
+        self, *, session_id: str, role_id: str, agent_id: str
+    ) -> None:
+        return await self._call_sync_async(
+            self.delete, session_id=session_id, role_id=role_id, agent_id=agent_id
         )

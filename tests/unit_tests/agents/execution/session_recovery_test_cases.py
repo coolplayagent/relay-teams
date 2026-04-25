@@ -30,6 +30,8 @@ from .agent_llm_session_test_support import (
     recovery_module,
 )
 
+EXPECTED_LLM_HTTP_CLIENT_CACHE_SCOPE = "run-1:session-1:task-1:inst-1:writer"
+
 
 @pytest.mark.asyncio
 async def test_execute_attempt_recovery_clears_cached_transport_before_retry(
@@ -51,7 +53,7 @@ async def test_execute_attempt_recovery_clears_cached_transport_before_retry(
     cleared: list[str] = []
 
     async def _reset_llm_http_client_cache_entry(**kwargs: object) -> None:
-        assert kwargs["cache_scope"] == "run-1"
+        assert kwargs["cache_scope"] == EXPECTED_LLM_HTTP_CLIENT_CACHE_SCOPE
         cleared.append("cleared")
 
     monkeypatch.setattr(
@@ -131,7 +133,7 @@ async def test_execute_attempt_recovery_keeps_cached_transport_for_non_transport
     cleared: list[str] = []
 
     async def _reset_llm_http_client_cache_entry(**kwargs: object) -> None:
-        assert kwargs["cache_scope"] == "run-1"
+        assert kwargs["cache_scope"] == EXPECTED_LLM_HTTP_CLIENT_CACHE_SCOPE
         cleared.append("cleared")
 
     monkeypatch.setattr(
@@ -207,7 +209,7 @@ async def test_execute_attempt_recovery_clears_cached_transport_before_resume(
     cleared: list[str] = []
 
     async def _reset_llm_http_client_cache_entry(**kwargs: object) -> None:
-        assert kwargs["cache_scope"] == "run-1"
+        assert kwargs["cache_scope"] == EXPECTED_LLM_HTTP_CLIENT_CACHE_SCOPE
         cleared.append("cleared")
 
     monkeypatch.setattr(

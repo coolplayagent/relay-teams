@@ -29,20 +29,15 @@ class ReminderStateRepository:
 
     def get_run_state(self, *, session_id: str, run_id: str) -> ReminderRunState:
         raw = self._repository.get_state(_scope(session_id), _state_key(run_id))
-        if raw is None:
-            return ReminderRunState()
-        try:
-            return ReminderRunState.model_validate_json(raw)
-        except ValidationError as exc:
-            log_event(
-                LOGGER,
-                logging.WARNING,
-                event="reminders.state.invalid",
-                message="Ignoring invalid persisted reminder state",
-                payload={"session_id": session_id, "run_id": run_id},
-                exc_info=exc,
-            )
-            return ReminderRunState()
+        return _parse_run_state(raw, session_id=session_id, run_id=run_id)
+
+    async def get_run_state_async(
+        self, *, session_id: str, run_id: str
+    ) -> ReminderRunState:
+        raw = await self._repository.get_state_async(
+            _scope(session_id), _state_key(run_id)
+        )
+        return _parse_run_state(raw, session_id=session_id, run_id=run_id)
 
     def save_run_state(
         self,
@@ -52,12 +47,54 @@ class ReminderStateRepository:
         state: ReminderRunState,
     ) -> None:
         self._repository.manage_state(
-            StateMutation(
-                scope=_scope(session_id),
-                key=_state_key(run_id),
-                value_json=dumps(state.model_dump(mode="json"), ensure_ascii=False),
-            )
+            _run_state_mutation(session_id=session_id, run_id=run_id, state=state)
         )
+
+    async def save_run_state_async(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        state: ReminderRunState,
+    ) -> None:
+        await self._repository.manage_state_async(
+            _run_state_mutation(session_id=session_id, run_id=run_id, state=state)
+        )
+
+
+def _parse_run_state(
+    raw: str | None,
+    *,
+    session_id: str,
+    run_id: str,
+) -> ReminderRunState:
+    if raw is None:
+        return ReminderRunState()
+    try:
+        return ReminderRunState.model_validate_json(raw)
+    except ValidationError as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="reminders.state.invalid",
+            message="Ignoring invalid persisted reminder state",
+            payload={"session_id": session_id, "run_id": run_id},
+            exc_info=exc,
+        )
+        return ReminderRunState()
+
+
+def _run_state_mutation(
+    *,
+    session_id: str,
+    run_id: str,
+    state: ReminderRunState,
+) -> StateMutation:
+    return StateMutation(
+        scope=_scope(session_id),
+        key=_state_key(run_id),
+        value_json=dumps(state.model_dump(mode="json"), ensure_ascii=False),
+    )
 
 
 def can_issue(

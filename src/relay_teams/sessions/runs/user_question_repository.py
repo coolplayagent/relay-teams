@@ -6,12 +6,13 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 
+import aiosqlite
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence import async_fetchall, async_fetchone
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.sessions.runs.user_question_models import (
     UserQuestionAnswer,
     UserQuestionPrompt,
@@ -45,12 +46,9 @@ class UserQuestionStatusConflictError(RuntimeError):
         self.actual_status = actual_status
 
 
-class UserQuestionRepository:
+class UserQuestionRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -81,13 +79,46 @@ class UserQuestionRepository:
                 "CREATE INDEX IF NOT EXISTS idx_user_questions_session_status ON user_questions(session_id, status, created_at ASC)"
             )
 
-        run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
-            operation=operation,
-            lock=self._lock,
-            repository_name="UserQuestionRepository",
+        self._run_write(
             operation_name="init_tables",
+            operation=operation,
+        )
+
+    async def _init_tables_async(self) -> None:
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_questions (
+                    question_id    TEXT PRIMARY KEY,
+                    run_id         TEXT NOT NULL,
+                    session_id     TEXT NOT NULL,
+                    task_id        TEXT NOT NULL,
+                    instance_id    TEXT NOT NULL,
+                    role_id        TEXT NOT NULL,
+                    tool_name      TEXT NOT NULL,
+                    questions_json TEXT NOT NULL,
+                    status         TEXT NOT NULL,
+                    answers_json   TEXT NOT NULL DEFAULT '[]',
+                    created_at     TEXT NOT NULL,
+                    updated_at     TEXT NOT NULL,
+                    resolved_at    TEXT
+                )
+                """
+            )
+            await cursor.close()
+            cursor = await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_questions_run_status ON user_questions(run_id, status, created_at ASC)"
+            )
+            await cursor.close()
+            cursor = await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_questions_session_status ON user_questions(session_id, status, created_at ASC)"
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="init_tables_async",
+            operation=lambda _conn: operation(),
         )
 
     def upsert_requested(
@@ -150,15 +181,80 @@ class UserQuestionRepository:
                 ),
             )
 
-        run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
-            operation=operation,
-            lock=self._lock,
-            repository_name="UserQuestionRepository",
+        self._run_write(
             operation_name="upsert_requested",
+            operation=operation,
         )
         record = self.get(question_id)
+        if record is None:
+            raise RuntimeError(f"Failed to persist user question {question_id}")
+        return record
+
+    async def upsert_requested_async(
+        self,
+        *,
+        question_id: str,
+        run_id: str,
+        session_id: str,
+        task_id: str,
+        instance_id: str,
+        role_id: str,
+        tool_name: str,
+        questions: tuple[UserQuestionPrompt, ...],
+    ) -> UserQuestionRequestRecord:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        questions_json = json.dumps(
+            [question.model_dump(mode="json") for question in questions],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        existing = await self.get_async(question_id)
+        created_at = existing.created_at.isoformat() if existing is not None else now
+
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                INSERT INTO user_questions(question_id, run_id, session_id, task_id, instance_id, role_id,
+                                           tool_name, questions_json, status, answers_json, created_at, updated_at, resolved_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(question_id)
+                DO UPDATE SET
+                    run_id=excluded.run_id,
+                    session_id=excluded.session_id,
+                    task_id=excluded.task_id,
+                    instance_id=excluded.instance_id,
+                    role_id=excluded.role_id,
+                    tool_name=excluded.tool_name,
+                    questions_json=excluded.questions_json,
+                    status=excluded.status,
+                    answers_json=excluded.answers_json,
+                    updated_at=excluded.updated_at,
+                    resolved_at=excluded.resolved_at
+                """,
+                (
+                    question_id,
+                    run_id,
+                    session_id,
+                    task_id,
+                    instance_id,
+                    role_id,
+                    tool_name,
+                    questions_json,
+                    UserQuestionRequestStatus.REQUESTED.value,
+                    "[]",
+                    created_at,
+                    now,
+                    None,
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="upsert_requested_async",
+            operation=lambda _conn: operation(),
+        )
+        record = await self.get_async(question_id)
         if record is None:
             raise RuntimeError(f"Failed to persist user question {question_id}")
         return record
@@ -178,9 +274,8 @@ class UserQuestionRepository:
             sort_keys=True,
         )
         resolved_at = now if status != UserQuestionRequestStatus.REQUESTED else None
-        rowcount = run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
+        rowcount = self._run_write(
+            operation_name="resolve",
             operation=lambda: self._resolve_row(
                 question_id=question_id,
                 status=status,
@@ -189,11 +284,46 @@ class UserQuestionRepository:
                 resolved_at=resolved_at,
                 expected_status=expected_status,
             ),
-            lock=self._lock,
-            repository_name="UserQuestionRepository",
-            operation_name="resolve",
         )
         record = self.get(question_id)
+        if record is None:
+            raise KeyError(f"Unknown user question: {question_id}")
+        if rowcount == 0 and expected_status is not None:
+            raise UserQuestionStatusConflictError(
+                question_id=question_id,
+                expected_status=expected_status,
+                actual_status=record.status,
+            )
+        return record
+
+    async def resolve_async(
+        self,
+        *,
+        question_id: str,
+        status: UserQuestionRequestStatus,
+        answers: tuple[UserQuestionAnswer, ...] = (),
+        expected_status: UserQuestionRequestStatus | None = None,
+    ) -> UserQuestionRequestRecord:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        answers_json = json.dumps(
+            [answer.model_dump(mode="json") for answer in answers],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        resolved_at = now if status != UserQuestionRequestStatus.REQUESTED else None
+        rowcount = await self._run_async_write(
+            operation_name="resolve_async",
+            operation=lambda conn: self._resolve_row_async(
+                conn=conn,
+                question_id=question_id,
+                status=status,
+                answers_json=answers_json,
+                updated_at=now,
+                resolved_at=resolved_at,
+                expected_status=expected_status,
+            ),
+        )
+        record = await self.get_async(question_id)
         if record is None:
             raise KeyError(f"Unknown user question: {question_id}")
         if rowcount == 0 and expected_status is not None:
@@ -214,12 +344,36 @@ class UserQuestionRepository:
             answers=record.answers,
         )
 
+    async def mark_completed_async(
+        self, question_id: str
+    ) -> UserQuestionRequestRecord | None:
+        record = await self.get_async(question_id)
+        if record is None:
+            return None
+        return await self.resolve_async(
+            question_id=question_id,
+            status=UserQuestionRequestStatus.COMPLETED,
+            answers=record.answers,
+        )
+
     def get(self, question_id: str) -> UserQuestionRequestRecord | None:
         with self._lock:
             row = self._conn.execute(
                 "SELECT * FROM user_questions WHERE question_id=?",
                 (question_id,),
             ).fetchone()
+        if row is None:
+            return None
+        return self._record_or_none(row, fallback_invalid_timestamps=True)
+
+    async def get_async(self, question_id: str) -> UserQuestionRequestRecord | None:
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT * FROM user_questions WHERE question_id=?",
+                (question_id,),
+            )
+        )
         if row is None:
             return None
         return self._record_or_none(row, fallback_invalid_timestamps=True)
@@ -249,6 +403,32 @@ class UserQuestionRepository:
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
 
+    async def list_by_run_async(
+        self,
+        run_id: str,
+        *,
+        include_resolved: bool = False,
+    ) -> tuple[UserQuestionRequestRecord, ...]:
+        query = (
+            "SELECT * FROM user_questions WHERE run_id=? ORDER BY created_at ASC"
+            if include_resolved
+            else (
+                "SELECT * FROM user_questions WHERE run_id=? AND status=? "
+                "ORDER BY created_at ASC"
+            )
+        )
+        params: tuple[object, ...] = (
+            (run_id,)
+            if include_resolved
+            else (run_id, UserQuestionRequestStatus.REQUESTED.value)
+        )
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(conn, query, params)
+        )
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
+
     def list_by_session(
         self,
         session_id: str,
@@ -274,17 +454,53 @@ class UserQuestionRepository:
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
 
+    async def list_by_session_async(
+        self,
+        session_id: str,
+        *,
+        include_resolved: bool = False,
+    ) -> tuple[UserQuestionRequestRecord, ...]:
+        query = (
+            "SELECT * FROM user_questions WHERE session_id=? ORDER BY created_at ASC"
+            if include_resolved
+            else (
+                "SELECT * FROM user_questions WHERE session_id=? AND status=? "
+                "ORDER BY created_at ASC"
+            )
+        )
+        params: tuple[object, ...] = (
+            (session_id,)
+            if include_resolved
+            else (session_id, UserQuestionRequestStatus.REQUESTED.value)
+        )
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(conn, query, params)
+        )
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
+
     def delete_by_session(self, session_id: str) -> None:
-        run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
+        self._run_write(
+            operation_name="delete_by_session",
             operation=lambda: self._conn.execute(
                 "DELETE FROM user_questions WHERE session_id=?",
                 (session_id,),
             ),
-            lock=self._lock,
-            repository_name="UserQuestionRepository",
-            operation_name="delete_by_session",
+        )
+
+    async def delete_by_session_async(self, session_id: str) -> None:
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                "DELETE FROM user_questions WHERE session_id=?",
+                (session_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_session_async",
+            operation=lambda _conn: operation(),
         )
 
     def _resolve_row(
@@ -324,17 +540,70 @@ class UserQuestionRepository:
         )
         return int(cursor.rowcount or 0)
 
+    # noinspection PyMethodMayBeStatic
+    async def _resolve_row_async(
+        self,
+        *,
+        conn: aiosqlite.Connection,
+        question_id: str,
+        status: UserQuestionRequestStatus,
+        answers_json: str,
+        updated_at: str,
+        resolved_at: str | None,
+        expected_status: UserQuestionRequestStatus | None,
+    ) -> int:
+        if expected_status is None:
+            cursor = await conn.execute(
+                """
+                UPDATE user_questions
+                SET status=?, answers_json=?, updated_at=?, resolved_at=?
+                WHERE question_id=?
+                """,
+                (status.value, answers_json, updated_at, resolved_at, question_id),
+            )
+            rowcount = int(cursor.rowcount or 0)
+            await cursor.close()
+            return rowcount
+        cursor = await conn.execute(
+            """
+            UPDATE user_questions
+            SET status=?, answers_json=?, updated_at=?, resolved_at=?
+            WHERE question_id=? AND status=?
+            """,
+            (
+                status.value,
+                answers_json,
+                updated_at,
+                resolved_at,
+                question_id,
+                expected_status.value,
+            ),
+        )
+        rowcount = int(cursor.rowcount or 0)
+        await cursor.close()
+        return rowcount
+
     def delete_by_run(self, run_id: str) -> None:
-        run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
+        self._run_write(
+            operation_name="delete_by_run",
             operation=lambda: self._conn.execute(
                 "DELETE FROM user_questions WHERE run_id=?",
                 (run_id,),
             ),
-            lock=self._lock,
-            repository_name="UserQuestionRepository",
-            operation_name="delete_by_run",
+        )
+
+    async def delete_by_run_async(self, run_id: str) -> None:
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                "DELETE FROM user_questions WHERE run_id=?",
+                (run_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_run_async",
+            operation=lambda _conn: operation(),
         )
 
     def _to_record(

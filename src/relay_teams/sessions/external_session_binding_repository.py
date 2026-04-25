@@ -5,12 +5,12 @@ import sqlite3
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.sessions.external_session_binding_models import (
     ExternalSessionBinding,
 )
@@ -22,12 +22,9 @@ from relay_teams.validation import (
 LOGGER = get_logger(__name__)
 
 
-class ExternalSessionBindingRepository:
+class ExternalSessionBindingRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -110,6 +107,17 @@ class ExternalSessionBindingRepository:
             return None
         return self._record_or_none(row, fallback_invalid_timestamps=True)
 
+    async def get_binding_async(
+        self, *, platform: str, trigger_id: str, tenant_key: str, external_chat_id: str
+    ) -> ExternalSessionBinding | None:
+        return await self._call_sync_async(
+            self.get_binding,
+            platform=platform,
+            trigger_id=trigger_id,
+            tenant_key=tenant_key,
+            external_chat_id=external_chat_id,
+        )
+
     def upsert_binding(
         self,
         *,
@@ -164,6 +172,24 @@ class ExternalSessionBindingRepository:
             raise RuntimeError("Failed to load upserted external session binding")
         return binding
 
+    async def upsert_binding_async(
+        self,
+        *,
+        platform: str,
+        trigger_id: str,
+        tenant_key: str,
+        external_chat_id: str,
+        session_id: str,
+    ) -> ExternalSessionBinding:
+        return await self._call_sync_async(
+            self.upsert_binding,
+            platform=platform,
+            trigger_id=trigger_id,
+            tenant_key=tenant_key,
+            external_chat_id=external_chat_id,
+            session_id=session_id,
+        )
+
     def list_by_platform(self, platform: str) -> tuple[ExternalSessionBinding, ...]:
         rows = self._conn.execute(
             """
@@ -177,6 +203,11 @@ class ExternalSessionBindingRepository:
         return tuple(
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
+
+    async def list_by_platform_async(
+        self, platform: str
+    ) -> tuple[ExternalSessionBinding, ...]:
+        return await self._call_sync_async(self.list_by_platform, platform)
 
     def exists(
         self,
@@ -196,6 +227,17 @@ class ExternalSessionBindingRepository:
             is not None
         )
 
+    async def exists_async(
+        self, *, platform: str, trigger_id: str, tenant_key: str, external_chat_id: str
+    ) -> bool:
+        return await self._call_sync_async(
+            self.exists,
+            platform=platform,
+            trigger_id=trigger_id,
+            tenant_key=tenant_key,
+            external_chat_id=external_chat_id,
+        )
+
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -209,6 +251,9 @@ class ExternalSessionBindingRepository:
             operation_name="delete_by_session",
         )
 
+    async def delete_by_session_async(self, session_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_session, session_id)
+
     def delete_by_trigger(self, trigger_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -221,6 +266,9 @@ class ExternalSessionBindingRepository:
             repository_name="ExternalSessionBindingRepository",
             operation_name="delete_by_trigger",
         )
+
+    async def delete_by_trigger_async(self, trigger_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_trigger, trigger_id)
 
     @staticmethod
     def _to_record(

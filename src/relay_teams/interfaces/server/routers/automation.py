@@ -4,8 +4,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import JsonValue
-from starlette.concurrency import run_in_threadpool
 
+from relay_teams.interfaces.server.async_call import call_maybe_async
 from relay_teams.automation import (
     AutomationDeliveryBindingCandidate,
     AutomationFeishuBindingCandidate,
@@ -31,7 +31,7 @@ router = APIRouter(prefix="/automation", tags=["Automation"])
 async def list_delivery_bindings(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> list[AutomationDeliveryBindingCandidate]:
-    bindings = await run_in_threadpool(service.list_delivery_bindings)
+    bindings = await call_maybe_async(service.list_delivery_bindings)
     return list(bindings)
 
 
@@ -39,7 +39,7 @@ async def list_delivery_bindings(
 async def list_feishu_bindings(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> list[AutomationFeishuBindingCandidate]:
-    bindings = await run_in_threadpool(service.list_feishu_bindings)
+    bindings = await call_maybe_async(service.list_feishu_bindings)
     return list(bindings)
 
 
@@ -49,7 +49,7 @@ async def create_project(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
     try:
-        return await run_in_threadpool(service.create_project, req)
+        return await call_maybe_async(service.create_project, req)
     except (AutomationProjectNameConflictError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -61,7 +61,7 @@ async def create_project(
 async def list_projects(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> list[AutomationProjectRecord]:
-    projects = await run_in_threadpool(service.list_projects)
+    projects = await call_maybe_async(service.list_projects)
     return list(projects)
 
 
@@ -71,7 +71,7 @@ async def get_project(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
     try:
-        return await run_in_threadpool(service.get_project, automation_project_id)
+        return await call_maybe_async(service.get_project, automation_project_id)
     except KeyError as exc:
         raise http_exception_for(exc) from exc
 
@@ -85,7 +85,7 @@ async def update_project(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
     try:
-        return await run_in_threadpool(
+        return await call_maybe_async(
             service.update_project,
             automation_project_id,
             req,
@@ -104,7 +104,7 @@ async def delete_project(
     req: DeleteRequest | None = Body(default=None),
 ) -> dict[str, JsonValue]:
     try:
-        await run_in_threadpool(
+        await call_maybe_async(
             service.delete_project,
             automation_project_id,
             force=req.force if req is not None else False,
@@ -124,7 +124,7 @@ async def run_project(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> dict[str, JsonValue]:
     try:
-        return await run_in_threadpool(service.run_now, automation_project_id)
+        return await call_maybe_async(service.run_now, automation_project_id)
     except (KeyError, RuntimeError) as exc:
         raise http_exception_for(
             exc,
@@ -140,7 +140,7 @@ async def enable_project(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
     try:
-        return await run_in_threadpool(
+        return await call_maybe_async(
             service.set_project_status,
             automation_project_id,
             AutomationProjectStatus.ENABLED,
@@ -161,7 +161,7 @@ async def disable_project(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> AutomationProjectRecord:
     try:
-        return await run_in_threadpool(
+        return await call_maybe_async(
             service.set_project_status,
             automation_project_id,
             AutomationProjectStatus.DISABLED,
@@ -176,7 +176,7 @@ async def list_project_sessions(
     service: Annotated[AutomationService, Depends(get_automation_service)],
 ) -> list[dict[str, object]]:
     try:
-        sessions = await run_in_threadpool(
+        sessions = await call_maybe_async(
             service.list_project_sessions,
             automation_project_id,
         )
