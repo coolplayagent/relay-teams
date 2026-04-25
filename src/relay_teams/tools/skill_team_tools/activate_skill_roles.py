@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import ast
+import json
+
 from pydantic import JsonValue
 from pydantic_ai import Agent
 
@@ -25,9 +28,12 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     async def activate_skill_roles(
         ctx: ToolContext,
         skill_name: str,
-        role_ids: list[str],
+        role_ids: list[str] | str,
     ) -> dict[str, JsonValue]:
-        def _action(skill_name: str, role_ids: list[str]) -> dict[str, JsonValue]:
+        def _action(
+            skill_name: str,
+            role_ids: list[str] | str,
+        ) -> dict[str, JsonValue]:
             runtime_role_resolver = ctx.deps.runtime_role_resolver
             if runtime_role_resolver is None:
                 raise RuntimeError("Temporary role activation is unavailable")
@@ -83,15 +89,19 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         return await execute_tool_call(
             ctx,
             tool_name="activate_skill_roles",
-            args_summary={"skill_name": skill_name, "role_count": len(role_ids)},
+            args_summary={
+                "skill_name": skill_name,
+                "role_count": len(_coerce_requested_role_ids(role_ids)),
+            },
             action=_action,
             raw_args=locals(),
         )
 
 
-def _normalize_requested_role_ids(role_ids: list[str]) -> tuple[str, ...]:
+def _normalize_requested_role_ids(role_ids: list[str] | str) -> tuple[str, ...]:
+    raw_role_ids = _coerce_requested_role_ids(role_ids)
     normalized_role_ids: list[str] = []
-    for role_id in role_ids:
+    for role_id in raw_role_ids:
         normalized = role_id.strip()
         if not normalized:
             continue
@@ -100,3 +110,47 @@ def _normalize_requested_role_ids(role_ids: list[str]) -> tuple[str, ...]:
     if not normalized_role_ids:
         raise ValueError("role_ids must contain at least one role id")
     return tuple(normalized_role_ids)
+
+
+def _coerce_requested_role_ids(role_ids: list[str] | str) -> tuple[str, ...]:
+    if isinstance(role_ids, str):
+        normalized = role_ids.strip()
+        if not normalized:
+            return ()
+        parsed = _parse_role_ids_text(normalized)
+        if parsed is not None:
+            return parsed
+        return (normalized,)
+    return tuple(role_ids)
+
+
+def _parse_role_ids_text(value: str) -> tuple[str, ...] | None:
+    json_parsed = _parse_role_ids_json(value)
+    if json_parsed is not None:
+        return json_parsed
+    try:
+        literal = ast.literal_eval(value)
+    except (SyntaxError, ValueError):
+        return None
+    return _role_ids_from_parsed_value(literal)
+
+
+def _parse_role_ids_json(value: str) -> tuple[str, ...] | None:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return _role_ids_from_parsed_value(parsed)
+
+
+def _role_ids_from_parsed_value(value: object) -> tuple[str, ...] | None:
+    if isinstance(value, str):
+        return (value,)
+    if not isinstance(value, list | tuple):
+        return None
+    parsed_role_ids: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            return None
+        parsed_role_ids.append(item)
+    return tuple(parsed_role_ids)

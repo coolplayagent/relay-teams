@@ -274,6 +274,22 @@ def test_normalize_requested_role_ids_rejects_blank_values() -> None:
         _normalize_requested_role_ids(["  "])
 
 
+@pytest.mark.parametrize(
+    ("raw_role_ids", "expected"),
+    [
+        ([" analyst ", "analyst"], ("analyst",)),
+        ('[" analyst ", "analyst"]', ("analyst",)),
+        ("[' analyst ', 'analyst']", ("analyst",)),
+        ("analyst", ("analyst",)),
+    ],
+)
+def test_normalize_requested_role_ids_accepts_provider_string_forms(
+    raw_role_ids: list[str] | str,
+    expected: tuple[str, ...],
+) -> None:
+    assert _normalize_requested_role_ids(raw_role_ids) == expected
+
+
 @pytest.mark.asyncio
 async def test_activate_skill_roles_requires_runtime_role_resolver(
     monkeypatch: pytest.MonkeyPatch,
