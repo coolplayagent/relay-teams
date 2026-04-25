@@ -44,7 +44,7 @@ from relay_teams.notifications.notification_settings_service import (
 from relay_teams.providers.model_config_service import ModelConfigService
 from relay_teams.roles import RoleMemoryService, RoleRegistry
 from relay_teams.roles.settings_service import RoleSettingsService
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
@@ -59,7 +59,7 @@ def get_container(request: Request) -> ServerContainer:
     return request.app.state.container
 
 
-def get_run_service(request: Request) -> RunManager:
+def get_run_service(request: Request) -> SessionRunService:
     return get_container(request).run_service
 
 

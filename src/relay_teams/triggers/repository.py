@@ -1104,7 +1104,8 @@ class TriggerRepository(SharedSqliteRepository):
         )
         return tuple(self._to_action_attempt_record(row) for row in rows)
 
-    def _to_account_record(self, row: sqlite3.Row) -> GitHubTriggerAccountRecord:
+    @staticmethod
+    def _to_account_record(row: sqlite3.Row) -> GitHubTriggerAccountRecord:
         return GitHubTriggerAccountRecord(
             account_id=_require_identifier(row["account_id"], field_name="account_id"),
             name=_require_identifier(row["name"], field_name="name"),
@@ -1119,8 +1120,8 @@ class TriggerRepository(SharedSqliteRepository):
             updated_at=_require_datetime(row["updated_at"]),
         )
 
+    @staticmethod
     def _to_repo_subscription_record(
-        self,
         row: sqlite3.Row,
     ) -> GitHubRepoSubscriptionRecord:
         return GitHubRepoSubscriptionRecord(
@@ -1146,7 +1147,8 @@ class TriggerRepository(SharedSqliteRepository):
             updated_at=_require_datetime(row["updated_at"]),
         )
 
-    def _to_rule_record(self, row: sqlite3.Row) -> TriggerRuleRecord:
+    @staticmethod
+    def _to_rule_record(row: sqlite3.Row) -> TriggerRuleRecord:
         raw_match_config = _load_json_dict(row["match_config_json"])
         match_config = {
             key: value
@@ -1178,7 +1180,8 @@ class TriggerRepository(SharedSqliteRepository):
             updated_at=_require_datetime(row["updated_at"]),
         )
 
-    def _to_delivery_record(self, row: sqlite3.Row) -> TriggerDeliveryRecord:
+    @staticmethod
+    def _to_delivery_record(row: sqlite3.Row) -> TriggerDeliveryRecord:
         return TriggerDeliveryRecord(
             trigger_delivery_id=_require_identifier(
                 row["trigger_delivery_id"], field_name="trigger_delivery_id"
@@ -1201,7 +1204,8 @@ class TriggerRepository(SharedSqliteRepository):
             last_error=normalize_persisted_text(row["last_error"]),
         )
 
-    def _to_evaluation_record(self, row: sqlite3.Row) -> TriggerEvaluationRecord:
+    @staticmethod
+    def _to_evaluation_record(row: sqlite3.Row) -> TriggerEvaluationRecord:
         return TriggerEvaluationRecord(
             trigger_evaluation_id=_require_identifier(
                 row["trigger_evaluation_id"], field_name="trigger_evaluation_id"
@@ -1220,7 +1224,8 @@ class TriggerRepository(SharedSqliteRepository):
             created_at=_require_datetime(row["created_at"]),
         )
 
-    def _to_dispatch_record(self, row: sqlite3.Row) -> TriggerDispatchRecord:
+    @staticmethod
+    def _to_dispatch_record(row: sqlite3.Row) -> TriggerDispatchRecord:
         return TriggerDispatchRecord(
             trigger_dispatch_id=_require_identifier(
                 row["trigger_dispatch_id"], field_name="trigger_dispatch_id"
@@ -1245,8 +1250,8 @@ class TriggerRepository(SharedSqliteRepository):
             updated_at=_require_datetime(row["updated_at"]),
         )
 
+    @staticmethod
     def _to_action_attempt_record(
-        self,
         row: sqlite3.Row,
     ) -> TriggerActionAttemptRecord:
         action_spec = GitHubActionSpec.model_validate_json(str(row["action_spec_json"]))
@@ -1336,6 +1341,7 @@ def _require_identifier(value: object, *, field_name: str) -> str:
 __all__ = [
     "GitHubRepoSubscriptionConflictError",
     "GitHubTriggerAccountNameConflictError",
+    "TriggerDeliveryConflictError",
     "TriggerRepository",
     "TriggerRuleNameConflictError",
 ]

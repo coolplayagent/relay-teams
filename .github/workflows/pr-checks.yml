@@ -29,12 +29,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.12"
 
@@ -47,7 +47,7 @@ jobs:
         run: python src/relay_teams/release/pull_request_issue_link.py
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v8.1.0
 
       - name: Install dev dependencies
         run: uv sync --extra dev --no-default-groups
@@ -79,14 +79,24 @@ jobs:
           src/relay_teams_evals
 
       - name: Unit tests with coverage
+        env:
+          RELAY_TEAMS_UNIT_TEST_TIMEOUT_SECONDS: "5"
         run: >
           uv run --extra dev pytest -q tests/unit_tests
           --cov=src/relay_teams
           --cov=src/relay_teams_evals
           --cov-report=xml:coverage.xml
 
+      - name: Build copy-aware coverage diff
+        run: |
+          mkdir -p .tmp
+          git diff -C1% origin/main...HEAD > .tmp/diff-cover-copy-aware.diff
+
       - name: Enforce changed-line unit coverage
-        run: uv run --extra dev diff-cover coverage.xml --config-file pyproject.toml
+        run: >
+          uv run --extra dev diff-cover coverage.xml
+          --config-file pyproject.toml
+          --diff-file .tmp/diff-cover-copy-aware.diff
 
       - name: Install Playwright Chromium
         run: uv run --extra dev python -m playwright install --with-deps chromium

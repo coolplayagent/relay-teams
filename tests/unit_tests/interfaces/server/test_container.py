@@ -73,7 +73,7 @@ def _write_app_role(config_dir: Path, *, role_id: str) -> None:
     )
 
 
-def test_runtime_reload_updates_run_manager_provider_factory(
+def test_runtime_reload_updates_run_service_provider_factory(
     monkeypatch,
     tmp_path: Path,
 ) -> None:

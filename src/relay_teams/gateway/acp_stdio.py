@@ -5,10 +5,11 @@ import asyncio
 import base64
 import json
 import logging
+import sqlite3
 import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from typing import BinaryIO, cast
+from typing import BinaryIO
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -40,7 +41,7 @@ from relay_teams.metrics import MetricRecorder
 from relay_teams.metrics.adapters import record_gateway_operation
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.runs.enums import RunEventType
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_models import IntentInput, RunEvent
 
 
@@ -294,7 +295,7 @@ class AcpGatewayServer:
         *,
         gateway_session_service: GatewaySessionService,
         session_service: SessionService,
-        run_service: RunManager,
+        run_service: SessionRunService,
         media_asset_service: MediaAssetService,
         notify: AcpNotifier,
         mcp_relay: AcpMcpRelay | None = None,
@@ -485,7 +486,8 @@ class AcpGatewayServer:
             return
         raise AcpProtocolError(-32601, f"Method not found: {method}")
 
-    def _initialize_result(self, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    @staticmethod
+    def _initialize_result(params: dict[str, JsonValue]) -> dict[str, JsonValue]:
         protocol_version = params.get("protocolVersion")
         resolved_protocol_version = 1
         if isinstance(protocol_version, int) and protocol_version > 0:
@@ -782,12 +784,6 @@ class AcpGatewayServer:
         text_suppressor: _ResumeTextSuppressor | None = None,
         observer: _AcpRequestObserver | None = None,
     ) -> _AcpRunStopResult:
-        stop_reason = "end_turn"
-        run_status = "running"
-        recoverable = True
-        terminal_error: str | None = None
-        clear_active_run = True
-
         async for event in self._run_service.stream_run_events(
             run_id, after_event_id=after_event_id
         ):
@@ -799,18 +795,13 @@ class AcpGatewayServer:
             )
             if maybe_result is None:
                 continue
-            stop_reason = maybe_result.stop_reason
-            run_status = maybe_result.run_status
-            recoverable = maybe_result.recoverable
-            terminal_error = maybe_result.error_message
-            clear_active_run = maybe_result.clear_active_run
             return _AcpRunStopResult(
-                stop_reason=stop_reason,
+                stop_reason=maybe_result.stop_reason,
                 run_id=run_id,
-                run_status=run_status,
-                recoverable=recoverable,
-                error_message=terminal_error,
-                clear_active_run=clear_active_run,
+                run_status=maybe_result.run_status,
+                recoverable=maybe_result.recoverable,
+                error_message=maybe_result.error_message,
+                clear_active_run=maybe_result.clear_active_run,
             )
         raise RuntimeError(f"ACP run watcher ended before a stop event for {run_id}.")
 
@@ -824,7 +815,8 @@ class AcpGatewayServer:
         run_id = str(active_run.get("run_id") or "").strip()
         if not run_id:
             return None
-        if active_run.get("is_recoverable") is not True:
+        is_recoverable = active_run.get("is_recoverable")
+        if not isinstance(is_recoverable, bool) or not is_recoverable:
             return None
         phase = str(active_run.get("phase") or "").strip()
         status = str(active_run.get("status") or "").strip()
@@ -1225,7 +1217,7 @@ class AcpGatewayServer:
     def _usage_for_run(self, run_id: str) -> dict[str, JsonValue]:
         try:
             usage = self._session_service.get_token_usage_by_run(run_id)
-        except Exception:
+        except sqlite3.Error:
             return {
                 "input_tokens": 0,
                 "output_tokens": 0,
@@ -1425,7 +1417,8 @@ class AcpStdioRuntime:
             )
             return await future
         finally:
-            self._pending_requests.pop(request_id, None)
+            if request_id in self._pending_requests:
+                del self._pending_requests[request_id]
 
     async def send_message(self, message: dict[str, JsonValue]) -> None:
         _trace_acp_message("outbound", message)
@@ -1645,10 +1638,9 @@ def _tool_result_payload_to_acp_content(
     if not isinstance(raw_content, list):
         result = payload.get("result")
         if isinstance(result, dict):
-            result_map = cast(dict[str, JsonValue], result)
-            data = result_map.get("data")
+            data = result.get("data")
             if isinstance(data, dict):
-                raw_content = cast(dict[str, JsonValue], data).get("content")
+                raw_content = data.get("content")
     if isinstance(raw_content, list):
         blocks: list[JsonValue] = []
         for item in raw_content:
@@ -1663,9 +1655,9 @@ def _tool_result_payload_to_acp_content(
             return blocks
     result_payload = payload.get("result")
     if isinstance(result_payload, dict):
-        data = cast(dict[str, JsonValue], result_payload).get("data")
+        data = result_payload.get("data")
         if isinstance(data, dict):
-            text = cast(dict[str, JsonValue], data).get("text")
+            text = data.get("text")
             if isinstance(text, str) and text.strip():
                 return [{"type": "content", "content": {"type": "text", "text": text}}]
     result_text = json.dumps(result_payload, ensure_ascii=False, default=str)

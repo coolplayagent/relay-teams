@@ -58,7 +58,7 @@ from relay_teams.logger import get_logger, log_event
 from relay_teams.media import content_parts_from_text
 from relay_teams.roles import RoleRegistry
 from relay_teams.sessions.session_models import ProjectKind, SessionMode
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.workspace import WorkspaceService
@@ -74,7 +74,7 @@ class AutomationService:
         repository: AutomationProjectRepository,
         event_repository: AutomationEventRepository,
         session_service: SessionService,
-        run_service: RunManager,
+        run_service: SessionRunService,
         feishu_binding_service: AutomationFeishuBindingService | None = None,
         xiaoluban_binding_service: AutomationXiaolubanBindingService | None = None,
         delivery_service: AutomationDeliveryService | None = None,
@@ -397,7 +397,6 @@ class AutomationService:
         effective_now = now or datetime.now(tz=UTC)
         execution_event = self._record_execution_event(project, reason=reason)
         next_status = project.status
-        next_run_at = project.next_run_at
         try:
             bound_session_handle = self._materialize_bound_session_execution(
                 project=project,
@@ -544,8 +543,8 @@ class AutomationService:
             return self._xiaoluban_binding_service.validate_binding(binding)
         raise ValueError(f"Unsupported delivery binding provider: {binding.provider}")
 
+    @staticmethod
     def _resolve_delivery_events(
-        self,
         *,
         binding: Optional[AutomationDeliveryBinding],
         requested_events: Optional[Tuple[AutomationDeliveryEvent, ...]],

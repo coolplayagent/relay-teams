@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from os import environ
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,8 @@ import pytest
 from relay_teams.secrets import AppSecretStore
 
 _UNIT_TESTS_ROOT = Path(__file__).resolve().parent
+_DEFAULT_UNIT_TEST_TIMEOUT_SECONDS = 1.0
+_UNIT_TEST_TIMEOUT_ENV = "RELAY_TEAMS_UNIT_TEST_TIMEOUT_SECONDS"
 
 
 class _UnitTestSecretStore(AppSecretStore):
@@ -29,7 +32,7 @@ def pytest_collection_modifyitems(
         raise pytest.UsageError(
             "pytest-timeout is required for unit-test timeout enforcement"
         )
-    timeout_marker = pytest.mark.timeout(1)
+    timeout_marker = pytest.mark.timeout(_unit_test_timeout_seconds())
     for item in items:
         item_path = Path(str(item.fspath)).resolve()
         if _UNIT_TESTS_ROOT not in item_path.parents:
@@ -37,3 +40,18 @@ def pytest_collection_modifyitems(
         if item.get_closest_marker("timeout") is not None:
             continue
         item.add_marker(timeout_marker)
+
+
+def _unit_test_timeout_seconds() -> float:
+    raw_timeout = environ.get(_UNIT_TEST_TIMEOUT_ENV)
+    if raw_timeout is None:
+        return _DEFAULT_UNIT_TEST_TIMEOUT_SECONDS
+    try:
+        timeout_seconds = float(raw_timeout)
+    except ValueError as exc:
+        raise pytest.UsageError(
+            f"{_UNIT_TEST_TIMEOUT_ENV} must be a positive number"
+        ) from exc
+    if timeout_seconds <= 0:
+        raise pytest.UsageError(f"{_UNIT_TEST_TIMEOUT_ENV} must be a positive number")
+    return timeout_seconds

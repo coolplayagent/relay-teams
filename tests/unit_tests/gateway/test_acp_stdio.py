@@ -34,7 +34,7 @@ from relay_teams.providers.token_usage_repo import RunTokenUsage
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.session_models import SessionRecord
 from relay_teams.sessions.runs.enums import RunEventType
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_models import IntentInput, RunEvent
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
@@ -144,7 +144,7 @@ class FakeSessionService:
         return self.usage_by_run[run_id]
 
 
-class FakeRunManager:
+class FakeRunService:
     def __init__(self) -> None:
         self._counter = 0
         self.events_by_run: dict[str, tuple[RunEvent, ...]] = {}
@@ -271,8 +271,8 @@ async def test_initialize_returns_gateway_capabilities(tmp_path: Path) -> None:
 async def test_session_prompt_streams_updates_and_usage(
     tmp_path: Path,
 ) -> None:
-    server, session_service, run_manager, notifications = _build_server(tmp_path)
-    run_manager.events_by_run["run-1"] = (
+    server, session_service, run_service, notifications = _build_server(tmp_path)
+    run_service.events_by_run["run-1"] = (
         _event(
             "session-1",
             "run-1",
@@ -354,13 +354,13 @@ async def test_session_prompt_streams_updates_and_usage(
         "runStatus": "completed",
         "recoverable": False,
     }
-    assert len(run_manager.create_calls) == 1
-    assert run_manager.create_calls[0] == IntentInput(
+    assert len(run_service.create_calls) == 1
+    assert run_service.create_calls[0] == IntentInput(
         session_id="session-1",
         input=content_parts_from_text("Summarize README"),
         yolo=True,
     )
-    assert run_manager.ensure_started_calls == ["run-1"]
+    assert run_service.ensure_started_calls == ["run-1"]
 
     session_updates = [_session_update_name(item) for item in notifications]
     assert session_updates == [
@@ -461,8 +461,8 @@ async def test_session_new_uses_gateway_default_normal_root_role(
 async def test_session_prompt_returns_paused_run_without_clearing_binding(
     tmp_path: Path,
 ) -> None:
-    server, _, run_manager, notifications = _build_server(tmp_path)
-    run_manager.events_by_run["run-1"] = (
+    server, _, run_service, notifications = _build_server(tmp_path)
+    run_service.events_by_run["run-1"] = (
         _event(
             "session-1",
             "run-1",
@@ -520,7 +520,7 @@ async def test_session_prompt_returns_paused_run_without_clearing_binding(
 async def test_session_prompt_resumes_recoverable_run_from_any_message(
     tmp_path: Path,
 ) -> None:
-    server, session_service, run_manager, notifications = _build_server(tmp_path)
+    server, session_service, run_service, notifications = _build_server(tmp_path)
     created = await server.handle_jsonrpc_message(
         {
             "jsonrpc": "2.0",
@@ -553,8 +553,8 @@ async def test_session_prompt_resumes_recoverable_run_from_any_message(
             "payload_json": json.dumps({"text": "OLD"}),
         }
     ]
-    run_manager.create_run_results.append(("run-paused", "session-1"))
-    run_manager.events_by_run["run-paused"] = (
+    run_service.create_run_results.append(("run-paused", "session-1"))
+    run_service.events_by_run["run-paused"] = (
         _event(
             "session-1",
             "run-paused",
@@ -603,13 +603,13 @@ async def test_session_prompt_resumes_recoverable_run_from_any_message(
         "runStatus": "completed",
         "recoverable": False,
     }
-    assert len(run_manager.create_calls) == 1
-    assert run_manager.create_calls[0].input == content_parts_from_text(
+    assert len(run_service.create_calls) == 1
+    assert run_service.create_calls[0].input == content_parts_from_text(
         "not necessarily continue"
     )
-    assert run_manager.ensure_started_calls == ["run-paused"]
-    assert run_manager.resume_calls == []
-    assert run_manager.stream_calls == [("run-paused", 3)]
+    assert run_service.ensure_started_calls == ["run-paused"]
+    assert run_service.resume_calls == []
+    assert run_service.stream_calls == [("run-paused", 3)]
     session_updates = [_session_update_name(item) for item in notifications]
     assert session_updates == ["user_message_chunk", "agent_message_chunk"]
     update = _session_update_payload(notifications[1])
@@ -634,10 +634,10 @@ async def test_session_prompt_rejects_busy_active_run(
         repository=repository,
         session_service=cast(SessionService, session_service),
     )
-    run_manager = FakeRunManager()
+    run_service = FakeRunService()
     run_runtime_repo = RunRuntimeRepository(tmp_path / "gateway.db")
     ingress_service = GatewaySessionIngressService(
-        run_service=cast(RunManager, run_manager),
+        run_service=cast(SessionRunService, run_service),
         run_runtime_repo=run_runtime_repo,
     )
     notifications: list[dict[str, JsonValue]] = []
@@ -648,7 +648,7 @@ async def test_session_prompt_rejects_busy_active_run(
     server = AcpGatewayServer(
         gateway_session_service=gateway_session_service,
         session_service=cast(SessionService, session_service),
-        run_service=cast(RunManager, run_manager),
+        run_service=cast(SessionRunService, run_service),
         media_asset_service=cast(MediaAssetService, object()),
         notify=notify,
         session_ingress_service=ingress_service,
@@ -694,7 +694,7 @@ async def test_session_prompt_rejects_busy_active_run(
             "message": "Session already has an active run: run-busy",
         },
     }
-    assert run_manager.create_calls == []
+    assert run_service.create_calls == []
     assert notifications == []
     failure_events = [
         event
@@ -752,12 +752,12 @@ async def test_session_prompt_via_ingress_preserves_root_instance_reuse(
         repository=repository,
         session_service=cast(SessionService, session_service),
     )
-    run_manager = FakeRunManager()
-    run_manager.events_by_run["run-1"] = (
+    run_service = FakeRunService()
+    run_service.events_by_run["run-1"] = (
         _event("session-1", "run-1", RunEventType.RUN_COMPLETED, {}),
     )
     ingress_service = GatewaySessionIngressService(
-        run_service=cast(RunManager, run_manager),
+        run_service=cast(SessionRunService, run_service),
         run_runtime_repo=RunRuntimeRepository(tmp_path / "gateway.db"),
     )
     notifications: list[dict[str, JsonValue]] = []
@@ -768,7 +768,7 @@ async def test_session_prompt_via_ingress_preserves_root_instance_reuse(
     server = AcpGatewayServer(
         gateway_session_service=gateway_session_service,
         session_service=cast(SessionService, session_service),
-        run_service=cast(RunManager, run_manager),
+        run_service=cast(SessionRunService, run_service),
         media_asset_service=cast(MediaAssetService, object()),
         notify=notify,
         session_ingress_service=ingress_service,
@@ -802,8 +802,8 @@ async def test_session_prompt_via_ingress_preserves_root_instance_reuse(
         "runStatus": "completed",
         "recoverable": False,
     }
-    assert len(run_manager.create_calls) == 1
-    assert run_manager.create_calls[0].reuse_root_instance is True
+    assert len(run_service.create_calls) == 1
+    assert run_service.create_calls[0].reuse_root_instance is True
     assert _session_update_name(notifications[0]) == "user_message_chunk"
 
 
@@ -817,9 +817,9 @@ async def test_session_prompt_via_ingress_resumes_recoverable_stopped_run(
         repository=repository,
         session_service=cast(SessionService, session_service),
     )
-    run_manager = FakeRunManager()
-    run_manager.create_run_results.append(("run-stopped", "session-1"))
-    run_manager.events_by_run["run-stopped"] = (
+    run_service = FakeRunService()
+    run_service.create_run_results.append(("run-stopped", "session-1"))
+    run_service.events_by_run["run-stopped"] = (
         _event(
             "session-1",
             "run-stopped",
@@ -837,7 +837,7 @@ async def test_session_prompt_via_ingress_resumes_recoverable_stopped_run(
     )
     run_runtime_repo = RunRuntimeRepository(tmp_path / "gateway.db")
     ingress_service = GatewaySessionIngressService(
-        run_service=cast(RunManager, run_manager),
+        run_service=cast(SessionRunService, run_service),
         run_runtime_repo=run_runtime_repo,
     )
     notifications: list[dict[str, JsonValue]] = []
@@ -848,7 +848,7 @@ async def test_session_prompt_via_ingress_resumes_recoverable_stopped_run(
     server = AcpGatewayServer(
         gateway_session_service=gateway_session_service,
         session_service=cast(SessionService, session_service),
-        run_service=cast(RunManager, run_manager),
+        run_service=cast(SessionRunService, run_service),
         media_asset_service=cast(MediaAssetService, object()),
         notify=notify,
         session_ingress_service=ingress_service,
@@ -905,12 +905,12 @@ async def test_session_prompt_via_ingress_resumes_recoverable_stopped_run(
         "runStatus": "completed",
         "recoverable": False,
     }
-    assert len(run_manager.create_calls) == 1
-    assert run_manager.create_calls[0].input == content_parts_from_text(
+    assert len(run_service.create_calls) == 1
+    assert run_service.create_calls[0].input == content_parts_from_text(
         "new question after stop"
     )
-    assert run_manager.ensure_started_calls == ["run-stopped"]
-    assert run_manager.stream_calls == [("run-stopped", 2)]
+    assert run_service.ensure_started_calls == ["run-stopped"]
+    assert run_service.stream_calls == [("run-stopped", 2)]
     session_updates = [_session_update_name(item) for item in notifications]
     assert session_updates == ["user_message_chunk", "agent_message_chunk"]
     update = _session_update_payload(notifications[1])
@@ -923,7 +923,7 @@ async def test_session_prompt_via_ingress_resumes_recoverable_stopped_run(
 async def test_session_resume_restarts_active_run_and_returns_result(
     tmp_path: Path,
 ) -> None:
-    server, _, run_manager, _notifications = _build_server(tmp_path)
+    server, _, run_service, _notifications = _build_server(tmp_path)
     created = await server.handle_jsonrpc_message(
         {
             "jsonrpc": "2.0",
@@ -936,7 +936,7 @@ async def test_session_resume_restarts_active_run_and_returns_result(
     repository = GatewaySessionRepository(tmp_path / "gateway.db")
     record = repository.get(session_id)
     repository.update(record.model_copy(update={"active_run_id": "run-9"}))
-    run_manager.events_by_run["run-9"] = (
+    run_service.events_by_run["run-9"] = (
         _event("session-1", "run-9", RunEventType.RUN_COMPLETED, {}),
     )
 
@@ -955,8 +955,8 @@ async def test_session_resume_restarts_active_run_and_returns_result(
         "runStatus": "completed",
         "recoverable": False,
     }
-    assert run_manager.resume_calls == ["run-9"]
-    assert run_manager.ensure_started_calls == ["run-9"]
+    assert run_service.resume_calls == ["run-9"]
+    assert run_service.ensure_started_calls == ["run-9"]
     assert repository.get(session_id).active_run_id is None
 
 
@@ -964,7 +964,7 @@ async def test_session_resume_restarts_active_run_and_returns_result(
 async def test_session_resume_streams_only_new_events_after_last_seen_event(
     tmp_path: Path,
 ) -> None:
-    server, session_service, run_manager, notifications = _build_server(tmp_path)
+    server, session_service, run_service, notifications = _build_server(tmp_path)
     created = await server.handle_jsonrpc_message(
         {
             "jsonrpc": "2.0",
@@ -986,7 +986,7 @@ async def test_session_resume_streams_only_new_events_after_last_seen_event(
         "paused_subagent": None,
         "round_snapshot": None,
     }
-    run_manager.events_by_run["run-9"] = (
+    run_service.events_by_run["run-9"] = (
         _event(
             "session-1",
             "run-9",
@@ -1032,7 +1032,7 @@ async def test_session_resume_streams_only_new_events_after_last_seen_event(
         "runStatus": "completed",
         "recoverable": False,
     }
-    assert run_manager.stream_calls == [("run-9", 3)]
+    assert run_service.stream_calls == [("run-9", 3)]
     session_updates = [_session_update_name(item) for item in notifications]
     assert session_updates == ["agent_message_chunk"]
     update = _session_update_payload(notifications[0])
@@ -1045,7 +1045,7 @@ async def test_session_resume_streams_only_new_events_after_last_seen_event(
 async def test_session_resume_suppresses_replayed_text_prefix_from_resumed_stream(
     tmp_path: Path,
 ) -> None:
-    server, session_service, run_manager, notifications = _build_server(tmp_path)
+    server, session_service, run_service, notifications = _build_server(tmp_path)
     created = await server.handle_jsonrpc_message(
         {
             "jsonrpc": "2.0",
@@ -1074,7 +1074,7 @@ async def test_session_resume_suppresses_replayed_text_prefix_from_resumed_strea
             "payload_json": json.dumps({"text": "LINE0001LINE0002"}),
         }
     ]
-    run_manager.events_by_run["run-9"] = (
+    run_service.events_by_run["run-9"] = (
         _event(
             "session-1",
             "run-9",
@@ -1132,9 +1132,9 @@ async def test_session_resume_suppresses_replayed_text_prefix_from_resumed_strea
 async def test_session_prompt_streams_progress_updates_for_zed(
     tmp_path: Path,
 ) -> None:
-    server, _, run_manager, notifications = _build_server(tmp_path)
+    server, _, run_service, notifications = _build_server(tmp_path)
     server.set_zed_compat_mode(True)
-    run_manager.events_by_run["run-1"] = (
+    run_service.events_by_run["run-1"] = (
         _event(
             "session-1",
             "run-1",
@@ -1207,9 +1207,9 @@ async def test_session_prompt_streams_progress_updates_for_zed(
 async def test_session_prompt_includes_string_tool_raw_input_for_zed(
     tmp_path: Path,
 ) -> None:
-    server, _, run_manager, notifications = _build_server(tmp_path)
+    server, _, run_service, notifications = _build_server(tmp_path)
     server.set_zed_compat_mode(True)
-    run_manager.events_by_run["run-1"] = (
+    run_service.events_by_run["run-1"] = (
         _event(
             "session-1",
             "run-1",
@@ -1537,10 +1537,10 @@ async def test_session_load_replays_thinking_and_response_chunks_separately(
 async def test_session_prompt_preserves_whitespace_for_zed_chunks(
     tmp_path: Path,
 ) -> None:
-    server, _, run_manager, notifications = _build_server(tmp_path)
+    server, _, run_service, notifications = _build_server(tmp_path)
     server.set_zed_compat_mode(True)
     formatted_text = "Line 1\n\n  - item 1\n  - item 2\n"
-    run_manager.events_by_run["run-1"] = (
+    run_service.events_by_run["run-1"] = (
         _event("session-1", "run-1", RunEventType.TEXT_DELTA, {"text": formatted_text}),
         _event("session-1", "run-1", RunEventType.RUN_COMPLETED, {}),
     )
@@ -1588,7 +1588,7 @@ async def test_session_prompt_preserves_whitespace_for_zed_chunks(
 async def test_session_cancel_falls_back_to_persisted_active_run_binding(
     tmp_path: Path,
 ) -> None:
-    server, _, run_manager, _notifications = _build_server(tmp_path)
+    server, _, run_service, _notifications = _build_server(tmp_path)
     created = await server.handle_jsonrpc_message(
         {
             "jsonrpc": "2.0",
@@ -1612,7 +1612,7 @@ async def test_session_cancel_falls_back_to_persisted_active_run_binding(
     )
 
     assert _require_result_object(response) == {"status": "ok"}
-    assert run_manager.stop_calls == ["run-cancel"]
+    assert run_service.stop_calls == ["run-cancel"]
 
 
 @pytest.mark.asyncio
@@ -1748,7 +1748,7 @@ async def test_session_new_stores_model_profile_override_without_persisting_api_
     server = AcpGatewayServer(
         gateway_session_service=gateway_session_service,
         session_service=cast(SessionService, session_service),
-        run_service=cast(RunManager, FakeRunManager()),
+        run_service=cast(SessionRunService, FakeRunService()),
         media_asset_service=cast(MediaAssetService, object()),
         notify=notify,
     )
@@ -1819,7 +1819,7 @@ async def test_session_new_stores_redacted_model_profile_override_headers(
     server = AcpGatewayServer(
         gateway_session_service=gateway_session_service,
         session_service=cast(SessionService, session_service),
-        run_service=cast(RunManager, FakeRunManager()),
+        run_service=cast(SessionRunService, FakeRunService()),
         media_asset_service=cast(MediaAssetService, object()),
         notify=notify,
     )
@@ -1895,7 +1895,7 @@ async def test_session_new_accepts_model_profile_override_headers_object_shortha
     server = AcpGatewayServer(
         gateway_session_service=gateway_session_service,
         session_service=cast(SessionService, session_service),
-        run_service=cast(RunManager, FakeRunManager()),
+        run_service=cast(SessionRunService, FakeRunService()),
         media_asset_service=cast(MediaAssetService, object()),
         notify=notify,
     )
@@ -2054,11 +2054,11 @@ async def test_session_prompt_records_gateway_prompt_phase_metrics(
         registry=MetricRegistry(DEFAULT_DEFINITIONS),
         sinks=(sink,),
     )
-    server, _, run_manager, _ = _build_server(
+    server, _, run_service, _ = _build_server(
         tmp_path,
         metric_recorder=recorder,
     )
-    run_manager.events_by_run["run-1"] = (
+    run_service.events_by_run["run-1"] = (
         _event(
             "session-1",
             "run-1",
@@ -2132,7 +2132,7 @@ def _build_server(
 ) -> tuple[
     AcpGatewayServer,
     FakeSessionService,
-    FakeRunManager,
+    FakeRunService,
     list[dict[str, JsonValue]],
 ]:
     session_service = FakeSessionService()
@@ -2143,7 +2143,7 @@ def _build_server(
         workspace_service=cast(WorkspaceService | None, workspace_service),
         default_normal_root_role_id=default_normal_root_role_id,
     )
-    run_manager = FakeRunManager()
+    run_service = FakeRunService()
     notifications: list[dict[str, JsonValue]] = []
 
     async def notify(message: dict[str, JsonValue]) -> None:
@@ -2162,13 +2162,13 @@ def _build_server(
     server = AcpGatewayServer(
         gateway_session_service=gateway_session_service,
         session_service=cast(SessionService, session_service),
-        run_service=cast(RunManager, run_manager),
+        run_service=cast(SessionRunService, run_service),
         media_asset_service=cast(MediaAssetService, object()),
         notify=notify,
         metric_recorder=metric_recorder,
     )
     server.set_mcp_relay_outbound(send_request=send_request, send_notification=notify)
-    return server, session_service, run_manager, notifications
+    return server, session_service, run_service, notifications
 
 
 def _event(

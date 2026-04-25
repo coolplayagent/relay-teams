@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 from collections.abc import Mapping
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future as ConcurrentFuture
@@ -18,6 +19,7 @@ from uuid import uuid4
 
 import qrcode
 import qrcode.image.svg
+import httpx
 
 from relay_teams.gateway.gateway_models import GatewayChannelType
 from relay_teams.validation import require_force_delete
@@ -35,7 +37,7 @@ from relay_teams.media import content_parts_from_text
 from relay_teams.roles import RoleRegistry
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.enums import RunEventType
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_models import (
     IntentInput,
     RunThinkingConfig,
@@ -100,7 +102,7 @@ class WeChatGatewayService:
         secret_store: WeChatSecretStore | None,
         client: WeChatClient,
         gateway_session_service: GatewaySessionService,
-        run_service: RunManager,
+        run_service: SessionRunService,
         run_event_hub: RunEventHub,
         workspace_service: WorkspaceService,
         role_registry: RoleRegistry,
@@ -474,7 +476,7 @@ class WeChatGatewayService:
                 now = datetime.now(tz=timezone.utc)
                 self._set_status(account_id, running=True, last_event_at=now)
                 for message in response.msgs:
-                    self._handle_message(updated_account, token, message)
+                    self._handle_message(updated_account, message)
             except Exception as exc:
                 self._set_status(
                     account_id,
@@ -487,7 +489,6 @@ class WeChatGatewayService:
     def _handle_message(
         self,
         account: WeChatAccountRecord,
-        token: str,
         message: WeChatInboundMessage,
     ) -> None:
         peer_user_id = (message.from_user_id or "").strip()
@@ -729,7 +730,6 @@ class WeChatGatewayService:
                 account_id=account_id,
                 gateway_session_id=gateway_session_id,
                 run_id=run_id,
-                peer_user_id=peer_user_id,
                 error_message=str(exc),
             )
             raise
@@ -772,7 +772,6 @@ class WeChatGatewayService:
                 account_id=account_id,
                 gateway_session_id=gateway_session_id,
                 run_id=run_id,
-                peer_user_id=peer_user_id,
                 error_message=message,
             )
             log_event(
@@ -903,7 +902,6 @@ class WeChatGatewayService:
         account_id: str,
         gateway_session_id: str,
         run_id: str,
-        peer_user_id: str,
         error_message: str,
     ) -> None:
         self._clear_active_run(gateway_session_id)
@@ -1053,13 +1051,13 @@ class WeChatGatewayService:
                 typing_ticket=ticket,
                 status=status,
             )
-        except Exception:
+        except (RuntimeError, ValueError, httpx.HTTPError):
             return
 
     def _require_loop(self) -> asyncio.AbstractEventLoop:
-        loop = self._run_service._event_loop
+        loop = self._run_service.bound_event_loop
         if loop is None:
-            raise RuntimeError("RunManager event loop is not bound")
+            raise RuntimeError("SessionRunService event loop is not bound")
         return loop
 
     def _drain_inbound_queue(self) -> None:
@@ -1370,7 +1368,7 @@ class WeChatGatewayService:
         padded = value + ("=" * ((4 - len(value) % 4) % 4))
         try:
             decoded = base64.b64decode(padded, validate=False)
-        except Exception:
+        except (binascii.Error, ValueError):
             return "image/png"
         if decoded.startswith(b"\x89PNG\r\n\x1a\n"):
             return "image/png"

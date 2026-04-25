@@ -50,6 +50,7 @@
 - Expose public package APIs through package-level `__init__.py`.
 - Use the project logger in production paths; do not use `print()`.
 - Do not use emoji in code, comments, docs, or commit messages.
+- Do not fix Qodana CI failures by adding source-file, package, or inspection-specific excludes to `qodana.yaml`. Fix the source issue or the CI workflow instead. Only non-source generated/cache/output directories may be excluded under `name: All`, such as virtualenvs, caches, docs, and built frontend artifacts.
 - For frontend UI work under `frontend/dist/`, split substantial pages, components, state logic, and styles into focused modules instead of continually appending to one large file. When a file is growing because it mixes view markup, interactions, data helpers, and CSS for multiple areas, extract cohesive pieces into separate JS/CSS files and link/import them explicitly.
 - For packaged resource files such as tool description `.txt` files, avoid hand-maintained subpackage `package-data` whitelists; use parent-package globs and add a source-tree coverage test to catch drift.
 - Keep transport semantics consistent for the same provider/model path. If the primary execution flow uses streaming, auxiliary LLM flows such as reflection, compaction, memory rewrite, or hooks must also use streaming APIs against that endpoint rather than mixing in non-streaming shortcuts.

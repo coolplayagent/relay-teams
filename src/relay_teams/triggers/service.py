@@ -31,7 +31,7 @@ from relay_teams.logger import get_logger, log_event
 from relay_teams.media import content_parts_from_text
 from relay_teams.monitors import MonitorEventEnvelope, MonitorService, MonitorSourceKind
 from relay_teams.sessions.runs.enums import RunEventType
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
@@ -104,7 +104,7 @@ class GitHubTriggerService:
         github_client: GitHubApiClient,
         automation_service: AutomationService,
         session_service: SessionService,
-        run_service: RunManager,
+        run_service: SessionRunService,
         run_runtime_repo: RunRuntimeRepository,
         event_log: EventLogLike,
         monitor_service: MonitorService | None = None,
@@ -1214,7 +1214,7 @@ class GitHubTriggerService:
             for attempt in attempts
         ):
             return False
-        next_status = dispatch.status
+        next_status: TriggerDispatchStatus
         run_id = _normalize_optional_text(dispatch.run_id)
         runtime = self._run_runtime_repo.get(run_id) if run_id is not None else None
         if runtime is not None:
@@ -1277,11 +1277,8 @@ class GitHubTriggerService:
                 body=body,
             )
             response_payload = _response_payload_dict(response)
-            return (
-                {"body": body},
-                response_payload,
-                _json_identifier(response_payload.get("id")),
-            )
+            response_id = _json_identifier(response_payload.get("id"))
+            return {"body": body}, response_payload, response_id
         if action_spec.action_type == GitHubActionType.ADD_LABELS:
             if issue_number is None:
                 raise RuntimeError("issue_or_pull_request_number_missing")
@@ -1292,11 +1289,8 @@ class GitHubTriggerService:
                 issue_number=issue_number,
                 labels=action_spec.labels,
             )
-            return (
-                {"labels": _json_string_list_value(action_spec.labels)},
-                _response_payload_dict(response),
-                None,
-            )
+            request_payload = {"labels": _json_string_list_value(action_spec.labels)}
+            return request_payload, _response_payload_dict(response), None
         if action_spec.action_type == GitHubActionType.REMOVE_LABELS:
             if issue_number is None:
                 raise RuntimeError("issue_or_pull_request_number_missing")
@@ -1308,7 +1302,7 @@ class GitHubTriggerService:
                     issue_number=issue_number,
                     label=label,
                 )
-            return ({"labels": _json_string_list_value(action_spec.labels)}, {}, None)
+            return {"labels": _json_string_list_value(action_spec.labels)}, {}, None
         if action_spec.action_type == GitHubActionType.ASSIGN_USERS:
             if issue_number is None:
                 raise RuntimeError("issue_or_pull_request_number_missing")
@@ -1319,11 +1313,10 @@ class GitHubTriggerService:
                 issue_number=issue_number,
                 assignees=action_spec.assignees,
             )
-            return (
-                {"assignees": _json_string_list_value(action_spec.assignees)},
-                _response_payload_dict(response),
-                None,
-            )
+            request_payload = {
+                "assignees": _json_string_list_value(action_spec.assignees)
+            }
+            return request_payload, _response_payload_dict(response), None
         if action_spec.action_type == GitHubActionType.UNASSIGN_USERS:
             if issue_number is None:
                 raise RuntimeError("issue_or_pull_request_number_missing")
@@ -1334,11 +1327,10 @@ class GitHubTriggerService:
                 issue_number=issue_number,
                 assignees=action_spec.assignees,
             )
-            return (
-                {"assignees": _json_string_list_value(action_spec.assignees)},
-                _response_payload_dict(response),
-                None,
-            )
+            request_payload = {
+                "assignees": _json_string_list_value(action_spec.assignees)
+            }
+            return request_payload, _response_payload_dict(response), None
         if action_spec.action_type == GitHubActionType.SET_COMMIT_STATUS:
             sha = _normalize_optional_text(context.get("head_sha"))
             if sha is None:
@@ -1375,40 +1367,38 @@ class GitHubTriggerService:
                 target_url=target_url,
             )
             response_payload = _response_payload_dict(response)
-            return (
-                {
-                    "sha": sha,
-                    "state": action_spec.commit_status_state,
-                    "context": action_spec.commit_status_context,
-                    "description": description,
-                    "target_url": target_url,
-                },
-                response_payload,
-                _json_identifier(response_payload.get("id")),
-            )
+            request_payload: dict[str, JsonValue] = {
+                "sha": sha,
+                "state": action_spec.commit_status_state,
+                "context": action_spec.commit_status_context,
+                "description": description,
+                "target_url": target_url,
+            }
+            response_id = _json_identifier(response_payload.get("id"))
+            return request_payload, response_payload, response_id
         raise RuntimeError(f"Unsupported action_type: {action_spec.action_type.value}")
 
+    @staticmethod
     def _match_rule(
-        self,
         match_config: TriggerRuleMatchConfig,
         *,
         delivery: TriggerDeliveryRecord,
     ) -> tuple[bool, str, str | None]:
         normalized = delivery.normalized_payload
         if delivery.event_name != match_config.event_name:
-            return (False, "event_mismatch", "event_name did not match")
+            return False, "event_mismatch", "event_name did not match"
         event_action = _normalize_optional_text(delivery.event_action)
         if match_config.actions and event_action not in match_config.actions:
-            return (False, "action_mismatch", "event_action did not match")
+            return False, "action_mismatch", "event_action did not match"
         base_branch = _normalize_optional_text(
             _json_text(normalized.get("base_branch"))
         )
         if match_config.base_branches and base_branch not in match_config.base_branches:
-            return (False, "base_branch_mismatch", "base_branch did not match")
+            return False, "base_branch_mismatch", "base_branch did not match"
         if match_config.draft_pr is not None:
             draft_pr = _json_bool(normalized.get("draft_pr"))
             if draft_pr is None or draft_pr != match_config.draft_pr:
-                return (False, "draft_pr_mismatch", "draft_pr did not match")
+                return False, "draft_pr_mismatch", "draft_pr did not match"
         conclusion = _normalize_optional_text(
             _json_text(normalized.get("check_conclusion"))
         )
@@ -1416,12 +1406,8 @@ class GitHubTriggerService:
             match_config.check_conclusions
             and conclusion not in match_config.check_conclusions
         ):
-            return (
-                False,
-                "check_conclusion_mismatch",
-                "check_conclusion did not match",
-            )
-        return (True, "matched", None)
+            return False, "check_conclusion_mismatch", "check_conclusion did not match"
+        return True, "matched", None
 
     def _best_effort_unregister_repo_webhook(
         self,
@@ -1730,8 +1716,8 @@ class GitHubTriggerService:
             enabled.append(subscription)
         return tuple(enabled)
 
+    @staticmethod
     def _resolve_signature_status(
-        self,
         *,
         matched_subscription: GitHubRepoSubscriptionRecord | None,
         signature: str | None,
@@ -1868,10 +1854,10 @@ def _decode_json_payload(body: bytes) -> tuple[dict[str, JsonValue], str | None]
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return ({}, str(exc))
+        return {}, str(exc)
     if not isinstance(payload, dict):
-        return ({}, "GitHub webhook payload must be a JSON object")
-    return (_normalize_json_mapping(payload), None)
+        return {}, "GitHub webhook payload must be a JSON object"
+    return _normalize_json_mapping(payload), None
 
 
 def _normalize_json_mapping(value: dict[str, object]) -> dict[str, JsonValue]:
@@ -1935,17 +1921,14 @@ def _resolve_repository_identity(
     if resolved_full_name is not None:
         owner_part, _, repo_part = resolved_full_name.partition("/")
         if owner_part and repo_part:
-            return (owner_part, repo_part, resolved_full_name)
+            return owner_part, repo_part, resolved_full_name
 
     resolved_owner = _normalize_optional_text(_nested_text(payload, "owner", "login"))
     resolved_repo_name = _normalize_optional_text(_json_text(payload.get("name")))
     if resolved_owner is not None and resolved_repo_name is not None:
-        return (
-            resolved_owner,
-            resolved_repo_name,
-            f"{resolved_owner}/{resolved_repo_name}",
-        )
-    return (owner, repo_name, f"{owner}/{repo_name}")
+        resolved_full_name = f"{resolved_owner}/{resolved_repo_name}"
+        return resolved_owner, resolved_repo_name, resolved_full_name
+    return owner, repo_name, f"{owner}/{repo_name}"
 
 
 def _resolve_repository_owner(payload: dict[str, JsonValue]) -> str | None:
@@ -2109,7 +2092,7 @@ def _json_bool(value: JsonValue | None) -> bool | None:
 
 def _json_string_tuple(value: JsonValue | None) -> tuple[str, ...]:
     if not isinstance(value, list):
-        return ()
+        return tuple()
     normalized: list[str] = []
     for item in value:
         if isinstance(item, str) and item.strip():

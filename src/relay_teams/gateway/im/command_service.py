@@ -22,7 +22,7 @@ from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
 from relay_teams.sessions.session_service import SessionService
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 
 _SESSION_COMMANDS: frozenset[str] = frozenset({"help", "status", "clear", "resume"})
 
@@ -60,7 +60,7 @@ class ImSessionCommandService:
         self,
         *,
         session_service: SessionService,
-        run_service: RunManager,
+        run_service: SessionRunService,
         external_session_binding_repo: ExternalSessionBindingRepository,
         gateway_session_service: GatewaySessionService,
         feishu_message_pool_service: _FeishuQueueLookup,
@@ -258,7 +258,6 @@ class ImSessionCommandService:
         recovery_snapshot = self._session_service.get_recovery_snapshot(
             resolved_session_id
         )
-        cleared_session_messages = 0
         try:
             cleared_session_messages = self._session_service.clear_session_messages(
                 resolved_session_id

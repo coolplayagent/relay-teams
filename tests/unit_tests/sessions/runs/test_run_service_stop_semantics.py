@@ -16,7 +16,7 @@ from relay_teams.sessions.runs.active_run_registry import ActiveSessionRunRegist
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
-from relay_teams.sessions.runs.run_manager import RunManager
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_models import IntentInput, RunResult
 from relay_teams.notifications import (
     NotificationChannel,
@@ -149,12 +149,12 @@ class _SessionRepo:
         return self.get(session_id)
 
 
-def _make_run_manager(
+def _make_run_service(
     control: RunControlManager,
     *,
     background_task_manager: object | None = None,
     meta_agent: object | None = None,
-) -> RunManager:
+) -> SessionRunService:
     hub = RunEventHub()
     injection = RunInjectionManager()
     control.bind_runtime(
@@ -166,7 +166,7 @@ def _make_run_manager(
         event_bus=cast(EventLog, cast(object, _EventBus())),
         run_runtime_repo=cast(RunRuntimeRepository, cast(object, _RunRuntimeRepo())),
     )
-    return RunManager(
+    return SessionRunService(
         meta_agent=cast(MetaAgent, cast(object, meta_agent or _MetaAgent())),
         injection_manager=injection,
         run_event_hub=hub,
@@ -191,7 +191,7 @@ def test_create_run_blocked_when_paused_subagent_exists() -> None:
         role_id="generalist",
         task_id="task-1",
     )
-    manager = _make_run_manager(control)
+    manager = _make_run_service(control)
 
     with pytest.raises(RuntimeError):
         manager.create_run(
@@ -215,7 +215,7 @@ def test_stop_pending_run_emits_run_stopped_event() -> None:
         event_bus=cast(EventLog, cast(object, _EventBus())),
         run_runtime_repo=cast(RunRuntimeRepository, cast(object, _RunRuntimeRepo())),
     )
-    manager = RunManager(
+    manager = SessionRunService(
         meta_agent=cast(MetaAgent, cast(object, _MetaAgent())),
         injection_manager=injection,
         run_event_hub=hub,
@@ -252,7 +252,7 @@ def test_stop_pending_run_emits_run_stopped_event() -> None:
 def test_worker_swallows_cleanup_failures_after_runner_exception() -> None:
     control = RunControlManager()
     injection = RunInjectionManager()
-    manager = RunManager(
+    manager = SessionRunService(
         meta_agent=cast(MetaAgent, cast(object, _MetaAgent())),
         injection_manager=injection,
         run_event_hub=cast(RunEventHub, cast(object, _FailingRunEventHub())),
@@ -283,7 +283,7 @@ def test_worker_swallows_cleanup_failures_after_runner_exception() -> None:
 def test_worker_finalization_only_stops_foreground_background_tasks() -> None:
     control = RunControlManager()
     background_task_manager = _CapturingBackgroundTaskManager()
-    manager = _make_run_manager(
+    manager = _make_run_service(
         control,
         background_task_manager=background_task_manager,
     )
@@ -321,7 +321,7 @@ def test_completed_notification_uses_final_run_output() -> None:
         event_bus=cast(EventLog, cast(object, _EventBus())),
         run_runtime_repo=cast(RunRuntimeRepository, cast(object, _RunRuntimeRepo())),
     )
-    manager = RunManager(
+    manager = SessionRunService(
         meta_agent=cast(MetaAgent, cast(object, _MetaAgent())),
         injection_manager=injection,
         run_event_hub=hub,
@@ -383,7 +383,7 @@ def test_assistant_error_notification_uses_failed_channel() -> None:
         event_bus=cast(EventLog, cast(object, _EventBus())),
         run_runtime_repo=cast(RunRuntimeRepository, cast(object, _RunRuntimeRepo())),
     )
-    manager = RunManager(
+    manager = SessionRunService(
         meta_agent=cast(MetaAgent, cast(object, _MetaAgent())),
         injection_manager=injection,
         run_event_hub=hub,
@@ -481,7 +481,7 @@ class _FakeRunHookService:
 def test_stop_pending_run_does_not_invoke_completion_stop_hooks() -> None:
     control = RunControlManager()
     hook_service = _FakeRunHookService(stop_decision=HookDecisionType.RETRY)
-    manager = _make_run_manager(control)
+    manager = _make_run_service(control)
     manager._hook_service = cast(HookService, hook_service)
 
     run_id, _ = manager.create_run(
@@ -499,7 +499,7 @@ def test_stop_pending_run_does_not_invoke_completion_stop_hooks() -> None:
 def test_finalize_run_clears_hook_runtime_state() -> None:
     control = RunControlManager()
     hook_service = _FakeRunHookService()
-    manager = _make_run_manager(control)
+    manager = _make_run_service(control)
     manager._hook_service = cast(HookService, hook_service)
     manager._running_run_ids.add("run-1")
 
@@ -562,7 +562,7 @@ class _AssistantErrorMetaAgent:
 def test_direct_run_executes_session_hooks_and_clears_runtime_state() -> None:
     control = RunControlManager()
     hook_service = _FakeRunHookService()
-    manager = _make_run_manager(control, meta_agent=_DirectRunMetaAgent())
+    manager = _make_run_service(control, meta_agent=_DirectRunMetaAgent())
     manager._hook_service = cast(HookService, hook_service)
 
     result = asyncio.run(
@@ -596,7 +596,7 @@ def test_direct_run_retries_completion_when_stop_hook_requests_retry() -> None:
             HookDecisionBundle(decision=HookDecisionType.ALLOW),
         )
     )
-    manager = _make_run_manager(control, meta_agent=meta_agent)
+    manager = _make_run_service(control, meta_agent=meta_agent)
     manager._hook_service = cast(HookService, hook_service)
     captured_followups: list[tuple[str, bool, InjectionSource]] = []
     manager._append_followup_to_coordinator = (
@@ -638,7 +638,7 @@ def test_direct_run_retries_completion_when_stop_hook_requests_retry() -> None:
 def test_direct_run_publishes_stop_failure_for_assistant_error() -> None:
     control = RunControlManager()
     hook_service = _FakeRunHookService()
-    manager = _make_run_manager(control, meta_agent=_AssistantErrorMetaAgent())
+    manager = _make_run_service(control, meta_agent=_AssistantErrorMetaAgent())
     manager._hook_service = cast(HookService, hook_service)
 
     result = asyncio.run(
