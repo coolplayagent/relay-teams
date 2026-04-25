@@ -99,6 +99,7 @@ def test_qodana_code_quality_workflow_uses_cloud_scan() -> None:
     assert '--diff-start "$diff_start"' in qodana_workflow
     assert "--within-docker false" in qodana_workflow
     assert "QODANA_PYTHON_PATH" in qodana_workflow
+    assert "uv pip install pip" in qodana_workflow
     assert "QODANA_TOKEN" in qodana_workflow
     assert 'QODANA_ENDPOINT: "https://qodana.cloud"' in qodana_workflow
     assert "fetch-depth: 0" in qodana_workflow

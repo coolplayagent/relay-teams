@@ -27,7 +27,9 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v8.1.0
       - name: Install project dependencies
-        run: uv sync --extra dev --no-default-groups
+        run: |
+          uv sync --extra dev --no-default-groups
+          uv pip install pip
       - name: Install Qodana CLI
         run: |
           mkdir -p "$HOME/.local/bin"
