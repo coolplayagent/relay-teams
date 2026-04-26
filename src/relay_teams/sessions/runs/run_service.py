@@ -262,7 +262,7 @@ class SessionRunService:
             get_user_question_repo=lambda: self._user_question_repo,
             get_user_question_manager=lambda: self._user_question_manager,
             get_runtime=lambda run_id: self._runtime_for_run(run_id),
-            get_runtime_async=lambda run_id: self._runtime_for_run_async(run_id),
+            get_runtime_async=self._runtime_for_run_async,
             is_running_run=lambda run_id: run_id in self._running_run_ids,
             has_pending_resolvable_question_for_session=(
                 self._has_pending_resolvable_question_for_session
@@ -273,7 +273,7 @@ class SessionRunService:
             has_running_agents_for_run=self._has_running_agents_for_run,
             has_running_agents_for_run_async=self._has_running_agents_for_run_async,
             resume_run=lambda run_id: self.resume_run(run_id),
-            resume_run_async=lambda run_id: self.resume_run_async(run_id),
+            resume_run_async=self.resume_run_async,
             ensure_run_started=lambda run_id: self.ensure_run_started(run_id),
             ensure_run_started_async=lambda run_id: self.ensure_run_started_async(
                 run_id

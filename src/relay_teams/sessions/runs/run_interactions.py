@@ -386,7 +386,9 @@ class RunInteractionService:
                     feedback=feedback,
                 )
             except KeyError:
-                pass
+                # Approval can already be absent from in-memory tracking after
+                # expiry, restart, or duplicate resolution.
+                pass  # pragma: no cover
         if self._is_running_run(run_id) or runtime is None:
             return
 
@@ -917,7 +919,9 @@ class RunInteractionService:
                     expected_status=UserQuestionRequestStatus.REQUESTED,
                 )
             except UserQuestionStatusConflictError:
-                pass
+                # Concurrent resolution is acceptable; later closure logic still
+                # reconciles the run state from the persisted question records.
+                pass  # pragma: no cover
             if resolved_record is not None:
                 self._event_publisher.safe_publish_run_event(
                     RunEvent(

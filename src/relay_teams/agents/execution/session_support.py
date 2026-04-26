@@ -63,7 +63,8 @@ class _AsyncConversationHistoryRepo(Protocol):
     async def get_history_for_conversation_async(
         self,
         conversation_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError  # pragma: no cover
 
 
 class _NullPromptHistoryMessageRepo:

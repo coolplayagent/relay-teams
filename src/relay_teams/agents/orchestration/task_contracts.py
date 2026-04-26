@@ -45,7 +45,8 @@ class TaskOrchestrationServiceLike(Protocol):
         *,
         run_id: str,
         tasks: List[TaskDraft],
-    ) -> Dict[str, JsonValue]: ...
+    ) -> Dict[str, JsonValue]:
+        raise NotImplementedError  # pragma: no cover
 
     def update_task(
         self,
@@ -53,7 +54,8 @@ class TaskOrchestrationServiceLike(Protocol):
         run_id: Optional[str],
         task_id: str,
         update: TaskUpdate,
-    ) -> Dict[str, JsonValue]: ...
+    ) -> Dict[str, JsonValue]:
+        raise NotImplementedError  # pragma: no cover
 
     async def update_task_async(
         self,
@@ -61,35 +63,40 @@ class TaskOrchestrationServiceLike(Protocol):
         run_id: Optional[str],
         task_id: str,
         update: TaskUpdate,
-    ) -> Dict[str, JsonValue]: ...
+    ) -> Dict[str, JsonValue]:
+        raise NotImplementedError  # pragma: no cover
 
     def list_delegated_tasks(
         self,
         *,
         run_id: str,
         include_root: bool = False,
-    ) -> Dict[str, JsonValue]: ...
+    ) -> Dict[str, JsonValue]:
+        raise NotImplementedError  # pragma: no cover
 
     async def list_delegated_tasks_async(
         self,
         *,
         run_id: str,
         include_root: bool = False,
-    ) -> Dict[str, JsonValue]: ...
+    ) -> Dict[str, JsonValue]:
+        raise NotImplementedError  # pragma: no cover
 
     def list_run_tasks(
         self,
         *,
         run_id: str,
         include_root: bool = False,
-    ) -> Dict[str, JsonValue]: ...
+    ) -> Dict[str, JsonValue]:
+        raise NotImplementedError  # pragma: no cover
 
     async def list_run_tasks_async(
         self,
         *,
         run_id: str,
         include_root: bool = False,
-    ) -> Dict[str, JsonValue]: ...
+    ) -> Dict[str, JsonValue]:
+        raise NotImplementedError  # pragma: no cover
 
     def dispatch_task(
         self,
@@ -98,7 +105,8 @@ class TaskOrchestrationServiceLike(Protocol):
         task_id: str,
         role_id: str,
         prompt: str = "",
-    ) -> Awaitable[Dict[str, JsonValue]]: ...
+    ) -> Awaitable[Dict[str, JsonValue]]:
+        raise NotImplementedError  # pragma: no cover
 
 
 class TaskExecutionServiceLike(Protocol):
@@ -109,4 +117,5 @@ class TaskExecutionServiceLike(Protocol):
         role_id: str,
         task: TaskEnvelope,
         user_prompt_override: Optional[str] = None,
-    ) -> object: ...
+    ) -> object:
+        raise NotImplementedError  # pragma: no cover

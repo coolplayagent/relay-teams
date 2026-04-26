@@ -55,7 +55,7 @@ async def _create_and_start_run(
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
-        await task
+        _ = await task
         raise
 
 
@@ -72,7 +72,7 @@ async def _resume_and_start_run(
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
-        await task
+        _ = await task
         raise
 
 
