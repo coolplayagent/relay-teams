@@ -298,6 +298,20 @@ class MessageRepository(SharedSqliteRepository):
             )
         return _dedupe_duplicate_objective_messages(results)
 
+    async def get_user_messages_by_session_async(
+        self,
+        session_id: str,
+        *,
+        include_cleared: bool = False,
+        include_hidden_from_context: bool = False,
+    ) -> list[dict[str, JsonValue]]:
+        return await self._call_sync_async(
+            self.get_user_messages_by_session,
+            session_id,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+
     async def get_messages_by_session_async(
         self,
         session_id: str,
