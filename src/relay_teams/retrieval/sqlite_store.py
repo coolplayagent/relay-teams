@@ -24,7 +24,7 @@ from relay_teams.retrieval.retrieval_models import (
 from relay_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)
-_UNICODE61_SPLIT_PATTERN = re.compile(r"(?:[^\w]+|_+)", re.UNICODE)
+_UNICODE61_SPLIT_PATTERN = re.compile(r"[\W_]+", re.UNICODE)
 _MATCH_SANITIZE_PATTERN = re.compile(r'["\'`(){}\[\]:^*]+')
 _CJK_CHARACTER_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
