@@ -9,7 +9,11 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.metrics.models import MetricEvent, MetricScope
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 
 
 class MetricPointRecord(BaseModel):
@@ -98,6 +102,47 @@ class SqliteMetricAggregateStore(SharedSqliteRepository):
 
         self._run_write(operation_name="record", operation=operation)
 
+    async def record_async(self, event: MetricEvent) -> None:
+        bucket_start = event.occurred_at.astimezone(timezone.utc).replace(
+            second=0,
+            microsecond=0,
+        )
+        tags_json = json.dumps(dict(event.tags.normalized_items()), sort_keys=True)
+        recorded_at = event.occurred_at.astimezone(timezone.utc).isoformat()
+        scopes = (
+            (MetricScope.GLOBAL, "global"),
+            (MetricScope.SESSION, event.tags.session_id),
+            (MetricScope.RUN, event.tags.run_id),
+        )
+
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            for scope, scope_id in scopes:
+                if not scope_id:
+                    continue
+                await conn.execute(
+                    """
+                    INSERT INTO metric_points(
+                        scope, scope_id, metric_name, bucket_start,
+                        tags_json, value, recorded_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        scope.value,
+                        scope_id,
+                        event.definition_name,
+                        bucket_start.isoformat(),
+                        tags_json,
+                        event.value,
+                        recorded_at,
+                    ),
+                )
+
+        await self._run_async_write(
+            operation_name="record", operation=lambda _: operation()
+        )
+
     def query_points(
         self,
         *,
@@ -126,6 +171,34 @@ class SqliteMetricAggregateStore(SharedSqliteRepository):
         )
         return tuple(self._row_to_record(row) for row in rows)
 
+    async def query_points_async(
+        self, *, scope: MetricScope, scope_id: str, time_window_minutes: int
+    ) -> tuple[MetricPointRecord, ...]:
+        threshold = datetime.now(tz=timezone.utc) - timedelta(
+            minutes=time_window_minutes
+        )
+
+        async def operation() -> list[sqlite3.Row]:
+            conn = await self._get_async_conn()
+            return await async_fetchall(
+                conn,
+                """
+                SELECT scope, scope_id, metric_name, bucket_start,
+                       tags_json, value, recorded_at
+                FROM metric_points
+                WHERE scope=? AND scope_id=? AND bucket_start>=?
+                ORDER BY bucket_start ASC, id ASC
+                """,
+                (
+                    scope.value,
+                    scope_id,
+                    threshold.replace(second=0, microsecond=0).isoformat(),
+                ),
+            )
+
+        rows = await self._run_async_read(lambda _: operation())
+        return tuple(self._row_to_record(row) for row in rows)
+
     def latest_recorded_at(
         self,
         *,
@@ -142,6 +215,29 @@ class SqliteMetricAggregateStore(SharedSqliteRepository):
                 (scope.value, scope_id),
             ).fetchone()
         )
+        if row is None:
+            return None
+        value = row["recorded_at"]
+        if value is None:
+            return None
+        return str(value)
+
+    async def latest_recorded_at_async(
+        self, *, scope: MetricScope, scope_id: str
+    ) -> str | None:
+        async def operation() -> sqlite3.Row | None:
+            conn = await self._get_async_conn()
+            return await async_fetchone(
+                conn,
+                """
+                SELECT MAX(recorded_at) AS recorded_at
+                FROM metric_points
+                WHERE scope=? AND scope_id=?
+                """,
+                (scope.value, scope_id),
+            )
+
+        row = await self._run_async_read(lambda _: operation())
         if row is None:
             return None
         value = row["recorded_at"]
@@ -171,6 +267,33 @@ class SqliteMetricAggregateStore(SharedSqliteRepository):
             )
 
         self._run_write(operation_name="delete_by_session", operation=operation)
+
+    async def delete_by_session_async(self, session_id: str) -> None:
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            await conn.execute(
+                "DELETE FROM metric_points WHERE scope=? AND scope_id=?",
+                (MetricScope.SESSION.value, session_id),
+            )
+            await conn.execute(
+                """
+                DELETE FROM metric_points
+                WHERE scope=? AND tags_json LIKE ?
+                """,
+                (MetricScope.GLOBAL.value, f'%"session_id": "{session_id}"%'),
+            )
+            await conn.execute(
+                """
+                DELETE FROM metric_points
+                WHERE scope=? AND tags_json LIKE ?
+                """,
+                (MetricScope.RUN.value, f'%"session_id": "{session_id}"%'),
+            )
+
+        await self._run_async_write(
+            operation_name="delete_by_session",
+            operation=lambda _: operation(),
+        )
 
     def _row_to_record(self, row: sqlite3.Row) -> MetricPointRecord:
         return MetricPointRecord(

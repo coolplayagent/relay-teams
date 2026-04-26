@@ -6,7 +6,6 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 
 from pydantic import JsonValue, ValidationError
 
@@ -16,7 +15,8 @@ from relay_teams.gateway.feishu.models import (
     FeishuMessageProcessingStatus,
 )
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.validation import (
     normalize_persisted_text,
     parse_persisted_datetime_or_none,
@@ -52,12 +52,9 @@ class FeishuMessageDuplicateError(ValueError):
         self.message_key = message_key
 
 
-class FeishuMessagePoolRepository:
+class FeishuMessagePoolRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -179,6 +176,11 @@ class FeishuMessagePoolRepository:
             return updated, False
         return created, True
 
+    async def create_or_get_async(
+        self, record: FeishuMessagePoolRecord
+    ) -> tuple[FeishuMessagePoolRecord, bool]:
+        return await self._call_sync_async(self.create_or_get, record)
+
     def _create(self, record: FeishuMessagePoolRecord) -> FeishuMessagePoolRecord:
         def operation() -> None:
             self._conn.execute(
@@ -276,6 +278,9 @@ class FeishuMessagePoolRepository:
             return None
         return self._record_or_none(row)
 
+    async def get_async(self, message_pool_id: str) -> FeishuMessagePoolRecord | None:
+        return await self._call_sync_async(self.get, message_pool_id)
+
     def get_by_message_key(
         self,
         *,
@@ -306,6 +311,16 @@ class FeishuMessagePoolRepository:
             f"trigger_id={trigger_id}, tenant_key={tenant_key}, message_key={message_key}"
         )
 
+    async def get_by_message_key_async(
+        self, *, trigger_id: str, tenant_key: str, message_key: str
+    ) -> FeishuMessagePoolRecord:
+        return await self._call_sync_async(
+            self.get_by_message_key,
+            trigger_id=trigger_id,
+            tenant_key=tenant_key,
+            message_key=message_key,
+        )
+
     def get_latest_by_run_id(self, run_id: str) -> FeishuMessagePoolRecord | None:
         with self._lock:
             rows = self._conn.execute(
@@ -321,6 +336,11 @@ class FeishuMessagePoolRepository:
             if (record := self._record_or_none(row)) is not None:
                 return record
         return None
+
+    async def get_latest_by_run_id_async(
+        self, run_id: str
+    ) -> FeishuMessagePoolRecord | None:
+        return await self._call_sync_async(self.get_latest_by_run_id, run_id)
 
     def update(
         self,
@@ -431,6 +451,11 @@ class FeishuMessagePoolRepository:
             )
         return stored
 
+    async def update_async(
+        self, message_pool_id: str, **changes: object
+    ) -> FeishuMessagePoolRecord:
+        return await self._call_sync_async(self.update, message_pool_id, **changes)
+
     def count_active_chat_messages_ahead(self, message_pool_id: str) -> int:
         with self._lock:
             row = self._conn.execute(
@@ -448,6 +473,11 @@ class FeishuMessagePoolRepository:
                 (message_pool_id, *_ACTIVE_PROCESSING_STATUSES),
             ).fetchone()
         return int(row["total"]) if row is not None else 0
+
+    async def count_active_chat_messages_ahead_async(self, message_pool_id: str) -> int:
+        return await self._call_sync_async(
+            self.count_active_chat_messages_ahead, message_pool_id
+        )
 
     def list_ready_for_processing(
         self,
@@ -488,6 +518,13 @@ class FeishuMessagePoolRepository:
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
 
+    async def list_ready_for_processing_async(
+        self, *, ready_at: datetime, limit: int = 20
+    ) -> tuple[FeishuMessagePoolRecord, ...]:
+        return await self._call_sync_async(
+            self.list_ready_for_processing, ready_at=ready_at, limit=limit
+        )
+
     def list_waiting_for_result(
         self,
         *,
@@ -512,6 +549,11 @@ class FeishuMessagePoolRepository:
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
 
+    async def list_waiting_for_result_async(
+        self, *, limit: int = 20
+    ) -> tuple[FeishuMessagePoolRecord, ...]:
+        return await self._call_sync_async(self.list_waiting_for_result, limit=limit)
+
     def list_pending_acknowledgements(
         self,
         *,
@@ -534,6 +576,13 @@ class FeishuMessagePoolRepository:
             ).fetchall()
         return tuple(
             record for row in rows if (record := self._record_or_none(row)) is not None
+        )
+
+    async def list_pending_acknowledgements_async(
+        self, *, limit: int = 20
+    ) -> tuple[FeishuMessagePoolRecord, ...]:
+        return await self._call_sync_async(
+            self.list_pending_acknowledgements, limit=limit
         )
 
     def list_pending_reactions(
@@ -560,6 +609,11 @@ class FeishuMessagePoolRepository:
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
 
+    async def list_pending_reactions_async(
+        self, *, limit: int = 20
+    ) -> tuple[FeishuMessagePoolRecord, ...]:
+        return await self._call_sync_async(self.list_pending_reactions, limit=limit)
+
     def list_active_chat_messages(
         self,
         *,
@@ -582,6 +636,16 @@ class FeishuMessagePoolRepository:
             ).fetchall()
         return tuple(
             record for row in rows if (record := self._record_or_none(row)) is not None
+        )
+
+    async def list_active_chat_messages_async(
+        self, *, trigger_id: str, tenant_key: str, chat_id: str
+    ) -> tuple[FeishuMessagePoolRecord, ...]:
+        return await self._call_sync_async(
+            self.list_active_chat_messages,
+            trigger_id=trigger_id,
+            tenant_key=tenant_key,
+            chat_id=chat_id,
         )
 
     def get_chat_status_counts(
@@ -619,6 +683,16 @@ class FeishuMessagePoolRepository:
             status = FeishuMessageProcessingStatus(str(row["processing_status"]))
             counts[status] = int(row["total"])
         return counts
+
+    async def get_chat_status_counts_async(
+        self, *, trigger_id: str, tenant_key: str, chat_id: str
+    ) -> dict[FeishuMessageProcessingStatus, int]:
+        return await self._call_sync_async(
+            self.get_chat_status_counts,
+            trigger_id=trigger_id,
+            tenant_key=tenant_key,
+            chat_id=chat_id,
+        )
 
     def cancel_active_chat_messages(
         self,
@@ -676,6 +750,17 @@ class FeishuMessagePoolRepository:
         )
         return affected
 
+    async def cancel_active_chat_messages_async(
+        self, *, trigger_id: str, tenant_key: str, chat_id: str, cancelled_at: datetime
+    ) -> int:
+        return await self._call_sync_async(
+            self.cancel_active_chat_messages,
+            trigger_id=trigger_id,
+            tenant_key=tenant_key,
+            chat_id=chat_id,
+            cancelled_at=cancelled_at,
+        )
+
     def recover_stale_claims(self, *, claimed_before: datetime) -> int:
         affected = 0
 
@@ -710,6 +795,11 @@ class FeishuMessagePoolRepository:
             operation_name="recover_stale_claims",
         )
         return affected
+
+    async def recover_stale_claims_async(self, *, claimed_before: datetime) -> int:
+        return await self._call_sync_async(
+            self.recover_stale_claims, claimed_before=claimed_before
+        )
 
     def _row_to_record(self, row: sqlite3.Row) -> FeishuMessagePoolRecord:
         message_pool_id = require_persisted_identifier(

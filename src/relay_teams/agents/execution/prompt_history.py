@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
@@ -92,7 +92,8 @@ class PromptContentPersistenceService(Protocol):
             TextContentPart | MediaRefContentPart | InlineMediaContentPart,
             ...,
         ],
-    ) -> UserPromptContent: ...
+    ) -> UserPromptContent:
+        raise NotImplementedError  # pragma: no cover
 
 
 @runtime_checkable
@@ -101,7 +102,8 @@ class PromptContentHydrationService(Protocol):
         self,
         *,
         content: UserPromptContent,
-    ) -> UserPromptContent: ...
+    ) -> UserPromptContent:
+        raise NotImplementedError  # pragma: no cover
 
 
 @runtime_checkable
@@ -113,25 +115,30 @@ class PromptContentProviderService(Protocol):
             TextContentPart | MediaRefContentPart | InlineMediaContentPart,
             ...,
         ],
-    ) -> UserPromptContent: ...
+    ) -> UserPromptContent:
+        raise NotImplementedError  # pragma: no cover
 
 
+# noinspection PyShadowingNames
 class PromptHistoryMessageRepository(Protocol):
     def get_history_for_conversation(
         self,
         conversation_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError  # pragma: no cover
 
     def get_history_for_conversation_task(
         self,
         conversation_id: str,
         task_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError  # pragma: no cover
 
     def prune_conversation_history_to_safe_boundary(
         self,
         conversation_id: str,
-    ) -> None: ...
+    ) -> None:
+        pass  # pragma: no cover
 
     def append(
         self,
@@ -144,7 +151,8 @@ class PromptHistoryMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         messages: list[ModelRequest | ModelResponse],
-    ) -> None: ...
+    ) -> None:
+        pass  # pragma: no cover
 
     def append_system_prompt_if_missing(
         self,
@@ -157,7 +165,8 @@ class PromptHistoryMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         content: str,
-    ) -> None: ...
+    ) -> None:
+        pass  # pragma: no cover
 
     def replace_pending_user_prompt(
         self,
@@ -170,7 +179,145 @@ class PromptHistoryMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         content: UserPromptContent,
-    ) -> bool: ...
+    ) -> bool:
+        raise NotImplementedError  # pragma: no cover
+
+    async def get_history_for_conversation_async(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError  # pragma: no cover
+
+    async def get_history_for_conversation_task_async(
+        self,
+        conversation_id: str,
+        task_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError  # pragma: no cover
+
+    async def prune_conversation_history_to_safe_boundary_async(
+        self,
+        conversation_id: str,
+    ) -> None:
+        pass  # pragma: no cover
+
+    async def append_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: list[ModelRequest | ModelResponse],
+    ) -> None:
+        pass  # pragma: no cover
+
+    async def append_system_prompt_if_missing_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: str,
+    ) -> None:
+        pass  # pragma: no cover
+
+    async def replace_pending_user_prompt_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: UserPromptContent,
+    ) -> bool:
+        raise NotImplementedError  # pragma: no cover
+
+
+# noinspection PyShadowingNames
+@runtime_checkable
+class AsyncPromptHistoryMessageRepository(Protocol):
+    async def get_history_for_conversation_async(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError  # pragma: no cover
+
+    async def get_history_for_conversation_task_async(
+        self,
+        conversation_id: str,
+        task_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError  # pragma: no cover
+
+    async def prune_conversation_history_to_safe_boundary_async(
+        self,
+        conversation_id: str,
+    ) -> None:
+        pass  # pragma: no cover
+
+    async def append_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: list[ModelRequest | ModelResponse],
+    ) -> None:
+        pass  # pragma: no cover
+
+    async def append_system_prompt_if_missing_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: str,
+    ) -> None:
+        pass  # pragma: no cover
+
+    async def replace_pending_user_prompt_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: UserPromptContent,
+    ) -> bool:
+        raise NotImplementedError  # pragma: no cover
+
+
+@runtime_checkable
+class AsyncRunIntentRepository(Protocol):
+    async def get_async(
+        self,
+        run_id: str,
+        *,
+        fallback_session_id: str | None = None,
+    ) -> object:
+        raise NotImplementedError  # pragma: no cover
 
 
 @runtime_checkable
@@ -180,7 +327,8 @@ class PromptHookService(Protocol):
         *,
         event_input: UserPromptSubmitInput | PreCompactInput | PostCompactInput,
         run_event_hub: object,
-    ) -> HookDecisionBundle: ...
+    ) -> HookDecisionBundle:
+        raise NotImplementedError  # pragma: no cover
 
 
 class PreparedPromptContext(BaseModel):
@@ -199,6 +347,7 @@ class PreparedPromptContext(BaseModel):
     microcompact_compacted_part_count: int = 0
 
 
+# noinspection PyShadowingNames
 class PromptHistoryService:
     def __init__(
         self,
@@ -217,6 +366,10 @@ class PromptHistoryService:
         load_safe_history_for_conversation: Callable[
             [str], list[ModelRequest | ModelResponse]
         ],
+        load_safe_history_for_conversation_async: Callable[
+            [str], Awaitable[list[ModelRequest | ModelResponse]]
+        ]
+        | None = None,
     ) -> None:
         self._config = config
         self._run_intent_repo = run_intent_repo
@@ -230,12 +383,155 @@ class PromptHistoryService:
         self._reminder_service = reminder_service
         self._run_event_hub = run_event_hub
         self._load_safe_history_for_conversation = load_safe_history_for_conversation
+        self._load_safe_history_for_conversation_async = (
+            load_safe_history_for_conversation_async
+        )
 
     def _prompt_budgeting_service(self) -> PromptBudgetingService:
         return PromptBudgetingService(
             config=self._config,
             mcp_registry=self._mcp_registry,
             mcp_tool_context_token_cache=self._mcp_tool_context_token_cache,
+        )
+
+    async def _get_history_for_conversation_async(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        if isinstance(self._message_repo, AsyncPromptHistoryMessageRepository):
+            return await self._message_repo.get_history_for_conversation_async(
+                conversation_id
+            )
+        return self._message_repo.get_history_for_conversation(conversation_id)
+
+    async def _get_history_for_conversation_task_async(
+        self,
+        conversation_id: str,
+        task_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        if isinstance(self._message_repo, AsyncPromptHistoryMessageRepository):
+            return await self._message_repo.get_history_for_conversation_task_async(
+                conversation_id,
+                task_id,
+            )
+        return self._message_repo.get_history_for_conversation_task(
+            conversation_id,
+            task_id,
+        )
+
+    async def _prune_conversation_history_to_safe_boundary_async(
+        self,
+        conversation_id: str,
+    ) -> None:
+        if isinstance(self._message_repo, AsyncPromptHistoryMessageRepository):
+            await self._message_repo.prune_conversation_history_to_safe_boundary_async(
+                conversation_id
+            )
+            return
+        self._message_repo.prune_conversation_history_to_safe_boundary(conversation_id)
+
+    async def _append_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: list[ModelRequest | ModelResponse],
+    ) -> None:
+        if isinstance(self._message_repo, AsyncPromptHistoryMessageRepository):
+            await self._message_repo.append_async(
+                session_id=session_id,
+                workspace_id=workspace_id,
+                conversation_id=conversation_id,
+                agent_role_id=agent_role_id,
+                instance_id=instance_id,
+                task_id=task_id,
+                trace_id=trace_id,
+                messages=messages,
+            )
+            return
+        self._message_repo.append(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=agent_role_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            messages=messages,
+        )
+
+    async def _append_system_prompt_if_missing_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: str,
+    ) -> None:
+        if isinstance(self._message_repo, AsyncPromptHistoryMessageRepository):
+            await self._message_repo.append_system_prompt_if_missing_async(
+                session_id=session_id,
+                workspace_id=workspace_id,
+                conversation_id=conversation_id,
+                agent_role_id=agent_role_id,
+                instance_id=instance_id,
+                task_id=task_id,
+                trace_id=trace_id,
+                content=content,
+            )
+            return
+        self._message_repo.append_system_prompt_if_missing(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=agent_role_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            content=content,
+        )
+
+    async def _replace_pending_user_prompt_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: UserPromptContent,
+    ) -> bool:
+        if isinstance(self._message_repo, AsyncPromptHistoryMessageRepository):
+            return await self._message_repo.replace_pending_user_prompt_async(
+                session_id=session_id,
+                workspace_id=workspace_id,
+                conversation_id=conversation_id,
+                agent_role_id=agent_role_id,
+                instance_id=instance_id,
+                task_id=task_id,
+                trace_id=trace_id,
+                content=content,
+            )
+        return self._message_repo.replace_pending_user_prompt(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=agent_role_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            content=content,
         )
 
     async def prepare_prompt_context(
@@ -249,8 +545,16 @@ class PromptHistoryService:
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
     ) -> PreparedPromptContext:
-        history = self._load_safe_history_for_conversation(conversation_id)
-        history, protected_current_prompt = self._split_protected_current_prompt(
+        if self._load_safe_history_for_conversation_async is not None:
+            history = await self._load_safe_history_for_conversation_async(
+                conversation_id
+            )
+        else:
+            history = self._load_safe_history_for_conversation(conversation_id)
+        (
+            history,
+            protected_current_prompt,
+        ) = await self._split_protected_current_prompt_async(
             request=request,
             conversation_id=conversation_id,
             history=history,
@@ -300,7 +604,7 @@ class PromptHistoryService:
             estimated_tokens_before_microcompact=estimated_before_microcompact,
             estimated_tokens_after_microcompact=estimated_after_microcompact,
         )
-        history = self.coerce_history_to_provider_safe_sequence(
+        history = await self.coerce_history_to_provider_safe_sequence_async(
             request=request,
             history=history,
         )
@@ -357,6 +661,33 @@ class PromptHistoryService:
             return candidate_history, None
         return candidate_history, protected_prompt
 
+    async def _split_protected_current_prompt_async(
+        self,
+        *,
+        request: LLMRequest,
+        conversation_id: str,
+        history: Sequence[ModelRequest | ModelResponse],
+        reserve_user_prompt_tokens: bool,
+    ) -> tuple[list[ModelRequest | ModelResponse], ModelRequest | None]:
+        candidate_history = list(history)
+        if not reserve_user_prompt_tokens:
+            return candidate_history, None
+        current_keys = await self._current_request_prompt_keys_async(
+            request=request,
+            conversation_id=conversation_id,
+        )
+        if not current_keys:
+            return candidate_history, None
+        if not any(
+            history_ends_with_user_prompt(candidate_history, current_key)
+            for current_key in current_keys
+        ):
+            return candidate_history, None
+        protected_prompt = candidate_history.pop()
+        if not isinstance(protected_prompt, ModelRequest):
+            return candidate_history, None
+        return candidate_history, protected_prompt
+
     def _current_request_prompt_keys(
         self,
         *,
@@ -370,6 +701,32 @@ class PromptHistoryService:
             if current_key and current_key not in keys:
                 keys.append(current_key)
         task_history = self._message_repo.get_history_for_conversation_task(
+            conversation_id,
+            request.task_id,
+        )
+        for message in reversed(task_history):
+            if not isinstance(message, ModelRequest):
+                continue
+            current_key = user_prompt_parts_key(parts=message.parts)
+            if current_key:
+                if current_key not in keys:
+                    keys.append(current_key)
+                break
+        return tuple(keys)
+
+    async def _current_request_prompt_keys_async(
+        self,
+        *,
+        request: LLMRequest,
+        conversation_id: str,
+    ) -> tuple[str, ...]:
+        keys: list[str] = []
+        current_content = self.current_request_prompt_content(request)
+        if current_content is not None:
+            current_key = user_prompt_content_key(current_content)
+            if current_key and current_key not in keys:
+                keys.append(current_key)
+        task_history = await self._get_history_for_conversation_task_async(
             conversation_id,
             request.task_id,
         )
@@ -480,6 +837,94 @@ class PromptHistoryService:
             return [bridge_message]
         return []
 
+    async def coerce_history_to_provider_safe_sequence_async(
+        self,
+        *,
+        request: LLMRequest,
+        history: Sequence[ModelRequest | ModelResponse],
+    ) -> list[ModelRequest | ModelResponse]:
+        candidate_history = list(history)
+        if is_replayable_history(candidate_history):
+            return candidate_history
+        replayable_start = self.first_tool_replayable_history_index(candidate_history)
+        if replayable_start > 0:
+            candidate_history = candidate_history[replayable_start:]
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.history.replayable_prefix.dropped",
+                message=(
+                    "Dropped a non-replayable history prefix before sending the "
+                    "provider request"
+                ),
+                payload={
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                    "dropped_message_count": replayable_start,
+                },
+            )
+        if candidate_history and is_replayable_history(candidate_history):
+            return candidate_history
+        if (
+            candidate_history
+            and not request_has_prompt_content(request)
+            and history_has_valid_tool_replay(candidate_history)
+        ):
+            bridge_message = await self.build_history_replay_bridge_message_async(
+                request=request
+            )
+            if bridge_message is not None:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="llm.history.replay_bridge.inserted",
+                    message=(
+                        "Inserted a synthetic user bridge before replaying "
+                        "assistant/tool-only history"
+                    ),
+                    payload={
+                        "role_id": request.role_id,
+                        "instance_id": request.instance_id,
+                        "message_count": len(candidate_history),
+                    },
+                )
+                return [bridge_message, *candidate_history]
+        if request_has_prompt_content(request):
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.history.invalid_suffix.dropped",
+                message=(
+                    "Dropped non-replayable history and relied on the current user "
+                    "prompt to restart the provider request"
+                ),
+                payload={
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                    "message_count": len(candidate_history),
+                },
+            )
+            return []
+        bridge_message = await self.build_history_replay_bridge_message_async(
+            request=request
+        )
+        if bridge_message is not None:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.history.replay_bridge.synthetic_only",
+                message=(
+                    "Fell back to a synthetic user bridge because no replayable "
+                    "history suffix remained"
+                ),
+                payload={
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                },
+            )
+            return [bridge_message]
+        return []
+
     def first_tool_replayable_history_index(
         self,
         history: Sequence[ModelRequest | ModelResponse],
@@ -501,6 +946,16 @@ class PromptHistoryService:
             return None
         return ModelRequest(parts=[UserPromptPart(content=prompt)])
 
+    async def build_history_replay_bridge_message_async(
+        self,
+        *,
+        request: LLMRequest,
+    ) -> ModelRequest | None:
+        prompt = await self.build_history_replay_bridge_prompt_async(request=request)
+        if not prompt:
+            return None
+        return ModelRequest(parts=[UserPromptPart(content=prompt)])
+
     def build_history_replay_bridge_prompt(
         self,
         *,
@@ -512,6 +967,39 @@ class PromptHistoryService:
                 request.run_id,
                 fallback_session_id=request.session_id,
             ).intent.strip()
+        except KeyError:
+            intent_text = ""
+        lines = [
+            "Continue the existing task using the compacted summary and preserved execution history.",
+            "Resume from the latest in-progress state without discarding prior decisions or artifacts.",
+        ]
+        if intent_text:
+            lines.extend(
+                [
+                    "",
+                    "Original task intent:",
+                    intent_text,
+                ]
+            )
+        return "\n".join(lines).strip()
+
+    async def build_history_replay_bridge_prompt_async(
+        self,
+        *,
+        request: LLMRequest,
+    ) -> str:
+        try:
+            if isinstance(self._run_intent_repo, AsyncRunIntentRepository):
+                record = await self._run_intent_repo.get_async(
+                    request.run_id,
+                    fallback_session_id=request.session_id,
+                )
+            else:
+                record = self._run_intent_repo.get(
+                    request.run_id,
+                    fallback_session_id=request.session_id,
+                )
+            intent_text = str(getattr(record, "intent", "")).strip()
         except KeyError:
             intent_text = ""
         lines = [
@@ -696,7 +1184,7 @@ class PromptHistoryService:
                 run_event_hub=self._run_event_hub,
             )
         if compacted_result.applied and self._reminder_service is not None:
-            _ = self._reminder_service.observe_context_pressure(
+            _ = await self._reminder_service.observe_context_pressure_async(
                 ContextPressureObservation(
                     session_id=request.session_id,
                     run_id=request.run_id,
@@ -741,7 +1229,7 @@ class PromptHistoryService:
     ) -> tuple[LLMRequest, tuple[str, ...]]:
         if not isinstance(self._hook_service, PromptHookService):
             return request, ()
-        prompt_text = self.resolve_hook_prompt_text(request)
+        prompt_text = await self.resolve_hook_prompt_text_async(request)
         if not prompt_text:
             return request, ()
         bundle = await self._hook_service.execute(
@@ -801,6 +1289,21 @@ class PromptHistoryService:
                 return resolved
         return ""
 
+    async def resolve_hook_prompt_text_async(self, request: LLMRequest) -> str:
+        prompt_text = request.prompt_text.strip()
+        if prompt_text:
+            return prompt_text
+        history = await self._get_history_for_conversation_async(
+            conversation_id(request)
+        )
+        for message in reversed(history):
+            if not isinstance(message, ModelRequest):
+                continue
+            resolved = extract_user_prompt_text(message)
+            if resolved:
+                return resolved
+        return ""
+
     def persist_hook_system_context_if_needed(
         self,
         *,
@@ -813,6 +1316,28 @@ class PromptHistoryService:
             if not text:
                 continue
             self._message_repo.append_system_prompt_if_missing(
+                session_id=request.session_id,
+                workspace_id=request.workspace_id,
+                conversation_id=resolved_conversation_id,
+                agent_role_id=request.role_id,
+                instance_id=request.instance_id,
+                task_id=request.task_id,
+                trace_id=request.trace_id,
+                content=text,
+            )
+
+    async def persist_hook_system_context_if_needed_async(
+        self,
+        *,
+        request: LLMRequest,
+        contexts: tuple[str, ...],
+    ) -> None:
+        resolved_conversation_id = conversation_id(request)
+        for context in contexts:
+            text = str(context).strip()
+            if not text:
+                continue
+            await self._append_system_prompt_if_missing_async(
                 session_id=request.session_id,
                 workspace_id=request.workspace_id,
                 conversation_id=resolved_conversation_id,
@@ -867,6 +1392,63 @@ class PromptHistoryService:
                 True,
             )
         self._message_repo.append(
+            session_id=request.session_id,
+            workspace_id=request.workspace_id,
+            conversation_id=resolved_conversation_id,
+            agent_role_id=request.role_id,
+            instance_id=request.instance_id,
+            task_id=request.task_id,
+            trace_id=request.trace_id,
+            messages=[prompt_message],
+        )
+        next_history = list(history)
+        next_history.append(prompt_message)
+        return next_history, False
+
+    async def persist_user_prompt_if_needed_async(
+        self,
+        *,
+        request: LLMRequest,
+        history: list[ModelRequest | ModelResponse],
+        content: UserPromptContent | None,
+        filter_model_messages: Callable[
+            [Sequence[ModelRequest | ModelResponse]],
+            list[ModelRequest | ModelResponse],
+        ],
+    ) -> tuple[list[ModelRequest | ModelResponse], bool]:
+        if content is None:
+            return history, False
+        prompt_text = user_prompt_content_to_text(content)
+        if not prompt_text:
+            return history, False
+        prompt_key = user_prompt_content_key(content)
+        if history_ends_with_user_prompt(history, prompt_key):
+            return history, False
+        resolved_conversation_id = conversation_id(request)
+        await self._prune_conversation_history_to_safe_boundary_async(
+            resolved_conversation_id
+        )
+        replaced = await self._replace_pending_user_prompt_async(
+            session_id=request.session_id,
+            workspace_id=request.workspace_id,
+            conversation_id=resolved_conversation_id,
+            agent_role_id=request.role_id,
+            instance_id=request.instance_id,
+            task_id=request.task_id,
+            trace_id=request.trace_id,
+            content=content,
+        )
+        prompt_message = ModelRequest(parts=[UserPromptPart(content=content)])
+        if replaced:
+            return (
+                filter_model_messages(
+                    await self._get_history_for_conversation_async(
+                        resolved_conversation_id
+                    )
+                ),
+                True,
+            )
+        await self._append_async(
             session_id=request.session_id,
             workspace_id=request.workspace_id,
             conversation_id=resolved_conversation_id,

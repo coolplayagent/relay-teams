@@ -11,3 +11,6 @@ class AggregateStoreSink:
 
     def record(self, event: MetricEvent) -> None:
         self._store.record(event)
+
+    async def record_async(self, event: MetricEvent) -> None:
+        await self._store.record_async(event)

@@ -95,5 +95,10 @@ class AutomationEventRepository(SharedSqliteRepository):
         )
         return record
 
+    async def create_event_async(
+        self, record: AutomationExecutionEventRecord
+    ) -> AutomationExecutionEventRecord:
+        return await self._call_sync_async(self.create_event, record)
+
 
 __all__ = ["AutomationEventRepository", "AutomationExecutionEventRecord"]

@@ -9,7 +9,6 @@ from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from threading import RLock
 
 from pydantic_ai.messages import (
     ModelMessage,
@@ -18,7 +17,8 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.agents.execution.tool_args_repair import repair_tool_args
 from relay_teams.agents.execution.tool_call_history import (
     collect_safe_row_ids,
@@ -36,7 +36,7 @@ from relay_teams.sessions.session_history_marker_repository import (
 )
 
 
-class MessageRepository:
+class MessageRepository(SharedSqliteRepository):
     """Persists conversation-safe LLM message history."""
 
     def __init__(
@@ -45,10 +45,7 @@ class MessageRepository:
         *,
         session_history_marker_repo: SessionHistoryMarkerRepository | None = None,
     ) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._session_history_marker_repo = session_history_marker_repo
         self._init_tables()
 
@@ -169,16 +166,50 @@ class MessageRepository:
             operation_name="append",
         )
 
+    async def append_async(
+        self,
+        *,
+        session_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: Sequence[ModelMessage],
+        workspace_id: str,
+        conversation_id: str | None = None,
+        agent_role_id: str | None = None,
+    ) -> None:
+        return await self._call_sync_async(
+            self.append,
+            session_id=session_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            messages=messages,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=agent_role_id,
+        )
+
     def get_history(self, instance_id: str) -> list[ModelMessage]:
         return self._read_history(
             "SELECT session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? ORDER BY id ASC",
             (instance_id,),
         )
 
+    async def get_history_async(self, instance_id: str) -> list[ModelMessage]:
+        return await self._call_sync_async(self.get_history, instance_id)
+
     def get_history_for_conversation(self, conversation_id: str) -> list[ModelMessage]:
         return self._read_history(
             "SELECT session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
             (conversation_id,),
+        )
+
+    async def get_history_for_conversation_async(
+        self, conversation_id: str
+    ) -> list[ModelMessage]:
+        return await self._call_sync_async(
+            self.get_history_for_conversation, conversation_id
         )
 
     def get_messages_by_session(
@@ -267,6 +298,34 @@ class MessageRepository:
             )
         return _dedupe_duplicate_objective_messages(results)
 
+    async def get_user_messages_by_session_async(
+        self,
+        session_id: str,
+        *,
+        include_cleared: bool = False,
+        include_hidden_from_context: bool = False,
+    ) -> list[dict[str, JsonValue]]:
+        return await self._call_sync_async(
+            self.get_user_messages_by_session,
+            session_id,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+
+    async def get_messages_by_session_async(
+        self,
+        session_id: str,
+        *,
+        include_cleared: bool = False,
+        include_hidden_from_context: bool = False,
+    ) -> list[dict[str, JsonValue]]:
+        return await self._call_sync_async(
+            self.get_messages_by_session,
+            session_id,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+
     def get_messages_for_instance(
         self,
         session_id: str,
@@ -311,6 +370,22 @@ class MessageRepository:
             )
         return _dedupe_duplicate_objective_messages(results)
 
+    async def get_messages_for_instance_async(
+        self,
+        session_id: str,
+        instance_id: str,
+        *,
+        include_cleared: bool = False,
+        include_hidden_from_context: bool = False,
+    ) -> list[dict[str, JsonValue]]:
+        return await self._call_sync_async(
+            self.get_messages_for_instance,
+            session_id,
+            instance_id,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -322,6 +397,9 @@ class MessageRepository:
             repository_name="MessageRepository",
             operation_name="delete_by_session",
         )
+
+    async def delete_by_session_async(self, session_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_session, session_id)
 
     def delete_by_instance(self, instance_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -336,16 +414,31 @@ class MessageRepository:
             operation_name="delete_by_instance",
         )
 
+    async def delete_by_instance_async(self, instance_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_instance, instance_id)
+
     def prune_history_to_safe_boundary(self, instance_id: str) -> None:
         self._prune_to_safe_boundary(
             "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? ORDER BY id ASC",
             (instance_id,),
         )
 
+    async def prune_history_to_safe_boundary_async(self, instance_id: str) -> None:
+        return await self._call_sync_async(
+            self.prune_history_to_safe_boundary, instance_id
+        )
+
     def prune_conversation_history_to_safe_boundary(self, conversation_id: str) -> None:
         self._prune_to_safe_boundary(
             "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
             (conversation_id,),
+        )
+
+    async def prune_conversation_history_to_safe_boundary_async(
+        self, conversation_id: str
+    ) -> None:
+        return await self._call_sync_async(
+            self.prune_conversation_history_to_safe_boundary, conversation_id
         )
 
     def compact_conversation_history(
@@ -391,6 +484,22 @@ class MessageRepository:
             lock=self._lock,
             repository_name="MessageRepository",
             operation_name="compact_conversation_history",
+        )
+
+    async def compact_conversation_history_async(
+        self,
+        conversation_id: str,
+        *,
+        keep_message_count: int,
+        hidden_reason: str = "compaction",
+        hidden_marker_id: str = "",
+    ) -> None:
+        return await self._call_sync_async(
+            self.compact_conversation_history,
+            conversation_id,
+            keep_message_count=keep_message_count,
+            hidden_reason=hidden_reason,
+            hidden_marker_id=hidden_marker_id,
         )
 
     def replace_pending_user_prompt(
@@ -466,6 +575,30 @@ class MessageRepository:
             lock=self._lock,
             repository_name="MessageRepository",
             operation_name="replace_pending_user_prompt",
+        )
+
+    async def replace_pending_user_prompt_async(
+        self,
+        *,
+        session_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: UserPromptContent,
+        workspace_id: str,
+        conversation_id: str | None = None,
+        agent_role_id: str | None = None,
+    ) -> bool:
+        return await self._call_sync_async(
+            self.replace_pending_user_prompt,
+            session_id=session_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            content=content,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=agent_role_id,
         )
 
     def append_user_prompt_if_missing(
@@ -549,6 +682,30 @@ class MessageRepository:
             operation_name="append_user_prompt_if_missing",
         )
 
+    async def append_user_prompt_if_missing_async(
+        self,
+        *,
+        session_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: UserPromptContent,
+        workspace_id: str,
+        conversation_id: str | None = None,
+        agent_role_id: str | None = None,
+    ) -> bool:
+        return await self._call_sync_async(
+            self.append_user_prompt_if_missing,
+            session_id=session_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            content=content,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=agent_role_id,
+        )
+
     def append_system_prompt_if_missing(
         self,
         *,
@@ -608,6 +765,30 @@ class MessageRepository:
             operation_name="append_system_prompt_if_missing",
         )
 
+    async def append_system_prompt_if_missing_async(
+        self,
+        *,
+        session_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: str,
+        workspace_id: str,
+        conversation_id: str | None = None,
+        agent_role_id: str | None = None,
+    ) -> bool:
+        return await self._call_sync_async(
+            self.append_system_prompt_if_missing,
+            session_id=session_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            content=content,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=agent_role_id,
+        )
+
     def get_history_for_task(
         self, instance_id: str, task_id: str
     ) -> list[ModelMessage]:
@@ -616,12 +797,26 @@ class MessageRepository:
             (instance_id, task_id),
         )
 
+    async def get_history_for_task_async(
+        self, instance_id: str, task_id: str
+    ) -> list[ModelMessage]:
+        return await self._call_sync_async(
+            self.get_history_for_task, instance_id, task_id
+        )
+
     def get_history_for_conversation_task(
         self, conversation_id: str, task_id: str
     ) -> list[ModelMessage]:
         return self._read_history(
             "SELECT session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
             (conversation_id, task_id),
+        )
+
+    async def get_history_for_conversation_task_async(
+        self, conversation_id: str, task_id: str
+    ) -> list[ModelMessage]:
+        return await self._call_sync_async(
+            self.get_history_for_conversation_task, conversation_id, task_id
         )
 
     def _read_history(
@@ -726,6 +921,16 @@ class MessageRepository:
             lock=self._lock,
             repository_name="MessageRepository",
             operation_name="hide_conversation_messages_for_compaction",
+        )
+
+    async def hide_conversation_messages_for_compaction_async(
+        self, *, conversation_id: str, hide_message_count: int, hidden_marker_id: str
+    ) -> int:
+        return await self._call_sync_async(
+            self.hide_conversation_messages_for_compaction,
+            conversation_id=conversation_id,
+            hide_message_count=hide_message_count,
+            hidden_marker_id=hidden_marker_id,
         )
 
     def _append_rows(

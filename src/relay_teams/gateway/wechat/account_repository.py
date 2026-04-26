@@ -6,12 +6,12 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.gateway.wechat.models import (
     WeChatAccountRecord,
     WeChatAccountStatus,
@@ -25,12 +25,9 @@ from relay_teams.validation import (
 LOGGER = get_logger(__name__)
 
 
-class WeChatAccountRepository:
+class WeChatAccountRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -80,6 +77,9 @@ class WeChatAccountRepository:
                 _log_invalid_wechat_account_row(row=row, error=exc)
         return tuple(records)
 
+    async def list_accounts_async(self) -> tuple[WeChatAccountRecord, ...]:
+        return await self._call_sync_async(self.list_accounts)
+
     def get_account(self, account_id: str) -> WeChatAccountRecord:
         row = self._conn.execute(
             "SELECT * FROM wechat_accounts WHERE account_id=?",
@@ -92,6 +92,9 @@ class WeChatAccountRepository:
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
             _log_invalid_wechat_account_row(row=row, error=exc)
             raise KeyError(f"Unknown account_id: {account_id}") from exc
+
+    async def get_account_async(self, account_id: str) -> WeChatAccountRecord:
+        return await self._call_sync_async(self.get_account, account_id)
 
     def upsert_account(self, record: WeChatAccountRecord) -> WeChatAccountRecord:
         run_sqlite_write_with_retry(
@@ -166,6 +169,11 @@ class WeChatAccountRepository:
         )
         return self.get_account(record.account_id)
 
+    async def upsert_account_async(
+        self, record: WeChatAccountRecord
+    ) -> WeChatAccountRecord:
+        return await self._call_sync_async(self.upsert_account, record)
+
     def delete_account(self, account_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -178,6 +186,9 @@ class WeChatAccountRepository:
             repository_name="WeChatAccountRepository",
             operation_name="delete_account",
         )
+
+    async def delete_account_async(self, account_id: str) -> None:
+        return await self._call_sync_async(self.delete_account, account_id)
 
     def _to_record(
         self,

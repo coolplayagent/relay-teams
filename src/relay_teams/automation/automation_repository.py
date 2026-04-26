@@ -120,6 +120,11 @@ class AutomationProjectRepository(SharedSqliteRepository):
             raise
         return record
 
+    async def create_async(
+        self, record: AutomationProjectRecord
+    ) -> AutomationProjectRecord:
+        return await self._call_sync_async(self.create, record)
+
     def update(self, record: AutomationProjectRecord) -> AutomationProjectRecord:
         try:
             self._run_write(
@@ -178,6 +183,11 @@ class AutomationProjectRepository(SharedSqliteRepository):
             raise
         return record
 
+    async def update_async(
+        self, record: AutomationProjectRecord
+    ) -> AutomationProjectRecord:
+        return await self._call_sync_async(self.update, record)
+
     def get(self, automation_project_id: str) -> AutomationProjectRecord:
         row = self._run_read(
             lambda: self._conn.execute(
@@ -198,6 +208,9 @@ class AutomationProjectRepository(SharedSqliteRepository):
                 f"Unknown automation_project_id: {automation_project_id}"
             ) from exc
 
+    async def get_async(self, automation_project_id: str) -> AutomationProjectRecord:
+        return await self._call_sync_async(self.get, automation_project_id)
+
     def list_all(self) -> Tuple[AutomationProjectRecord, ...]:
         rows = self._run_read(
             lambda: self._conn.execute(
@@ -210,6 +223,9 @@ class AutomationProjectRepository(SharedSqliteRepository):
         return tuple(
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
+
+    async def list_all_async(self) -> Tuple[AutomationProjectRecord, ...]:
+        return await self._call_sync_async(self.list_all)
 
     def list_due(self, now: datetime) -> Tuple[AutomationProjectRecord, ...]:
         rows = self._run_read(
@@ -229,6 +245,11 @@ class AutomationProjectRepository(SharedSqliteRepository):
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
 
+    async def list_due_async(
+        self, now: datetime
+    ) -> Tuple[AutomationProjectRecord, ...]:
+        return await self._call_sync_async(self.list_due, now)
+
     def delete(self, automation_project_id: str) -> None:
         self._run_write(
             operation_name="delete",
@@ -240,6 +261,9 @@ class AutomationProjectRepository(SharedSqliteRepository):
                 (automation_project_id,),
             ),
         )
+
+    async def delete_async(self, automation_project_id: str) -> None:
+        return await self._call_sync_async(self.delete, automation_project_id)
 
     def _to_row(self, record: AutomationProjectRecord) -> Tuple[object, ...]:
         return (

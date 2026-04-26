@@ -5,7 +5,6 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from threading import RLock
 
 from relay_teams.automation.automation_models import (
     AutomationDeliveryBinding,
@@ -15,15 +14,13 @@ from relay_teams.automation.automation_models import (
     AutomationRunDeliveryRecord,
     validate_automation_delivery_binding,
 )
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 
 
-class AutomationDeliveryRepository:
+class AutomationDeliveryRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -170,6 +167,11 @@ class AutomationDeliveryRepository:
         )
         return self.get_by_run_id(record.run_id)
 
+    async def create_async(
+        self, record: AutomationRunDeliveryRecord
+    ) -> AutomationRunDeliveryRecord:
+        return await self._call_sync_async(self.create, record)
+
     def update(
         self, record: AutomationRunDeliveryRecord
     ) -> AutomationRunDeliveryRecord:
@@ -239,6 +241,11 @@ class AutomationDeliveryRepository:
         )
         return self.get_by_run_id(record.run_id)
 
+    async def update_async(
+        self, record: AutomationRunDeliveryRecord
+    ) -> AutomationRunDeliveryRecord:
+        return await self._call_sync_async(self.update, record)
+
     def get_by_run_id(self, run_id: str) -> AutomationRunDeliveryRecord:
         row = self._conn.execute(
             "SELECT * FROM automation_deliveries WHERE run_id=?",
@@ -247,6 +254,9 @@ class AutomationDeliveryRepository:
         if row is None:
             raise KeyError(f"Unknown automation delivery run_id: {run_id}")
         return self._to_record(row)
+
+    async def get_by_run_id_async(self, run_id: str) -> AutomationRunDeliveryRecord:
+        return await self._call_sync_async(self.get_by_run_id, run_id)
 
     def list_pending_started(
         self,
@@ -284,6 +294,13 @@ class AutomationDeliveryRepository:
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
 
+    async def list_pending_started_async(
+        self, *, limit: int = 20, stale_before: datetime | None = None
+    ) -> tuple[AutomationRunDeliveryRecord, ...]:
+        return await self._call_sync_async(
+            self.list_pending_started, limit=limit, stale_before=stale_before
+        )
+
     def list_pending_terminal(
         self,
         *,
@@ -319,6 +336,13 @@ class AutomationDeliveryRepository:
                 ),
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
+
+    async def list_pending_terminal_async(
+        self, *, limit: int = 20, stale_before: datetime | None = None
+    ) -> tuple[AutomationRunDeliveryRecord, ...]:
+        return await self._call_sync_async(
+            self.list_pending_terminal, limit=limit, stale_before=stale_before
+        )
 
     def claim_started(
         self,
@@ -367,6 +391,15 @@ class AutomationDeliveryRepository:
             return None
         return self._to_record(row)
 
+    async def claim_started_async(
+        self, *, automation_delivery_id: str, stale_before: datetime
+    ) -> AutomationRunDeliveryRecord | None:
+        return await self._call_sync_async(
+            self.claim_started,
+            automation_delivery_id=automation_delivery_id,
+            stale_before=stale_before,
+        )
+
     def claim_terminal(
         self,
         *,
@@ -414,6 +447,15 @@ class AutomationDeliveryRepository:
             return None
         return self._to_record(row)
 
+    async def claim_terminal_async(
+        self, *, automation_delivery_id: str, stale_before: datetime
+    ) -> AutomationRunDeliveryRecord | None:
+        return await self._call_sync_async(
+            self.claim_terminal,
+            automation_delivery_id=automation_delivery_id,
+            stale_before=stale_before,
+        )
+
     def list_pending_started_cleanup(
         self,
         *,
@@ -449,6 +491,13 @@ class AutomationDeliveryRepository:
                 ),
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
+
+    async def list_pending_started_cleanup_async(
+        self, *, limit: int = 20, stale_before: datetime | None = None
+    ) -> tuple[AutomationRunDeliveryRecord, ...]:
+        return await self._call_sync_async(
+            self.list_pending_started_cleanup, limit=limit, stale_before=stale_before
+        )
 
     def claim_started_cleanup(
         self,
@@ -497,6 +546,15 @@ class AutomationDeliveryRepository:
             return None
         return self._to_record(row)
 
+    async def claim_started_cleanup_async(
+        self, *, automation_delivery_id: str, stale_before: datetime
+    ) -> AutomationRunDeliveryRecord | None:
+        return await self._call_sync_async(
+            self.claim_started_cleanup,
+            automation_delivery_id=automation_delivery_id,
+            stale_before=stale_before,
+        )
+
     def has_project_records(self, automation_project_id: str) -> bool:
         with self._lock:
             row = self._conn.execute(
@@ -504,6 +562,11 @@ class AutomationDeliveryRepository:
                 (automation_project_id,),
             ).fetchone()
         return row is not None
+
+    async def has_project_records_async(self, automation_project_id: str) -> bool:
+        return await self._call_sync_async(
+            self.has_project_records, automation_project_id
+        )
 
     def delete_by_project(self, automation_project_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -516,6 +579,11 @@ class AutomationDeliveryRepository:
             lock=self._lock,
             repository_name="AutomationDeliveryRepository",
             operation_name="delete_by_project",
+        )
+
+    async def delete_by_project_async(self, automation_project_id: str) -> None:
+        return await self._call_sync_async(
+            self.delete_by_project, automation_project_id
         )
 
     def _to_row(self, record: AutomationRunDeliveryRecord) -> tuple[object, ...]:

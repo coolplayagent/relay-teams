@@ -944,7 +944,7 @@ def test_health_check_builds_payload_in_worker_thread(
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     client = _create_test_client(_FakeSystemService())
     app = cast(FastAPI, client.app)
     app.state.container = SimpleNamespace(
@@ -1042,7 +1042,7 @@ def test_probe_ssh_profile_connectivity_runs_service_call_in_threadpool(
         calls.append(request)
         return func(request)
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     client = _create_test_client(_FakeSystemService())
 
     response = client.post(
@@ -1066,7 +1066,7 @@ def test_ssh_profile_routes_run_service_calls_in_threadpool(monkeypatch) -> None
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     client = _create_test_client(_FakeSystemService())
 
     responses = [
@@ -1113,7 +1113,7 @@ def test_sync_system_read_routes_run_service_calls_in_threadpool(monkeypatch) ->
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     client = _create_test_client(_FakeSystemService())
 
     responses = [
@@ -1187,7 +1187,7 @@ def test_sync_system_write_routes_run_service_calls_in_threadpool(monkeypatch) -
             protocol_version=1,
         )
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     monkeypatch.setattr(system, "probe_acp_agent", fake_probe)
     client = _create_test_client(_FakeSystemService())
 
@@ -1592,7 +1592,7 @@ def test_save_github_config_runs_refresh_in_threadpool(monkeypatch) -> None:
         calls.append("save")
         func()
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     service = _FakeSystemService()
     client = _create_test_client(service)
 
@@ -1686,7 +1686,7 @@ def test_probe_github_webhook_connectivity_runs_service_call_in_threadpool(
         calls.append(request)
         return func(request)
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     client = _create_test_client(_FakeSystemService())
 
     response = client.post(
@@ -1759,7 +1759,7 @@ def test_start_github_webhook_tunnel_runs_service_call_in_threadpool(
         calls.append("start")
         return func()
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     service = _FakeSystemService()
     client = _create_test_client(service)
 
@@ -1813,7 +1813,7 @@ def test_stop_github_webhook_tunnel_runs_service_call_in_threadpool(
         calls.append("stop")
         return func()
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     service = _FakeSystemService()
     service.tunnel_status = LocalhostRunTunnelStatus(
         status="active",
@@ -1881,7 +1881,7 @@ def test_probe_clawhub_connectivity_runs_service_call_in_threadpool(
         calls.append(request)
         return func(request)
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     client = _create_test_client(_FakeSystemService())
 
     response = client.post(
@@ -2253,7 +2253,7 @@ def test_probe_model_connectivity_runs_service_call_in_threadpool(
         calls.append(request)
         return func(request)
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     client = _create_test_client(_FakeSystemService())
 
     response = client.post(
@@ -2297,7 +2297,7 @@ def test_discover_model_catalog_runs_service_call_in_threadpool(
         calls.append(request)
         return func(request)
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     client = _create_test_client(_FakeSystemService())
 
     response = client.post(
@@ -3306,7 +3306,7 @@ def test_environment_variable_routes_run_service_calls_in_threadpool(
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(system.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
     client = _create_env_test_client(_FakeEnvironmentVariableService())
 
     responses = [

@@ -24,8 +24,9 @@ from relay_teams.retrieval.retrieval_models import (
 from relay_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)
-_UNICODE61_SPLIT_PATTERN = re.compile(r"[^\w]+", re.UNICODE)
+_UNICODE61_SPLIT_PATTERN = re.compile(r"[\W_]+", re.UNICODE)
 _MATCH_SANITIZE_PATTERN = re.compile(r'["\'`(){}\[\]:^*]+')
+_CJK_CHARACTER_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 
 class SqliteFts5RetrievalStore(SharedSqliteRepository):
@@ -65,6 +66,13 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
             )
         return self.stats(scope_kind=config.scope_kind, scope_id=config.scope_id)
 
+    async def replace_scope_async(
+        self, *, config: RetrievalScopeConfig, documents: tuple[RetrievalDocument, ...]
+    ) -> RetrievalStats:
+        return await self._call_sync_async(
+            self.replace_scope, config=config, documents=documents
+        )
+
     def upsert_documents(
         self,
         *,
@@ -91,6 +99,13 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                 ),
             )
         return self.stats(scope_kind=config.scope_kind, scope_id=config.scope_id)
+
+    async def upsert_documents_async(
+        self, *, config: RetrievalScopeConfig, documents: tuple[RetrievalDocument, ...]
+    ) -> RetrievalStats:
+        return await self._call_sync_async(
+            self.upsert_documents, config=config, documents=documents
+        )
 
     def delete_documents(
         self,
@@ -119,6 +134,20 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                 ),
             )
         return self.stats(scope_kind=scope_kind, scope_id=scope_id)
+
+    async def delete_documents_async(
+        self,
+        *,
+        scope_kind: RetrievalScopeKind,
+        scope_id: str,
+        document_ids: tuple[str, ...],
+    ) -> RetrievalStats:
+        return await self._call_sync_async(
+            self.delete_documents,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            document_ids=document_ids,
+        )
 
     def search(
         self,
@@ -191,6 +220,9 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                 for index, row in enumerate(rows, start=1)
             )
 
+    async def search_async(self, *, query: RetrievalQuery) -> tuple[RetrievalHit, ...]:
+        return await self._call_sync_async(self.search, query=query)
+
     def rebuild_scope(
         self,
         *,
@@ -214,6 +246,13 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                 ),
             )
         return self.stats(scope_kind=scope_kind, scope_id=scope_id)
+
+    async def rebuild_scope_async(
+        self, *, scope_kind: RetrievalScopeKind, scope_id: str
+    ) -> RetrievalStats:
+        return await self._call_sync_async(
+            self.rebuild_scope, scope_kind=scope_kind, scope_id=scope_id
+        )
 
     def stats(
         self,
@@ -266,6 +305,13 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                 ),
                 updated_at=updated_at,
             )
+
+    async def stats_async(
+        self, *, scope_kind: RetrievalScopeKind, scope_id: str
+    ) -> RetrievalStats:
+        return await self._call_sync_async(
+            self.stats, scope_kind=scope_kind, scope_id=scope_id
+        )
 
     def _require_fts5(self) -> None:
         if self._run_read(lambda: sqlite_supports_fts5(self._conn)):
@@ -778,13 +824,32 @@ def _build_match_expression(
     if tokenizer == RetrievalTokenizer.TRIGRAM:
         return _build_trigram_match_expression(sanitized)
     tokens = tuple(
-        token.lower()
+        expanded_token
         for token in _UNICODE61_SPLIT_PATTERN.split(sanitized)
-        if token.strip()
+        for expanded_token in _expand_unicode61_match_terms(token)
     )
     if not tokens:
         return ""
-    return " OR ".join(f'"{token}"' for token in tokens)
+    return " OR ".join(tokens)
+
+
+def _expand_unicode61_match_terms(token: str) -> tuple[str, ...]:
+    cleaned = token.strip().lower()
+    if not cleaned:
+        return ()
+    terms: list[str] = []
+    current_word: list[str] = []
+    for char in cleaned:
+        if _CJK_CHARACTER_PATTERN.fullmatch(char):
+            if current_word:
+                terms.append("".join(current_word))
+                current_word.clear()
+            terms.append(char)
+            continue
+        current_word.append(char)
+    if current_word:
+        terms.append("".join(current_word))
+    return tuple(terms)
 
 
 def _build_trigram_match_expression(raw_query: str) -> str:

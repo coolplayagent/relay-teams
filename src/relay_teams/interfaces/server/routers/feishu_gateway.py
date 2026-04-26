@@ -4,8 +4,8 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from starlette.concurrency import run_in_threadpool
 
+from relay_teams.interfaces.server.async_call import call_maybe_async
 from relay_teams.gateway.feishu.errors import FeishuAccountNameConflictError
 from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
 from relay_teams.gateway.feishu.models import (
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/gateway/feishu", tags=["Gateway"])
 async def list_feishu_accounts(
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
 ) -> list[FeishuGatewayAccountRecord]:
-    accounts = await run_in_threadpool(service.list_accounts)
+    accounts = await call_maybe_async(service.list_accounts)
     return list(accounts)
 
 
@@ -49,7 +49,7 @@ async def create_feishu_account(
             subscription_service.reload()
             return created
 
-        return await run_in_threadpool(_create_feishu_account)
+        return await call_maybe_async(_create_feishu_account)
     except (FeishuAccountNameConflictError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -80,7 +80,7 @@ async def update_feishu_account(
                 subscription_service.reload()
             return updated
 
-        return await run_in_threadpool(_update_feishu_account)
+        return await call_maybe_async(_update_feishu_account)
     except (KeyError, FeishuAccountNameConflictError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -104,7 +104,7 @@ async def enable_feishu_account(
             subscription_service.reload()
             return updated
 
-        return await run_in_threadpool(_enable_feishu_account)
+        return await call_maybe_async(_enable_feishu_account)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -130,7 +130,7 @@ async def disable_feishu_account(
             subscription_service.reload()
             return updated
 
-        return await run_in_threadpool(_disable_feishu_account)
+        return await call_maybe_async(_disable_feishu_account)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -154,7 +154,7 @@ async def delete_feishu_account(
             )
             subscription_service.reload()
 
-        await run_in_threadpool(_delete_feishu_account)
+        await call_maybe_async(_delete_feishu_account)
         return {"status": "ok"}
     except (KeyError, RuntimeError) as exc:
         raise http_exception_for(
@@ -170,5 +170,5 @@ async def reload_feishu_gateway(
         Depends(get_feishu_subscription_service),
     ],
 ) -> dict[str, str]:
-    await run_in_threadpool(subscription_service.reload)
+    await call_maybe_async(subscription_service.reload)
     return {"status": "ok"}

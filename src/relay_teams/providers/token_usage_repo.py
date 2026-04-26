@@ -191,6 +191,34 @@ class TokenUsageRepository(SharedSqliteRepository):
 
         self._run_write(operation_name="record", operation=operation)
 
+    async def record_async(
+        self,
+        *,
+        session_id: str,
+        run_id: str,
+        instance_id: str,
+        role_id: str,
+        input_tokens: int = 0,
+        cached_input_tokens: int = 0,
+        output_tokens: int = 0,
+        reasoning_output_tokens: int = 0,
+        requests: int = 0,
+        tool_calls: int = 0,
+    ) -> None:
+        return await self._call_sync_async(
+            self.record,
+            session_id=session_id,
+            run_id=run_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            input_tokens=input_tokens,
+            cached_input_tokens=cached_input_tokens,
+            output_tokens=output_tokens,
+            reasoning_output_tokens=reasoning_output_tokens,
+            requests=requests,
+            tool_calls=tool_calls,
+        )
+
     def get_by_run(self, run_id: str) -> RunTokenUsage:
         rows = self._run_read(
             lambda: self._conn.execute(
@@ -254,6 +282,9 @@ class TokenUsageRepository(SharedSqliteRepository):
             total_tool_calls=sum(agent.tool_calls for agent in agents),
             by_agent=agents,
         )
+
+    async def get_by_run_async(self, run_id: str) -> RunTokenUsage:
+        return await self._call_sync_async(self.get_by_run, run_id)
 
     def get_by_session(
         self,
@@ -332,6 +363,13 @@ class TokenUsageRepository(SharedSqliteRepository):
             by_role=by_role,
         )
 
+    async def get_by_session_async(
+        self, session_id: str, *, include_cleared: bool = False
+    ) -> SessionTokenUsage:
+        return await self._call_sync_async(
+            self.get_by_session, session_id, include_cleared=include_cleared
+        )
+
     def delete_by_session(self, session_id: str) -> None:
         self._run_write(
             operation_name="delete_by_session",
@@ -339,6 +377,9 @@ class TokenUsageRepository(SharedSqliteRepository):
                 "DELETE FROM token_usage WHERE session_id=?", (session_id,)
             ),
         )
+
+    async def delete_by_session_async(self, session_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_session, session_id)
 
     def delete_by_run(self, run_id: str) -> None:
         self._run_write(
@@ -348,6 +389,9 @@ class TokenUsageRepository(SharedSqliteRepository):
                 (run_id,),
             ),
         )
+
+    async def delete_by_run_async(self, run_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_run, run_id)
 
     def _latest_clear_cutoff(self, session_id: str) -> str | None:
         if self._session_history_marker_repo is None:

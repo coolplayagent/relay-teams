@@ -313,7 +313,7 @@ def test_github_account_and_list_routes_run_service_calls_in_threadpool(
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(triggers, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(triggers, "call_maybe_async", fake_run_in_threadpool)
     client = _client(_FakeGitHubTriggerService())
 
     requests = [
@@ -396,7 +396,7 @@ def test_list_github_available_repositories_runs_service_call_in_threadpool(
         calls.append("list")
         return func()
 
-    monkeypatch.setattr(triggers, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(triggers, "call_maybe_async", fake_run_in_threadpool)
     client = _client(_FakeGitHubTriggerService())
 
     response = client.get(
@@ -485,7 +485,7 @@ def test_create_github_repo_route_runs_service_call_in_threadpool(monkeypatch) -
         calls.append(req)
         return func(req)
 
-    monkeypatch.setattr(triggers, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(triggers, "call_maybe_async", fake_run_in_threadpool)
     client = _client(_FakeGitHubTriggerService())
 
     response = client.post(
@@ -518,7 +518,7 @@ def test_update_github_repo_route_runs_service_call_in_threadpool(monkeypatch) -
         calls.append((repo_subscription_id, req))
         return func(repo_subscription_id, req)
 
-    monkeypatch.setattr(triggers, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(triggers, "call_maybe_async", fake_run_in_threadpool)
     client = _client(_FakeGitHubTriggerService())
 
     response = client.patch(
@@ -598,7 +598,7 @@ def test_create_github_rule_route_runs_service_call_in_threadpool(monkeypatch) -
         calls.append(req)
         return func(req)
 
-    monkeypatch.setattr(triggers, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(triggers, "call_maybe_async", fake_run_in_threadpool)
     client = _client(_FakeGitHubTriggerService())
 
     response = client.post(

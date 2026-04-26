@@ -183,7 +183,7 @@ def test_feishu_account_routes_run_service_calls_in_threadpool(monkeypatch) -> N
         calls.append(func.__name__)
         return func()
 
-    monkeypatch.setattr(feishu_gateway, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(feishu_gateway, "call_maybe_async", fake_run_in_threadpool)
     gateway_service = _FakeFeishuGatewayService()
     subscription_service = _FakeSubscriptionService()
     client = _client(gateway_service, subscription_service)

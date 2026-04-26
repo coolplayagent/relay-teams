@@ -14,7 +14,7 @@ from pydantic_ai.messages import ModelRequest, UserContent, UserPromptPart
 
 from relay_teams.agents.execution.subagent_runner import SubAgentRunner
 from relay_teams.agents.execution.prompt_instruction_state import (
-    record_prompt_instruction_paths_loaded,
+    record_prompt_instruction_paths_loaded_async,
 )
 from relay_teams.agents.execution.system_prompts import (
     PromptBuildInput,
@@ -178,9 +178,9 @@ class TaskExecutionService(BaseModel):
                 "role_id": role_id,
             },
         )
-        _ = self.agent_repo.mark_status(instance_id, InstanceStatus.RUNNING)
-        _ = self.task_repo.update_status(task.task_id, TaskStatus.RUNNING)
-        self.run_runtime_repo.ensure(
+        await self.agent_repo.mark_status_async(instance_id, InstanceStatus.RUNNING)
+        _ = await self.task_repo.update_status_async(task.task_id, TaskStatus.RUNNING)
+        await self.run_runtime_repo.ensure_async(
             run_id=task.trace_id,
             session_id=task.session_id,
             root_task_id=task.parent_task_id or task.task_id,
@@ -191,7 +191,7 @@ class TaskExecutionService(BaseModel):
                 else RunRuntimePhase.SUBAGENT_RUNNING
             ),
         )
-        self.run_runtime_repo.update(
+        await self.run_runtime_repo.update_async(
             task.trace_id,
             status=RunRuntimeStatus.RUNNING,
             phase=(
@@ -205,7 +205,7 @@ class TaskExecutionService(BaseModel):
             active_subagent_instance_id=(None if is_coordinator else instance_id),
             last_error=None,
         )
-        self.event_bus.emit(
+        await self.event_bus.emit_async(
             EventEnvelope(
                 event_type=EventType.TASK_STARTED,
                 trace_id=task.trace_id,
@@ -217,13 +217,13 @@ class TaskExecutionService(BaseModel):
         )
 
         if self.runtime_role_resolver is not None:
-            role = self.runtime_role_resolver.get_effective_role(
+            role = await self.runtime_role_resolver.get_effective_role_async(
                 run_id=task.trace_id,
                 role_id=role_id,
             )
         else:
             role = self.role_registry.get(role_id)
-        instance_record = self.agent_repo.get_instance(instance_id)
+        instance_record = await self.agent_repo.get_instance_async(instance_id)
         workspace = self.workspace_manager.resolve(
             session_id=task.session_id,
             role_id=role_id,
@@ -241,7 +241,7 @@ class TaskExecutionService(BaseModel):
             prompt_builder=self.prompt_builder,
             provider=self.provider_factory(role_for_run, task.session_id),
         )
-        snapshot = self._shared_state_snapshot(
+        snapshot = await self._shared_state_snapshot_async(
             session_id=task.session_id,
             role_id=role_id,
             conversation_id=workspace.ref.conversation_id,
@@ -259,7 +259,7 @@ class TaskExecutionService(BaseModel):
                     user_prompt_override=user_prompt_override,
                 ),
             )
-            self._ensure_committed_task_prompt(
+            await self._ensure_committed_task_prompt_async(
                 role_id=role_id,
                 workspace_id=workspace.ref.workspace_id,
                 conversation_id=workspace.ref.conversation_id,
@@ -275,7 +275,7 @@ class TaskExecutionService(BaseModel):
                 runtime_prompt_sections=runtime_prompt_sections,
                 skill_instructions=prepared_runtime_snapshot.skill_instructions,
             )
-            self.agent_repo.update_runtime_snapshot(
+            await self.agent_repo.update_runtime_snapshot_async(
                 instance_id,
                 runtime_system_prompt=runtime_system_prompt,
                 runtime_tools_json=runtime_tools_json,
@@ -298,15 +298,17 @@ class TaskExecutionService(BaseModel):
             if isinstance(guarded_result, TaskExecutionResult):
                 return guarded_result
             result = guarded_result
-            self.task_repo.update_status(
+            await self.task_repo.update_status_async(
                 task.task_id, TaskStatus.COMPLETED, result=result
             )
-            _ = self.agent_repo.mark_status(instance_id, InstanceStatus.COMPLETED)
-            self._mark_runtime_idle_after_success(
+            await self.agent_repo.mark_status_async(
+                instance_id, InstanceStatus.COMPLETED
+            )
+            await self._mark_runtime_idle_after_success_async(
                 run_id=task.trace_id,
                 completed_task_id=task.task_id,
             )
-            self.event_bus.emit(
+            await self.event_bus.emit_async(
                 EventEnvelope(
                     event_type=EventType.TASK_COMPLETED,
                     trace_id=task.trace_id,
@@ -322,7 +324,7 @@ class TaskExecutionService(BaseModel):
                 role_id=role_id,
                 output_text=result,
             )
-            self._record_memory_if_needed(
+            await self._record_memory_if_needed_async(
                 role_id=role_id,
                 workspace_id=workspace.ref.workspace_id,
                 task=task,
@@ -367,13 +369,15 @@ class TaskExecutionService(BaseModel):
                 )
             else:
                 stopped = False
-                self.task_repo.update_status(
+                await self.task_repo.update_status_async(
                     task.task_id,
                     TaskStatus.FAILED,
                     error_message="Task cancelled",
                 )
-                self.agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
-                self.event_bus.emit(
+                await self.agent_repo.mark_status_async(
+                    instance_id, InstanceStatus.FAILED
+                )
+                await self.event_bus.emit_async(
                     EventEnvelope(
                         event_type=EventType.TASK_FAILED,
                         trace_id=task.trace_id,
@@ -385,12 +389,12 @@ class TaskExecutionService(BaseModel):
                 )
             last_error = "Task stopped by user" if stopped else "Task cancelled"
             if paused_subagent:
-                if not self._promote_running_runtime_lane(
+                if not await self._promote_running_runtime_lane_async(
                     run_id=task.trace_id,
                     terminal_task_id=task.task_id,
                     last_error=last_error,
                 ):
-                    self.run_runtime_repo.update(
+                    await self.run_runtime_repo.update_async(
                         task.trace_id,
                         status=RunRuntimeStatus.STOPPED,
                         phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
@@ -401,7 +405,7 @@ class TaskExecutionService(BaseModel):
                         last_error=last_error,
                     )
             else:
-                self._mark_runtime_after_terminal_task_update(
+                await self._mark_runtime_after_terminal_task_update_async(
                     run_id=task.trace_id,
                     terminal_task_id=task.task_id,
                     status=(
@@ -430,7 +434,7 @@ class TaskExecutionService(BaseModel):
             )
             raise
         except AssistantRunError as exc:
-            return self._complete_with_assistant_error(
+            return await self._complete_with_assistant_error_async(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -443,14 +447,14 @@ class TaskExecutionService(BaseModel):
             )
         except RecoverableRunPauseError as exc:
             payload = exc.payload
-            _ = self.task_repo.update_status(
+            _ = await self.task_repo.update_status_async(
                 task.task_id,
                 TaskStatus.STOPPED,
                 assigned_instance_id=instance_id,
                 error_message=payload.error_message,
             )
-            _ = self.agent_repo.mark_status(instance_id, InstanceStatus.IDLE)
-            self.run_runtime_repo.update(
+            await self.agent_repo.mark_status_async(instance_id, InstanceStatus.IDLE)
+            await self.run_runtime_repo.update_async(
                 task.trace_id,
                 status=RunRuntimeStatus.PAUSED,
                 phase=RunRuntimePhase.AWAITING_RECOVERY,
@@ -462,7 +466,7 @@ class TaskExecutionService(BaseModel):
                 ),
                 last_error=payload.error_message,
             )
-            self.event_bus.emit(
+            await self.event_bus.emit_async(
                 EventEnvelope(
                     event_type=EventType.TASK_STOPPED,
                     trace_id=task.trace_id,
@@ -486,7 +490,7 @@ class TaskExecutionService(BaseModel):
             )
             raise
         except TimeoutError:
-            return self._complete_with_assistant_error(
+            return await self._complete_with_assistant_error_async(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -500,7 +504,7 @@ class TaskExecutionService(BaseModel):
                 error_message="Task timeout",
             )
         except Exception as exc:
-            return self._complete_with_assistant_error(
+            return await self._complete_with_assistant_error_async(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -536,7 +540,7 @@ class TaskExecutionService(BaseModel):
             system_prompt_override=system_prompt_override,
         )
         while True:
-            decision = self._evaluate_completion_guard(
+            decision = await self._evaluate_completion_guard_async(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -574,7 +578,7 @@ class TaskExecutionService(BaseModel):
                     error_code="incomplete_todos",
                     error_message=decision.content,
                 )
-                return self._complete_with_assistant_error(
+                return await self._complete_with_assistant_error_async(
                     task=task,
                     instance_id=instance_id,
                     role_id=role_id,
@@ -604,10 +608,56 @@ class TaskExecutionService(BaseModel):
             working_directory=workspace.resolve_workdir(),
             conversation_id=conversation_id,
             shared_state_snapshot=shared_state_snapshot,
-            thinking=self._thinking_for_run(task.trace_id),
+            thinking=await self._thinking_for_run_async(task.trace_id),
             system_prompt_override=system_prompt_override,
             user_prompt=None,
         )
+
+    async def _evaluate_completion_guard_async(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        workspace: WorkspaceHandle,
+        conversation_id: str,
+        output_text: str,
+    ) -> ReminderDecision:
+        if self.reminder_service is None or self.todo_service is None:
+            return ReminderDecision()
+        if task.parent_task_id is not None:
+            return ReminderDecision()
+        snapshot = await self.todo_service.get_for_run_async(
+            run_id=task.trace_id,
+            session_id=task.session_id,
+        )
+        incomplete = tuple(
+            IncompleteTodoItem(content=item.content, status=item.status.value)
+            for item in snapshot.items
+            if item.status != TodoStatus.COMPLETED
+        )
+        return await self.reminder_service.evaluate_completion_attempt_async(
+            CompletionAttemptObservation(
+                session_id=task.session_id,
+                run_id=task.trace_id,
+                trace_id=task.trace_id,
+                task_id=task.task_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                workspace_id=workspace.ref.workspace_id,
+                conversation_id=conversation_id,
+                output_text=output_text,
+                incomplete_todos=incomplete,
+            )
+        )
+
+    async def _thinking_for_run_async(self, run_id: str) -> RunThinkingConfig:
+        if self.run_intent_repo is None:
+            return RunThinkingConfig()
+        try:
+            return (await self.run_intent_repo.get_async(run_id)).thinking
+        except KeyError:
+            return RunThinkingConfig()
 
     def _evaluate_completion_guard(
         self,
@@ -758,6 +808,81 @@ class TaskExecutionService(BaseModel):
             error_message=error_message or assistant_message,
         )
 
+    async def _complete_with_assistant_error_async(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        conversation_id: str,
+        workspace_id: str,
+        assistant_message: str,
+        error_code: str,
+        error_message: str,
+        append_message: bool = True,
+    ) -> TaskExecutionResult:
+        if append_message:
+            await self.message_repo.prune_conversation_history_to_safe_boundary_async(
+                conversation_id
+            )
+            await self.message_repo.append_async(
+                session_id=task.session_id,
+                workspace_id=workspace_id,
+                conversation_id=conversation_id,
+                agent_role_id=role_id,
+                instance_id=instance_id,
+                task_id=task.task_id,
+                trace_id=task.trace_id,
+                messages=[build_assistant_error_response(assistant_message)],
+            )
+        await self.task_repo.update_status_async(
+            task.task_id,
+            TaskStatus.FAILED,
+            assigned_instance_id=instance_id,
+            result=assistant_message,
+            error_message=error_message or assistant_message,
+        )
+        await self.agent_repo.mark_status_async(instance_id, InstanceStatus.FAILED)
+        await self._mark_runtime_after_terminal_task_update_async(
+            run_id=task.trace_id,
+            terminal_task_id=task.task_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.IDLE,
+            active_instance_id=None,
+            active_task_id=None,
+            active_role_id=None,
+            active_subagent_instance_id=None,
+            last_error=error_message or assistant_message,
+        )
+        await self.event_bus.emit_async(
+            EventEnvelope(
+                event_type=EventType.TASK_FAILED,
+                trace_id=task.trace_id,
+                session_id=task.session_id,
+                task_id=task.task_id,
+                instance_id=instance_id,
+                payload_json="{}",
+            )
+        )
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="task.execution.failed_with_assistant_error",
+            message="Task execution failed after assistant error message was persisted",
+            payload={
+                "task_id": task.task_id,
+                "instance_id": instance_id,
+                "role_id": role_id,
+                "error_code": error_code,
+            },
+        )
+        return TaskExecutionResult(
+            output=assistant_message,
+            completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+            error_code=error_code,
+            error_message=error_message or assistant_message,
+        )
+
     def _topology_for_run(self, run_id: str) -> RunTopologySnapshot | None:
         if self.run_intent_repo is None:
             return None
@@ -774,6 +899,25 @@ class TaskExecutionService(BaseModel):
             return None
         try:
             return self.run_intent_repo.get(run_id).conversation_context
+        except KeyError:
+            return None
+
+    async def _topology_for_run_async(self, run_id: str) -> RunTopologySnapshot | None:
+        if self.run_intent_repo is None:
+            return None
+        try:
+            return (await self.run_intent_repo.get_async(run_id)).topology
+        except KeyError:
+            return None
+
+    async def _conversation_context_for_run_async(
+        self,
+        run_id: str,
+    ) -> RuntimePromptConversationContext | None:
+        if self.run_intent_repo is None:
+            return None
+        try:
+            return (await self.run_intent_repo.get_async(run_id)).conversation_context
         except KeyError:
             return None
 
@@ -803,8 +947,10 @@ class TaskExecutionService(BaseModel):
         shared_state_snapshot: tuple[tuple[str, str], ...],
         objective: str,
     ) -> PreparedRuntimeSnapshot:
-        topology = self._topology_for_run(task.trace_id)
-        conversation_context = self._conversation_context_for_run(task.trace_id)
+        topology = await self._topology_for_run_async(task.trace_id)
+        conversation_context = await self._conversation_context_for_run_async(
+            task.trace_id
+        )
         runtime_tools = await self._build_runtime_tools_snapshot(role=role, task=task)
         prompt_sections = await self.prompt_builder.build_sections(
             PromptBuildInput(
@@ -833,7 +979,7 @@ class TaskExecutionService(BaseModel):
                 runtime_tools=runtime_tools,
             )
         )
-        record_prompt_instruction_paths_loaded(
+        await record_prompt_instruction_paths_loaded_async(
             shared_store=self.shared_store,
             task_id=task.task_id,
             paths=prompt_sections.local_instruction_paths,
@@ -1057,6 +1203,52 @@ class TaskExecutionService(BaseModel):
                 exc_info=True,
             )
 
+    async def _record_memory_if_needed_async(
+        self,
+        *,
+        role_id: str,
+        workspace_id: str,
+        task: TaskEnvelope,
+        conversation_id: str,
+        instance_id: str,
+        lifecycle: str,
+        result: str,
+    ) -> None:
+        payload: dict[str, JsonValue] = {
+            "task_id": task.task_id,
+            "title": task.title or "",
+            "objective": task.objective[:500],
+            "role_id": role_id,
+            "workspace_id": workspace_id,
+            "conversation_id": conversation_id,
+            "instance_id": instance_id,
+            "lifecycle": lifecycle,
+            "result_excerpt": _truncate_task_memory_result(result),
+            "completed_at": datetime.now(tz=timezone.utc).isoformat(),
+        }
+        # noinspection PyBroadException
+        try:
+            await self.shared_store.manage_state_async(
+                StateMutation(
+                    scope=ScopeRef(
+                        scope_type=ScopeType.ROLE,
+                        scope_id=f"{task.session_id}:{role_id}",
+                    ),
+                    key=f"task_result:{task.task_id}",
+                    value_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                )
+            )
+        except Exception:
+            LOGGER.warning(
+                "Failed to persist completed task memory",
+                extra={
+                    "task_id": task.task_id,
+                    "role_id": role_id,
+                    "instance_id": instance_id,
+                },
+                exc_info=True,
+            )
+
     def _mark_runtime_idle_after_success(
         self,
         *,
@@ -1064,6 +1256,24 @@ class TaskExecutionService(BaseModel):
         completed_task_id: str,
     ) -> None:
         self._mark_runtime_after_terminal_task_update(
+            run_id=run_id,
+            terminal_task_id=completed_task_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.IDLE,
+            active_instance_id=None,
+            active_task_id=None,
+            active_role_id=None,
+            active_subagent_instance_id=None,
+            last_error=None,
+        )
+
+    async def _mark_runtime_idle_after_success_async(
+        self,
+        *,
+        run_id: str,
+        completed_task_id: str,
+    ) -> None:
+        await self._mark_runtime_after_terminal_task_update_async(
             run_id=run_id,
             terminal_task_id=completed_task_id,
             status=RunRuntimeStatus.RUNNING,
@@ -1119,6 +1329,50 @@ class TaskExecutionService(BaseModel):
             last_error=last_error,
         )
 
+    async def _mark_runtime_after_terminal_task_update_async(
+        self,
+        *,
+        run_id: str,
+        terminal_task_id: str,
+        status: RunRuntimeStatus,
+        phase: RunRuntimePhase,
+        active_instance_id: Optional[str],
+        active_task_id: Optional[str],
+        active_role_id: Optional[str],
+        active_subagent_instance_id: Optional[str],
+        last_error: Optional[str],
+    ) -> None:
+        current = await self.run_runtime_repo.get_async(run_id)
+        if current is not None and current.active_task_id not in {
+            None,
+            terminal_task_id,
+        }:
+            if last_error is not None:
+                await self.run_runtime_repo.update_async(run_id, last_error=last_error)
+            return
+        if await self._promote_running_runtime_lane_async(
+            run_id=run_id,
+            terminal_task_id=terminal_task_id,
+            last_error=last_error,
+        ):
+            return
+        if await self._promote_paused_runtime_lane_async(
+            run_id=run_id,
+            terminal_task_id=terminal_task_id,
+            last_error=last_error,
+        ):
+            return
+        await self.run_runtime_repo.update_async(
+            run_id,
+            status=status,
+            phase=phase,
+            active_instance_id=active_instance_id,
+            active_task_id=active_task_id,
+            active_role_id=active_role_id,
+            active_subagent_instance_id=active_subagent_instance_id,
+            last_error=last_error,
+        )
+
     def _promote_running_runtime_lane(
         self,
         *,
@@ -1151,6 +1405,53 @@ class TaskExecutionService(BaseModel):
             return False
         is_coordinator = task.parent_task_id is None
         self.run_runtime_repo.update(
+            run_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=(
+                RunRuntimePhase.COORDINATOR_RUNNING
+                if is_coordinator
+                else RunRuntimePhase.SUBAGENT_RUNNING
+            ),
+            active_instance_id=instance_id,
+            active_task_id=task.task_id,
+            active_role_id=task.role_id,
+            active_subagent_instance_id=(None if is_coordinator else instance_id),
+            last_error=last_error,
+        )
+        return True
+
+    async def _promote_running_runtime_lane_async(
+        self,
+        *,
+        run_id: str,
+        terminal_task_id: str,
+        last_error: Optional[str],
+    ) -> bool:
+        coordinator_record: Optional[TaskRecord] = None
+        promoted_record: Optional[TaskRecord] = None
+        for record in await self.task_repo.list_by_trace_async(run_id):
+            task = record.envelope
+            if task.task_id == terminal_task_id:
+                continue
+            if record.status != TaskStatus.RUNNING:
+                continue
+            if not record.assigned_instance_id:
+                continue
+            if task.parent_task_id is not None:
+                promoted_record = record
+                break
+            if coordinator_record is None:
+                coordinator_record = record
+        if promoted_record is None:
+            promoted_record = coordinator_record
+        if promoted_record is None:
+            return False
+        task = promoted_record.envelope
+        instance_id = promoted_record.assigned_instance_id
+        if not instance_id:
+            return False
+        is_coordinator = task.parent_task_id is None
+        await self.run_runtime_repo.update_async(
             run_id,
             status=RunRuntimeStatus.RUNNING,
             phase=(
@@ -1212,6 +1513,52 @@ class TaskExecutionService(BaseModel):
             return True
         return False
 
+    async def _promote_paused_runtime_lane_async(
+        self,
+        *,
+        run_id: str,
+        terminal_task_id: str,
+        last_error: Optional[str],
+    ) -> bool:
+        if self.run_control_manager is None:
+            return False
+        if self.run_control_manager.is_run_stop_requested(run_id):
+            return False
+        for record in await self.task_repo.list_by_trace_async(run_id):
+            task = record.envelope
+            instance_id = record.assigned_instance_id
+            if task.task_id == terminal_task_id:
+                continue
+            if task.parent_task_id is None:
+                continue
+            if record.status != TaskStatus.STOPPED:
+                continue
+            if not instance_id:
+                continue
+            if not (
+                self.run_control_manager.is_subagent_stop_requested(
+                    run_id=run_id,
+                    instance_id=instance_id,
+                )
+                or self.run_control_manager.is_subagent_paused(
+                    session_id=task.session_id,
+                    instance_id=instance_id,
+                )
+            ):
+                continue
+            await self.run_runtime_repo.update_async(
+                run_id,
+                status=RunRuntimeStatus.STOPPED,
+                phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
+                active_instance_id=None,
+                active_task_id=task.task_id,
+                active_role_id=task.role_id,
+                active_subagent_instance_id=instance_id,
+                last_error=last_error or record.error_message or "Task stopped by user",
+            )
+            return True
+        return False
+
     def _shared_state_snapshot(
         self,
         *,
@@ -1225,6 +1572,23 @@ class TaskExecutionService(BaseModel):
             ScopeRef(scope_type=ScopeType.CONVERSATION, scope_id=conversation_id),
         )
         return self.shared_store.snapshot_many(
+            scopes,
+            exclude_key_prefixes=(READ_STATE_PREFIX,),
+        )
+
+    async def _shared_state_snapshot_async(
+        self,
+        *,
+        session_id: str,
+        role_id: str,
+        conversation_id: str,
+    ) -> tuple[tuple[str, str], ...]:
+        scopes = (
+            ScopeRef(scope_type=ScopeType.SESSION, scope_id=session_id),
+            ScopeRef(scope_type=ScopeType.ROLE, scope_id=f"{session_id}:{role_id}"),
+            ScopeRef(scope_type=ScopeType.CONVERSATION, scope_id=conversation_id),
+        )
+        return await self.shared_store.snapshot_many_async(
             scopes,
             exclude_key_prefixes=(READ_STATE_PREFIX,),
         )
@@ -1311,6 +1675,100 @@ class TaskExecutionService(BaseModel):
             )
             return
         self.message_repo.append_user_prompt_if_missing(
+            session_id=task.session_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=role_id,
+            instance_id=instance_id,
+            task_id=task.task_id,
+            trace_id=task.trace_id,
+            content=task.objective,
+        )
+
+    async def _ensure_committed_task_prompt_async(
+        self,
+        *,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        instance_id: str,
+        task: TaskEnvelope,
+        user_prompt_text: str,
+        user_prompt_override: str | None,
+    ) -> None:
+        prompt = user_prompt_text.strip()
+        override_prompt = str(user_prompt_override or "").strip()
+        if override_prompt:
+            await self.message_repo.append_user_prompt_if_missing_async(
+                session_id=task.session_id,
+                workspace_id=workspace_id,
+                conversation_id=conversation_id,
+                agent_role_id=role_id,
+                instance_id=instance_id,
+                task_id=task.task_id,
+                trace_id=task.trace_id,
+                content=override_prompt,
+            )
+            return
+
+        task_history = await self.message_repo.get_history_for_conversation_task_async(
+            conversation_id,
+            task.task_id,
+        )
+        if task_history:
+            return
+        if (
+            task.parent_task_id is None
+            and self.run_intent_repo is not None
+            and self.media_asset_service is not None
+        ):
+            try:
+                run_intent = await self.run_intent_repo.get_async(task.trace_id)
+            except KeyError:
+                run_intent = None
+            if run_intent is not None and run_intent.input:
+                provider_content = (
+                    self.media_asset_service.to_persisted_user_prompt_content(
+                        parts=run_intent.input
+                    )
+                )
+                merged_provider_content = self._merge_provider_prompt_content(
+                    provider_content=provider_content,
+                    user_prompt_text=prompt,
+                )
+                await (
+                    self.message_repo.prune_conversation_history_to_safe_boundary_async(
+                        conversation_id
+                    )
+                )
+                await self.message_repo.append_async(
+                    session_id=task.session_id,
+                    workspace_id=workspace_id,
+                    conversation_id=conversation_id,
+                    agent_role_id=role_id,
+                    instance_id=instance_id,
+                    task_id=task.task_id,
+                    trace_id=task.trace_id,
+                    messages=[
+                        ModelRequest(
+                            parts=[UserPromptPart(content=merged_provider_content)]
+                        )
+                    ],
+                )
+                return
+        if prompt:
+            await self.message_repo.append_user_prompt_if_missing_async(
+                session_id=task.session_id,
+                workspace_id=workspace_id,
+                conversation_id=conversation_id,
+                agent_role_id=role_id,
+                instance_id=instance_id,
+                task_id=task.task_id,
+                trace_id=task.trace_id,
+                content=prompt,
+            )
+            return
+        await self.message_repo.append_user_prompt_if_missing_async(
             session_id=task.session_id,
             workspace_id=workspace_id,
             conversation_id=conversation_id,

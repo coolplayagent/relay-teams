@@ -106,6 +106,90 @@ def test_find_reusable_skips_newer_invalid_matching_ticket(tmp_path: Path) -> No
     assert record.tool_call_id == "call-valid"
 
 
+@pytest.mark.asyncio
+async def test_async_approval_ticket_repo_methods_share_persisted_state(
+    tmp_path: Path,
+) -> None:
+    repository = ApprovalTicketRepository(tmp_path / "approval_ticket_async.db")
+
+    try:
+        requested = await repository.upsert_requested_async(
+            tool_call_id="call-async",
+            run_id="run-1",
+            session_id="session-1",
+            task_id="task-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_name="orch_dispatch_task",
+            args_preview="{}",
+        )
+        open_by_run = await repository.list_open_by_run_async("run-1")
+        reusable = await repository.find_reusable_async(
+            run_id="run-1",
+            task_id="task-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_name="orch_dispatch_task",
+            args_preview="{}",
+        )
+        resolved = await repository.resolve_async(
+            tool_call_id="call-async",
+            status=ApprovalTicketStatus.APPROVED,
+            feedback="ok",
+            expected_status=ApprovalTicketStatus.REQUESTED,
+        )
+        completed = await repository.mark_completed_async("call-async")
+    finally:
+        await repository.close_async()
+
+    assert requested.status == ApprovalTicketStatus.REQUESTED
+    assert tuple(record.tool_call_id for record in open_by_run) == ("call-async",)
+    assert reusable is not None
+    assert reusable.tool_call_id == "call-async"
+    assert resolved.status == ApprovalTicketStatus.APPROVED
+    assert completed is not None
+    assert completed.status == ApprovalTicketStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_async_approval_ticket_hot_paths_do_not_reinitialize_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = ApprovalTicketRepository(tmp_path / "approval_ticket_no_reinit.db")
+
+    async def _fail_init() -> None:
+        raise AssertionError("async schema init must not run on hot paths")
+
+    monkeypatch.setattr(repository, "_init_tables_async", _fail_init)
+
+    try:
+        requested = await repository.upsert_requested_async(
+            tool_call_id="call-async",
+            run_id="run-1",
+            session_id="session-1",
+            task_id="task-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_name="orch_dispatch_task",
+            args_preview="{}",
+        )
+        fetched = await repository.get_async("call-async")
+        open_by_run = await repository.list_open_by_run_async("run-1")
+        resolved = await repository.resolve_async(
+            tool_call_id="call-async",
+            status=ApprovalTicketStatus.APPROVED,
+        )
+        await repository.delete_by_run_async("run-1")
+    finally:
+        await repository.close_async()
+
+    assert requested.tool_call_id == "call-async"
+    assert fetched is not None
+    assert tuple(record.tool_call_id for record in open_by_run) == ("call-async",)
+    assert resolved.status == ApprovalTicketStatus.APPROVED
+
+
 def test_approval_signature_key_prefers_cache_key_over_args_preview() -> None:
     cache_key = build_shell_cache_key(
         "bash -lc 'pwd'",

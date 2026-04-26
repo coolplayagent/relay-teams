@@ -123,6 +123,9 @@ class GatewaySessionRepository(SharedSqliteRepository):
         )
         return record
 
+    async def create_async(self, record: GatewaySessionRecord) -> GatewaySessionRecord:
+        return await self._call_sync_async(self.create, record)
+
     def get(self, gateway_session_id: str) -> GatewaySessionRecord:
         row = self._run_read(
             lambda: self._conn.execute(
@@ -137,6 +140,9 @@ class GatewaySessionRepository(SharedSqliteRepository):
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
             _log_invalid_gateway_session_row(row=row, error=exc)
             raise KeyError(f"Unknown gateway_session_id: {gateway_session_id}") from exc
+
+    async def get_async(self, gateway_session_id: str) -> GatewaySessionRecord:
+        return await self._call_sync_async(self.get, gateway_session_id)
 
     def get_by_external(
         self,
@@ -157,6 +163,15 @@ class GatewaySessionRepository(SharedSqliteRepository):
             return None
         return self._record_or_none(row, fallback_invalid_timestamps=True)
 
+    async def get_by_external_async(
+        self, *, channel_type: GatewayChannelType, external_session_id: str
+    ) -> GatewaySessionRecord | None:
+        return await self._call_sync_async(
+            self.get_by_external,
+            channel_type=channel_type,
+            external_session_id=external_session_id,
+        )
+
     def get_by_internal_session_id(
         self,
         internal_session_id: str,
@@ -176,6 +191,13 @@ class GatewaySessionRepository(SharedSqliteRepository):
             if record is not None:
                 return record
         return None
+
+    async def get_by_internal_session_id_async(
+        self, internal_session_id: str
+    ) -> GatewaySessionRecord | None:
+        return await self._call_sync_async(
+            self.get_by_internal_session_id, internal_session_id
+        )
 
     def update(self, record: GatewaySessionRecord) -> GatewaySessionRecord:
         rowcount = self._run_write(
@@ -230,6 +252,9 @@ class GatewaySessionRepository(SharedSqliteRepository):
             raise KeyError(f"Unknown gateway_session_id: {record.gateway_session_id}")
         return record
 
+    async def update_async(self, record: GatewaySessionRecord) -> GatewaySessionRecord:
+        return await self._call_sync_async(self.update, record)
+
     def list_all(self) -> tuple[GatewaySessionRecord, ...]:
         rows = self._run_read(
             lambda: self._conn.execute(
@@ -239,6 +264,9 @@ class GatewaySessionRepository(SharedSqliteRepository):
         return tuple(
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
+
+    async def list_all_async(self) -> tuple[GatewaySessionRecord, ...]:
+        return await self._call_sync_async(self.list_all)
 
     def _to_record(
         self,

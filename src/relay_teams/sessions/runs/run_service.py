@@ -178,6 +178,7 @@ class SessionRunService:
             get_background_task_service=lambda: self._background_task_service,
             get_todo_service=lambda: self._todo_service,
             get_run_session_id=self._run_session_id,
+            get_run_session_id_async=self._run_session_id_async,
         )
         self._recovery_service = RunRecoveryService(
             get_event_log=lambda: self._event_log,
@@ -261,18 +262,26 @@ class SessionRunService:
             get_user_question_repo=lambda: self._user_question_repo,
             get_user_question_manager=lambda: self._user_question_manager,
             get_runtime=lambda run_id: self._runtime_for_run(run_id),
+            get_runtime_async=self._runtime_for_run_async,
             is_running_run=lambda run_id: run_id in self._running_run_ids,
             has_pending_resolvable_question_for_session=(
                 self._has_pending_resolvable_question_for_session
             ),
+            has_pending_resolvable_question_for_session_async=(
+                self._has_pending_resolvable_question_for_session_async
+            ),
             has_running_agents_for_run=self._has_running_agents_for_run,
+            has_running_agents_for_run_async=self._has_running_agents_for_run_async,
             resume_run=lambda run_id: self.resume_run(run_id),
+            resume_run_async=self.resume_run_async,
             ensure_run_started=lambda run_id: self.ensure_run_started(run_id),
+            ensure_run_started_async=self._ensure_run_started_for_interaction_async,
             event_publisher=self._event_publisher,
         )
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
+        self._run_creation_lock = asyncio.Lock()
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self._scheduler = RunScheduler(
             meta_agent=self._meta_agent,
@@ -414,8 +423,35 @@ class SessionRunService:
         _ = self._session_repo.get(session_id)
         return session_id
 
+    async def _ensure_session_async(self, session_id: str) -> str:
+        _ = await self._session_repo.get_async(session_id)
+        return session_id
+
     def _prepare_intent(self, intent: IntentInput) -> IntentInput:
         session = self._session_repo.get(intent.session_id)
+        target_role_id = str(intent.target_role_id or "").strip() or None
+        skills = tuple(str(skill or "").strip() for skill in (intent.skills or ()))
+        skills = tuple(skill for skill in skills if skill) or None
+        if self._orchestration_settings_service is None:
+            return intent.model_copy(
+                update={
+                    "session_mode": session.session_mode,
+                    "target_role_id": target_role_id,
+                    "skills": skills,
+                }
+            )
+        topology = self._orchestration_settings_service.resolve_run_topology(session)
+        return intent.model_copy(
+            update={
+                "session_mode": session.session_mode,
+                "target_role_id": target_role_id,
+                "skills": skills,
+                "topology": topology,
+            }
+        )
+
+    async def _prepare_intent_async(self, intent: IntentInput) -> IntentInput:
+        session = await self._session_repo.get_async(intent.session_id)
         target_role_id = str(intent.target_role_id or "").strip() or None
         skills = tuple(str(skill or "").strip() for skill in (intent.skills or ()))
         skills = tuple(skill for skill in skills if skill) or None
@@ -444,6 +480,16 @@ class SessionRunService:
                 return runtime
         return None
 
+    async def _runtime_for_run_async(self, run_id: str) -> RunRuntimeRecord | None:
+        if self._run_runtime_repo is not None:
+            runtime = await self._run_runtime_repo.get_async(run_id)
+            if runtime is not None:
+                return runtime
+        return None
+
+    async def _ensure_run_started_for_interaction_async(self, run_id: str) -> None:
+        await self.ensure_run_started_async(run_id)
+
     def _active_recoverable_run(
         self, session_id: str
     ) -> tuple[str, RunRuntimeRecord | None] | None:
@@ -451,6 +497,14 @@ class SessionRunService:
         if not run_id:
             return None
         return run_id, self._runtime_for_run(run_id)
+
+    async def _active_recoverable_run_async(
+        self, session_id: str
+    ) -> tuple[str, RunRuntimeRecord | None] | None:
+        run_id = self._active_run_registry.get_active_run_id(session_id)
+        if not run_id:
+            return None
+        return run_id, await self._runtime_for_run_async(run_id)
 
     def _remember_active_run(self, session_id: str, run_id: str) -> None:
         self._active_run_registry.remember_active_run(
@@ -606,8 +660,39 @@ class SessionRunService:
     ) -> tuple[str, str]:
         return self._scheduler.create_run(intent, source=source)
 
+    async def create_run_async(
+        self,
+        intent: IntentInput,
+        *,
+        source: InjectionSource = InjectionSource.USER,
+    ) -> tuple[str, str]:
+        if self._should_delegate_to_bound_loop():
+            delegated_intent = intent.model_copy(deep=True)
+            return await self._call_in_bound_loop_async(
+                lambda: self.create_run(delegated_intent, source=source)
+            )
+        delegated_intent = intent.model_copy(deep=True)
+        return await self._create_run_local_async(
+            delegated_intent,
+            allow_active_run_attach=True,
+            source=source,
+        )
+
     def create_detached_run(self, intent: IntentInput) -> tuple[str, str]:
         return self._scheduler.create_detached_run(intent)
+
+    async def create_detached_run_async(self, intent: IntentInput) -> tuple[str, str]:
+        if self._should_delegate_to_bound_loop():
+            delegated_intent = intent.model_copy(deep=True)
+            return await self._call_in_bound_loop_async(
+                lambda: self.create_detached_run(delegated_intent)
+            )
+        delegated_intent = intent.model_copy(deep=True)
+        return await self._create_run_local_async(
+            delegated_intent,
+            allow_active_run_attach=False,
+            source=InjectionSource.USER,
+        )
 
     def _create_run_local(
         self,
@@ -622,6 +707,127 @@ class SessionRunService:
             source=source,
         )
 
+    async def _create_run_local_async(
+        self,
+        intent: IntentInput,
+        *,
+        allow_active_run_attach: bool,
+        source: InjectionSource,
+    ) -> tuple[str, str]:
+        async with self._run_creation_lock:
+            session_id = await self._ensure_session_async(intent.session_id)
+            intent.session_id = session_id
+            intent = await self._prepare_intent_async(intent)
+            self._run_control_manager.assert_session_allows_main_input(session_id)
+            _ = await self._session_repo.mark_started_async(session_id)
+
+            existing = await self._active_recoverable_run_async(session_id)
+            if existing is not None:
+                active_run_id, runtime = existing
+                if not allow_active_run_attach:
+                    raise RuntimeError(
+                        f"Session {session_id} already has active run {active_run_id}"
+                    )
+                if not await self._run_accepts_followups_async(active_run_id, intent):
+                    raise RuntimeError(
+                        f"Run {active_run_id} is active and does not accept follow-up input"
+                    )
+                await self._assert_auto_attach_allowed_async(active_run_id, runtime)
+                if (
+                    active_run_id in self._pending_runs
+                    and active_run_id not in self._running_run_ids
+                ):
+                    pending = self._pending_runs[active_run_id]
+                    pending.intent = self._merge_intent(pending.intent, intent.intent)
+                    existing_skills = pending.skills or ()
+                    next_skills = intent.skills or ()
+                    merged_skills = tuple(
+                        dict.fromkeys((*existing_skills, *next_skills))
+                    )
+                    pending.skills = merged_skills or None
+                    pending.yolo = intent.yolo
+                    run_intent_repo = self._run_intent_repo
+                    if run_intent_repo is not None:
+                        await run_intent_repo.upsert_async(
+                            run_id=active_run_id,
+                            session_id=session_id,
+                            intent=pending,
+                        )
+                    with bind_trace_context(
+                        trace_id=active_run_id,
+                        run_id=active_run_id,
+                        session_id=session_id,
+                    ):
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            event="run.followup.attached",
+                            message="Follow-up merged into pending run",
+                            payload={"mode": "pending_merge"},
+                        )
+                    return active_run_id, session_id
+                if (
+                    active_run_id in self._running_run_ids
+                    or self._injection_manager.is_active(active_run_id)
+                ):
+                    await self._update_run_yolo_async(
+                        run_id=active_run_id,
+                        session_id=session_id,
+                        yolo=intent.yolo,
+                    )
+                    self._append_followup_to_coordinator(
+                        active_run_id,
+                        intent.intent,
+                        enqueue=True,
+                        source=source,
+                    )
+                    with bind_trace_context(
+                        trace_id=active_run_id,
+                        run_id=active_run_id,
+                        session_id=session_id,
+                    ):
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            event="run.followup.attached",
+                            message="Follow-up enqueued to active coordinator",
+                            payload={"mode": "active_enqueue"},
+                        )
+                    return active_run_id, session_id
+                if (
+                    runtime is not None
+                    and runtime.is_recoverable
+                    and runtime.status
+                    in {RunRuntimeStatus.PAUSED, RunRuntimeStatus.STOPPED}
+                ):
+                    self._append_followup_to_coordinator(
+                        active_run_id,
+                        intent.intent,
+                        enqueue=False,
+                        source=InjectionSource.USER,
+                    )
+                    await self._update_run_yolo_async(
+                        run_id=active_run_id,
+                        session_id=session_id,
+                        yolo=intent.yolo,
+                    )
+                    self._resume_requested_runs.add(active_run_id)
+                    with bind_trace_context(
+                        trace_id=active_run_id,
+                        run_id=active_run_id,
+                        session_id=session_id,
+                    ):
+                        log_event(
+                            logger,
+                            logging.INFO,
+                            event="run.followup.attached",
+                            message="Follow-up queued for recoverable run",
+                            payload={"mode": "recoverable_resume"},
+                        )
+                    return active_run_id, session_id
+
+            return await self._queue_new_run_async(session_id=session_id, intent=intent)
+
     def _queue_new_run(
         self,
         *,
@@ -630,17 +836,304 @@ class SessionRunService:
     ) -> tuple[str, str]:
         return self._scheduler.queue_new_run(session_id=session_id, intent=intent)
 
+    async def _queue_new_run_async(
+        self,
+        *,
+        session_id: str,
+        intent: IntentInput,
+    ) -> tuple[str, str]:
+        run_id = new_trace_id().value
+        if self._hook_service is not None:
+            self._hook_service.snapshot_run(run_id)
+        self._pending_runs[run_id] = intent
+        run_runtime_repo = self._run_runtime_repo
+        if run_runtime_repo is not None:
+            await run_runtime_repo.ensure_async(
+                run_id=run_id,
+                session_id=session_id,
+                status=RunRuntimeStatus.QUEUED,
+                phase=RunRuntimePhase.IDLE,
+            )
+        run_intent_repo = self._run_intent_repo
+        if run_intent_repo is not None:
+            await run_intent_repo.upsert_async(
+                run_id=run_id,
+                session_id=session_id,
+                intent=intent,
+            )
+        self._remember_active_run(session_id, run_id)
+        with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
+            log_event(
+                logger,
+                logging.INFO,
+                event="run.queued",
+                message="Run queued for streaming execution",
+            )
+        return run_id, session_id
+
     def ensure_run_started(self, run_id: str) -> None:
         self._scheduler.ensure_run_started(run_id)
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        if self._should_delegate_to_bound_loop():
+            await self._call_in_bound_loop_async(
+                lambda: self.ensure_run_started(run_id)
+            )
+            return
+        await self._ensure_run_started_local_async(run_id)
 
     def _ensure_run_started_local(self, run_id: str) -> None:
         self._scheduler.ensure_run_started_local(run_id)
 
+    async def _ensure_run_started_local_async(self, run_id: str) -> None:
+        if run_id in self._running_run_ids:
+            return
+        if run_id in self._pending_runs:
+            await self._start_new_run_worker_async(run_id)
+            return
+        if run_id in self._resume_requested_runs:
+            runtime = await self._runtime_for_run_async(run_id)
+            if runtime is None:
+                raise KeyError(f"Run {run_id} not found")
+            if runtime.status not in {
+                RunRuntimeStatus.QUEUED,
+                RunRuntimeStatus.PAUSED,
+                RunRuntimeStatus.STOPPED,
+            }:
+                raise RuntimeError(
+                    f"Run {run_id} cannot be resumed from status {runtime.status.value}"
+                )
+            await self._start_resume_worker_async(run_id)
+            return
+        raise KeyError(f"Run {run_id} not found")
+
     def _start_new_run_worker(self, run_id: str) -> None:
         self._scheduler.start_new_run_worker(run_id)
 
+    def _register_startup_gated_worker(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        runner: Callable[[], Awaitable[RunResult]],
+    ) -> tuple[asyncio.Event, asyncio.Event, asyncio.Event, asyncio.Task[None]]:
+        startup_ready = asyncio.Event()
+        startup_done = asyncio.Event()
+        startup_failed = asyncio.Event()
+
+        async def _run_after_startup() -> None:
+            try:
+                await startup_ready.wait()
+            except asyncio.CancelledError:
+                await startup_done.wait()
+                if not startup_failed.is_set():
+                    await self._handle_startup_cancelled_async(
+                        run_id=run_id,
+                        session_id=session_id,
+                    )
+                return
+            await self._worker(run_id=run_id, session_id=session_id, runner=runner)
+
+        task = asyncio.create_task(_run_after_startup())
+        self._run_control_manager.register_run_task(
+            run_id=run_id,
+            session_id=session_id,
+            task=task,
+        )
+        return startup_ready, startup_done, startup_failed, task
+
+    async def _handle_startup_cancelled_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+    ) -> None:
+        run_runtime_repo = self._run_runtime_repo
+        if run_runtime_repo is not None:
+            await run_runtime_repo.update_async(
+                run_id,
+                status=RunRuntimeStatus.STOPPED,
+                phase=RunRuntimePhase.IDLE,
+                active_instance_id=None,
+                active_task_id=None,
+                active_role_id=None,
+                active_subagent_instance_id=None,
+                last_error="stopped_by_user",
+            )
+        await self._run_control_manager.publish_run_stopped_async(
+            session_id=session_id,
+            run_id=run_id,
+            reason="stopped_by_user",
+        )
+        with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
+            log_event(
+                logger,
+                logging.WARNING,
+                event="run.stopped",
+                message="Run cancelled during startup",
+                payload={"reason": "stopped_by_user"},
+            )
+        self._emit_notification(
+            notification_type=NotificationType.RUN_STOPPED,
+            session_id=session_id,
+            run_id=run_id,
+            trace_id=run_id,
+            title="Run Stopped",
+            body=f"Run {run_id} was stopped by user.",
+        )
+        await self._hook_pipeline.execute_session_end_hooks(
+            run_id=run_id,
+            session_id=session_id,
+            status="stopped",
+            completion_reason="stopped_by_user",
+            output_text="",
+        )
+        self._safe_finalize_run(run_id=run_id, session_id=session_id)
+
+    async def _start_new_run_worker_async(self, run_id: str) -> None:
+        intent = self._pending_runs.get(run_id)
+        if intent is None:
+            raise KeyError(f"Run {run_id} not found")
+        session_id = intent.session_id
+        if session_id is None:
+            raise RuntimeError(f"Run {run_id} is missing session id")
+        self._running_run_ids.add(run_id)
+        self._injection_manager.activate(run_id)
+        runner = (
+            (
+                lambda: self._media_executor.run_media_generation(
+                    run_id=run_id,
+                    intent=intent,
+                )
+            )
+            if intent.run_kind != RunKind.CONVERSATION
+            else (lambda: self._meta_agent.handle_intent(intent, trace_id=run_id))
+        )
+        startup_ready, startup_done, startup_failed, task = (
+            self._register_startup_gated_worker(
+                run_id=run_id,
+                session_id=session_id,
+                runner=runner,
+            )
+        )
+        run_runtime_repo = self._run_runtime_repo
+        try:
+            if run_runtime_repo is not None:
+                await run_runtime_repo.ensure_async(
+                    run_id=run_id,
+                    session_id=session_id,
+                    status=RunRuntimeStatus.RUNNING,
+                    phase=RunRuntimePhase.COORDINATOR_RUNNING,
+                )
+                await run_runtime_repo.update_async(
+                    run_id,
+                    status=RunRuntimeStatus.RUNNING,
+                    phase=RunRuntimePhase.COORDINATOR_RUNNING,
+                    last_error=None,
+                )
+            await self._run_event_hub.publish_async(
+                RunEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    trace_id=run_id,
+                    task_id=None,
+                    event_type=RunEventType.RUN_STARTED,
+                    payload_json=dumps({"session_id": session_id}),
+                )
+            )
+        except BaseException:
+            startup_failed.set()
+            startup_done.set()
+            task.cancel()
+            self._run_control_manager.unregister_run_task(run_id)
+            raise
+        startup_done.set()
+        if self._run_control_manager.is_run_stop_requested(run_id) or task.done():
+            return
+        startup_ready.set()
+
     def _start_resume_worker(self, run_id: str) -> None:
         self._scheduler.start_resume_worker(run_id)
+
+    async def _start_resume_worker_async(self, run_id: str) -> None:
+        runtime = await self._runtime_for_run_async(run_id)
+        if runtime is None:
+            raise KeyError(f"Run {run_id} not found")
+        session_id = runtime.session_id
+        self._running_run_ids.add(run_id)
+        self._resume_requested_runs.discard(run_id)
+        self._injection_manager.activate(run_id)
+        startup_ready, startup_done, startup_failed, task = (
+            self._register_startup_gated_worker(
+                run_id=run_id,
+                session_id=session_id,
+                runner=lambda: self._resume_existing_run(run_id),
+            )
+        )
+        try:
+            resume_payload = await self._transition_run_to_resumed_async(
+                run_id=run_id,
+                session_id=session_id,
+                reason="resume",
+            )
+            with bind_trace_context(
+                trace_id=run_id,
+                run_id=run_id,
+                session_id=session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event="run.resumed",
+                    message="Recoverable run resumed",
+                    payload=resume_payload,
+                )
+        except BaseException:
+            startup_failed.set()
+            startup_done.set()
+            task.cancel()
+            self._run_control_manager.unregister_run_task(run_id)
+            raise
+        startup_done.set()
+        if self._run_control_manager.is_run_stop_requested(run_id) or task.done():
+            return
+        startup_ready.set()
+
+    async def _transition_run_to_resumed_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        reason: str,
+    ) -> dict[str, JsonValue]:
+        runtime = await self._runtime_for_run_async(run_id)
+        phase = RunRuntimePhase.COORDINATOR_RUNNING
+        if runtime is not None and runtime.phase != RunRuntimePhase.TERMINAL:
+            phase = runtime.phase
+        run_runtime_repo = self._run_runtime_repo
+        if run_runtime_repo is not None:
+            await run_runtime_repo.update_async(
+                run_id,
+                status=RunRuntimeStatus.RUNNING,
+                phase=phase,
+                last_error=None,
+            )
+        payload: dict[str, JsonValue] = {
+            "session_id": session_id,
+            "reason": reason,
+        }
+        await self._event_publisher.safe_publish_run_event_async(
+            RunEvent(
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=None,
+                event_type=RunEventType.RUN_RESUMED,
+                payload_json=dumps(payload),
+            ),
+            failure_event="run.event.publish_failed",
+        )
+        return payload
 
     async def _resume_existing_run(self, run_id: str) -> RunResult:
         try:
@@ -733,7 +1226,7 @@ class SessionRunService:
                 active_subagent_instance_id=None,
                 last_error=((result.error_message or output_text) if failed else None),
             )
-            self._safe_publish_run_event(
+            await self._safe_publish_run_event_async(
                 RunEvent(
                     session_id=session_id,
                     run_id=run_id,
@@ -788,7 +1281,7 @@ class SessionRunService:
                 active_subagent_instance_id=None,
                 last_error=payload.error_message,
             )
-            self._safe_publish_run_event(
+            await self._safe_publish_run_event_async(
                 RunEvent(
                     session_id=session_id,
                     run_id=run_id,
@@ -822,7 +1315,7 @@ class SessionRunService:
                 active_subagent_instance_id=None,
                 last_error="stopped_by_user",
             )
-            self._run_control_manager.publish_run_stopped(
+            await self._run_control_manager.publish_run_stopped_async(
                 session_id=session_id,
                 run_id=run_id,
                 reason="stopped_by_user",
@@ -878,7 +1371,7 @@ class SessionRunService:
                 active_subagent_instance_id=None,
                 last_error=((result.error_message or output_text) if failed else None),
             )
-            self._safe_publish_run_event(
+            await self._safe_publish_run_event_async(
                 RunEvent(
                     session_id=session_id,
                     run_id=run_id,
@@ -1069,6 +1562,27 @@ class SessionRunService:
             content=content,
         )
 
+    async def inject_message_async(
+        self,
+        *,
+        run_id: str,
+        source: InjectionSource,
+        content: str,
+    ):
+        if self._should_delegate_to_bound_loop():
+            return await self._call_in_bound_loop_async(
+                lambda: self.inject_message(
+                    run_id=run_id,
+                    source=source,
+                    content=content,
+                )
+            )
+        return await self._run_control_manager.inject_to_running_agents_async(
+            run_id=run_id,
+            source=source,
+            content=content,
+        )
+
     def handle_background_task_completion(
         self,
         *,
@@ -1113,8 +1627,89 @@ class SessionRunService:
     def stop_run(self, run_id: str) -> None:
         self._scheduler.stop_run(run_id)
 
+    async def stop_run_async(self, run_id: str) -> None:
+        if self._should_delegate_to_bound_loop():
+            await self._call_in_bound_loop_async(lambda: self.stop_run(run_id))
+            return
+        await self._stop_run_local_async(run_id)
+
     def _stop_run_local(self, run_id: str) -> None:
         self._scheduler.stop_run_local(run_id)
+
+    async def _stop_run_local_async(self, run_id: str) -> None:
+        self._run_control_manager.clear_paused_subagent_for_run(run_id)
+        if run_id in self._pending_runs and run_id not in self._running_run_ids:
+            await self._interaction_service.complete_pending_user_questions_async(
+                run_id=run_id,
+                reason="run_stopped",
+            )
+            intent = self._pending_runs.pop(run_id)
+            session_id = intent.session_id
+            if session_id is None:
+                raise RuntimeError(f"Run {run_id} is missing session id")
+            run_runtime_repo = self._run_runtime_repo
+            if run_runtime_repo is not None:
+                await run_runtime_repo.update_async(
+                    run_id,
+                    status=RunRuntimeStatus.STOPPED,
+                    phase=RunRuntimePhase.IDLE,
+                    active_instance_id=None,
+                    active_task_id=None,
+                    active_role_id=None,
+                    active_subagent_instance_id=None,
+                    last_error="stopped_before_start",
+                )
+            await self._run_control_manager.publish_run_stopped_async(
+                session_id=session_id,
+                run_id=run_id,
+                reason="stopped_before_start",
+            )
+            self._emit_notification(
+                notification_type=NotificationType.RUN_STOPPED,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                title="Run Stopped",
+                body=f"Run {run_id} was stopped before start.",
+            )
+            with bind_trace_context(
+                trace_id=run_id, run_id=run_id, session_id=session_id
+            ):
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    event="run.stopped",
+                    message="Pending run stopped before worker start",
+                    payload={"reason": "stopped_before_start"},
+                )
+            return
+
+        requested = self._run_control_manager.request_run_stop(run_id)
+        if not requested and run_id not in self._running_run_ids:
+            raise KeyError(f"Run {run_id} not found")
+        if requested:
+            await self._interaction_service.complete_pending_user_questions_async(
+                run_id=run_id,
+                reason="run_stopped",
+            )
+        run_runtime_repo = self._run_runtime_repo
+        if run_runtime_repo is not None and requested:
+            runtime = await run_runtime_repo.get_async(run_id)
+            if runtime is not None:
+                await run_runtime_repo.update_async(
+                    run_id,
+                    status=RunRuntimeStatus.STOPPING,
+                    phase=runtime.phase,
+                    last_error="stop_requested",
+                )
+        with bind_trace_context(trace_id=run_id, run_id=run_id):
+            log_event(
+                logger,
+                logging.WARNING,
+                event="run.stop.requested",
+                message="Run stop requested",
+                payload={"was_running": requested},
+            )
 
     def _handle_background_task_completion_local(
         self,
@@ -1164,11 +1759,90 @@ class SessionRunService:
         loop.call_soon_threadsafe(runner)
         return result.result(timeout=30)
 
+    async def _call_in_bound_loop_async(self, callback: Callable[[], _T]) -> _T:
+        loop = self._event_loop
+        if loop is None:
+            return callback()
+        result: ThreadFuture[_T] = ThreadFuture()
+
+        def runner() -> None:
+            try:
+                result.set_result(callback())
+            except Exception as exc:
+                result.set_exception(exc)
+
+        loop.call_soon_threadsafe(runner)
+        return await asyncio.wait_for(asyncio.wrap_future(result), timeout=30)
+
     def resume_run(self, run_id: str) -> str:
         return self._scheduler.resume_run(run_id)
 
+    async def resume_run_async(self, run_id: str) -> str:
+        if self._should_delegate_to_bound_loop():
+            return await self._call_in_bound_loop_async(lambda: self.resume_run(run_id))
+        return await self._resume_run_local_async(run_id)
+
+    async def _resume_run_local_async(self, run_id: str) -> str:
+        if run_id in self._running_run_ids:
+            raise RuntimeError(f"Run {run_id} is already running")
+        if run_id in self._pending_runs:
+            pending = self._pending_runs[run_id]
+            if pending.session_id is None:
+                raise RuntimeError(f"Run {run_id} is missing session id")
+            if run_id in self._resume_requested_runs:
+                return pending.session_id
+            self._resume_requested_runs.add(run_id)
+            self._remember_active_run(pending.session_id, run_id)
+            with bind_trace_context(
+                trace_id=run_id, run_id=run_id, session_id=pending.session_id
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event="run.resume.requested",
+                    message="Resume requested for pending run",
+                )
+            return pending.session_id
+
+        runtime = await self._runtime_for_run_async(run_id)
+        if runtime is None:
+            raise KeyError(f"Run {run_id} not found")
+        if runtime.status == RunRuntimeStatus.RUNNING:
+            raise RuntimeError(f"Run {run_id} is already running")
+        if runtime.status == RunRuntimeStatus.STOPPING:
+            raise RuntimeError(
+                f"Run {run_id} is stopping. Wait for it to stop before resuming."
+            )
+        if not runtime.is_recoverable:
+            raise RuntimeError(f"Run {run_id} is not recoverable")
+        if run_id in self._resume_requested_runs:
+            return runtime.session_id
+        self._resume_requested_runs.add(run_id)
+        self._remember_active_run(runtime.session_id, run_id)
+        with bind_trace_context(
+            trace_id=run_id, run_id=run_id, session_id=runtime.session_id
+        ):
+            log_event(
+                logger,
+                logging.INFO,
+                event="run.resume.requested",
+                message="Resume requested for recoverable run",
+            )
+        return runtime.session_id
+
     def stop_subagent(self, run_id: str, instance_id: str) -> dict[str, str]:
         return self._interaction_service.stop_subagent(run_id, instance_id)
+
+    async def stop_subagent_async(
+        self,
+        run_id: str,
+        instance_id: str,
+    ) -> dict[str, str]:
+        if self._should_delegate_to_bound_loop():
+            return await self._call_in_bound_loop_async(
+                lambda: self.stop_subagent(run_id, instance_id)
+            )
+        return await self._interaction_service.stop_subagent_async(run_id, instance_id)
 
     def _complete_pending_user_questions(
         self,
@@ -1206,8 +1880,34 @@ class SessionRunService:
             tool_call_id=tool_call_id,
         )
 
+    async def create_monitor_async(
+        self,
+        *,
+        run_id: str,
+        source_kind: MonitorSourceKind,
+        source_key: str,
+        rule: MonitorRule,
+        action_type: MonitorActionType,
+        created_by_instance_id: str | None = None,
+        created_by_role_id: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> dict[str, object]:
+        return await self._auxiliary_service.create_monitor_async(
+            run_id=run_id,
+            source_kind=source_kind,
+            source_key=source_key,
+            rule=rule,
+            action_type=action_type,
+            created_by_instance_id=created_by_instance_id,
+            created_by_role_id=created_by_role_id,
+            tool_call_id=tool_call_id,
+        )
+
     def list_monitors(self, run_id: str) -> tuple[dict[str, object], ...]:
         return self._auxiliary_service.list_monitors(run_id)
+
+    async def list_monitors_async(self, run_id: str) -> tuple[dict[str, object], ...]:
+        return await self._auxiliary_service.list_monitors_async(run_id)
 
     def stop_monitor(
         self,
@@ -1220,8 +1920,25 @@ class SessionRunService:
             monitor_id=monitor_id,
         )
 
+    async def stop_monitor_async(
+        self,
+        *,
+        run_id: str,
+        monitor_id: str,
+    ) -> dict[str, object]:
+        return await self._auxiliary_service.stop_monitor_async(
+            run_id=run_id,
+            monitor_id=monitor_id,
+        )
+
     def list_background_tasks(self, run_id: str) -> tuple[dict[str, object], ...]:
         return self._auxiliary_service.list_background_tasks(run_id)
+
+    async def list_background_tasks_async(
+        self,
+        run_id: str,
+    ) -> tuple[dict[str, object], ...]:
+        return await self._auxiliary_service.list_background_tasks_async(run_id)
 
     def get_background_task(
         self,
@@ -1234,8 +1951,22 @@ class SessionRunService:
             background_task_id=background_task_id,
         )
 
+    async def get_background_task_async(
+        self,
+        *,
+        run_id: str,
+        background_task_id: str,
+    ) -> dict[str, object]:
+        return await self._auxiliary_service.get_background_task_async(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
+
     def get_todo(self, run_id: str) -> dict[str, object]:
         return self._auxiliary_service.get_todo(run_id)
+
+    async def get_todo_async(self, run_id: str) -> dict[str, object]:
+        return await self._auxiliary_service.get_todo_async(run_id)
 
     async def stop_background_task(
         self,
@@ -1259,6 +1990,17 @@ class SessionRunService:
                 pass
         raise KeyError(f"Run {run_id} not found")
 
+    async def _run_session_id_async(self, run_id: str) -> str:
+        runtime = await self._runtime_for_run_async(run_id)
+        if runtime is not None:
+            return runtime.session_id
+        if self._run_intent_repo is not None:
+            try:
+                return (await self._run_intent_repo.get_async(run_id)).session_id
+            except KeyError:
+                pass
+        raise KeyError(f"Run {run_id} not found")
+
     def inject_subagent_message(
         self,
         *,
@@ -1267,6 +2009,19 @@ class SessionRunService:
         content: str,
     ) -> None:
         self._interaction_service.inject_subagent_message(
+            run_id=run_id,
+            instance_id=instance_id,
+            content=content,
+        )
+
+    async def inject_subagent_message_async(
+        self,
+        *,
+        run_id: str,
+        instance_id: str,
+        content: str,
+    ) -> None:
+        await self._interaction_service.inject_subagent_message_async(
             run_id=run_id,
             instance_id=instance_id,
             content=content,
@@ -1286,6 +2041,31 @@ class SessionRunService:
             feedback,
         )
 
+    async def resolve_tool_approval_async(
+        self,
+        *,
+        run_id: str,
+        tool_call_id: str,
+        action: str,
+        feedback: str = "",
+    ) -> None:
+        if self._should_delegate_to_bound_loop():
+            await self._call_in_bound_loop_async(
+                lambda: self.resolve_tool_approval(
+                    run_id=run_id,
+                    tool_call_id=tool_call_id,
+                    action=action,
+                    feedback=feedback,
+                )
+            )
+            return
+        await self._interaction_service.resolve_tool_approval_async(
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            action=action,
+            feedback=feedback,
+        )
+
     def _persist_shell_approval_grants(
         self,
         *,
@@ -1300,8 +2080,16 @@ class SessionRunService:
     def list_open_tool_approvals(self, run_id: str) -> list[dict[str, str]]:
         return self._interaction_service.list_open_tool_approvals(run_id)
 
+    async def list_open_tool_approvals_async(self, run_id: str) -> list[dict[str, str]]:
+        return await self._interaction_service.list_open_tool_approvals_async(run_id)
+
     def list_user_questions(self, run_id: str) -> list[dict[str, JsonValue]]:
         return self._interaction_service.list_user_questions(run_id)
+
+    async def list_user_questions_async(
+        self, run_id: str
+    ) -> list[dict[str, JsonValue]]:
+        return await self._interaction_service.list_user_questions_async(run_id)
 
     def answer_user_question(
         self,
@@ -1316,6 +2104,19 @@ class SessionRunService:
             answers=answers,
         )
 
+    async def answer_user_question_async(
+        self,
+        *,
+        run_id: str,
+        question_id: str,
+        answers: UserQuestionAnswerSubmission,
+    ) -> dict[str, JsonValue]:
+        return await self._interaction_service.answer_user_question_async(
+            run_id=run_id,
+            question_id=question_id,
+            answers=answers,
+        )
+
     @staticmethod
     def _merge_intent(current: str, followup: str) -> str:
         return f"{current}\n\n{followup}" if current.strip() else followup
@@ -1325,16 +2126,69 @@ class SessionRunService:
     ) -> None:
         self._followup_router.assert_auto_attach_allowed(run_id, runtime)
 
+    async def _assert_auto_attach_allowed_async(
+        self, run_id: str, runtime: RunRuntimeRecord | None
+    ) -> None:
+        if runtime is None:
+            return
+        if (
+            self._approval_ticket_repo is not None
+            and await self._approval_ticket_repo.list_open_by_run_async(run_id)
+        ):
+            raise RuntimeError(
+                f"Run {run_id} is waiting for tool approval. Resolve the pending approval before continuing."
+            )
+        if await self._has_pending_resolvable_question_for_session_async(
+            runtime.session_id
+        ):
+            raise RuntimeError(
+                f"Run {run_id} is waiting for manual action. Answer the pending question before continuing."
+            )
+        if runtime.status == RunRuntimeStatus.STOPPING:
+            raise RuntimeError(
+                f"Run {run_id} is stopping. Wait for it to stop before continuing."
+            )
+        if (
+            runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
+            and runtime.active_subagent_instance_id
+        ):
+            instance_id = runtime.active_subagent_instance_id
+            role_id = instance_id
+            agent_repo = self._agent_repo
+            if agent_repo is not None:
+                try:
+                    record = await agent_repo.get_instance_async(instance_id)
+                    role_id = record.role_id
+                except KeyError:
+                    role_id = instance_id
+            raise RuntimeError(
+                f"Subagent {role_id} ({instance_id}) is paused in run {run_id}. "
+                "Please send a follow-up message to that subagent first."
+            )
+
     def _root_task_for_run(self, run_id: str) -> TaskRecord:
         return self._followup_router.root_task_for_run(run_id)
 
     def _has_running_agents_for_run(self, run_id: str) -> bool:
         return self._followup_router.has_running_agents_for_run(run_id)
 
+    async def _has_running_agents_for_run_async(self, run_id: str) -> bool:
+        return await self._followup_router.has_running_agents_for_run_async(run_id)
+
     def _has_pending_resolvable_question_for_session(self, session_id: str) -> bool:
         return self._followup_router.has_pending_resolvable_question_for_session(
             session_id
         )
+
+    async def _has_pending_resolvable_question_for_session_async(
+        self, session_id: str
+    ) -> bool:
+        if self._user_question_repo is None:
+            return False
+        for record in await self._user_question_repo.list_by_session_async(session_id):
+            if await self._runtime_for_run_async(record.run_id) is not None:
+                return True
+        return False
 
     def _append_followup_to_instance(
         self,
@@ -1370,6 +2224,33 @@ class SessionRunService:
             source=source,
         )
 
+    async def _update_run_yolo_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        yolo: bool,
+    ) -> None:
+        run_intent_repo = self._run_intent_repo
+        if run_intent_repo is None:
+            return
+        try:
+            intent = await run_intent_repo.get_async(
+                run_id,
+                fallback_session_id=session_id,
+            )
+        except KeyError:
+            return
+        if intent.yolo == yolo:
+            return
+        intent.session_id = session_id
+        intent.yolo = yolo
+        await run_intent_repo.upsert_async(
+            run_id=run_id,
+            session_id=session_id,
+            intent=intent,
+        )
+
     def _run_accepts_followups(self, run_id: str, next_intent: IntentInput) -> bool:
         if next_intent.run_kind != RunKind.CONVERSATION:
             return False
@@ -1379,6 +2260,27 @@ class SessionRunService:
                 runtime_repo = self._run_runtime_repo
                 runtime = runtime_repo.get(run_id) if runtime_repo is not None else None
                 current_intent = self._run_intent_repo.get(
+                    run_id,
+                    fallback_session_id=(
+                        runtime.session_id if runtime is not None else None
+                    ),
+                )
+            except KeyError:
+                current_intent = None
+        if current_intent is None:
+            return True
+        return current_intent.run_kind == RunKind.CONVERSATION
+
+    async def _run_accepts_followups_async(
+        self, run_id: str, next_intent: IntentInput
+    ) -> bool:
+        if next_intent.run_kind != RunKind.CONVERSATION:
+            return False
+        current_intent = self._pending_runs.get(run_id)
+        if current_intent is None and self._run_intent_repo is not None:
+            try:
+                runtime = await self._runtime_for_run_async(run_id)
+                current_intent = await self._run_intent_repo.get_async(
                     run_id,
                     fallback_session_id=(
                         runtime.session_id if runtime is not None else None
@@ -1446,6 +2348,17 @@ class SessionRunService:
         failure_event: str,
     ) -> None:
         self._event_publisher.safe_publish_run_event(
+            event,
+            failure_event=failure_event,
+        )
+
+    async def _safe_publish_run_event_async(
+        self,
+        event: RunEvent,
+        *,
+        failure_event: str,
+    ) -> None:
+        await self._event_publisher.safe_publish_run_event_async(
             event,
             failure_event=failure_event,
         )

@@ -22,12 +22,13 @@ from typing import (
     get_origin,
     get_type_hints,
     overload,
+    runtime_checkable,
 )
 from uuid import uuid4
 
 from relay_teams.logger import get_logger, log_event, log_tool_error
 from relay_teams.media import ContentPart, TextContentPart, UserPromptContent
-from relay_teams.metrics.adapters import record_tool_execution
+from relay_teams.metrics.adapters import record_tool_execution_async
 from relay_teams.notifications import NotificationContext, NotificationType
 from relay_teams.persistence import is_retryable_sqlite_error
 from relay_teams.agents.tasks.task_status_sanitizer import (
@@ -35,6 +36,7 @@ from relay_teams.agents.tasks.task_status_sanitizer import (
 )
 from relay_teams.reminders import ToolResultObservation
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
+from relay_teams.sessions.runs.event_stream import publish_run_event_async
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.runs.system_injection import SystemInjectionSink
 
@@ -60,8 +62,8 @@ from relay_teams.tools.runtime.persisted_state import (
     ToolApprovalMode,
     ToolApprovalStatus,
     ToolExecutionStatus,
-    load_tool_call_state,
-    merge_tool_call_state,
+    load_tool_call_state_async,
+    merge_tool_call_state_async,
 )
 from relay_teams.env.hook_runtime_env import (
     reset_tool_hook_runtime_env,
@@ -78,6 +80,31 @@ from relay_teams.hooks import (
 )
 
 LOGGER = get_logger(__name__)
+
+
+@runtime_checkable
+class _AsyncToolResultReminderService(Protocol):
+    async def observe_tool_result_async(
+        self, observation: ToolResultObservation
+    ) -> object:
+        pass
+
+
+@runtime_checkable
+class _AsyncRunRuntimeRepository(Protocol):
+    async def ensure_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        root_task_id: str | None = None,
+        status: RunRuntimeStatus = RunRuntimeStatus.QUEUED,
+        phase: RunRuntimePhase = RunRuntimePhase.IDLE,
+    ) -> object:
+        pass
+
+    async def update_async(self, run_id: str, **changes: object) -> object:
+        pass
 
 
 # noinspection PyUnusedLocal,PyTypeHints
@@ -198,7 +225,7 @@ async def execute_tool(
             tool_input=effective_tool_input,
         )
         args_summary = dict(effective_tool_input)
-        reusable_result = _reusable_tool_result(
+        reusable_result = await _reusable_tool_result_async(
             ctx=ctx,
             args_preview=_safe_json(args_summary),
             tool_call_id=tool_call_id,
@@ -252,13 +279,13 @@ async def execute_tool(
                 error=approval_error,
                 meta=meta,
             )
-            _observe_tool_result_reminders(
+            await _observe_tool_result_reminders_async(
                 ctx=ctx,
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
                 envelope=envelope,
             )
-            _persist_tool_record(
+            await _persist_tool_record_async(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -268,13 +295,13 @@ async def execute_tool(
                 runtime_meta=meta,
                 execution_status=ToolExecutionStatus.FAILED,
             )
-            _record_tool_metrics(
+            await _record_tool_metrics_async(
                 ctx=ctx,
                 tool_name=tool_name,
                 duration_ms=elapsed_ms,
                 success=False,
             )
-            _publish_tool_result_event(
+            await _publish_tool_result_event_async(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -282,13 +309,9 @@ async def execute_tool(
             )
             return envelope
 
-        ctx.deps.run_runtime_repo.ensure(
-            run_id=ctx.deps.run_id,
-            session_id=ctx.deps.session_id,
-            root_task_id=ctx.deps.task_id,
-        )
-        ctx.deps.run_runtime_repo.update(
-            ctx.deps.run_id,
+        await _ensure_run_runtime_async(ctx=ctx)
+        await _update_run_runtime_async(
+            ctx=ctx,
             status=RunRuntimeStatus.RUNNING,
             phase=RunRuntimePhase.COORDINATOR_RUNNING
             if ctx.deps.role_registry.is_coordinator_role(ctx.deps.role_id)
@@ -359,13 +382,13 @@ async def execute_tool(
                 args_summary=args_summary,
                 envelope=envelope,
             )
-            _observe_tool_result_reminders(
+            await _observe_tool_result_reminders_async(
                 ctx=ctx,
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
                 envelope=envelope,
             )
-            _persist_tool_record(
+            await _persist_tool_record_async(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -376,20 +399,22 @@ async def execute_tool(
                 execution_status=ToolExecutionStatus.COMPLETED,
                 tool_content_parts=tool_content_parts,
             )
-            _record_tool_metrics(
+            await _record_tool_metrics_async(
                 ctx=ctx,
                 tool_name=tool_name,
                 duration_ms=elapsed_ms,
                 success=True,
             )
-            _publish_tool_result_event(
+            await _publish_tool_result_event_async(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
                 visible_envelope=envelope,
             )
             if approval_ticket_id and not keep_approval_ticket_reusable:
-                ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
+                await ctx.deps.approval_ticket_repo.mark_completed_async(
+                    approval_ticket_id
+                )
             if tool_return_content is not None:
                 return ToolReturn(
                     return_value=envelope,
@@ -439,13 +464,13 @@ async def execute_tool(
                 args_summary=args_summary,
                 envelope=envelope,
             )
-            _observe_tool_result_reminders(
+            await _observe_tool_result_reminders_async(
                 ctx=ctx,
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
                 envelope=envelope,
             )
-            _persist_tool_record(
+            await _persist_tool_record_async(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -455,20 +480,22 @@ async def execute_tool(
                 runtime_meta=meta,
                 execution_status=ToolExecutionStatus.FAILED,
             )
-            _record_tool_metrics(
+            await _record_tool_metrics_async(
                 ctx=ctx,
                 tool_name=tool_name,
                 duration_ms=elapsed_ms,
                 success=False,
             )
-            _publish_tool_result_event(
+            await _publish_tool_result_event_async(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
                 visible_envelope=envelope,
             )
             if approval_ticket_id and not keep_approval_ticket_reusable:
-                ctx.deps.approval_ticket_repo.mark_completed(approval_ticket_id)
+                await ctx.deps.approval_ticket_repo.mark_completed_async(
+                    approval_ticket_id
+                )
             return envelope
 
 
@@ -579,7 +606,7 @@ async def execute_tool_call(
     )
 
 
-def _reusable_tool_result(
+async def _reusable_tool_result_async(
     *,
     ctx: ToolContext,
     args_preview: str,
@@ -587,7 +614,7 @@ def _reusable_tool_result(
     tool_name: str,
     allow_tool_return: bool,
 ) -> Optional[ToolReturn | dict[str, JsonValue]]:
-    state = load_tool_call_state(
+    state = await load_tool_call_state_async(
         shared_store=ctx.deps.shared_store,
         task_id=ctx.deps.task_id,
         tool_call_id=tool_call_id,
@@ -646,7 +673,7 @@ def _state_matches_runtime_scope(
     return not state_run_id or state_run_id == ctx.deps.run_id
 
 
-def _record_tool_metrics(
+async def _record_tool_metrics_async(
     *,
     ctx: ToolContext,
     tool_name: str,
@@ -657,7 +684,7 @@ def _record_tool_metrics(
     mcp_registry = getattr(ctx.deps, "mcp_registry", None)
     if metric_recorder is None or mcp_registry is None:
         return
-    record_tool_execution(
+    await record_tool_execution_async(
         metric_recorder,
         mcp_registry=mcp_registry,
         workspace_id=ctx.deps.workspace_id,
@@ -671,7 +698,47 @@ def _record_tool_metrics(
     )
 
 
-def _publish_tool_result_event(
+async def _ensure_run_runtime_async(
+    *,
+    ctx: ToolContext,
+    status: RunRuntimeStatus = RunRuntimeStatus.QUEUED,
+    phase: RunRuntimePhase = RunRuntimePhase.IDLE,
+) -> None:
+    repository = ctx.deps.run_runtime_repo
+    if isinstance(repository, _AsyncRunRuntimeRepository):
+        _ = await repository.ensure_async(
+            run_id=ctx.deps.run_id,
+            session_id=ctx.deps.session_id,
+            root_task_id=ctx.deps.task_id,
+            status=status,
+            phase=phase,
+        )
+        return
+    ensure_kwargs: dict[str, object] = {
+        "run_id": ctx.deps.run_id,
+        "session_id": ctx.deps.session_id,
+        "root_task_id": ctx.deps.task_id,
+    }
+    if status != RunRuntimeStatus.QUEUED:
+        ensure_kwargs["status"] = status
+    if phase != RunRuntimePhase.IDLE:
+        ensure_kwargs["phase"] = phase
+    _ = await asyncio.to_thread(repository.ensure, **ensure_kwargs)
+
+
+async def _update_run_runtime_async(
+    *,
+    ctx: ToolContext,
+    **changes: object,
+) -> None:
+    repository = ctx.deps.run_runtime_repo
+    if isinstance(repository, _AsyncRunRuntimeRepository):
+        _ = await repository.update_async(ctx.deps.run_id, **changes)
+        return
+    _ = await asyncio.to_thread(repository.update, ctx.deps.run_id, **changes)
+
+
+async def _publish_tool_result_event_async(
     *,
     ctx: ToolContext,
     tool_call_id: str,
@@ -683,7 +750,8 @@ def _publish_tool_result_event(
         sanitize_task_status_payload(visible_envelope),
     )
     is_error = bool(visible_envelope.get("ok") is False)
-    ctx.deps.run_event_hub.publish(
+    await publish_run_event_async(
+        ctx.deps.run_event_hub,
         RunEvent(
             session_id=ctx.deps.session_id,
             run_id=ctx.deps.run_id,
@@ -702,7 +770,7 @@ def _publish_tool_result_event(
                     "instance_id": ctx.deps.instance_id,
                 }
             ),
-        )
+        ),
     )
 
 
@@ -1230,7 +1298,7 @@ async def _apply_post_tool_hooks(
         ),
         run_event_hub=ctx.deps.run_event_hub,
     )
-    return _apply_post_hook_bundle_to_envelope(
+    return await _apply_post_hook_bundle_to_envelope_async(
         ctx=ctx,
         hook_event=HookEventName.POST_TOOL_USE,
         tool_name=tool_name,
@@ -1273,7 +1341,7 @@ async def _apply_post_tool_failure_hooks(
         ),
         run_event_hub=ctx.deps.run_event_hub,
     )
-    return _apply_post_hook_bundle_to_envelope(
+    return await _apply_post_hook_bundle_to_envelope_async(
         ctx=ctx,
         hook_event=HookEventName.POST_TOOL_USE_FAILURE,
         tool_name=tool_name,
@@ -1283,7 +1351,7 @@ async def _apply_post_tool_failure_hooks(
     )
 
 
-def _apply_post_hook_bundle_to_envelope(
+async def _apply_post_hook_bundle_to_envelope_async(
     *,
     ctx: ToolContext,
     hook_event: HookEventName,
@@ -1296,7 +1364,7 @@ def _apply_post_hook_bundle_to_envelope(
     runtime_meta = cast(dict[str, JsonValue], meta) if isinstance(meta, dict) else {}
     if bundle.additional_context:
         runtime_meta["hook_additional_context"] = list(bundle.additional_context)
-        _enqueue_system_followup(
+        await _enqueue_system_followup_async(
             ctx=ctx,
             content="\n\n".join(
                 str(context).strip()
@@ -1306,7 +1374,7 @@ def _apply_post_hook_bundle_to_envelope(
         )
     if bundle.deferred_action:
         runtime_meta["hook_deferred_action"] = bundle.deferred_action
-        _enqueue_deferred_followup(
+        await _enqueue_deferred_followup_async(
             ctx=ctx,
             hook_event=hook_event,
             tool_name=tool_name,
@@ -1317,14 +1385,14 @@ def _apply_post_hook_bundle_to_envelope(
     return envelope
 
 
-def _enqueue_system_followup(
+async def _enqueue_system_followup_async(
     *,
     ctx: ToolContext,
     content: str,
 ) -> bool:
     if not content:
         return False
-    result = _system_injection_sink(ctx).enqueue_only(
+    result = await _system_injection_sink(ctx).enqueue_only_async(
         session_id=ctx.deps.session_id,
         run_id=ctx.deps.run_id,
         trace_id=ctx.deps.trace_id,
@@ -1337,7 +1405,7 @@ def _enqueue_system_followup(
     return result.enqueued
 
 
-def _enqueue_deferred_followup(
+async def _enqueue_deferred_followup_async(
     *,
     ctx: ToolContext,
     hook_event: HookEventName,
@@ -1345,9 +1413,10 @@ def _enqueue_deferred_followup(
     tool_call_id: str,
     deferred_action: str,
 ) -> None:
-    if not _enqueue_system_followup(ctx=ctx, content=deferred_action):
+    if not await _enqueue_system_followup_async(ctx=ctx, content=deferred_action):
         return
-    ctx.deps.run_event_hub.publish(
+    await publish_run_event_async(
+        ctx.deps.run_event_hub,
         RunEvent(
             session_id=ctx.deps.session_id,
             run_id=ctx.deps.run_id,
@@ -1365,7 +1434,7 @@ def _enqueue_deferred_followup(
                 },
                 ensure_ascii=False,
             ),
-        )
+        ),
     )
 
 
@@ -1378,7 +1447,7 @@ def _system_injection_sink(ctx: ToolContext) -> SystemInjectionSink:
 
 
 # noinspection PyTypeHints
-def _observe_tool_result_reminders(
+async def _observe_tool_result_reminders_async(
     *,
     ctx: ToolContext,
     tool_name: str,
@@ -1413,23 +1482,25 @@ def _observe_tool_result_reminders(
             error_type = reported_failure[0]
         if not error_message:
             error_message = reported_failure[1]
-    _ = reminder_service.observe_tool_result(
-        ToolResultObservation(
-            session_id=ctx.deps.session_id,
-            run_id=ctx.deps.run_id,
-            trace_id=ctx.deps.trace_id,
-            task_id=ctx.deps.task_id,
-            instance_id=ctx.deps.instance_id,
-            role_id=ctx.deps.role_id,
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            ok=observed_ok,
-            error_type=error_type,
-            error_message=error_message,
-            retryable=bool(error.get("retryable") is True),
-            meta=meta,
-        )
+    observation = ToolResultObservation(
+        session_id=ctx.deps.session_id,
+        run_id=ctx.deps.run_id,
+        trace_id=ctx.deps.trace_id,
+        task_id=ctx.deps.task_id,
+        instance_id=ctx.deps.instance_id,
+        role_id=ctx.deps.role_id,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        ok=observed_ok,
+        error_type=error_type,
+        error_message=error_message,
+        retryable=bool(error.get("retryable") is True),
+        meta=meta,
     )
+    if isinstance(reminder_service, _AsyncToolResultReminderService):
+        _ = await reminder_service.observe_tool_result_async(observation)
+        return
+    _ = await asyncio.to_thread(reminder_service.observe_tool_result, observation)
 
 
 def _reported_failure_from_success_envelope(
@@ -1535,7 +1606,7 @@ async def _handle_tool_approval(
         meta["approval_status"] = "not_required"
         return None, None
 
-    reusable_ticket = ctx.deps.approval_ticket_repo.find_reusable(
+    reusable_ticket = await ctx.deps.approval_ticket_repo.find_reusable_async(
         run_id=ctx.deps.run_id,
         task_id=ctx.deps.task_id,
         instance_id=ctx.deps.instance_id,
@@ -1576,7 +1647,7 @@ async def _handle_tool_approval(
                 message="Tool approval timed out.",
                 retryable=True,
             )
-    ticket = ctx.deps.approval_ticket_repo.upsert_requested(
+    ticket = await ctx.deps.approval_ticket_repo.upsert_requested_async(
         tool_call_id=tool_call_id,
         run_id=ctx.deps.run_id,
         session_id=ctx.deps.session_id,
@@ -1628,13 +1699,9 @@ async def _wait_for_ticket_resolution(
         )
         publish_request = True
 
-    ctx.deps.run_runtime_repo.ensure(
-        run_id=ctx.deps.run_id,
-        session_id=ctx.deps.session_id,
-        root_task_id=ctx.deps.task_id,
-    )
-    ctx.deps.run_runtime_repo.update(
-        ctx.deps.run_id,
+    await _ensure_run_runtime_async(ctx=ctx)
+    await _update_run_runtime_async(
+        ctx=ctx,
         status=RunRuntimeStatus.PAUSED,
         phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
         active_instance_id=ctx.deps.instance_id,
@@ -1654,7 +1721,7 @@ async def _wait_for_ticket_resolution(
                 "tool_call_id": ticket_id,
             },
         )
-        _publish_tool_approval_event(
+        await _publish_tool_approval_event_async(
             ctx=ctx,
             event_type=RunEventType.TOOL_APPROVAL_REQUESTED,
             payload={
@@ -1682,7 +1749,7 @@ async def _wait_for_ticket_resolution(
                 ),
             },
         )
-        _publish_tool_approval_notification(
+        await _publish_tool_approval_notification_async(
             ctx=ctx,
             tool_call_id=ticket_id,
             tool_name=tool_name,
@@ -1701,13 +1768,13 @@ async def _wait_for_ticket_resolution(
             tool_call_id=ticket_id,
         )
         try:
-            resolved_ticket = ctx.deps.approval_ticket_repo.resolve(
+            resolved_ticket = await ctx.deps.approval_ticket_repo.resolve_async(
                 tool_call_id=ticket_id,
                 status=ApprovalTicketStatus.TIMED_OUT,
                 expected_status=ApprovalTicketStatus.REQUESTED,
             )
         except ApprovalTicketStatusConflictError:
-            resolved_ticket = ctx.deps.approval_ticket_repo.get(ticket_id)
+            resolved_ticket = await ctx.deps.approval_ticket_repo.get_async(ticket_id)
             if resolved_ticket is None:
                 raise KeyError(f"Unknown approval ticket: {ticket_id}") from None
         resolved_action, resolved_error = _approval_resolution_from_ticket(
@@ -1715,8 +1782,8 @@ async def _wait_for_ticket_resolution(
             meta=meta,
         )
         if resolved_action == "timeout":
-            ctx.deps.run_runtime_repo.update(
-                ctx.deps.run_id,
+            await _update_run_runtime_async(
+                ctx=ctx,
                 status=RunRuntimeStatus.PAUSED,
                 phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
                 active_instance_id=ctx.deps.instance_id,
@@ -1726,8 +1793,8 @@ async def _wait_for_ticket_resolution(
                 last_error="Tool approval timed out",
             )
         elif resolved_action == "deny":
-            ctx.deps.run_runtime_repo.update(
-                ctx.deps.run_id,
+            await _update_run_runtime_async(
+                ctx=ctx,
                 status=RunRuntimeStatus.PAUSED,
                 phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
                 active_instance_id=ctx.deps.instance_id,
@@ -1751,7 +1818,7 @@ async def _wait_for_ticket_resolution(
                 "action": resolved_action,
             },
         )
-        _publish_tool_approval_event(
+        await _publish_tool_approval_event_async(
             ctx=ctx,
             event_type=RunEventType.TOOL_APPROVAL_RESOLVED,
             payload={
@@ -1775,14 +1842,14 @@ async def _wait_for_ticket_resolution(
         else ApprovalTicketStatus.DENIED
     )
     try:
-        resolved_ticket = ctx.deps.approval_ticket_repo.resolve(
+        resolved_ticket = await ctx.deps.approval_ticket_repo.resolve_async(
             tool_call_id=ticket_id,
             status=resolved_status,
             feedback=feedback,
             expected_status=ApprovalTicketStatus.REQUESTED,
         )
     except ApprovalTicketStatusConflictError:
-        resolved_ticket = ctx.deps.approval_ticket_repo.get(ticket_id)
+        resolved_ticket = await ctx.deps.approval_ticket_repo.get_async(ticket_id)
         if resolved_ticket is None:
             raise KeyError(f"Unknown approval ticket: {ticket_id}") from None
     resolved_action, resolved_error = _approval_resolution_from_ticket(
@@ -1800,7 +1867,7 @@ async def _wait_for_ticket_resolution(
             "action": resolved_action,
         },
     )
-    _publish_tool_approval_event(
+    await _publish_tool_approval_event_async(
         ctx=ctx,
         event_type=RunEventType.TOOL_APPROVAL_RESOLVED,
         payload={
@@ -1813,8 +1880,8 @@ async def _wait_for_ticket_resolution(
         },
     )
     if resolved_action == "deny":
-        ctx.deps.run_runtime_repo.update(
-            ctx.deps.run_id,
+        await _update_run_runtime_async(
+            ctx=ctx,
             status=RunRuntimeStatus.PAUSED,
             phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
             active_instance_id=ctx.deps.instance_id,
@@ -1825,8 +1892,8 @@ async def _wait_for_ticket_resolution(
         )
         return ticket_id, resolved_error
     if resolved_action == "timeout":
-        ctx.deps.run_runtime_repo.update(
-            ctx.deps.run_id,
+        await _update_run_runtime_async(
+            ctx=ctx,
             status=RunRuntimeStatus.PAUSED,
             phase=RunRuntimePhase.AWAITING_TOOL_APPROVAL,
             active_instance_id=ctx.deps.instance_id,
@@ -1872,7 +1939,7 @@ def _approval_resolution_from_ticket(
     )
 
 
-def _publish_tool_approval_notification(
+async def _publish_tool_approval_notification_async(
     *,
     ctx: ToolContext,
     tool_call_id: str,
@@ -1884,7 +1951,7 @@ def _publish_tool_approval_notification(
 
     role_label = ctx.deps.role_id or "An agent"
     body = f"{role_label} requests approval for {tool_name}."
-    _ = notification_service.emit(
+    _ = await notification_service.emit_async(
         notification_type=NotificationType.TOOL_APPROVAL_REQUESTED,
         title="Approval Required",
         body=body,
@@ -1902,13 +1969,14 @@ def _publish_tool_approval_notification(
     )
 
 
-def _publish_tool_approval_event(
+async def _publish_tool_approval_event_async(
     *,
     ctx: ToolContext,
     event_type: RunEventType,
     payload: dict[str, JsonValue],
 ) -> None:
-    ctx.deps.run_event_hub.publish(
+    await publish_run_event_async(
+        ctx.deps.run_event_hub,
         RunEvent(
             session_id=ctx.deps.session_id,
             run_id=ctx.deps.run_id,
@@ -1918,7 +1986,7 @@ def _publish_tool_approval_event(
             role_id=ctx.deps.role_id,
             event_type=event_type,
             payload_json=dumps(payload, ensure_ascii=False),
-        )
+        ),
     )
 
 
@@ -1969,7 +2037,8 @@ def _evaluate_tool_approval_policy(
 class _RequiresApprovalPolicy(Protocol):
     timeout_seconds: float
 
-    def requires_approval(self, tool_name: str) -> bool: ...
+    def requires_approval(self, tool_name: str) -> bool:
+        raise NotImplementedError
 
 
 # noinspection PyTypeHints
@@ -1991,7 +2060,7 @@ def _internal_record(
     return cast(dict[str, JsonValue], record.model_dump(mode="json"))
 
 
-def _persist_tool_record(
+async def _persist_tool_record_async(
     *,
     ctx: ToolContext,
     tool_call_id: str,
@@ -2012,7 +2081,7 @@ def _persist_tool_record(
         runtime_meta=runtime_meta,
         tool_content_parts=tool_content_parts,
     )
-    current_state = load_tool_call_state(
+    current_state = await load_tool_call_state_async(
         shared_store=ctx.deps.shared_store,
         task_id=ctx.deps.task_id,
         tool_call_id=tool_call_id,
@@ -2020,7 +2089,7 @@ def _persist_tool_record(
     existing_call_state = (
         dict(current_state.call_state) if current_state is not None else {}
     )
-    merge_tool_call_state(
+    await merge_tool_call_state_async(
         shared_store=ctx.deps.shared_store,
         task_id=ctx.deps.task_id,
         tool_call_id=tool_call_id,

@@ -4,23 +4,20 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 from typing import Optional
 
 from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
 from relay_teams.agents.instances.models import AgentRuntimeRecord
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.workspace import build_conversation_id
 
 _SQLITE_SAFE_VARIABLE_LIMIT = 900
 
 
-class AgentInstanceRepository:
+class AgentInstanceRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -159,6 +156,34 @@ class AgentInstanceRepository:
             operation_name="upsert_instance",
         )
 
+    async def upsert_instance_async(
+        self,
+        *,
+        run_id: str,
+        trace_id: str,
+        session_id: str,
+        instance_id: str,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str | None = None,
+        status: InstanceStatus,
+        lifecycle: Optional[InstanceLifecycle] = None,
+        parent_instance_id: Optional[str] = None,
+    ) -> None:
+        return await self._call_sync_async(
+            self.upsert_instance,
+            run_id=run_id,
+            trace_id=trace_id,
+            session_id=session_id,
+            instance_id=instance_id,
+            role_id=role_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            status=status,
+            lifecycle=lifecycle,
+            parent_instance_id=parent_instance_id,
+        )
+
     def update_runtime_snapshot(
         self,
         instance_id: str,
@@ -183,6 +208,16 @@ class AgentInstanceRepository:
             operation_name="update_runtime_snapshot",
         )
 
+    async def update_runtime_snapshot_async(
+        self, instance_id: str, *, runtime_system_prompt: str, runtime_tools_json: str
+    ) -> None:
+        return await self._call_sync_async(
+            self.update_runtime_snapshot,
+            instance_id,
+            runtime_system_prompt=runtime_system_prompt,
+            runtime_tools_json=runtime_tools_json,
+        )
+
     def mark_status(self, instance_id: str, status: InstanceStatus) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         run_sqlite_write_with_retry(
@@ -196,6 +231,9 @@ class AgentInstanceRepository:
             repository_name="AgentInstanceRepository",
             operation_name="mark_status",
         )
+
+    async def mark_status_async(self, instance_id: str, status: InstanceStatus) -> None:
+        return await self._call_sync_async(self.mark_status, instance_id, status)
 
     def update_session_workspace(self, session_id: str, *, workspace_id: str) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
@@ -213,6 +251,13 @@ class AgentInstanceRepository:
             lock=self._lock,
             repository_name="AgentInstanceRepository",
             operation_name="update_session_workspace",
+        )
+
+    async def update_session_workspace_async(
+        self, session_id: str, *, workspace_id: str
+    ) -> None:
+        return await self._call_sync_async(
+            self.update_session_workspace, session_id, workspace_id=workspace_id
         )
 
     def mark_running_instances_failed(self) -> tuple[str, ...]:
@@ -238,12 +283,18 @@ class AgentInstanceRepository:
         )
         return instance_ids
 
+    async def mark_running_instances_failed_async(self) -> tuple[str, ...]:
+        return await self._call_sync_async(self.mark_running_instances_failed)
+
     def list_all(self) -> tuple[AgentRuntimeRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM agent_instances ORDER BY created_at ASC",
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
+
+    async def list_all_async(self) -> tuple[AgentRuntimeRecord, ...]:
+        return await self._call_sync_async(self.list_all)
 
     def list_running(self, run_id: str) -> tuple[AgentRuntimeRecord, ...]:
         with self._lock:
@@ -253,6 +304,9 @@ class AgentInstanceRepository:
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
 
+    async def list_running_async(self, run_id: str) -> tuple[AgentRuntimeRecord, ...]:
+        return await self._call_sync_async(self.list_running, run_id)
+
     def list_by_run(self, run_id: str) -> tuple[AgentRuntimeRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
@@ -261,6 +315,9 @@ class AgentInstanceRepository:
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
 
+    async def list_by_run_async(self, run_id: str) -> tuple[AgentRuntimeRecord, ...]:
+        return await self._call_sync_async(self.list_by_run, run_id)
+
     def list_by_session(self, session_id: str) -> tuple[AgentRuntimeRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
@@ -268,6 +325,11 @@ class AgentInstanceRepository:
                 (session_id,),
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
+
+    async def list_by_session_async(
+        self, session_id: str
+    ) -> tuple[AgentRuntimeRecord, ...]:
+        return await self._call_sync_async(self.list_by_session, session_id)
 
     def count_normal_mode_subagents_by_session_ids(
         self,
@@ -296,6 +358,13 @@ class AgentInstanceRepository:
                     subagent_counts[str(row["session_id"])] = int(row["subagent_count"])
         return subagent_counts
 
+    async def count_normal_mode_subagents_by_session_ids_async(
+        self, session_ids: tuple[str, ...]
+    ) -> dict[str, int]:
+        return await self._call_sync_async(
+            self.count_normal_mode_subagents_by_session_ids, session_ids
+        )
+
     def list_session_role_instances(
         self, session_id: str
     ) -> tuple[AgentRuntimeRecord, ...]:
@@ -317,6 +386,11 @@ class AgentInstanceRepository:
             latest_by_role[role_id] for role_id in sorted(latest_by_role.keys())
         )
 
+    async def list_session_role_instances_async(
+        self, session_id: str
+    ) -> tuple[AgentRuntimeRecord, ...]:
+        return await self._call_sync_async(self.list_session_role_instances, session_id)
+
     def get_instance(self, instance_id: str) -> AgentRuntimeRecord:
         with self._lock:
             row = self._conn.execute(
@@ -326,6 +400,9 @@ class AgentInstanceRepository:
         if row is None:
             raise KeyError(f"Unknown instance_id: {instance_id}")
         return self._to_record(row)
+
+    async def get_instance_async(self, instance_id: str) -> AgentRuntimeRecord:
+        return await self._call_sync_async(self.get_instance, instance_id)
 
     def get_session_role_instance(
         self, session_id: str, role_id: str
@@ -345,9 +422,23 @@ class AgentInstanceRepository:
             return None
         return self._to_record(row)
 
+    async def get_session_role_instance_async(
+        self, session_id: str, role_id: str
+    ) -> AgentRuntimeRecord | None:
+        return await self._call_sync_async(
+            self.get_session_role_instance, session_id, role_id
+        )
+
     def get_session_role_instance_id(self, session_id: str, role_id: str) -> str | None:
         record = self.get_session_role_instance(session_id, role_id)
         return record.instance_id if record is not None else None
+
+    async def get_session_role_instance_id_async(
+        self, session_id: str, role_id: str
+    ) -> str | None:
+        return await self._call_sync_async(
+            self.get_session_role_instance_id, session_id, role_id
+        )
 
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -361,6 +452,9 @@ class AgentInstanceRepository:
             operation_name="delete_by_session",
         )
 
+    async def delete_by_session_async(self, session_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_session, session_id)
+
     def delete_instance(self, instance_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -373,6 +467,9 @@ class AgentInstanceRepository:
             repository_name="AgentInstanceRepository",
             operation_name="delete_instance",
         )
+
+    async def delete_instance_async(self, instance_id: str) -> None:
+        return await self._call_sync_async(self.delete_instance, instance_id)
 
     def _to_record(self, row: sqlite3.Row) -> AgentRuntimeRecord:
         return AgentRuntimeRecord(

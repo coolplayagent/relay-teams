@@ -337,7 +337,7 @@ def test_role_config_routes_run_service_calls_in_threadpool(monkeypatch) -> None
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(roles, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(roles, "call_maybe_async", fake_run_in_threadpool)
     client = _create_test_client()
     role_payload = {
         "role_id": "writer",
@@ -386,7 +386,7 @@ def test_get_role_config_options_runs_in_threadpool(
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(roles, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(roles, "call_maybe_async", fake_run_in_threadpool)
     client = _create_test_client()
 
     response = client.get("/api/roles:options")

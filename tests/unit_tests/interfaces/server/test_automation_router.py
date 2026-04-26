@@ -386,7 +386,7 @@ def test_automation_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(automation, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(automation, "call_maybe_async", fake_run_in_threadpool)
     fake_service = _FakeAutomationService()
     client = _client(fake_service)
 

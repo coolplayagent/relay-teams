@@ -68,6 +68,71 @@ def test_runtime_role_resolver_prefers_run_temporary_roles(tmp_path: Path) -> No
     assert role.tools == ("write", "office_read_markdown")
 
 
+@pytest.mark.asyncio
+async def test_runtime_role_resolver_async_prefers_temporary_roles(
+    tmp_path: Path,
+) -> None:
+    resolver = RuntimeRoleResolver(
+        role_registry=_base_registry(),
+        temporary_role_repository=TemporaryRoleRepository(tmp_path / "roles.db"),
+    )
+    resolver.create_temporary_role(
+        run_id="run-1",
+        session_id="session-1",
+        role=TemporaryRoleSpec(
+            role_id="tmp_writer",
+            name="Tmp Writer",
+            description="temporary",
+            system_prompt="tmp",
+            tools=("write",),
+        ),
+    )
+
+    role = await resolver.get_effective_role_async(
+        run_id="run-1",
+        role_id="tmp_writer",
+    )
+    fallback_role = await resolver.get_effective_role_async(
+        run_id="run-1",
+        role_id="Analyst",
+    )
+
+    assert role.role_id == "tmp_writer"
+    assert role.tools == ("write", "office_read_markdown")
+    assert fallback_role.role_id == "Analyst"
+
+
+@pytest.mark.asyncio
+async def test_runtime_role_resolver_async_lists_static_and_temporary_roles(
+    tmp_path: Path,
+) -> None:
+    resolver = RuntimeRoleResolver(
+        role_registry=_base_registry(),
+        temporary_role_repository=TemporaryRoleRepository(tmp_path / "roles.db"),
+    )
+    resolver.create_temporary_role(
+        run_id="run-1",
+        session_id="session-1",
+        role=TemporaryRoleSpec(
+            role_id="tmp_reviewer",
+            name="Tmp Reviewer",
+            description="temporary",
+            system_prompt="tmp",
+            tools=("read",),
+        ),
+    )
+
+    static_roles = await resolver.list_effective_roles_async(run_id=None)
+    run_roles = await resolver.list_effective_roles_async(run_id="run-1")
+
+    assert {role.role_id for role in static_roles} == {
+        "Analyst",
+        "Coordinator",
+        "MainAgent",
+    }
+    assert "tmp_reviewer" in {role.role_id for role in run_roles}
+
+
 def test_runtime_role_resolver_get_temporary_role_rejects_missing_run_id(
     tmp_path: Path,
 ) -> None:

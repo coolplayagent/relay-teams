@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from starlette.concurrency import run_in_threadpool
 
+from relay_teams.interfaces.server.async_call import call_maybe_async
 from relay_teams.computer import ExecutionSurface
 from relay_teams.builtin import get_builtin_roles_dir
 from relay_teams.interfaces.server.deps import (
@@ -71,7 +71,7 @@ async def get_role_config_options(
     ),
 ) -> RoleConfigOptions:
     try:
-        return await run_in_threadpool(
+        return await call_maybe_async(
             _build_role_config_options,
             role_registry=role_registry,
             model_config_service=model_config_service,
@@ -161,7 +161,7 @@ def _build_role_config_options(
 async def list_role_configs(
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> tuple[RoleDocumentSummary, ...]:
-    return await run_in_threadpool(service.list_role_documents)
+    return await call_maybe_async(service.list_role_documents)
 
 
 @router.get(
@@ -174,7 +174,7 @@ async def get_role_config(
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> RoleDocumentRecord:
     try:
-        return await run_in_threadpool(service.get_role_document, role_id)
+        return await call_maybe_async(service.get_role_document, role_id)
     except ValueError as exc:
         raise http_exception_for(exc, mappings=((ValueError, 404),)) from exc
 
@@ -190,7 +190,7 @@ async def save_role_config(
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> RoleDocumentRecord:
     try:
-        return await run_in_threadpool(service.save_role_document, role_id, draft)
+        return await call_maybe_async(service.save_role_document, role_id, draft)
     except ValueError as exc:
         raise http_exception_for(exc, mappings=((ValueError, 400),)) from exc
 
@@ -201,7 +201,7 @@ async def delete_role_config(
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> dict[str, str]:
     try:
-        await run_in_threadpool(service.delete_role_document, role_id)
+        await call_maybe_async(service.delete_role_document, role_id)
         return {"status": "ok"}
     except ValueError as exc:
         if str(exc).startswith("Role not found:"):
@@ -214,7 +214,7 @@ async def validate_roles(
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> dict[str, int | bool]:
     try:
-        return await run_in_threadpool(service.validate_all_roles)
+        return await call_maybe_async(service.validate_all_roles)
     except (SystemRolesUnavailableError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -232,7 +232,7 @@ async def validate_role_config(
     service: RoleSettingsService = Depends(get_role_settings_service),
 ) -> RoleValidationResult:
     try:
-        return await run_in_threadpool(service.validate_role_document, draft)
+        return await call_maybe_async(service.validate_role_document, draft)
     except ValueError as exc:
         raise http_exception_for(exc, mappings=((ValueError, 400),)) from exc
 

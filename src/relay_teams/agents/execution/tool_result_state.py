@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import cast
 
 from pydantic import JsonValue
@@ -89,6 +89,41 @@ class ToolResultStateService:
         if not tool_call_id:
             return False
         state = load_tool_call_state(
+            shared_store=shared_store,
+            task_id=request.task_id,
+            tool_call_id=tool_call_id,
+        )
+        if state is None or state.tool_name != tool_name:
+            return False
+        if state.execution_status not in (
+            ToolExecutionStatus.COMPLETED,
+            ToolExecutionStatus.FAILED,
+        ):
+            return False
+        result_envelope = state.result_envelope
+        if not isinstance(result_envelope, dict):
+            return False
+        visible_result = self.visible_tool_result_from_envelope(result_envelope)
+        return self.tool_result_event_was_published(
+            result_envelope=result_envelope,
+            visible_result=visible_result,
+        )
+
+    async def tool_result_already_emitted_from_runtime_async(
+        self,
+        *,
+        request: LLMRequest,
+        tool_name: str,
+        tool_call_id: str,
+        shared_store: object,
+        load_tool_call_state: Callable[
+            ...,
+            Awaitable[PersistedToolCallState | None],
+        ],
+    ) -> bool:
+        if not tool_call_id:
+            return False
+        state = await load_tool_call_state(
             shared_store=shared_store,
             task_id=request.task_id,
             tool_call_id=tool_call_id,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from relay_teams.metrics import (
     DEFAULT_DEFINITIONS,
     MetricRecorder,
@@ -13,6 +15,59 @@ from relay_teams.metrics import (
     SqliteMetricAggregateStore,
 )
 from relay_teams.metrics.sinks import AggregateStoreSink
+
+
+@pytest.mark.asyncio
+async def test_metric_store_async_records_queries_and_deletes(tmp_path) -> None:
+    store = SqliteMetricAggregateStore(tmp_path / "metrics-async.db")
+    recorder = MetricRecorder(
+        registry=MetricRegistry(DEFAULT_DEFINITIONS),
+        sinks=(AggregateStoreSink(store),),
+    )
+    now = datetime.now(tz=timezone.utc)
+    tags = MetricTagSet(
+        workspace_id="default",
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-1",
+        role_id="coordinator",
+        tool_name="shell",
+        tool_source="local",
+        status="success",
+    )
+
+    try:
+        await recorder.emit_async(
+            definition_name="relay_teams.tool.calls",
+            value=2,
+            tags=tags,
+            occurred_at=now,
+        )
+
+        points = await store.query_points_async(
+            scope=MetricScope.SESSION,
+            scope_id="session-1",
+            time_window_minutes=10,
+        )
+        recorded_at = await store.latest_recorded_at_async(
+            scope=MetricScope.SESSION,
+            scope_id="session-1",
+        )
+        await store.delete_by_session_async("session-1")
+        remaining = await store.query_points_async(
+            scope=MetricScope.SESSION,
+            scope_id="session-1",
+            time_window_minutes=10,
+        )
+
+        assert len(points) == 1
+        assert points[0].metric_name == "relay_teams.tool.calls"
+        assert points[0].scope == MetricScope.SESSION
+        assert points[0].value == 2
+        assert recorded_at is not None
+        assert remaining == ()
+    finally:
+        await store.close_async()
 
 
 def test_metrics_query_service_builds_overview_and_breakdowns(tmp_path) -> None:

@@ -5,7 +5,6 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from threading import RLock
 
 from relay_teams.automation.automation_models import (
     AutomationBoundSessionQueueRecord,
@@ -15,7 +14,8 @@ from relay_teams.automation.automation_models import (
     AutomationFeishuBinding,
     AutomationRunConfig,
 )
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 
 _NON_TERMINAL_QUEUE_STATUSES = (
     AutomationBoundSessionQueueStatus.QUEUED.value,
@@ -24,12 +24,9 @@ _NON_TERMINAL_QUEUE_STATUSES = (
 )
 
 
-class AutomationBoundSessionQueueRepository:
+class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -179,6 +176,11 @@ class AutomationBoundSessionQueueRepository:
             )
         return stored
 
+    async def create_async(
+        self, record: AutomationBoundSessionQueueRecord
+    ) -> AutomationBoundSessionQueueRecord:
+        return await self._call_sync_async(self.create, record)
+
     def update(
         self,
         record: AutomationBoundSessionQueueRecord,
@@ -248,6 +250,11 @@ class AutomationBoundSessionQueueRepository:
             raise RuntimeError("Failed to reload automation bound session queue record")
         return stored
 
+    async def update_async(
+        self, record: AutomationBoundSessionQueueRecord
+    ) -> AutomationBoundSessionQueueRecord:
+        return await self._call_sync_async(self.update, record)
+
     def get(self, automation_queue_id: str) -> AutomationBoundSessionQueueRecord | None:
         with self._lock:
             row = self._conn.execute(
@@ -261,6 +268,11 @@ class AutomationBoundSessionQueueRepository:
         if row is None:
             return None
         return self._to_record(row)
+
+    async def get_async(
+        self, automation_queue_id: str
+    ) -> AutomationBoundSessionQueueRecord | None:
+        return await self._call_sync_async(self.get, automation_queue_id)
 
     def has_non_terminal_item_for_run(self, run_id: str) -> bool:
         if not str(run_id).strip():
@@ -278,6 +290,9 @@ class AutomationBoundSessionQueueRepository:
             ).fetchone()
         return row is not None
 
+    async def has_non_terminal_item_for_run_async(self, run_id: str) -> bool:
+        return await self._call_sync_async(self.has_non_terminal_item_for_run, run_id)
+
     def count_non_terminal_by_session(self, session_id: str) -> int:
         with self._lock:
             row = self._conn.execute(
@@ -290,6 +305,11 @@ class AutomationBoundSessionQueueRepository:
                 (session_id, *_NON_TERMINAL_QUEUE_STATUSES),
             ).fetchone()
         return int(row["total"]) if row is not None else 0
+
+    async def count_non_terminal_by_session_async(self, session_id: str) -> int:
+        return await self._call_sync_async(
+            self.count_non_terminal_by_session, session_id
+        )
 
     def count_non_terminal_ahead(self, automation_queue_id: str) -> int:
         with self._lock:
@@ -306,6 +326,11 @@ class AutomationBoundSessionQueueRepository:
                 (automation_queue_id, *_NON_TERMINAL_QUEUE_STATUSES),
             ).fetchone()
         return int(row["total"]) if row is not None else 0
+
+    async def count_non_terminal_ahead_async(self, automation_queue_id: str) -> int:
+        return await self._call_sync_async(
+            self.count_non_terminal_ahead, automation_queue_id
+        )
 
     def list_ready_to_start(
         self,
@@ -332,6 +357,13 @@ class AutomationBoundSessionQueueRepository:
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
 
+    async def list_ready_to_start_async(
+        self, *, ready_at: datetime, limit: int = 20
+    ) -> tuple[AutomationBoundSessionQueueRecord, ...]:
+        return await self._call_sync_async(
+            self.list_ready_to_start, ready_at=ready_at, limit=limit
+        )
+
     def list_waiting_for_result(
         self,
         *,
@@ -353,6 +385,11 @@ class AutomationBoundSessionQueueRepository:
                 ),
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
+
+    async def list_waiting_for_result_async(
+        self, *, limit: int = 20
+    ) -> tuple[AutomationBoundSessionQueueRecord, ...]:
+        return await self._call_sync_async(self.list_waiting_for_result, limit=limit)
 
     def claim_starting(
         self,
@@ -394,6 +431,15 @@ class AutomationBoundSessionQueueRepository:
             return None
         return self.get(automation_queue_id)
 
+    async def claim_starting_async(
+        self, *, automation_queue_id: str, stale_before: datetime
+    ) -> AutomationBoundSessionQueueRecord | None:
+        return await self._call_sync_async(
+            self.claim_starting,
+            automation_queue_id=automation_queue_id,
+            stale_before=stale_before,
+        )
+
     def list_pending_queue_cleanup(
         self,
         *,
@@ -432,6 +478,13 @@ class AutomationBoundSessionQueueRepository:
                     ),
                 ).fetchall()
         return tuple(self._to_record(row) for row in rows)
+
+    async def list_pending_queue_cleanup_async(
+        self, *, limit: int = 20, stale_before: datetime | None = None
+    ) -> tuple[AutomationBoundSessionQueueRecord, ...]:
+        return await self._call_sync_async(
+            self.list_pending_queue_cleanup, limit=limit, stale_before=stale_before
+        )
 
     def claim_queue_cleanup(
         self,
@@ -473,6 +526,15 @@ class AutomationBoundSessionQueueRepository:
             return None
         return self.get(automation_queue_id)
 
+    async def claim_queue_cleanup_async(
+        self, *, automation_queue_id: str, stale_before: datetime
+    ) -> AutomationBoundSessionQueueRecord | None:
+        return await self._call_sync_async(
+            self.claim_queue_cleanup,
+            automation_queue_id=automation_queue_id,
+            stale_before=stale_before,
+        )
+
     def has_project_records(self, automation_project_id: str) -> bool:
         with self._lock:
             row = self._conn.execute(
@@ -480,6 +542,11 @@ class AutomationBoundSessionQueueRepository:
                 (automation_project_id,),
             ).fetchone()
         return row is not None
+
+    async def has_project_records_async(self, automation_project_id: str) -> bool:
+        return await self._call_sync_async(
+            self.has_project_records, automation_project_id
+        )
 
     def delete_by_project(self, automation_project_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -495,6 +562,11 @@ class AutomationBoundSessionQueueRepository:
             lock=self._lock,
             repository_name="AutomationBoundSessionQueueRepository",
             operation_name="delete_by_project",
+        )
+
+    async def delete_by_project_async(self, automation_project_id: str) -> None:
+        return await self._call_sync_async(
+            self.delete_by_project, automation_project_id
         )
 
     def _to_row(self, record: AutomationBoundSessionQueueRecord) -> tuple[object, ...]:

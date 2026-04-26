@@ -80,6 +80,23 @@ def load_tool_call_state(
         return None
 
 
+async def load_tool_call_state_async(
+    *,
+    shared_store: SharedStateRepository,
+    task_id: str,
+    tool_call_id: str,
+) -> PersistedToolCallState | None:
+    raw = await shared_store.get_state_async(
+        _task_scope(task_id), _state_key(tool_call_id)
+    )
+    if raw is None:
+        return None
+    try:
+        return PersistedToolCallState.model_validate_json(raw)
+    except Exception:
+        return None
+
+
 def merge_tool_call_state(
     *,
     shared_store: SharedStateRepository,
@@ -148,6 +165,83 @@ def merge_tool_call_state(
         update["call_state"] = call_state
     next_state = current.model_copy(update=update)
     shared_store.manage_state(
+        StateMutation(
+            scope=_task_scope(task_id),
+            key=_state_key(tool_call_id),
+            value_json=next_state.model_dump_json(),
+        )
+    )
+    return next_state
+
+
+async def merge_tool_call_state_async(
+    *,
+    shared_store: SharedStateRepository,
+    task_id: str,
+    tool_call_id: str,
+    tool_name: str,
+    run_id: str | None = None,
+    session_id: str | None = None,
+    instance_id: str,
+    role_id: str,
+    args_preview: str | None = None,
+    run_yolo: bool | None = None,
+    approval_mode: ToolApprovalMode | None = None,
+    approval_status: ToolApprovalStatus | None = None,
+    approval_feedback: str | None = None,
+    execution_status: ToolExecutionStatus | None = None,
+    result_envelope: dict[str, JsonValue] | None = None,
+    call_state: dict[str, JsonValue] | None = None,
+) -> PersistedToolCallState:
+    current = await load_tool_call_state_async(
+        shared_store=shared_store,
+        task_id=task_id,
+        tool_call_id=tool_call_id,
+    )
+    now = datetime.now(tz=timezone.utc).isoformat()
+    if current is None:
+        current = PersistedToolCallState(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            run_id=run_id or "",
+            session_id=session_id or "",
+            instance_id=instance_id,
+            role_id=role_id,
+            args_preview=args_preview or "",
+            run_yolo=False if run_yolo is None else run_yolo,
+            approval_mode=(
+                ToolApprovalMode.UNKNOWN if approval_mode is None else approval_mode
+            ),
+            updated_at=now,
+        )
+    update: dict[str, object] = {
+        "tool_name": tool_name,
+        "instance_id": instance_id,
+        "role_id": role_id,
+        "updated_at": now,
+    }
+    if run_id is not None:
+        update["run_id"] = run_id
+    if session_id is not None:
+        update["session_id"] = session_id
+    if args_preview is not None:
+        update["args_preview"] = args_preview
+    if run_yolo is not None:
+        update["run_yolo"] = run_yolo
+    if approval_mode is not None:
+        update["approval_mode"] = approval_mode
+    if approval_status is not None:
+        update["approval_status"] = approval_status
+    if approval_feedback is not None:
+        update["approval_feedback"] = approval_feedback
+    if execution_status is not None:
+        update["execution_status"] = execution_status
+    if result_envelope is not None:
+        update["result_envelope"] = result_envelope
+    if call_state is not None:
+        update["call_state"] = call_state
+    next_state = current.model_copy(update=update)
+    await shared_store.manage_state_async(
         StateMutation(
             scope=_task_scope(task_id),
             key=_state_key(tool_call_id),

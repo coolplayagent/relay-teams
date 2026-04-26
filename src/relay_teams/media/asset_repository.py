@@ -3,22 +3,19 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 
 from relay_teams.media.models import (
     MediaAssetRecord,
     MediaAssetStorageKind,
     MediaModality,
 )
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 
 
-class MediaAssetRepository:
+class MediaAssetRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -132,6 +129,9 @@ class MediaAssetRepository:
         )
         return self.get(record.asset_id)
 
+    async def upsert_async(self, record: MediaAssetRecord) -> MediaAssetRecord:
+        return await self._call_sync_async(self.upsert, record)
+
     def get(self, asset_id: str) -> MediaAssetRecord:
         with self._lock:
             row = self._conn.execute(
@@ -142,6 +142,9 @@ class MediaAssetRepository:
             raise KeyError(f"Unknown asset_id: {asset_id}")
         return self._to_record(row)
 
+    async def get_async(self, asset_id: str) -> MediaAssetRecord:
+        return await self._call_sync_async(self.get, asset_id)
+
     def list_by_session(self, session_id: str) -> tuple[MediaAssetRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
@@ -149,6 +152,11 @@ class MediaAssetRepository:
                 (session_id,),
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
+
+    async def list_by_session_async(
+        self, session_id: str
+    ) -> tuple[MediaAssetRecord, ...]:
+        return await self._call_sync_async(self.list_by_session, session_id)
 
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -162,6 +170,9 @@ class MediaAssetRepository:
             repository_name="MediaAssetRepository",
             operation_name="delete_by_session",
         )
+
+    async def delete_by_session_async(self, session_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_session, session_id)
 
     def _to_record(self, row: sqlite3.Row) -> MediaAssetRecord:
         return MediaAssetRecord(

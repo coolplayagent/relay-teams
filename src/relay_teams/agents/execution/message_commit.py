@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from typing import Protocol
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Protocol, runtime_checkable
 
 from pydantic_ai.messages import (
     ModelRequest,
@@ -32,12 +32,57 @@ class CommitMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         messages: list[ModelRequest | ModelResponse],
-    ) -> None: ...
+    ) -> None:
+        pass
 
     def get_history_for_conversation(
         self,
         conversation_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
+
+    async def append_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: list[ModelRequest | ModelResponse],
+    ) -> None:
+        pass
+
+    async def get_history_for_conversation_async(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
+
+
+@runtime_checkable
+class AsyncCommitMessageRepository(Protocol):
+    async def append_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: list[ModelRequest | ModelResponse],
+    ) -> None:
+        pass
+
+    async def get_history_for_conversation_async(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
 
 
 class NormalizeCommittableMessages(Protocol):
@@ -46,7 +91,8 @@ class NormalizeCommittableMessages(Protocol):
         *,
         request: LLMRequest,
         messages: Sequence[ModelRequest | ModelResponse],
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
 
 
 class MessageCommitService:
@@ -56,6 +102,51 @@ class MessageCommitService:
         message_repo: CommitMessageRepository,
     ) -> None:
         self._message_repo = message_repo
+
+    async def _append_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: list[ModelRequest | ModelResponse],
+    ) -> None:
+        if isinstance(self._message_repo, AsyncCommitMessageRepository):
+            await self._message_repo.append_async(
+                session_id=session_id,
+                workspace_id=workspace_id,
+                conversation_id=conversation_id,
+                agent_role_id=agent_role_id,
+                instance_id=instance_id,
+                task_id=task_id,
+                trace_id=trace_id,
+                messages=messages,
+            )
+            return
+        self._message_repo.append(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=agent_role_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            messages=messages,
+        )
+
+    async def _get_history_for_conversation_async(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        if isinstance(self._message_repo, AsyncCommitMessageRepository):
+            return await self._message_repo.get_history_for_conversation_async(
+                conversation_id
+            )
+        return self._message_repo.get_history_for_conversation(conversation_id)
 
     def commit_ready_messages(
         self,
@@ -122,6 +213,75 @@ class MessageCommitService:
             committed_tool_validation_failures,
         )
 
+    async def commit_ready_messages_async(
+        self,
+        *,
+        request: LLMRequest,
+        history: list[ModelRequest | ModelResponse],
+        pending_messages: list[ModelRequest | ModelResponse],
+        last_committable_index: Callable[
+            [Sequence[ModelRequest | ModelResponse]],
+            int,
+        ],
+        has_tool_input_validation_failures: Callable[
+            [Sequence[ModelRequest | ModelResponse]],
+            bool,
+        ],
+        normalize_committable_messages: NormalizeCommittableMessages,
+        workspace_id: Callable[[LLMRequest], str],
+        conversation_id: Callable[[LLMRequest], str],
+        publish_committed_tool_outcome_events_from_messages: Callable[
+            ...,
+            Awaitable[None],
+        ],
+        filter_model_messages: Callable[
+            [Sequence[ModelRequest | ModelResponse]],
+            list[ModelRequest | ModelResponse],
+        ],
+        has_tool_side_effect_messages: Callable[
+            [Sequence[ModelRequest | ModelResponse]],
+            bool,
+        ],
+    ) -> tuple[
+        list[ModelRequest | ModelResponse],
+        list[ModelRequest | ModelResponse],
+        bool,
+        bool,
+    ]:
+        _ = history
+        safe_index = last_committable_index(pending_messages)
+        if safe_index <= 0:
+            return history, pending_messages, False, False
+        raw_ready = pending_messages[:safe_index]
+        committed_tool_validation_failures = has_tool_input_validation_failures(
+            raw_ready
+        )
+        ready = normalize_committable_messages(request=request, messages=raw_ready)
+        resolved_conversation_id = conversation_id(request)
+        await self._append_async(
+            session_id=request.session_id,
+            workspace_id=workspace_id(request),
+            conversation_id=resolved_conversation_id,
+            agent_role_id=request.role_id,
+            instance_id=request.instance_id,
+            task_id=request.task_id,
+            trace_id=request.trace_id,
+            messages=ready,
+        )
+        await publish_committed_tool_outcome_events_from_messages(
+            request=request,
+            messages=ready,
+        )
+        next_history = filter_model_messages(
+            await self._get_history_for_conversation_async(resolved_conversation_id)
+        )
+        return (
+            next_history,
+            pending_messages[safe_index:],
+            has_tool_side_effect_messages(ready),
+            committed_tool_validation_failures,
+        )
+
     def commit_all_safe_messages(
         self,
         *,
@@ -161,6 +321,63 @@ class MessageCommitService:
                 committed_tool_events_published,
                 committed_tool_validation_failures,
             ) = commit_ready_messages(
+                request=request,
+                history=next_history,
+                pending_messages=remaining,
+            )
+            if committed_tool_events_published:
+                tool_events_published = True
+            if committed_tool_validation_failures:
+                tool_validation_failures_committed = True
+        return (
+            next_history,
+            remaining,
+            tool_events_published,
+            tool_validation_failures_committed,
+        )
+
+    # noinspection PyMethodMayBeStatic
+    async def commit_all_safe_messages_async(
+        self,
+        *,
+        request: LLMRequest,
+        history: list[ModelRequest | ModelResponse],
+        pending_messages: list[ModelRequest | ModelResponse],
+        commit_ready_messages: Callable[
+            ...,
+            Awaitable[
+                tuple[
+                    list[ModelRequest | ModelResponse],
+                    list[ModelRequest | ModelResponse],
+                    bool,
+                    bool,
+                ]
+            ],
+        ],
+        last_committable_index: Callable[
+            [Sequence[ModelRequest | ModelResponse]],
+            int,
+        ],
+    ) -> tuple[
+        list[ModelRequest | ModelResponse],
+        list[ModelRequest | ModelResponse],
+        bool,
+        bool,
+    ]:
+        next_history = history
+        remaining = list(pending_messages)
+        tool_events_published = False
+        tool_validation_failures_committed = False
+        while remaining:
+            safe_index = last_committable_index(remaining)
+            if safe_index <= 0:
+                break
+            (
+                next_history,
+                remaining,
+                committed_tool_events_published,
+                committed_tool_validation_failures,
+            ) = await commit_ready_messages(
                 request=request,
                 history=next_history,
                 pending_messages=remaining,

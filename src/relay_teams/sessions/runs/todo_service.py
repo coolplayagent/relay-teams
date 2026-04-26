@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from json import dumps
 
 from relay_teams.sessions.runs.enums import RunEventType
-from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.runs.todo_models import (
     TodoItem,
@@ -41,14 +41,34 @@ class TodoService:
             return snapshot
         return empty_todo_snapshot(run_id=run_id, session_id=session_id)
 
+    async def get_for_run_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+    ) -> TodoSnapshot:
+        snapshot = await self._repository.get_async(run_id)
+        if snapshot is not None:
+            return snapshot
+        return empty_todo_snapshot(run_id=run_id, session_id=session_id)
+
     def list_for_session(self, session_id: str) -> tuple[TodoSnapshot, ...]:
         return self._repository.list_by_session(session_id)
+
+    async def list_for_session_async(self, session_id: str) -> tuple[TodoSnapshot, ...]:
+        return await self._repository.list_by_session_async(session_id)
 
     def delete_for_session(self, session_id: str) -> None:
         self._repository.delete_by_session(session_id)
 
+    async def delete_for_session_async(self, session_id: str) -> None:
+        await self._repository.delete_by_session_async(session_id)
+
     def delete_for_run(self, run_id: str) -> None:
         self._repository.delete_by_run(run_id)
+
+    async def delete_for_run_async(self, run_id: str) -> None:
+        await self._repository.delete_by_run_async(run_id)
 
     def replace_for_run(
         self,
@@ -75,6 +95,31 @@ class TodoService:
         self._publish_todo_updated_event(persisted)
         return persisted
 
+    async def replace_for_run_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        items: Sequence[TodoItem],
+        updated_by_role_id: str | None = None,
+        updated_by_instance_id: str | None = None,
+    ) -> TodoSnapshot:
+        normalized_items = tuple(items)
+        _validate_items(normalized_items)
+        previous = await self._repository.get_async(run_id)
+        next_version = 1 if previous is None else previous.version + 1
+        snapshot = build_todo_snapshot(
+            run_id=run_id,
+            session_id=session_id,
+            items=normalized_items,
+            version=next_version,
+            updated_by_role_id=updated_by_role_id,
+            updated_by_instance_id=updated_by_instance_id,
+        )
+        persisted = await self._repository.upsert_async(snapshot)
+        await self._publish_todo_updated_event_async(persisted)
+        return persisted
+
     def clear_for_run(
         self,
         *,
@@ -84,6 +129,22 @@ class TodoService:
         updated_by_instance_id: str | None = None,
     ) -> TodoSnapshot:
         return self.replace_for_run(
+            run_id=run_id,
+            session_id=session_id,
+            items=(),
+            updated_by_role_id=updated_by_role_id,
+            updated_by_instance_id=updated_by_instance_id,
+        )
+
+    async def clear_for_run_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        updated_by_role_id: str | None = None,
+        updated_by_instance_id: str | None = None,
+    ) -> TodoSnapshot:
+        return await self.replace_for_run_async(
             run_id=run_id,
             session_id=session_id,
             items=(),
@@ -106,6 +167,24 @@ class TodoService:
                     snapshot.model_dump(mode="json"), ensure_ascii=False
                 ),
             )
+        )
+
+    async def _publish_todo_updated_event_async(self, snapshot: TodoSnapshot) -> None:
+        if self._run_event_hub is None:
+            return
+        await publish_run_event_async(
+            self._run_event_hub,
+            RunEvent(
+                session_id=snapshot.session_id,
+                run_id=snapshot.run_id,
+                trace_id=snapshot.run_id,
+                instance_id=snapshot.updated_by_instance_id,
+                role_id=snapshot.updated_by_role_id,
+                event_type=RunEventType.TODO_UPDATED,
+                payload_json=dumps(
+                    snapshot.model_dump(mode="json"), ensure_ascii=False
+                ),
+            ),
         )
 
 

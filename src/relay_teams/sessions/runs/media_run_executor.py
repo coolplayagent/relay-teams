@@ -124,7 +124,7 @@ class MediaRunExecutor:
             active_subagent_instance_id=None,
             last_error=None,
         )
-        self._event_publisher.safe_publish_run_event(
+        await self._event_publisher.safe_publish_run_event_async(
             RunEvent(
                 session_id=intent.session_id,
                 run_id=run_id,
@@ -139,7 +139,7 @@ class MediaRunExecutor:
             ),
             failure_event="run.event.publish_failed",
         )
-        self.publish_generation_progress(
+        await self.publish_generation_progress_async(
             run_id=run_id,
             session_id=intent.session_id,
             task_id=root_task.task_id,
@@ -174,7 +174,7 @@ class MediaRunExecutor:
             if not output:
                 raise RuntimeError("Provider returned no media output")
             self.append_media_output_message(request=request, output=output)
-            self.publish_output_delta(
+            await self.publish_output_delta_async(
                 run_id=run_id,
                 session_id=intent.session_id,
                 task_id=root_task.task_id,
@@ -190,7 +190,7 @@ class MediaRunExecutor:
                 ),
                 None,
             )
-            self.publish_generation_progress(
+            await self.publish_generation_progress_async(
                 run_id=run_id,
                 session_id=intent.session_id,
                 task_id=root_task.task_id,
@@ -201,7 +201,7 @@ class MediaRunExecutor:
                 progress=1.0,
                 preview_asset_id=preview_asset_id,
             )
-            self._event_publisher.safe_publish_run_event(
+            await self._event_publisher.safe_publish_run_event_async(
                 RunEvent(
                     session_id=intent.session_id,
                     run_id=run_id,
@@ -250,7 +250,7 @@ class MediaRunExecutor:
                 error_message=result.error_message,
             )
             agent_repo.mark_status(instance.instance_id, InstanceStatus.COMPLETED)
-            self.publish_generation_progress(
+            await self.publish_generation_progress_async(
                 run_id=run_id,
                 session_id=intent.session_id,
                 task_id=root_task.task_id,
@@ -307,7 +307,7 @@ class MediaRunExecutor:
             return intent.topology.normal_root_role_id
         return role_registry.get_main_agent_role_id()
 
-    def publish_generation_progress(
+    async def publish_generation_progress_async(
         self,
         *,
         run_id: str,
@@ -320,7 +320,7 @@ class MediaRunExecutor:
         progress: float,
         preview_asset_id: str | None,
     ) -> None:
-        self._event_publisher.safe_publish_run_event(
+        await self._event_publisher.safe_publish_run_event_async(
             RunEvent(
                 session_id=session_id,
                 run_id=run_id,
@@ -341,7 +341,7 @@ class MediaRunExecutor:
             failure_event="run.event.publish_failed",
         )
 
-    def publish_output_delta(
+    async def publish_output_delta_async(
         self,
         *,
         run_id: str,
@@ -356,7 +356,7 @@ class MediaRunExecutor:
             "role_id": role_id,
             "instance_id": instance_id,
         }
-        self._event_publisher.safe_publish_run_event(
+        await self._event_publisher.safe_publish_run_event_async(
             RunEvent(
                 session_id=session_id,
                 run_id=run_id,

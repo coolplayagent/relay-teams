@@ -128,7 +128,7 @@ def test_session_media_routes_offload_sync_service_calls(
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(session_media.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(session_media, "call_maybe_async", fake_to_thread)
     asset_file_path = tmp_path / "image.png"
     asset_file_path.write_bytes(b"seed")
     client, _ = _create_client(asset_file_path)

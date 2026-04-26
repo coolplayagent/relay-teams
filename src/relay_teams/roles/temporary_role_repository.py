@@ -4,10 +4,10 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
 
 from relay_teams.computer import ExecutionSurface
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence.db import run_sqlite_write_with_retry
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.roles.memory_models import MemoryProfile
 from relay_teams.roles.temporary_role_models import (
     TemporaryRoleRecord,
@@ -16,12 +16,9 @@ from relay_teams.roles.temporary_role_models import (
 )
 
 
-class TemporaryRoleRepository:
+class TemporaryRoleRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -135,6 +132,9 @@ class TemporaryRoleRepository:
         )
         return self.get(run_id=record.run_id, role_id=record.role.role_id)
 
+    async def upsert_async(self, record: TemporaryRoleRecord) -> TemporaryRoleRecord:
+        return await self._call_sync_async(self.upsert, record)
+
     def get(self, *, run_id: str, role_id: str) -> TemporaryRoleRecord:
         with self._lock:
             row = self._conn.execute(
@@ -147,6 +147,9 @@ class TemporaryRoleRepository:
             )
         return self._to_record(row)
 
+    async def get_async(self, *, run_id: str, role_id: str) -> TemporaryRoleRecord:
+        return await self._call_sync_async(self.get, run_id=run_id, role_id=role_id)
+
     def list_by_run(self, run_id: str) -> tuple[TemporaryRoleRecord, ...]:
         with self._lock:
             rows = self._conn.execute(
@@ -154,6 +157,9 @@ class TemporaryRoleRepository:
                 (run_id,),
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
+
+    async def list_by_run_async(self, run_id: str) -> tuple[TemporaryRoleRecord, ...]:
+        return await self._call_sync_async(self.list_by_run, run_id)
 
     def delete_by_run(self, run_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -166,6 +172,9 @@ class TemporaryRoleRepository:
             repository_name="TemporaryRoleRepository",
             operation_name="delete_by_run",
         )
+
+    async def delete_by_run_async(self, run_id: str) -> None:
+        return await self._call_sync_async(self.delete_by_run, run_id)
 
     def _to_record(self, row: sqlite3.Row) -> TemporaryRoleRecord:
         return TemporaryRoleRecord(

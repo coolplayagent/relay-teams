@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from pydantic_ai.messages import (
     PartDeltaEvent,
@@ -124,6 +124,53 @@ class StreamEventService:
             )
         return False
 
+    # noinspection PyMethodMayBeStatic
+    async def handle_model_stream_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        stream_event: object,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
+        handle_part_start_event: Callable[..., Awaitable[bool]],
+        handle_part_delta_event: Callable[..., Awaitable[bool]],
+        handle_part_end_event: Callable[..., Awaitable[bool]],
+    ) -> bool:
+        if isinstance(stream_event, PartStartEvent):
+            return await handle_part_start_event(
+                request=request,
+                event=stream_event,
+                emitted_text_chunks=emitted_text_chunks,
+                text_lengths=text_lengths,
+                thinking_lengths=thinking_lengths,
+                started_thinking_parts=started_thinking_parts,
+                streamed_tool_calls=streamed_tool_calls,
+            )
+        if isinstance(stream_event, PartDeltaEvent):
+            return await handle_part_delta_event(
+                request=request,
+                event=stream_event,
+                emitted_text_chunks=emitted_text_chunks,
+                text_lengths=text_lengths,
+                thinking_lengths=thinking_lengths,
+                started_thinking_parts=started_thinking_parts,
+                streamed_tool_calls=streamed_tool_calls,
+            )
+        if isinstance(stream_event, PartEndEvent):
+            return await handle_part_end_event(
+                request=request,
+                event=stream_event,
+                emitted_text_chunks=emitted_text_chunks,
+                text_lengths=text_lengths,
+                thinking_lengths=thinking_lengths,
+                started_thinking_parts=started_thinking_parts,
+                streamed_tool_calls=streamed_tool_calls,
+            )
+        return False
+
     def handle_part_start_event(
         self,
         *,
@@ -157,6 +204,49 @@ class StreamEventService:
                 started_thinking_parts.add(event.index)
             thinking_lengths.setdefault(event.index, 0)
             return emit_thinking_suffix_for_part(
+                request=request,
+                part_index=event.index,
+                content=part.content,
+                emitted_lengths=thinking_lengths,
+            )
+        if isinstance(part, ToolCallPart):
+            streamed_tool_calls[event.index] = part
+        return False
+
+    # noinspection PyMethodMayBeStatic
+    async def handle_part_start_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        event: PartStartEvent,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
+        emit_text_suffix_for_part: Callable[..., Awaitable[bool]],
+        emit_thinking_suffix_for_part: Callable[..., Awaitable[bool]],
+        publish_thinking_started_event: Callable[..., Awaitable[None]],
+    ) -> bool:
+        part = event.part
+        if isinstance(part, TextPart):
+            text_lengths.setdefault(event.index, 0)
+            return await emit_text_suffix_for_part(
+                request=request,
+                part_index=event.index,
+                content=part.content,
+                emitted_text_chunks=emitted_text_chunks,
+                emitted_lengths=text_lengths,
+            )
+        if isinstance(part, ThinkingPart):
+            if event.index not in started_thinking_parts:
+                await publish_thinking_started_event(
+                    request=request,
+                    part_index=event.index,
+                )
+                started_thinking_parts.add(event.index)
+            thinking_lengths.setdefault(event.index, 0)
+            return await emit_thinking_suffix_for_part(
                 request=request,
                 part_index=event.index,
                 content=part.content,
@@ -223,6 +313,64 @@ class StreamEventService:
                     streamed_tool_calls[event.index] = updated
         return False
 
+    # noinspection PyMethodMayBeStatic
+    async def handle_part_delta_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        event: PartDeltaEvent,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
+        log_model_stream_chunk: Callable[[str, str], None],
+        publish_text_delta_event: Callable[..., Awaitable[None]],
+        publish_thinking_started_event: Callable[..., Awaitable[None]],
+        publish_thinking_delta_event: Callable[..., Awaitable[None]],
+    ) -> bool:
+        delta = event.delta
+        if isinstance(delta, TextPartDelta):
+            text = str(delta.content_delta or "")
+            if not text:
+                return False
+            text_lengths[event.index] = text_lengths.get(event.index, 0) + len(text)
+            emitted_text_chunks.append(text)
+            log_model_stream_chunk(request.role_id, text)
+            await publish_text_delta_event(request=request, text=text)
+            return True
+        if isinstance(delta, ThinkingPartDelta):
+            if event.index not in started_thinking_parts:
+                await publish_thinking_started_event(
+                    request=request,
+                    part_index=event.index,
+                )
+                started_thinking_parts.add(event.index)
+            text = str(delta.content_delta or "")
+            if not text:
+                return False
+            thinking_lengths[event.index] = thinking_lengths.get(event.index, 0) + len(
+                text
+            )
+            await publish_thinking_delta_event(
+                request=request,
+                part_index=event.index,
+                text=text,
+            )
+            return False
+        if isinstance(delta, ToolCallPartDelta):
+            existing = streamed_tool_calls.get(event.index)
+            if existing is None:
+                as_part = delta.as_part()
+                streamed_tool_calls[event.index] = (
+                    as_part if as_part is not None else delta
+                )
+            else:
+                updated = delta.apply(existing)
+                if isinstance(updated, (ToolCallPart, ToolCallPartDelta)):
+                    streamed_tool_calls[event.index] = updated
+        return False
+
     def handle_part_end_event(
         self,
         *,
@@ -268,6 +416,52 @@ class StreamEventService:
             streamed_tool_calls[event.index] = part
         return False
 
+    # noinspection PyMethodMayBeStatic
+    async def handle_part_end_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        event: PartEndEvent,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
+        emit_text_suffix_for_part: Callable[..., Awaitable[bool]],
+        emit_thinking_suffix_for_part: Callable[..., Awaitable[bool]],
+        publish_thinking_started_event: Callable[..., Awaitable[None]],
+        publish_thinking_finished_event: Callable[..., Awaitable[None]],
+    ) -> bool:
+        part = event.part
+        if isinstance(part, TextPart):
+            return await emit_text_suffix_for_part(
+                request=request,
+                part_index=event.index,
+                content=part.content,
+                emitted_text_chunks=emitted_text_chunks,
+                emitted_lengths=text_lengths,
+            )
+        if isinstance(part, ThinkingPart):
+            if event.index not in started_thinking_parts:
+                await publish_thinking_started_event(
+                    request=request,
+                    part_index=event.index,
+                )
+                started_thinking_parts.add(event.index)
+            _ = await emit_thinking_suffix_for_part(
+                request=request,
+                part_index=event.index,
+                content=part.content,
+                emitted_lengths=thinking_lengths,
+            )
+            await publish_thinking_finished_event(
+                request=request,
+                part_index=event.index,
+            )
+        if isinstance(part, ToolCallPart):
+            streamed_tool_calls[event.index] = part
+        return False
+
     def emit_text_suffix_for_part(
         self,
         *,
@@ -289,6 +483,28 @@ class StreamEventService:
         publish_text_delta_event(request=request, text=suffix)
         return True
 
+    # noinspection PyMethodMayBeStatic
+    async def emit_text_suffix_for_part_async(
+        self,
+        *,
+        request: LLMRequest,
+        part_index: int,
+        content: str,
+        emitted_text_chunks: list[str],
+        emitted_lengths: dict[int, int],
+        log_model_stream_chunk: Callable[[str, str], None],
+        publish_text_delta_event: Callable[..., Awaitable[None]],
+    ) -> bool:
+        previous_length = emitted_lengths.get(part_index, 0)
+        suffix = content[previous_length:]
+        emitted_lengths[part_index] = len(content)
+        if not suffix:
+            return False
+        emitted_text_chunks.append(suffix)
+        log_model_stream_chunk(request.role_id, suffix)
+        await publish_text_delta_event(request=request, text=suffix)
+        return True
+
     def emit_thinking_suffix_for_part(
         self,
         *,
@@ -304,6 +520,28 @@ class StreamEventService:
         if not suffix:
             return False
         publish_thinking_delta_event(
+            request=request,
+            part_index=part_index,
+            text=suffix,
+        )
+        return False
+
+    # noinspection PyMethodMayBeStatic
+    async def emit_thinking_suffix_for_part_async(
+        self,
+        *,
+        request: LLMRequest,
+        part_index: int,
+        content: str,
+        emitted_lengths: dict[int, int],
+        publish_thinking_delta_event: Callable[..., Awaitable[None]],
+    ) -> bool:
+        previous_length = emitted_lengths.get(part_index, 0)
+        suffix = content[previous_length:]
+        emitted_lengths[part_index] = len(content)
+        if not suffix:
+            return False
+        await publish_thinking_delta_event(
             request=request,
             part_index=part_index,
             text=suffix,

@@ -23,6 +23,7 @@ from relay_teams.metrics.registry import MetricRegistry
 from relay_teams.metrics.service import MetricsService
 from relay_teams.metrics.sinks import (
     AggregateStoreSink,
+    AsyncMetricsSink,
     GrafanaExporterSink,
     MetricsSink,
     PrettyLogSink,
@@ -31,6 +32,7 @@ from relay_teams.metrics.stores import MetricPointRecord, SqliteMetricAggregateS
 
 __all__ = [
     "AggregateStoreSink",
+    "AsyncMetricsSink",
     "DEFAULT_DEFINITIONS",
     "GrafanaExporterSink",
     "MetricDefinition",

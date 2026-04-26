@@ -244,6 +244,13 @@ class RunIntentRepository(SharedSqliteRepository):
             ),
         )
 
+    async def upsert_async(
+        self, *, run_id: str, session_id: str, intent: IntentInput
+    ) -> None:
+        return await self._call_sync_async(
+            self.upsert, run_id=run_id, session_id=session_id, intent=intent
+        )
+
     def append_followup(self, *, run_id: str, content: str) -> None:
         def operation() -> None:
             row = self._conn.execute(
@@ -274,6 +281,11 @@ class RunIntentRepository(SharedSqliteRepository):
 
         self._run_write(operation_name="append_followup", operation=operation)
 
+    async def append_followup_async(self, *, run_id: str, content: str) -> None:
+        return await self._call_sync_async(
+            self.append_followup, run_id=run_id, content=content
+        )
+
     def get(
         self,
         run_id: str,
@@ -293,6 +305,13 @@ class RunIntentRepository(SharedSqliteRepository):
         if row is None:
             raise KeyError(f"Unknown run_id: {run_id}")
         return _intent_input_from_row(row, fallback_session_id=fallback_session_id)
+
+    async def get_async(
+        self, run_id: str, *, fallback_session_id: str | None = None
+    ) -> IntentInput:
+        return await self._call_sync_async(
+            self.get, run_id, fallback_session_id=fallback_session_id
+        )
 
     def list_by_session(self, session_id: str) -> dict[str, IntentInput]:
         rows = self._run_read(
@@ -321,6 +340,9 @@ class RunIntentRepository(SharedSqliteRepository):
             except (KeyError, ValueError, ValidationError) as exc:
                 _log_invalid_run_intent_row(row=row, error=exc)
         return records
+
+    async def list_by_session_async(self, session_id: str) -> dict[str, IntentInput]:
+        return await self._call_sync_async(self.list_by_session, session_id)
 
 
 def _intent_input_from_row(

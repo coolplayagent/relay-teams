@@ -28,10 +28,14 @@ from relay_teams.logger import (
     log_model_output,
     log_model_stream_chunk,
 )
-from relay_teams.metrics.adapters import record_session_step, record_token_usage
+from relay_teams.metrics.adapters import (
+    record_session_step_async,
+    record_token_usage_async,
+)
 from relay_teams.providers.llm_retry import extract_retry_error_info
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.event_stream import publish_run_event_async
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime.context import ToolDeps
@@ -200,13 +204,13 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
         if not skip_initial_user_prompt_persist:
             request, hook_system_contexts = await self._apply_user_prompt_hooks(request)
             if hook_system_contexts:
-                self._persist_hook_system_context_if_needed(
+                await self._persist_hook_system_context_if_needed_async(
                     request=request,
                     contexts=hook_system_contexts,
                 )
         self._validate_request_input_capabilities(request)
         if self._metric_recorder is not None:
-            record_session_step(
+            await record_session_step_async(
                 self._metric_recorder,
                 workspace_id=resolved_workspace_id,
                 session_id=request.session_id,
@@ -219,7 +223,8 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             self._allowed_tools,
             session_id=request.session_id,
         )
-        self._run_event_hub.publish(
+        await publish_run_event_async(
+            self._run_event_hub,
             RunEvent(
                 session_id=request.session_id,
                 run_id=request.run_id,
@@ -234,7 +239,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                         instance_id=request.instance_id,
                     )
                 ),
-            )
+            ),
         )
         try:
             (
@@ -346,12 +351,13 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 },
             )
             if not skip_initial_user_prompt_persist:
-                persisted_history, rebuild_context = (
-                    self._persist_user_prompt_if_needed(
-                        request=request,
-                        history=history,
-                        content=self._current_request_prompt_content(request),
-                    )
+                (
+                    persisted_history,
+                    rebuild_context,
+                ) = await self._persist_user_prompt_if_needed_async(
+                    request=request,
+                    history=history,
+                    content=self._current_request_prompt_content(request),
                 )
                 if rebuild_context:
                     (
@@ -422,7 +428,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                         started_thinking_parts: set[int] = set()
                                         async for stream_event in stream:
                                             control_ctx.raise_if_cancelled()
-                                            text_emitted = self._handle_model_stream_event(
+                                            text_emitted = await self._handle_model_stream_event_async(
                                                 request=request,
                                                 stream_event=stream_event,
                                                 emitted_text_chunks=emitted_text_chunks,
@@ -451,7 +457,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                                 if active_retry_number > 0:
                                                     active_retry_number = 0
                                                 emitted_text_chunks.append(text_delta)
-                                                self._publish_text_delta_event(
+                                                await self._publish_text_delta_event_async(
                                                     request=request,
                                                     text=text_delta,
                                                 )
@@ -506,12 +512,10 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                             if new_to_process:
                                 if active_retry_number > 0:
                                     active_retry_number = 0
-                                tool_call_events_emitted = (
-                                    self._publish_tool_call_events_from_messages(
-                                        request=request,
-                                        messages=new_to_process,
-                                        published_tool_call_ids=published_tool_call_ids,
-                                    )
+                                tool_call_events_emitted = await self._publish_tool_call_events_from_messages_async(
+                                    request=request,
+                                    messages=new_to_process,
+                                    published_tool_call_ids=published_tool_call_ids,
                                 )
                                 if tool_call_events_emitted:
                                     attempt_tool_call_event_emitted = True
@@ -525,7 +529,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                     buffered_messages,
                                     committed_tool_events_published,
                                     committed_tool_validation_failures,
-                                ) = self._commit_ready_messages(
+                                ) = await self._commit_ready_messages_async(
                                     request=request,
                                     history=history,
                                     pending_messages=buffered_messages,
@@ -575,7 +579,8 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                             )
                             if injections:
                                 for msg in injections:
-                                    self._run_event_hub.publish(
+                                    await publish_run_event_async(
+                                        self._run_event_hub,
                                         RunEvent(
                                             session_id=request.session_id,
                                             run_id=request.run_id,
@@ -585,9 +590,9 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                             role_id=request.role_id,
                                             event_type=RunEventType.INJECTION_APPLIED,
                                             payload_json=msg.model_dump_json(),
-                                        )
+                                        ),
                                     )
-                                    self._message_repo.append_user_prompt_if_missing(
+                                    await self._message_repo.append_user_prompt_if_missing_async(
                                         session_id=request.session_id,
                                         workspace_id=resolved_workspace_id,
                                         conversation_id=resolved_conversation_id,
@@ -635,12 +640,10 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                             streamed_text=latest_streamed_text,
                         )
                         if to_save:
-                            tool_call_events_emitted = (
-                                self._publish_tool_call_events_from_messages(
-                                    request=request,
-                                    messages=to_save,
-                                    published_tool_call_ids=published_tool_call_ids,
-                                )
+                            tool_call_events_emitted = await self._publish_tool_call_events_from_messages_async(
+                                request=request,
+                                messages=to_save,
+                                published_tool_call_ids=published_tool_call_ids,
                             )
                             if tool_call_events_emitted:
                                 attempt_tool_call_event_emitted = True
@@ -652,7 +655,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                             buffered_messages,
                             committed_tool_events_published,
                             _committed_tool_validation_failures,
-                        ) = self._commit_all_safe_messages(
+                        ) = await self._commit_all_safe_messages_async(
                             request=request,
                             history=history,
                             pending_messages=buffered_messages,
@@ -681,7 +684,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                             requests = self._usage_field_int(usage, "requests")
                         tool_calls = self._usage_field_int(usage, "tool_calls")
                         if self._token_usage_repo is not None:
-                            self._token_usage_repo.record(
+                            await self._token_usage_repo.record_async(
                                 session_id=request.session_id,
                                 run_id=request.run_id,
                                 instance_id=request.instance_id,
@@ -693,7 +696,8 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                 requests=requests,
                                 tool_calls=tool_calls,
                             )
-                        self._run_event_hub.publish(
+                        await publish_run_event_async(
+                            self._run_event_hub,
                             RunEvent(
                                 session_id=request.session_id,
                                 run_id=request.run_id,
@@ -715,10 +719,10 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                         "instance_id": request.instance_id,
                                     }
                                 ),
-                            )
+                            ),
                         )
                         if self._metric_recorder is not None:
-                            record_token_usage(
+                            await record_token_usage_async(
                                 self._metric_recorder,
                                 workspace_id=resolved_workspace_id,
                                 session_id=request.session_id,
@@ -828,7 +832,8 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             if not text and emitted_text_chunks:
                 text = "".join(emitted_text_chunks)
             elif text and not emitted_text_chunks:
-                self._run_event_hub.publish(
+                await publish_run_event_async(
+                    self._run_event_hub,
                     RunEvent(
                         session_id=request.session_id,
                         run_id=request.run_id,
@@ -844,11 +849,12 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                 "instance_id": request.instance_id,
                             }
                         ),
-                    )
+                    ),
                 )
             if text and not printed_any:
                 log_model_output(request.role_id, text)
-            self._run_event_hub.publish(
+            await publish_run_event_async(
+                self._run_event_hub,
                 RunEvent(
                     session_id=request.session_id,
                     run_id=request.run_id,
@@ -864,7 +870,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                             prepared_prompt=prepared_prompt,
                         )
                     ),
-                )
+                ),
             )
             log_event(
                 LOGGER,

@@ -7,7 +7,7 @@ import logging
 import json
 from collections.abc import Sequence
 from dataclasses import replace
-from typing import cast
+from typing import Protocol, cast, runtime_checkable
 
 from pydantic import JsonValue
 from pydantic_ai.exceptions import ModelAPIError
@@ -58,6 +58,15 @@ _RECOVERED_SUBAGENT_DESCRIPTION = "Recovered spawn_subagent call"
 _RECOVERED_SUBAGENT_PROMPT = "Recovered spawn_subagent prompt unavailable."
 
 
+@runtime_checkable
+class _AsyncConversationHistoryRepo(Protocol):
+    async def get_history_for_conversation_async(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError  # pragma: no cover
+
+
 class _NullPromptHistoryMessageRepo:
     def get_history_for_conversation(
         self,
@@ -65,6 +74,12 @@ class _NullPromptHistoryMessageRepo:
     ) -> list[ModelRequest | ModelResponse]:
         _ = conversation_id
         return []
+
+    async def get_history_for_conversation_async(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        return self.get_history_for_conversation(conversation_id)
 
     def get_history_for_conversation_task(
         self,
@@ -74,11 +89,24 @@ class _NullPromptHistoryMessageRepo:
         _ = (conversation_id, task_id)
         return []
 
+    async def get_history_for_conversation_task_async(
+        self,
+        conversation_id: str,
+        task_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        return self.get_history_for_conversation_task(conversation_id, task_id)
+
     def prune_conversation_history_to_safe_boundary(
         self,
         conversation_id: str,
     ) -> None:
         _ = conversation_id
+
+    async def prune_conversation_history_to_safe_boundary_async(
+        self,
+        conversation_id: str,
+    ) -> None:
+        self.prune_conversation_history_to_safe_boundary(conversation_id)
 
     def append(
         self,
@@ -103,6 +131,29 @@ class _NullPromptHistoryMessageRepo:
             messages,
         )
 
+    async def append_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: list[ModelRequest | ModelResponse],
+    ) -> None:
+        self.append(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=agent_role_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            messages=messages,
+        )
+
     def append_system_prompt_if_missing(
         self,
         *,
@@ -124,6 +175,29 @@ class _NullPromptHistoryMessageRepo:
             task_id,
             trace_id,
             content,
+        )
+
+    async def append_system_prompt_if_missing_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: str,
+    ) -> None:
+        self.append_system_prompt_if_missing(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=agent_role_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            content=content,
         )
 
     def replace_pending_user_prompt(
@@ -150,11 +224,39 @@ class _NullPromptHistoryMessageRepo:
         )
         return False
 
+    async def replace_pending_user_prompt_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: object,
+    ) -> bool:
+        return self.replace_pending_user_prompt(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            agent_role_id=agent_role_id,
+            instance_id=instance_id,
+            task_id=task_id,
+            trace_id=trace_id,
+            content=content,
+        )
+
 
 class _NullRunIntentRepo:
     def get(self, run_id: str, *, fallback_session_id: str | None = None) -> object:
         _ = (run_id, fallback_session_id)
         return type("_Intent", (), {"intent": ""})()
+
+    async def get_async(
+        self, run_id: str, *, fallback_session_id: str | None = None
+    ) -> object:
+        return self.get(run_id, fallback_session_id=fallback_session_id)
 
 
 def _tool_result_error_code(result: dict[str, JsonValue]) -> str:
@@ -387,6 +489,30 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             handle_part_end_event=self._handle_part_end_event,
         )
 
+    async def _handle_model_stream_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        stream_event: object,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
+    ) -> bool:
+        return await self._stream_event_service().handle_model_stream_event_async(
+            request=request,
+            stream_event=stream_event,
+            emitted_text_chunks=emitted_text_chunks,
+            text_lengths=text_lengths,
+            thinking_lengths=thinking_lengths,
+            started_thinking_parts=started_thinking_parts,
+            streamed_tool_calls=streamed_tool_calls,
+            handle_part_start_event=self._handle_part_start_event_async,
+            handle_part_delta_event=self._handle_part_delta_event_async,
+            handle_part_end_event=self._handle_part_end_event_async,
+        )
+
     def _handle_part_start_event(
         self,
         *,
@@ -409,6 +535,30 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             emit_text_suffix_for_part=self._emit_text_suffix_for_part,
             emit_thinking_suffix_for_part=self._emit_thinking_suffix_for_part,
             publish_thinking_started_event=self._publish_thinking_started_event,
+        )
+
+    async def _handle_part_start_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        event: PartStartEvent,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
+    ) -> bool:
+        return await self._stream_event_service().handle_part_start_event_async(
+            request=request,
+            event=event,
+            emitted_text_chunks=emitted_text_chunks,
+            text_lengths=text_lengths,
+            thinking_lengths=thinking_lengths,
+            started_thinking_parts=started_thinking_parts,
+            streamed_tool_calls=streamed_tool_calls,
+            emit_text_suffix_for_part=self._emit_text_suffix_for_part_async,
+            emit_thinking_suffix_for_part=self._emit_thinking_suffix_for_part_async,
+            publish_thinking_started_event=self._publish_thinking_started_event_async,
         )
 
     def _handle_part_delta_event(
@@ -436,6 +586,31 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             publish_thinking_delta_event=self._publish_thinking_delta_event,
         )
 
+    async def _handle_part_delta_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        event: PartDeltaEvent,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
+    ) -> bool:
+        return await self._stream_event_service().handle_part_delta_event_async(
+            request=request,
+            event=event,
+            emitted_text_chunks=emitted_text_chunks,
+            text_lengths=text_lengths,
+            thinking_lengths=thinking_lengths,
+            started_thinking_parts=started_thinking_parts,
+            streamed_tool_calls=streamed_tool_calls,
+            log_model_stream_chunk=log_model_stream_chunk,
+            publish_text_delta_event=self._publish_text_delta_event_async,
+            publish_thinking_started_event=self._publish_thinking_started_event_async,
+            publish_thinking_delta_event=self._publish_thinking_delta_event_async,
+        )
+
     def _handle_part_end_event(
         self,
         *,
@@ -461,6 +636,31 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             publish_thinking_finished_event=self._publish_thinking_finished_event,
         )
 
+    async def _handle_part_end_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        event: PartEndEvent,
+        emitted_text_chunks: list[str],
+        text_lengths: dict[int, int],
+        thinking_lengths: dict[int, int],
+        started_thinking_parts: set[int],
+        streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta],
+    ) -> bool:
+        return await self._stream_event_service().handle_part_end_event_async(
+            request=request,
+            event=event,
+            emitted_text_chunks=emitted_text_chunks,
+            text_lengths=text_lengths,
+            thinking_lengths=thinking_lengths,
+            started_thinking_parts=started_thinking_parts,
+            streamed_tool_calls=streamed_tool_calls,
+            emit_text_suffix_for_part=self._emit_text_suffix_for_part_async,
+            emit_thinking_suffix_for_part=self._emit_thinking_suffix_for_part_async,
+            publish_thinking_started_event=self._publish_thinking_started_event_async,
+            publish_thinking_finished_event=self._publish_thinking_finished_event_async,
+        )
+
     def _emit_text_suffix_for_part(
         self,
         *,
@@ -480,6 +680,25 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             publish_text_delta_event=self._publish_text_delta_event,
         )
 
+    async def _emit_text_suffix_for_part_async(
+        self,
+        *,
+        request: LLMRequest,
+        part_index: int,
+        content: str,
+        emitted_text_chunks: list[str],
+        emitted_lengths: dict[int, int],
+    ) -> bool:
+        return await self._stream_event_service().emit_text_suffix_for_part_async(
+            request=request,
+            part_index=part_index,
+            content=content,
+            emitted_text_chunks=emitted_text_chunks,
+            emitted_lengths=emitted_lengths,
+            log_model_stream_chunk=log_model_stream_chunk,
+            publish_text_delta_event=self._publish_text_delta_event_async,
+        )
+
     def _emit_thinking_suffix_for_part(
         self,
         *,
@@ -496,6 +715,22 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             publish_thinking_delta_event=self._publish_thinking_delta_event,
         )
 
+    async def _emit_thinking_suffix_for_part_async(
+        self,
+        *,
+        request: LLMRequest,
+        part_index: int,
+        content: str,
+        emitted_lengths: dict[int, int],
+    ) -> bool:
+        return await self._stream_event_service().emit_thinking_suffix_for_part_async(
+            request=request,
+            part_index=part_index,
+            content=content,
+            emitted_lengths=emitted_lengths,
+            publish_thinking_delta_event=self._publish_thinking_delta_event_async,
+        )
+
     def _publish_text_delta_event(
         self,
         *,
@@ -507,6 +742,17 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             text=text,
         )
 
+    async def _publish_text_delta_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        text: str,
+    ) -> None:
+        await self._event_publishing_service().publish_text_delta_event_async(
+            request=request,
+            text=text,
+        )
+
     def _publish_thinking_started_event(
         self,
         *,
@@ -514,6 +760,17 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
         part_index: int,
     ) -> None:
         self._event_publishing_service().publish_thinking_started_event(
+            request=request,
+            part_index=part_index,
+        )
+
+    async def _publish_thinking_started_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        part_index: int,
+    ) -> None:
+        await self._event_publishing_service().publish_thinking_started_event_async(
             request=request,
             part_index=part_index,
         )
@@ -531,6 +788,19 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             text=text,
         )
 
+    async def _publish_thinking_delta_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        part_index: int,
+        text: str,
+    ) -> None:
+        await self._event_publishing_service().publish_thinking_delta_event_async(
+            request=request,
+            part_index=part_index,
+            text=text,
+        )
+
     def _publish_thinking_finished_event(
         self,
         *,
@@ -538,6 +808,17 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
         part_index: int,
     ) -> None:
         self._event_publishing_service().publish_thinking_finished_event(
+            request=request,
+            part_index=part_index,
+        )
+
+    async def _publish_thinking_finished_event_async(
+        self,
+        *,
+        request: LLMRequest,
+        part_index: int,
+    ) -> None:
+        await self._event_publishing_service().publish_thinking_finished_event_async(
             request=request,
             part_index=part_index,
         )
@@ -1046,6 +1327,20 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             )
         )
 
+    async def _load_safe_history_for_conversation_async(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        if isinstance(self._message_repo, _AsyncConversationHistoryRepo):
+            history = await self._message_repo.get_history_for_conversation_async(
+                conversation_id
+            )
+        else:
+            history = self._message_repo.get_history_for_conversation(conversation_id)
+        return self._truncate_history_to_safe_boundary(
+            self._filter_model_messages(history)
+        )
+
     def _prompt_history_service(self) -> PromptHistoryService:
         mcp_tool_context_token_cache = getattr(
             self,
@@ -1094,6 +1389,11 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
                 self,
                 "_load_safe_history_for_conversation",
                 lambda _conversation_id: [],
+            ),
+            load_safe_history_for_conversation_async=getattr(
+                self,
+                "_load_safe_history_for_conversation_async",
+                None,
             ),
         )
 

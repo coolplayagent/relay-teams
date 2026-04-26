@@ -15,6 +15,7 @@ from relay_teams.net.github_cli import (
 from relay_teams.net.llm_client import (
     build_llm_http_client,
     clear_llm_http_client_cache,
+    clear_llm_http_client_cache_async,
     reset_llm_http_client_cache_entry,
 )
 from relay_teams.net.websocket import (
@@ -27,6 +28,7 @@ __all__ = [
     "build_llm_http_client",
     "build_websocket_ssl_context",
     "clear_llm_http_client_cache",
+    "clear_llm_http_client_cache_async",
     "reset_llm_http_client_cache_entry",
     "create_async_http_client",
     "create_runtime_sync_http_client",

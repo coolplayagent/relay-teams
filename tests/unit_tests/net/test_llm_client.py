@@ -303,6 +303,67 @@ async def test_reset_llm_http_client_cache_entry_isolated_by_cache_scope(
     assert run_b_client.close_calls == 0
 
 
+@pytest.mark.asyncio
+async def test_clear_llm_http_client_cache_async_closes_shared_and_scoped_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeAsyncClient:
+        def __init__(self) -> None:
+            self.is_closed = False
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            self.is_closed = True
+
+    created_clients: list[_FakeAsyncClient] = []
+
+    def _create_async_http_client(**_: object) -> _FakeAsyncClient:
+        client = _FakeAsyncClient()
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        llm_client,
+        "create_async_http_client",
+        _create_async_http_client,
+    )
+
+    shared_client = cast(
+        _FakeAsyncClient,
+        llm_client.build_llm_http_client(
+            merged_env={"HTTPS_PROXY": "http://proxy.internal:8443"},
+            connect_timeout_seconds=42.5,
+            ssl_verify=False,
+        ),
+    )
+    scoped_client = cast(
+        _FakeAsyncClient,
+        llm_client.build_llm_http_client(
+            merged_env={"HTTPS_PROXY": "http://proxy.internal:8443"},
+            connect_timeout_seconds=42.5,
+            cache_scope="run-a",
+            ssl_verify=False,
+        ),
+    )
+
+    await llm_client.clear_llm_http_client_cache_async()
+
+    assert shared_client.close_calls == 1
+    assert scoped_client.close_calls == 1
+
+    rebuilt_client = cast(
+        _FakeAsyncClient,
+        llm_client.build_llm_http_client(
+            merged_env={"HTTPS_PROXY": "http://proxy.internal:8443"},
+            connect_timeout_seconds=42.5,
+            ssl_verify=False,
+        ),
+    )
+    assert rebuilt_client is not shared_client
+    assert len(created_clients) == 3
+
+
 def test_build_llm_http_client_does_not_evict_scoped_clients(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

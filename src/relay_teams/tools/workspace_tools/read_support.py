@@ -6,8 +6,8 @@ from pathlib import Path
 from pydantic import JsonValue
 
 from relay_teams.agents.execution.prompt_instruction_state import (
-    filter_unloaded_prompt_instruction_paths,
-    record_prompt_instruction_paths_loaded,
+    filter_unloaded_prompt_instruction_paths_async,
+    record_prompt_instruction_paths_loaded_async,
 )
 from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from relay_teams.tools.runtime.context import ToolDeps
@@ -97,7 +97,7 @@ async def resolve_read_instruction_sections(
         file_path=file_path,
         workspace_root=deps.workspace.scope_root,
     )
-    unresolved_paths = filter_unloaded_prompt_instruction_paths(
+    unresolved_paths = await filter_unloaded_prompt_instruction_paths_async(
         shared_store=deps.shared_store,
         task_id=deps.task_id,
         paths=candidate_paths,
@@ -105,7 +105,7 @@ async def resolve_read_instruction_sections(
     if not unresolved_paths:
         return ()
     loaded = await resolver.load_paths(unresolved_paths)
-    record_prompt_instruction_paths_loaded(
+    await record_prompt_instruction_paths_loaded_async(
         shared_store=deps.shared_store,
         task_id=deps.task_id,
         paths=loaded.local_paths,

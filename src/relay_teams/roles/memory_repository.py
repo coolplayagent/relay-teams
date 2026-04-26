@@ -42,6 +42,13 @@ class RoleMemoryRepository(SharedSqliteRepository):
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
         )
 
+    async def read_role_memory_async(
+        self, *, role_id: str, workspace_id: str
+    ) -> RoleMemoryRecord:
+        return await self._call_sync_async(
+            self.read_role_memory, role_id=role_id, workspace_id=workspace_id
+        )
+
     def write_role_memory(
         self,
         *,
@@ -64,6 +71,16 @@ class RoleMemoryRepository(SharedSqliteRepository):
             ),
         )
 
+    async def write_role_memory_async(
+        self, *, role_id: str, workspace_id: str, content_markdown: str
+    ) -> None:
+        return await self._call_sync_async(
+            self.write_role_memory,
+            role_id=role_id,
+            workspace_id=workspace_id,
+            content_markdown=content_markdown,
+        )
+
     def delete_role_memory(self, *, role_id: str, workspace_id: str) -> None:
         self._run_write(
             operation_name="delete_role_memory",
@@ -71,6 +88,13 @@ class RoleMemoryRepository(SharedSqliteRepository):
                 "DELETE FROM role_memories WHERE role_id=? AND workspace_id=?",
                 (role_id, workspace_id),
             ),
+        )
+
+    async def delete_role_memory_async(
+        self, *, role_id: str, workspace_id: str
+    ) -> None:
+        return await self._call_sync_async(
+            self.delete_role_memory, role_id=role_id, workspace_id=workspace_id
         )
 
     def _ensure_role_memories_schema(self) -> None:

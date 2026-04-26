@@ -5,12 +5,12 @@ import json
 import logging
 import sqlite3
 from pathlib import Path
-from threading import RLock
 
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.db import open_sqlite, run_sqlite_write_with_retry
+from relay_teams.persistence import async_fetchall, async_fetchone
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.sessions.runs.todo_models import TodoItem, TodoSnapshot
 from relay_teams.validation import (
     normalize_persisted_text,
@@ -21,12 +21,9 @@ from relay_teams.validation import (
 LOGGER = get_logger(__name__)
 
 
-class TodoRepository:
+class TodoRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._conn = open_sqlite(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = RLock()
+        super().__init__(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -63,13 +60,51 @@ class TodoRepository:
                 """
             )
 
-        run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
-            operation=operation,
-            lock=self._lock,
-            repository_name="TodoRepository",
+        self._run_write(
             operation_name="init_tables",
+            operation=operation,
+        )
+
+    async def _init_tables_async(self) -> None:
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS run_todos (
+                    run_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    items_json TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by_role_id TEXT,
+                    updated_by_instance_id TEXT
+                )
+                """
+            )
+            await cursor.close()
+            rows = await async_fetchall(conn, "PRAGMA table_info(run_todos)")
+            columns = {str(row["name"]) for row in rows}
+            if "updated_by_role_id" not in columns:
+                cursor = await conn.execute(
+                    "ALTER TABLE run_todos ADD COLUMN updated_by_role_id TEXT"
+                )
+                await cursor.close()
+            if "updated_by_instance_id" not in columns:
+                cursor = await conn.execute(
+                    "ALTER TABLE run_todos ADD COLUMN updated_by_instance_id TEXT"
+                )
+                await cursor.close()
+            cursor = await conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_run_todos_session
+                ON run_todos(session_id, updated_at DESC)
+                """
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="init_tables_async",
+            operation=lambda _conn: operation(),
         )
 
     def upsert(self, snapshot: TodoSnapshot) -> TodoSnapshot:
@@ -100,15 +135,52 @@ class TodoRepository:
                 _snapshot_params(snapshot),
             )
 
-        run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
-            operation=operation,
-            lock=self._lock,
-            repository_name="TodoRepository",
+        self._run_write(
             operation_name="upsert",
+            operation=operation,
         )
         persisted = self.get(snapshot.run_id)
+        if persisted is None:
+            raise RuntimeError(
+                f"Failed to persist todo snapshot for run {snapshot.run_id}"
+            )
+        return persisted
+
+    async def upsert_async(self, snapshot: TodoSnapshot) -> TodoSnapshot:
+        async def operation() -> None:
+            if snapshot.updated_at is None:
+                raise ValueError("Todo snapshot updated_at is required for persistence")
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                INSERT INTO run_todos(
+                    run_id,
+                    session_id,
+                    items_json,
+                    version,
+                    updated_at,
+                    updated_by_role_id,
+                    updated_by_instance_id
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id)
+                DO UPDATE SET
+                    session_id=excluded.session_id,
+                    items_json=excluded.items_json,
+                    version=excluded.version,
+                    updated_at=excluded.updated_at,
+                    updated_by_role_id=excluded.updated_by_role_id,
+                    updated_by_instance_id=excluded.updated_by_instance_id
+                """,
+                _snapshot_params(snapshot),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="upsert_async",
+            operation=lambda _conn: operation(),
+        )
+        persisted = await self.get_async(snapshot.run_id)
         if persisted is None:
             raise RuntimeError(
                 f"Failed to persist todo snapshot for run {snapshot.run_id}"
@@ -125,6 +197,22 @@ class TodoRepository:
                 """,
                 (run_id,),
             ).fetchone()
+        if row is None:
+            return None
+        return _row_to_snapshot_or_none(row)
+
+    async def get_async(self, run_id: str) -> TodoSnapshot | None:
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM run_todos
+                WHERE run_id=?
+                """,
+                (run_id,),
+            )
+        )
         if row is None:
             return None
         return _row_to_snapshot_or_none(row)
@@ -147,30 +235,73 @@ class TodoRepository:
                 snapshots.append(snapshot)
         return tuple(snapshots)
 
+    async def list_by_session_async(
+        self,
+        session_id: str,
+    ) -> tuple[TodoSnapshot, ...]:
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT *
+                FROM run_todos
+                WHERE session_id=?
+                ORDER BY updated_at DESC
+                """,
+                (session_id,),
+            )
+        )
+        snapshots: list[TodoSnapshot] = []
+        for row in rows:
+            snapshot = _row_to_snapshot_or_none(row)
+            if snapshot is not None:
+                snapshots.append(snapshot)
+        return tuple(snapshots)
+
     def delete_by_session(self, session_id: str) -> None:
-        run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
+        self._run_write(
+            operation_name="delete_by_session",
             operation=lambda: self._conn.execute(
                 "DELETE FROM run_todos WHERE session_id=?",
                 (session_id,),
             ),
-            lock=self._lock,
-            repository_name="TodoRepository",
-            operation_name="delete_by_session",
+        )
+
+    async def delete_by_session_async(self, session_id: str) -> None:
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                "DELETE FROM run_todos WHERE session_id=?",
+                (session_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_session_async",
+            operation=lambda _conn: operation(),
         )
 
     def delete_by_run(self, run_id: str) -> None:
-        run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
+        self._run_write(
+            operation_name="delete_by_run",
             operation=lambda: self._conn.execute(
                 "DELETE FROM run_todos WHERE run_id=?",
                 (run_id,),
             ),
-            lock=self._lock,
-            repository_name="TodoRepository",
-            operation_name="delete_by_run",
+        )
+
+    async def delete_by_run_async(self, run_id: str) -> None:
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                "DELETE FROM run_todos WHERE run_id=?",
+                (run_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_run_async",
+            operation=lambda _conn: operation(),
         )
 
 

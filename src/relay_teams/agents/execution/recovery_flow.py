@@ -10,6 +10,9 @@ from typing import Protocol, cast
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolReturnPart
 
+from relay_teams.agents.execution.llm_transport_scope import (
+    llm_http_client_cache_scope_for_request,
+)
 from relay_teams.logger import get_logger, log_event
 from relay_teams.net.llm_client import reset_llm_http_client_cache_entry
 from relay_teams.providers.llm_retry import (
@@ -255,7 +258,7 @@ class AttemptRecoveryService:
         await reset_llm_http_client_cache_entry(
             ssl_verify=self._config.ssl_verify,
             connect_timeout_seconds=self._config.connect_timeout_seconds,
-            cache_scope=request.run_id,
+            cache_scope=llm_http_client_cache_scope_for_request(request),
         )
 
     async def close_run_scoped_llm_http_client(
@@ -266,7 +269,7 @@ class AttemptRecoveryService:
         await reset_llm_http_client_cache_entry(
             ssl_verify=self._config.ssl_verify,
             connect_timeout_seconds=self._config.connect_timeout_seconds,
-            cache_scope=request.run_id,
+            cache_scope=llm_http_client_cache_scope_for_request(request),
         )
 
     def should_retry_request(

@@ -33,6 +33,7 @@ from relay_teams.providers.model_fallback import (
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.sessions.runs.assistant_errors import build_tool_error_result
 from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.event_stream import publish_run_event_async
 from relay_teams.sessions.runs.recoverable_pause import RecoverableRunPauseError
 from relay_teams.sessions.runs.run_models import RunEvent
 
@@ -60,12 +61,13 @@ class SessionRecoveryMixin(AgentLlmSessionMixinBase):
             "error_message": schedule.error.message,
             "status_code": schedule.error.status_code,
         }
-        self._run_event_hub.publish(
+        await publish_run_event_async(
+            self._run_event_hub,
             self._build_run_event(
                 request=request,
                 event_type="LLM_RETRY_SCHEDULED",
                 payload=payload,
-            )
+            ),
         )
         log_event(
             LOGGER,
