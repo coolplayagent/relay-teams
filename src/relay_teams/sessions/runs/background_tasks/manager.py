@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from collections import deque
 import codecs
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import errno
+from functools import partial
 import importlib
 import json
 import logging
@@ -16,7 +19,7 @@ import posixpath
 from pathlib import Path
 import struct
 import shutil
-from typing import Literal, Protocol, cast
+from typing import Literal, ParamSpec, Protocol, TypeVar, cast
 from uuid import uuid4
 
 try:
@@ -46,12 +49,12 @@ from relay_teams.sessions.runs.background_tasks.command_runtime import (
     ResolvedCommandRuntime,
     _PipeProcess,
     _kill_process_tree,
-    _kill_process_tree_by_pid,
     _start_new_session,
     build_command_argv,
     build_command_env,
     create_command_subprocess,
     create_prepared_subprocess,
+    kill_process_tree_by_pid,
     resolve_command_runtime,
     windows_conpty_supported,
 )
@@ -64,6 +67,8 @@ from relay_teams.workspace.workspace_models import (
 )
 
 LOGGER = get_logger(__name__)
+ParamT = ParamSpec("ParamT")
+ResultT = TypeVar("ResultT")
 
 DEFAULT_BACKGROUND_TASK_TIMEOUT_MS = 30 * 60 * 1000
 MIN_EXEC_COMMAND_YIELD_MS = 250
@@ -75,6 +80,7 @@ PROTECTED_RECENT_BACKGROUND_TASKS = 8
 MAX_RECENT_OUTPUT_LINES = 3
 MAX_OUTPUT_BUFFER_BYTES = 1024 * 1024
 MAX_DELTA_BYTES = 8192
+COMMAND_BLOCKING_WORKER_COUNT = 8
 _DEFAULT_PTY_COLUMNS = 120
 _DEFAULT_PTY_ROWS = 40
 _STOP_WAIT_TIMEOUT_SECONDS = 10.0
@@ -354,11 +360,26 @@ class _WindowsConPtyTransport(_BackgroundTaskTransport):
         self,
         proc: _WindowsPtyProcessProtocol,
         *,
+        blocking_executor: ThreadPoolExecutor,
         cleanup_root: Path | None = None,
     ) -> None:
         self._proc = proc
+        self._blocking_executor = blocking_executor
         self._cached_returncode: int | None = None
         self._cleanup_root = cleanup_root
+
+    async def _run_blocking(
+        self,
+        function: Callable[ParamT, ResultT],
+        /,
+        *args: ParamT.args,
+        **kwargs: ParamT.kwargs,
+    ) -> ResultT:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._blocking_executor,
+            partial(function, *args, **kwargs),
+        )
 
     @property
     def tty(self) -> bool:
@@ -389,30 +410,25 @@ class _WindowsConPtyTransport(_BackgroundTaskTransport):
     async def wait(self) -> int | None:
         if self._cached_returncode is not None:
             return self._cached_returncode
-        loop = asyncio.get_running_loop()
-        self._cached_returncode = await loop.run_in_executor(None, self._proc.wait)
+        self._cached_returncode = await self._run_blocking(self._proc.wait)
         return self._cached_returncode
 
     async def write(self, chars: str) -> None:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._proc.write, chars)
+        await self._run_blocking(self._proc.write, chars)
 
     async def resize(self, *, columns: int, rows: int) -> None:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._proc.setwinsize, rows, columns)
+        await self._run_blocking(self._proc.setwinsize, rows, columns)
 
     async def terminate(self) -> None:
         pid = self._proc.pid
         if pid is not None:
-            await _kill_process_tree_by_pid(pid)
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._proc.close, True)
+            _ = await self._run_blocking(kill_process_tree_by_pid, pid)
+        await self._run_blocking(self._proc.close, True)
 
     async def close(self) -> None:
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._proc.close)
+        await self._run_blocking(self._proc.close)
         if self._cleanup_root is not None:
-            await asyncio.to_thread(shutil.rmtree, self._cleanup_root, True)
+            await self._run_blocking(shutil.rmtree, self._cleanup_root, True)
 
 
 class _BackgroundTaskRuntime:
@@ -459,6 +475,23 @@ class BackgroundTaskManager:
         self._runtimes: dict[str, _BackgroundTaskRuntime] = {}
         self._admission_lock = asyncio.Lock()
         self._completion_listener: _BackgroundTaskCompletionListener | None = None
+        self._blocking_executor = ThreadPoolExecutor(
+            max_workers=COMMAND_BLOCKING_WORKER_COUNT,
+            thread_name_prefix="background-task-io",
+        )
+
+    async def _run_blocking(
+        self,
+        function: Callable[ParamT, ResultT],
+        /,
+        *args: ParamT.args,
+        **kwargs: ParamT.kwargs,
+    ) -> ResultT:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._blocking_executor,
+            partial(function, *args, **kwargs),
+        )
 
     def set_completion_listener(
         self,
@@ -573,7 +606,7 @@ class BackgroundTaskManager:
             yield_time_ms=yield_time_ms,
             is_initial_poll=True,
         )
-        if updated.is_active:
+        if updated.is_active or record.background_task_id in self._runtimes:
             follow_up, completed = await self.wait_for_run(
                 run_id=run_id,
                 background_task_id=record.background_task_id,
@@ -621,12 +654,12 @@ class BackgroundTaskManager:
     ) -> tuple[BackgroundTaskRecord, bool]:
         record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
         runtime = self._runtimes.get(background_task_id)
+        if runtime is not None:
+            await runtime.completed.wait()
+            return self._get_record(background_task_id), True
         if not record.is_active:
             return record, True
-        if runtime is None:
-            return record, False
-        await runtime.completed.wait()
-        return self._get_record(background_task_id), True
+        return record, False
 
     async def interact_for_run(
         self,
@@ -734,7 +767,7 @@ class BackgroundTaskManager:
                 extra={"background_task_id": record.background_task_id},
             )
             return record
-        killed = await _kill_process_tree_by_pid(record.pid)
+        killed = await self._run_blocking(kill_process_tree_by_pid, record.pid)
         if not killed:
             LOGGER.warning(
                 "Failed to stop persisted background task without runtime",
@@ -798,6 +831,7 @@ class BackgroundTaskManager:
                     background_task_id=background_task_id,
                     reason="server_shutdown",
                 )
+        self._blocking_executor.shutdown(wait=False, cancel_futures=True)
 
     async def _spawn_runtime(
         self,
@@ -992,7 +1026,11 @@ class BackgroundTaskManager:
         except Exception:
             shutil.rmtree(prepared.temp_root, ignore_errors=True)
             raise
-        return _WindowsConPtyTransport(process, cleanup_root=prepared.temp_root)
+        return _WindowsConPtyTransport(
+            process,
+            blocking_executor=self._blocking_executor,
+            cleanup_root=prepared.temp_root,
+        )
 
     async def _create_ssh_pty_process(
         self,
@@ -1125,7 +1163,10 @@ class BackgroundTaskManager:
             columns=_DEFAULT_PTY_COLUMNS,
             rows=_DEFAULT_PTY_ROWS,
         )
-        return _WindowsConPtyTransport(process)
+        return _WindowsConPtyTransport(
+            process,
+            blocking_executor=self._blocking_executor,
+        )
 
     async def _pump_stream(
         self,
@@ -1150,15 +1191,10 @@ class BackgroundTaskManager:
 
     async def _pump_master_fd(self, runtime: _BackgroundTaskRuntime, fd: int) -> None:
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        loop = asyncio.get_running_loop()
         try:
             while True:
                 try:
-                    chunk = await loop.run_in_executor(
-                        None,
-                        self._read_master_fd,
-                        fd,
-                    )
+                    chunk = await self._run_blocking(self._read_master_fd, fd)
                 except OSError as exc:
                     if exc.errno == errno.EIO:
                         break
@@ -1179,15 +1215,10 @@ class BackgroundTaskManager:
         runtime: _BackgroundTaskRuntime,
         proc: _WindowsPtyProcessProtocol,
     ) -> None:
-        loop = asyncio.get_running_loop()
         try:
             while True:
                 try:
-                    chunk = await loop.run_in_executor(
-                        None,
-                        proc.read,
-                        MAX_DELTA_BYTES,
-                    )
+                    chunk = await self._run_blocking(proc.read, MAX_DELTA_BYTES)
                 except EOFError:
                     break
                 if not chunk:
@@ -1257,7 +1288,7 @@ class BackgroundTaskManager:
         stream_name: str,
         chunk: str,
     ) -> None:
-        await asyncio.to_thread(
+        await self._run_blocking(
             self._append_log,
             runtime.log_file_path,
             stream_name=stream_name,
@@ -1265,14 +1296,15 @@ class BackgroundTaskManager:
         )
         runtime.recent_output.feed(chunk)
         runtime.output_buffer.append(chunk)
-        runtime.record = self._repository.upsert(
+        runtime.record = await self._run_blocking(
+            self._repository.upsert,
             runtime.record.model_copy(
                 update={
                     "recent_output": runtime.recent_output.snapshot(),
                     "output_excerpt": runtime.output_buffer.render(),
                     "updated_at": datetime.now(tz=timezone.utc),
                 }
-            )
+            ),
         )
         self._emit_monitor_lines(
             runtime,
@@ -1313,7 +1345,8 @@ class BackgroundTaskManager:
                 timed_out=timed_out,
             )
             completed_at = datetime.now(tz=timezone.utc)
-            runtime.record = self._repository.upsert(
+            runtime.record = await self._run_blocking(
+                self._repository.upsert,
                 runtime.record.model_copy(
                     update={
                         "status": status,
@@ -1324,10 +1357,8 @@ class BackgroundTaskManager:
                         "updated_at": completed_at,
                         "completed_at": completed_at,
                     }
-                )
+                ),
             )
-            self._runtimes.pop(runtime.record.background_task_id, None)
-            runtime.completed.set()
             try:
                 await runtime.transport.close()
             except Exception:
@@ -1351,6 +1382,8 @@ class BackgroundTaskManager:
             )
             if self._completion_listener is not None:
                 await self._completion_listener(runtime.record)
+            self._runtimes.pop(runtime.record.background_task_id, None)
+            runtime.completed.set()
 
     async def _signal_runtime_stop(self, runtime: _BackgroundTaskRuntime) -> None:
         for _ in range(runtime.stream_count):
