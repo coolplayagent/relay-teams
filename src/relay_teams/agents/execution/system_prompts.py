@@ -61,6 +61,8 @@ ORCHESTRATION_USAGE_PROMPT = (
     "- Prefer `template_role_id` when creating a temporary role so it inherits the closest existing capabilities.\n"
     "- Reuse an existing temporary role when it already matches the delegated work.\n"
     "- Create tasks as durable contracts with concrete outcomes and constraints.\n"
+    "- Fill task specs with acceptance criteria, verification evidence, and "
+    "lifecycle settings when risk or duration warrants them.\n"
     "- Choose the executing role in `orch_dispatch_task`.\n"
     "- Use the dispatch prompt to pass stage-specific instructions and upstream context.\n"
     "- The roles listed below are dispatch targets, not your own capabilities."

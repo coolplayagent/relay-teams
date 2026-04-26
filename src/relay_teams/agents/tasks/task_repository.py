@@ -336,6 +336,58 @@ class TaskRepository(SharedSqliteRepository):
             operation=lambda _conn: operation(),
         )
 
+    async def heartbeat_running_async(
+        self,
+        task_id: str,
+        assigned_instance_id: str | None = None,
+    ) -> bool:
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation() -> bool:
+            conn = await self._get_async_conn()
+            if assigned_instance_id is None:
+                cursor = await conn.execute(
+                    """
+                    UPDATE tasks
+                    SET updated_at=?
+                    WHERE task_id=? AND status=?
+                    """,
+                    (now, task_id, TaskStatus.RUNNING.value),
+                )
+            else:
+                cursor = await conn.execute(
+                    """
+                    UPDATE tasks
+                    SET updated_at=?
+                    WHERE task_id=? AND status=? AND assigned_instance_id=?
+                    """,
+                    (
+                        now,
+                        task_id,
+                        TaskStatus.RUNNING.value,
+                        assigned_instance_id,
+                    ),
+                )
+            try:
+                updated = cursor.rowcount > 0
+            finally:
+                await cursor.close()
+            if updated:
+                return True
+            row = await async_fetchone(
+                conn,
+                "SELECT task_id FROM tasks WHERE task_id=?",
+                (task_id,),
+            )
+            if row is None:
+                raise KeyError(f"Unknown task_id: {task_id}")
+            return False
+
+        return await self._run_async_write(
+            operation_name="heartbeat_running_async",
+            operation=lambda _conn: operation(),
+        )
+
     def get(self, task_id: str) -> TaskRecord:
         with self._lock:
             row = self._conn.execute(

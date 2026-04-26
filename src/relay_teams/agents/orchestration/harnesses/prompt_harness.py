@@ -510,6 +510,67 @@ class TaskPromptHarness(BaseModel):
         user_prompt_override: str | None,
     ) -> str:
         prompt_override = str(user_prompt_override or "").strip()
-        if prompt_override:
-            return prompt_override
-        return task.objective.strip()
+        base_prompt = prompt_override or task.objective.strip()
+        contract_prompt = TaskPromptHarness.task_contract_prompt(task)
+        if not contract_prompt:
+            return base_prompt
+        return "\n\n".join(
+            section for section in (base_prompt, contract_prompt) if section
+        )
+
+    @staticmethod
+    def task_contract_prompt(task: TaskEnvelope) -> str:
+        sections: list[str] = []
+        spec = task.spec
+        if spec is not None:
+            lines = ["## Task Spec"]
+            if spec.summary:
+                lines.append(f"- Summary: {spec.summary}")
+            lines.extend(_format_contract_items("Requirements", spec.requirements))
+            lines.extend(_format_contract_items("Constraints", spec.constraints))
+            lines.extend(
+                _format_contract_items(
+                    "Acceptance Criteria",
+                    spec.acceptance_criteria,
+                )
+            )
+            lines.extend(_format_contract_items("Out of Scope", spec.out_of_scope))
+            lines.extend(
+                _format_contract_items(
+                    "Verification Commands",
+                    spec.verification_commands,
+                )
+            )
+            lines.extend(
+                _format_contract_items(
+                    "Evidence Expectations",
+                    spec.evidence_expectations,
+                )
+            )
+            lines.append(f"- Strictness: {spec.strictness.value}")
+            sections.append("\n".join(lines))
+
+        lifecycle = task.lifecycle
+        lifecycle_lines: list[str] = []
+        if lifecycle.timeout_seconds is not None:
+            lifecycle_lines.append(f"- Timeout Seconds: {lifecycle.timeout_seconds:g}")
+        if lifecycle.heartbeat_interval_seconds is not None:
+            lifecycle_lines.append(
+                "- Heartbeat Interval Seconds: "
+                f"{lifecycle.heartbeat_interval_seconds:g}"
+            )
+        if lifecycle.timeout_seconds is not None:
+            lifecycle_lines.append(f"- On Timeout: {lifecycle.on_timeout.value}")
+            lifecycle_lines.append(
+                "- Handoff Required: summarize completed work, incomplete work, "
+                "key files, checks run, and next steps before stopping when possible."
+            )
+        if lifecycle_lines:
+            sections.append("## Task Lifecycle\n" + "\n".join(lifecycle_lines))
+        return "\n\n".join(sections)
+
+
+def _format_contract_items(label: str, items: tuple[str, ...]) -> list[str]:
+    if not items:
+        return []
+    return [f"- {label}:"] + [f"  - {item}" for item in items]

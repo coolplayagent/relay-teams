@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from enum import Enum
+
 from relay_teams.computer import (
     ComputerActionRisk,
     ComputerPermissionScope,
@@ -8,6 +10,12 @@ from relay_teams.computer import (
 )
 from relay_teams.media import ContentPart
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_serializer
+
+
+class ToolRuntimeDecision(str, Enum):
+    ALLOW = "allow"
+    REQUIRE_APPROVAL = "require_approval"
+    DENY = "deny"
 
 
 class ToolError(BaseModel):
@@ -84,6 +92,8 @@ class ToolApprovalDecision(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     required: bool
+    runtime_decision: ToolRuntimeDecision = ToolRuntimeDecision.ALLOW
+    reason: str = ""
     permission_scope: ComputerPermissionScope | None = None
     risk_level: ComputerActionRisk | None = None
     target_summary: str = ""

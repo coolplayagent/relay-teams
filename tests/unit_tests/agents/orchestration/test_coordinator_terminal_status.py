@@ -16,10 +16,14 @@ from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
+from relay_teams.roles.temporary_role_models import TemporaryRoleSpec
+from relay_teams.roles.temporary_role_repository import TemporaryRoleRepository
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
+from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.sessions.runs.event_log import EventLog
@@ -40,6 +44,7 @@ from relay_teams.agents.tasks.models import (
     VerificationResult,
 )
 from relay_teams.workspace import (
+    WorkspaceManager,
     build_conversation_id,
     build_instance_conversation_id,
 )
@@ -49,6 +54,9 @@ from relay_teams.hooks import HookService
 class _RecordingTaskExecutionService:
     def __init__(self, task_repo: TaskRepository) -> None:
         self._task_repo = task_repo
+        self.runtime_role_resolver: RuntimeRoleResolver | None = None
+        self.workspace_manager: WorkspaceManager | None = None
+        self.run_intent_repo: RunIntentRepository | None = None
         self.calls: list[str] = []
 
     async def execute(
@@ -64,6 +72,14 @@ class _RecordingTaskExecutionService:
             result=result,
         )
         return TaskExecutionResult(output=result)
+
+
+class _FailingRunIntentRepository(RunIntentRepository):
+    async def get_async(
+        self, run_id: str, *, fallback_session_id: str | None = None
+    ) -> IntentInput:
+        _ = (run_id, fallback_session_id)
+        raise RuntimeError("invalid persisted intent")
 
 
 class _SlowRecordingTaskExecutionService:
@@ -200,6 +216,116 @@ def _build_coordinator(
         run_runtime_repo,
         task_execution_service,
     )
+
+
+@pytest.mark.asyncio
+async def test_verification_context_uses_runtime_effective_role(
+    tmp_path: Path,
+) -> None:
+    coordinator, _, _, _, task_execution_service = _build_coordinator(tmp_path)
+    runtime_role_resolver = RuntimeRoleResolver(
+        role_registry=RoleRegistry(),
+        temporary_role_repository=TemporaryRoleRepository(
+            tmp_path / "verification_runtime_roles.db"
+        ),
+    )
+    _ = runtime_role_resolver.create_temporary_role(
+        run_id="run-1",
+        session_id="session-1",
+        role=TemporaryRoleSpec(
+            role_id="runtime_only",
+            name="Runtime Only",
+            description="Runtime-scoped verifier.",
+            tools=("shell",),
+            system_prompt="Verify work.",
+        ),
+    )
+    task_execution_service.runtime_role_resolver = runtime_role_resolver
+    task = TaskEnvelope(
+        task_id="task-runtime-role",
+        session_id="session-1",
+        trace_id="run-1",
+        role_id="runtime_only",
+        objective="verify work",
+        verification=VerificationPlan(),
+    )
+
+    allowed_tools, workspace_root = await coordinator._verification_context(
+        task=task,
+        instance_id=None,
+    )
+
+    assert "shell" in allowed_tools
+    assert workspace_root is None
+
+
+@pytest.mark.asyncio
+async def test_verification_context_denies_tools_when_role_lookup_fails(
+    tmp_path: Path,
+) -> None:
+    coordinator, _, _, _, task_execution_service = _build_coordinator(tmp_path)
+    task_execution_service.runtime_role_resolver = RuntimeRoleResolver(
+        role_registry=RoleRegistry(),
+        temporary_role_repository=TemporaryRoleRepository(
+            tmp_path / "verification_missing_runtime_roles.db"
+        ),
+    )
+    task = TaskEnvelope(
+        task_id="task-missing-runtime-role",
+        session_id="session-1",
+        trace_id="run-1",
+        role_id="missing_runtime",
+        objective="verify work",
+        verification=VerificationPlan(),
+    )
+
+    allowed_tools, workspace_root = await coordinator._verification_context(
+        task=task,
+        instance_id=None,
+    )
+
+    assert allowed_tools == ()
+    assert workspace_root is None
+
+
+@pytest.mark.asyncio
+async def test_verification_context_uses_no_workspace_when_instance_lookup_fails(
+    tmp_path: Path,
+) -> None:
+    coordinator, _, _, _, task_execution_service = _build_coordinator(tmp_path)
+    task_execution_service.workspace_manager = WorkspaceManager(project_root=tmp_path)
+    task = TaskEnvelope(
+        task_id="task-missing-instance",
+        session_id="session-1",
+        trace_id="run-1",
+        role_id="time",
+        objective="verify work",
+        verification=VerificationPlan(),
+    )
+
+    _, workspace_root = await coordinator._verification_context(
+        task=task,
+        instance_id="missing-instance",
+    )
+
+    assert workspace_root is None
+
+
+@pytest.mark.asyncio
+async def test_verification_tool_policy_falls_back_when_intent_lookup_fails(
+    tmp_path: Path,
+) -> None:
+    coordinator, _, _, _, task_execution_service = _build_coordinator(tmp_path)
+    task_execution_service.run_intent_repo = _FailingRunIntentRepository(
+        tmp_path / "failing_intent.db"
+    )
+
+    policy = await coordinator._verification_tool_policy_async(
+        trace_id="run-1",
+        fallback_session_id="session-1",
+    )
+
+    assert policy.yolo is False
 
 
 def test_terminal_status_from_verification_completes_with_assistant_error(
@@ -621,8 +747,18 @@ async def test_pending_delegated_task_cancellation_raises_without_stop_request(
         )
 
 
-def test_prepare_recovery_preserves_paused_subagent_followup_state(
+@pytest.mark.parametrize(
+    ("phase", "runtime_status"),
+    [
+        (RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP, RunRuntimeStatus.STOPPED),
+        (RunRuntimePhase.AWAITING_MANUAL_ACTION, RunRuntimeStatus.PAUSED),
+        (RunRuntimePhase.AWAITING_RECOVERY, RunRuntimeStatus.PAUSED),
+    ],
+)
+def test_prepare_recovery_preserves_paused_subagent_state(
     tmp_path: Path,
+    phase: RunRuntimePhase,
+    runtime_status: RunRuntimeStatus,
 ) -> None:
     coordinator, task_repo, agent_repo, run_runtime_repo, _ = _build_coordinator(
         tmp_path
@@ -693,8 +829,8 @@ def test_prepare_recovery_preserves_paused_subagent_followup_state(
             run_id="run-1",
             session_id="session-1",
             root_task_id=root_task.task_id,
-            status=RunRuntimeStatus.STOPPED,
-            phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
+            status=runtime_status,
+            phase=phase,
             active_task_id=child_task.task_id,
             active_role_id="time",
             active_subagent_instance_id=child_instance.instance_id,

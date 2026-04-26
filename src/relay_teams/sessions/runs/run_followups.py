@@ -43,6 +43,16 @@ from relay_teams.trace import bind_trace_context
 logger = get_logger(__name__)
 
 
+def assert_runtime_auto_attach_phase_allowed(
+    run_id: str,
+    runtime: RunRuntimeRecord,
+) -> None:
+    if runtime.phase == RunRuntimePhase.AWAITING_MANUAL_ACTION:
+        raise RuntimeError(
+            f"Run {run_id} is waiting for manual action. Resolve the manual gate before continuing."
+        )
+
+
 class RunFollowupRouter:
     def __init__(
         self,
@@ -324,6 +334,7 @@ class RunFollowupRouter:
             raise RuntimeError(
                 f"Run {run_id} is stopping. Wait for it to stop before continuing."
             )
+        assert_runtime_auto_attach_phase_allowed(run_id, runtime)
         if (
             runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
             and runtime.active_subagent_instance_id

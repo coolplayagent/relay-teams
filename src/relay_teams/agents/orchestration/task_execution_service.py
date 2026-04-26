@@ -4,8 +4,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -35,9 +36,9 @@ from relay_teams.agents.orchestration.harnesses.prompt_harness import (
     ProviderUserPromptContent,
 )
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
-from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.enums import TaskStatus, TaskTimeoutAction
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
-from relay_teams.agents.tasks.models import TaskEnvelope
+from relay_teams.agents.tasks.models import TaskEnvelope, TaskHandoff
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.hooks import HookService
 from relay_teams.logger import get_logger, log_event
@@ -51,12 +52,16 @@ from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.assistant_errors import (
     AssistantRunError,
+    RunCompletionReason,
     build_assistant_error_message,
 )
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
-from relay_teams.sessions.runs.recoverable_pause import RecoverableRunPauseError
+from relay_teams.sessions.runs.recoverable_pause import (
+    RecoverableRunPauseError,
+    RecoverableRunPausePayload,
+)
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_models import (
@@ -75,6 +80,8 @@ from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
 
 LOGGER = get_logger(__name__)
+TaskResultT = TypeVar("TaskResultT")
+TIMEOUT_WORKER_CANCEL_GRACE_SECONDS = 5.0
 __all__ = [
     "TASK_MEMORY_RESULT_EXCERPT_CHARS",
     "TaskExecutionService",
@@ -119,13 +126,21 @@ class TaskExecutionService(BaseModel):
         task: TaskEnvelope,
         user_prompt_override: str | None = None,
     ) -> TaskExecutionResult:
+        timeout_cancellation = asyncio.Event()
         worker = asyncio.create_task(
             self._execute_inner(
                 instance_id=instance_id,
                 role_id=role_id,
                 task=task,
                 user_prompt_override=user_prompt_override,
+                timeout_cancellation=timeout_cancellation,
             )
+        )
+        heartbeat = self._start_task_heartbeat(
+            task=task,
+            instance_id=instance_id,
+            role_id=role_id,
+            worker=worker,
         )
         if self.run_control_manager is not None:
             self.run_control_manager.register_instance_task(
@@ -137,8 +152,53 @@ class TaskExecutionService(BaseModel):
                 task=worker,
             )
         try:
-            return await worker
+            timeout_seconds = task.lifecycle.timeout_seconds
+            if timeout_seconds is None:
+                return await worker
+            completed, _ = await asyncio.wait((worker,), timeout=timeout_seconds)
+            if worker in completed:
+                return await worker
+            if worker.done():
+                return await worker
+            timeout_finalizer = asyncio.create_task(
+                self._complete_timeout_after_worker_cancel_async(
+                    task=task,
+                    instance_id=instance_id,
+                    role_id=role_id,
+                    timeout_seconds=timeout_seconds,
+                    worker=worker,
+                    timeout_cancellation=timeout_cancellation,
+                )
+            )
+            try:
+                return await asyncio.shield(timeout_finalizer)
+            except asyncio.CancelledError:
+                _ = await asyncio.shield(timeout_finalizer)
+                raise
+        except asyncio.CancelledError:
+            _ = await _cancel_and_wait(
+                worker,
+                suppress_exceptions=True,
+                task_name="task_worker",
+                context={
+                    "task_id": task.task_id,
+                    "instance_id": instance_id,
+                    "role_id": role_id,
+                },
+            )
+            raise
         finally:
+            if heartbeat is not None:
+                _ = await _cancel_and_wait(
+                    heartbeat,
+                    suppress_exceptions=True,
+                    task_name="task_heartbeat",
+                    context={
+                        "task_id": task.task_id,
+                        "instance_id": instance_id,
+                        "role_id": role_id,
+                    },
+                )
             if self.run_control_manager is not None:
                 self.run_control_manager.unregister_instance_task(
                     run_id=task.trace_id,
@@ -152,6 +212,7 @@ class TaskExecutionService(BaseModel):
         role_id: str,
         task: TaskEnvelope,
         user_prompt_override: str | None,
+        timeout_cancellation: asyncio.Event,
     ) -> TaskExecutionResult:
         is_coordinator = self.role_registry.is_coordinator_role(role_id)
         log_event(
@@ -166,7 +227,11 @@ class TaskExecutionService(BaseModel):
             },
         )
         await self.agent_repo.mark_status_async(instance_id, InstanceStatus.RUNNING)
-        _ = await self.task_repo.update_status_async(task.task_id, TaskStatus.RUNNING)
+        _ = await self.task_repo.update_status_async(
+            task.task_id,
+            TaskStatus.RUNNING,
+            assigned_instance_id=instance_id,
+        )
         await self.run_runtime_repo.ensure_async(
             run_id=task.trace_id,
             session_id=task.session_id,
@@ -280,6 +345,12 @@ class TaskExecutionService(BaseModel):
                 shared_state_snapshot=snapshot,
                 system_prompt_override=provider_system_prompt,
             )
+            _raise_if_timeout_cancellation_requested(
+                timeout_cancellation,
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+            )
             if isinstance(guarded_result, TaskExecutionResult):
                 return guarded_result
             result = guarded_result
@@ -331,6 +402,19 @@ class TaskExecutionService(BaseModel):
             )
             return TaskExecutionResult(output=result)
         except asyncio.CancelledError:
+            if timeout_cancellation.is_set():
+                log_event(
+                    LOGGER,
+                    logging.DEBUG,
+                    event="task.execution.timeout_cancelled",
+                    message="Task worker cancelled for lifecycle timeout",
+                    payload={
+                        "task_id": task.task_id,
+                        "instance_id": instance_id,
+                        "role_id": role_id,
+                    },
+                )
+                raise
             paused_subagent = False
             if self.run_control_manager is not None:
                 run_stop_requested = self.run_control_manager.is_run_stop_requested(
@@ -419,6 +503,12 @@ class TaskExecutionService(BaseModel):
             )
             raise
         except AssistantRunError as exc:
+            _raise_if_timeout_cancellation_requested(
+                timeout_cancellation,
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+            )
             return await self._complete_with_assistant_error_async(
                 task=task,
                 instance_id=instance_id,
@@ -431,18 +521,25 @@ class TaskExecutionService(BaseModel):
                 append_message=False,
             )
         except RecoverableRunPauseError as exc:
+            _raise_if_timeout_cancellation_requested(
+                timeout_cancellation,
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+            )
             payload = exc.payload
             _ = await self.task_repo.update_status_async(
                 task.task_id,
                 TaskStatus.STOPPED,
                 assigned_instance_id=instance_id,
+                result=payload.assistant_message or None,
                 error_message=payload.error_message,
             )
             await self.agent_repo.mark_status_async(instance_id, InstanceStatus.IDLE)
             await self.run_runtime_repo.update_async(
                 task.trace_id,
                 status=RunRuntimeStatus.PAUSED,
-                phase=RunRuntimePhase.AWAITING_RECOVERY,
+                phase=payload.runtime_phase or RunRuntimePhase.AWAITING_RECOVERY,
                 active_instance_id=payload.instance_id,
                 active_task_id=payload.task_id,
                 active_role_id=payload.role_id,
@@ -475,6 +572,12 @@ class TaskExecutionService(BaseModel):
             )
             raise
         except TimeoutError:
+            _raise_if_timeout_cancellation_requested(
+                timeout_cancellation,
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+            )
             return await self._complete_with_assistant_error_async(
                 task=task,
                 instance_id=instance_id,
@@ -489,6 +592,12 @@ class TaskExecutionService(BaseModel):
                 error_message="Task timeout",
             )
         except Exception as exc:
+            _raise_if_timeout_cancellation_requested(
+                timeout_cancellation,
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+            )
             return await self._complete_with_assistant_error_async(
                 task=task,
                 instance_id=instance_id,
@@ -502,6 +611,270 @@ class TaskExecutionService(BaseModel):
                 error_code="internal_execution_error",
                 error_message=str(exc),
             )
+
+    def _start_task_heartbeat(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        worker: asyncio.Task[TaskExecutionResult],
+    ) -> asyncio.Task[None] | None:
+        interval = task.lifecycle.heartbeat_interval_seconds
+        if interval is None:
+            return None
+        return asyncio.create_task(
+            self._heartbeat_task_until_done(
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+                interval_seconds=interval,
+                worker=worker,
+            )
+        )
+
+    async def _heartbeat_task_until_done(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        interval_seconds: float,
+        worker: asyncio.Task[TaskExecutionResult],
+    ) -> None:
+        while not worker.done():
+            await asyncio.sleep(interval_seconds)
+            if worker.done():
+                return
+            updated = await self.task_repo.heartbeat_running_async(
+                task.task_id,
+                assigned_instance_id=instance_id,
+            )
+            if not updated:
+                should_stop = await self._should_stop_heartbeat_after_skip(
+                    task=task,
+                    instance_id=instance_id,
+                    role_id=role_id,
+                )
+                if should_stop:
+                    return
+                continue
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="task.execution.heartbeat",
+                message="Task heartbeat recorded",
+                payload={
+                    "task_id": task.task_id,
+                    "instance_id": instance_id,
+                    "role_id": role_id,
+                },
+            )
+
+    async def _should_stop_heartbeat_after_skip(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+    ) -> bool:
+        try:
+            record = await self.task_repo.get_async(task.task_id)
+        except KeyError:
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="task.execution.heartbeat_skipped",
+                message="Task heartbeat stopped because task no longer exists",
+                payload={
+                    "task_id": task.task_id,
+                    "instance_id": instance_id,
+                    "role_id": role_id,
+                },
+            )
+            return True
+        if record.status in {TaskStatus.CREATED, TaskStatus.ASSIGNED}:
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="task.execution.heartbeat_waiting",
+                message="Task heartbeat waiting for task to enter running state",
+                payload={
+                    "task_id": task.task_id,
+                    "instance_id": instance_id,
+                    "role_id": role_id,
+                    "status": record.status.value,
+                },
+            )
+            return False
+        if record.status == TaskStatus.RUNNING and record.assigned_instance_id in {
+            None,
+            instance_id,
+        }:
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="task.execution.heartbeat_waiting",
+                message="Task heartbeat waiting after a transient running update miss",
+                payload={
+                    "task_id": task.task_id,
+                    "instance_id": instance_id,
+                    "role_id": role_id,
+                    "assigned_instance_id": record.assigned_instance_id or "",
+                },
+            )
+            return False
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="task.execution.heartbeat_skipped",
+            message="Task heartbeat stopped because task is no longer running here",
+            payload={
+                "task_id": task.task_id,
+                "instance_id": instance_id,
+                "role_id": role_id,
+                "status": record.status.value,
+                "assigned_instance_id": record.assigned_instance_id or "",
+            },
+        )
+        return True
+
+    async def _complete_task_timeout_async(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        timeout_seconds: float,
+    ) -> TaskExecutionResult:
+        timeout_action = task.lifecycle.on_timeout
+        task_status = _timeout_task_status(timeout_action)
+        instance_status = _timeout_instance_status(timeout_action)
+        runtime_status = _timeout_runtime_status(timeout_action)
+        runtime_phase = _timeout_runtime_phase(timeout_action)
+        paused_timeout = timeout_action != TaskTimeoutAction.FAIL
+        error_message = (
+            f"Task timed out after {timeout_seconds:g}s "
+            f"(on_timeout={timeout_action.value})"
+        )
+        assistant_message = build_assistant_error_message(
+            error_code="task_timeout",
+            error_message=error_message,
+        )
+        current = await self.task_repo.get_async(task.task_id)
+        handoff = _timeout_handoff(
+            task=current.envelope,
+            timeout_seconds=timeout_seconds,
+        )
+        await self.task_repo.update_envelope_async(
+            task.task_id,
+            current.envelope.model_copy(update={"handoff": handoff}),
+        )
+        await self.task_repo.update_status_async(
+            task.task_id,
+            task_status,
+            assigned_instance_id=instance_id,
+            result=assistant_message,
+            error_message=error_message,
+        )
+        await self.agent_repo.mark_status_async(instance_id, instance_status)
+        await self.run_runtime_repo.ensure_async(
+            run_id=task.trace_id,
+            session_id=task.session_id,
+            root_task_id=task.parent_task_id or task.task_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.IDLE,
+        )
+        await self._mark_runtime_after_terminal_task_update_async(
+            run_id=task.trace_id,
+            terminal_task_id=task.task_id,
+            status=runtime_status,
+            phase=runtime_phase,
+            active_instance_id=instance_id if paused_timeout else None,
+            active_task_id=task.task_id if paused_timeout else None,
+            active_role_id=role_id if paused_timeout else None,
+            active_subagent_instance_id=instance_id if paused_timeout else None,
+            last_error=error_message,
+        )
+        await self.event_bus.emit_async(
+            EventEnvelope(
+                event_type=EventType.TASK_TIMEOUT,
+                trace_id=task.trace_id,
+                session_id=task.session_id,
+                task_id=task.task_id,
+                instance_id=instance_id,
+                payload_json=handoff.model_dump_json(),
+            )
+        )
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="task.execution.timeout",
+            message="Task execution timed out",
+            payload={
+                "task_id": task.task_id,
+                "instance_id": instance_id,
+                "role_id": role_id,
+                "timeout_seconds": timeout_seconds,
+                "on_timeout": timeout_action.value,
+                "task_status": task_status.value,
+                "instance_status": instance_status.value,
+                "runtime_status": runtime_status.value,
+                "runtime_phase": runtime_phase.value,
+            },
+        )
+        if paused_timeout:
+            raise RecoverableRunPauseError(
+                RecoverableRunPausePayload(
+                    run_id=task.trace_id,
+                    trace_id=task.trace_id,
+                    task_id=task.task_id,
+                    session_id=task.session_id,
+                    instance_id=instance_id,
+                    role_id=role_id,
+                    error_code="task_timeout",
+                    error_message=error_message,
+                    retries_used=0,
+                    total_attempts=1,
+                    runtime_phase=runtime_phase,
+                    assistant_message=assistant_message,
+                )
+            )
+        return TaskExecutionResult(
+            output=assistant_message,
+            completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+            error_code="task_timeout",
+            error_message=error_message,
+        )
+
+    async def _complete_timeout_after_worker_cancel_async(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        timeout_seconds: float,
+        worker: asyncio.Task[TaskExecutionResult],
+        timeout_cancellation: asyncio.Event,
+    ) -> TaskExecutionResult:
+        timeout_cancellation.set()
+        _ = await _cancel_and_wait(
+            worker,
+            suppress_exceptions=True,
+            task_name="task_worker",
+            timeout_seconds=TIMEOUT_WORKER_CANCEL_GRACE_SECONDS,
+            context={
+                "task_id": task.task_id,
+                "instance_id": instance_id,
+                "role_id": role_id,
+            },
+        )
+        return await self._complete_task_timeout_async(
+            task=task,
+            instance_id=instance_id,
+            role_id=role_id,
+            timeout_seconds=timeout_seconds,
+        )
 
     def _tool_harness(self) -> TaskToolHarness:
         return TaskToolHarness.model_construct(
@@ -1172,3 +1545,165 @@ class TaskExecutionService(BaseModel):
             task=task,
             user_prompt_override=user_prompt_override,
         )
+
+
+async def _cancel_and_wait(
+    task: asyncio.Task[TaskResultT],
+    *,
+    suppress_exceptions: bool = False,
+    task_name: str = "task",
+    timeout_seconds: float | None = None,
+    context: Mapping[str, JsonValue] | None = None,
+) -> TaskResultT | None:
+    task.cancel()
+    if timeout_seconds is not None:
+        completed, _ = await asyncio.wait((task,), timeout=timeout_seconds)
+        if task not in completed:
+            task.add_done_callback(
+                lambda completed_task: _consume_cancelled_background_result(
+                    completed_task,
+                    task_name=task_name,
+                    context=context,
+                )
+            )
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="task.execution.background_cancel_timeout",
+                message="Background task did not stop before cancel wait timeout",
+                payload={
+                    "task_name": task_name,
+                    "timeout_seconds": timeout_seconds,
+                    **dict(context or {}),
+                },
+            )
+            return None
+        try:
+            return task.result()
+        except asyncio.CancelledError:
+            return None
+        except Exception as exc:
+            if not suppress_exceptions:
+                raise
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="task.execution.background_cancel_failed",
+                message="Background task raised while being cancelled",
+                payload={
+                    "task_name": task_name,
+                    "error": str(exc),
+                    **dict(context or {}),
+                },
+            )
+            return None
+    try:
+        return await task
+    except asyncio.CancelledError:
+        return None
+    except Exception as exc:
+        if not suppress_exceptions:
+            raise
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="task.execution.background_cancel_failed",
+            message="Background task raised while being cancelled",
+            payload={
+                "task_name": task_name,
+                "error": str(exc),
+                **dict(context or {}),
+            },
+        )
+        return None
+
+
+def _raise_if_timeout_cancellation_requested(
+    timeout_cancellation: asyncio.Event,
+    *,
+    task: TaskEnvelope,
+    instance_id: str,
+    role_id: str,
+) -> None:
+    if not timeout_cancellation.is_set():
+        return
+    log_event(
+        LOGGER,
+        logging.DEBUG,
+        event="task.execution.timeout_cancelled",
+        message="Task worker result ignored after lifecycle timeout",
+        payload={
+            "task_id": task.task_id,
+            "instance_id": instance_id,
+            "role_id": role_id,
+        },
+    )
+    raise asyncio.CancelledError
+
+
+def _consume_cancelled_background_result(
+    task: asyncio.Task[TaskResultT],
+    *,
+    task_name: str,
+    context: Mapping[str, JsonValue] | None,
+) -> None:
+    try:
+        _ = task.result()
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="task.execution.background_cancel_failed",
+            message="Background task raised after cancel wait timeout",
+            payload={
+                "task_name": task_name,
+                "error": str(exc),
+                **dict(context or {}),
+            },
+        )
+
+
+def _timeout_task_status(action: TaskTimeoutAction) -> TaskStatus:
+    if action == TaskTimeoutAction.FAIL:
+        return TaskStatus.TIMEOUT
+    return TaskStatus.STOPPED
+
+
+def _timeout_instance_status(action: TaskTimeoutAction) -> InstanceStatus:
+    if action == TaskTimeoutAction.FAIL:
+        return InstanceStatus.FAILED
+    return InstanceStatus.IDLE
+
+
+def _timeout_runtime_status(action: TaskTimeoutAction) -> RunRuntimeStatus:
+    if action == TaskTimeoutAction.FAIL:
+        return RunRuntimeStatus.RUNNING
+    return RunRuntimeStatus.PAUSED
+
+
+def _timeout_runtime_phase(action: TaskTimeoutAction) -> RunRuntimePhase:
+    if action == TaskTimeoutAction.HUMAN_GATE:
+        return RunRuntimePhase.AWAITING_MANUAL_ACTION
+    if action == TaskTimeoutAction.RETRY:
+        return RunRuntimePhase.AWAITING_RECOVERY
+    return RunRuntimePhase.IDLE
+
+
+def _timeout_handoff(*, task: TaskEnvelope, timeout_seconds: float) -> TaskHandoff:
+    if task.handoff is not None:
+        reason = task.handoff.reason or f"timeout after {timeout_seconds:g}s"
+        return task.handoff.model_copy(
+            update={
+                "reason": reason,
+                "updated_at": datetime.now(tz=timezone.utc),
+            }
+        )
+    return TaskHandoff(
+        incomplete=(task.objective,),
+        next_steps=(
+            "Review the task conversation and tool history before retrying or splitting the task.",
+        ),
+        reason=f"timeout after {timeout_seconds:g}s",
+    )

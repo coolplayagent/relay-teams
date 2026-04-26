@@ -26,7 +26,12 @@ from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.tasks.enums import TaskStatus
-from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.agents.tasks.models import (
+    TaskEnvelope,
+    TaskLifecyclePolicy,
+    TaskSpec,
+    VerificationPlan,
+)
 
 
 class _FakeTaskExecutionService:
@@ -255,6 +260,62 @@ async def test_create_tasks_creates_unassigned_task_contracts(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_create_tasks_persists_spec_verification_and_lifecycle(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_spec.db"
+    )
+
+    payload = await service.create_tasks(
+        run_id="run-1",
+        tasks=[
+            TaskDraft(
+                objective="Implement the endpoint",
+                spec=TaskSpec(
+                    summary="Endpoint contract",
+                    acceptance_criteria=("returns 201",),
+                    evidence_expectations=("pytest",),
+                    verification_commands=("pytest tests/unit_tests/agents/tasks",),
+                ),
+                lifecycle=TaskLifecyclePolicy(
+                    timeout_seconds=60,
+                    heartbeat_interval_seconds=5,
+                ),
+            )
+        ],
+    )
+
+    created_task = cast(
+        dict[str, JsonValue], cast(list[JsonValue], payload["tasks"])[0]
+    )
+    task_id = str(created_task["task_id"])
+    record = task_repo.get(task_id)
+    spec_payload = cast(dict[str, JsonValue], created_task["spec"])
+    verification_payload = cast(dict[str, JsonValue], created_task["verification"])
+    lifecycle_payload = cast(dict[str, JsonValue], created_task["lifecycle"])
+
+    assert record.envelope.spec is not None
+    assert record.envelope.spec.acceptance_criteria == ("returns 201",)
+    assert record.envelope.verification.acceptance_criteria == ("returns 201",)
+    assert record.envelope.verification.command_checks[0].command == (
+        "pytest",
+        "tests/unit_tests/agents/tasks",
+    )
+    assert spec_payload["summary"] == "Endpoint contract"
+    assert verification_payload["acceptance_criteria"] == ["returns 201"]
+    assert verification_payload["command_checks"] == [
+        {
+            "command": ["pytest", "tests/unit_tests/agents/tasks"],
+            "cwd": None,
+            "timeout_seconds": 120.0,
+        }
+    ]
+    assert verification_payload["evidence_expectations"] == ["pytest"]
+    assert lifecycle_payload["timeout_seconds"] == 60
+
+
+@pytest.mark.asyncio
 async def test_create_tasks_emits_task_created_hooks_with_created_task_identity(
     tmp_path: Path,
 ) -> None:
@@ -336,6 +397,58 @@ def test_update_task_allows_created_only(tmp_path: Path) -> None:
             task_id=created.envelope.task_id,
             update=TaskUpdate(title="Should fail"),
         )
+
+
+def test_update_task_recomputes_verification_when_spec_changes(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_update_spec.db"
+    )
+    created = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title="Initial title",
+            objective="Initial objective",
+            verification=VerificationPlan(
+                checklist=("non_empty_response",),
+                acceptance_criteria=("old acceptance",),
+            ),
+            spec=TaskSpec(acceptance_criteria=("old acceptance",)),
+        )
+    )
+
+    updated = service.update_task(
+        run_id="run-1",
+        task_id=created.envelope.task_id,
+        update=TaskUpdate(
+            spec=TaskSpec(
+                summary="Updated contract",
+                acceptance_criteria=("new acceptance",),
+                evidence_expectations=("pytest output",),
+                verification_commands=("pytest tests/unit_tests/agents/tasks",),
+            ),
+        ),
+    )
+    updated_record = task_repo.get(created.envelope.task_id)
+    updated_task = cast(dict[str, JsonValue], updated["task"])
+    verification_payload = cast(dict[str, JsonValue], updated_task["verification"])
+
+    assert updated_record.envelope.spec is not None
+    assert updated_record.envelope.spec.summary == "Updated contract"
+    assert updated_record.envelope.verification.acceptance_criteria == (
+        "new acceptance",
+    )
+    assert updated_record.envelope.verification.command_checks[0].command == (
+        "pytest",
+        "tests/unit_tests/agents/tasks",
+    )
+    assert verification_payload["acceptance_criteria"] == ["new acceptance"]
+    assert verification_payload["evidence_expectations"] == ["pytest output"]
 
 
 @pytest.mark.asyncio

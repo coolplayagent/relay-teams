@@ -17,8 +17,17 @@ from relay_teams.agents.orchestration.task_execution_service import (
     truncate_task_memory_result,
 )
 from relay_teams.agents.tasks.events import EventType
-from relay_teams.agents.tasks.enums import TaskStatus
-from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.agents.tasks.enums import (
+    TaskSpecStrictness,
+    TaskStatus,
+    TaskTimeoutAction,
+)
+from relay_teams.agents.tasks.models import (
+    TaskEnvelope,
+    TaskLifecyclePolicy,
+    TaskSpec,
+    VerificationPlan,
+)
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.roles.role_models import RoleDefinition
@@ -650,6 +659,48 @@ def test_prompt_tool_and_state_compatibility_helpers(
         )
         == "Override objective"
     )
+
+
+def test_resolve_turn_objective_appends_task_contract_sections() -> None:
+    task = _task_envelope(task_id="task-contract").model_copy(
+        update={
+            "spec": TaskSpec(
+                summary="Ship task contracts",
+                requirements=("persist spec",),
+                constraints=("use typed models",),
+                acceptance_criteria=("contract prompt visible",),
+                out_of_scope=("frontend redesign",),
+                verification_commands=("pytest tests/unit_tests/agents/tasks",),
+                evidence_expectations=("coverage output",),
+                strictness=TaskSpecStrictness.HIGH,
+            ),
+            "lifecycle": TaskLifecyclePolicy(
+                timeout_seconds=90,
+                heartbeat_interval_seconds=15,
+                on_timeout=TaskTimeoutAction.HUMAN_GATE,
+            ),
+        }
+    )
+
+    objective = TaskExecutionService._resolve_turn_objective(
+        task=task,
+        user_prompt_override=None,
+    )
+
+    assert objective.startswith("write the result\n\n## Task Spec")
+    assert "- Summary: Ship task contracts" in objective
+    assert "  - persist spec" in objective
+    assert "  - use typed models" in objective
+    assert "  - contract prompt visible" in objective
+    assert "  - frontend redesign" in objective
+    assert "  - pytest tests/unit_tests/agents/tasks" in objective
+    assert "  - coverage output" in objective
+    assert "- Strictness: high" in objective
+    assert "## Task Lifecycle" in objective
+    assert "- Timeout Seconds: 90" in objective
+    assert "- Heartbeat Interval Seconds: 15" in objective
+    assert "- On Timeout: human_gate" in objective
+    assert "- Handoff Required:" in objective
 
 
 def test_completion_guard_wrappers_default_to_no_issue() -> None:

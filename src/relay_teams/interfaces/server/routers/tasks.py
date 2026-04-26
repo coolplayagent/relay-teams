@@ -14,7 +14,13 @@ from relay_teams.interfaces.server.deps import get_task_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.validation import RequiredIdentifierStr
 
-from relay_teams.agents.tasks.models import TaskRecord
+from relay_teams.agents.tasks.models import (
+    TaskHandoff,
+    TaskLifecyclePolicy,
+    TaskRecord,
+    TaskSpec,
+    VerificationPlan,
+)
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 
@@ -30,6 +36,10 @@ class UpdateTaskRequest(BaseModel):
 
     objective: str | None = None
     title: str | None = None
+    spec: TaskSpec | None = None
+    verification: VerificationPlan | None = None
+    lifecycle: TaskLifecyclePolicy | None = None
+    handoff: TaskHandoff | None = None
 
 
 @router.get("", response_model=list[TaskRecord])
@@ -98,6 +108,10 @@ async def update_task_by_id(
             update=TaskUpdate(
                 objective=req.objective,
                 title=req.title,
+                spec=req.spec,
+                verification=req.verification,
+                lifecycle=req.lifecycle,
+                handoff=req.handoff,
             ),
         )
     except (KeyError, ValueError) as exc:

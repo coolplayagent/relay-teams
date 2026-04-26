@@ -6,7 +6,13 @@ from typing import Dict, List, Optional, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from relay_teams.agents.tasks.models import TaskEnvelope
+from relay_teams.agents.tasks.models import (
+    TaskEnvelope,
+    TaskHandoff,
+    TaskLifecyclePolicy,
+    TaskSpec,
+    VerificationPlan,
+)
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
 
 
@@ -15,6 +21,9 @@ class TaskDraft(BaseModel):
 
     objective: str = Field(min_length=1)
     title: Optional[str] = None
+    spec: TaskSpec | None = None
+    verification: VerificationPlan | None = None
+    lifecycle: TaskLifecyclePolicy = Field(default_factory=TaskLifecyclePolicy)
 
 
 class TaskUpdate(BaseModel):
@@ -22,10 +31,21 @@ class TaskUpdate(BaseModel):
 
     objective: Optional[str] = None
     title: Optional[str] = None
+    spec: TaskSpec | None = None
+    verification: VerificationPlan | None = None
+    lifecycle: TaskLifecyclePolicy | None = None
+    handoff: TaskHandoff | None = None
 
     @model_validator(mode="after")
     def validate_non_empty_patch(self) -> TaskUpdate:
-        if self.objective is None and self.title is None:
+        if (
+            self.objective is None
+            and self.title is None
+            and self.spec is None
+            and self.verification is None
+            and self.lifecycle is None
+            and self.handoff is None
+        ):
             raise ValueError("update must include at least one field")
         return self
 
