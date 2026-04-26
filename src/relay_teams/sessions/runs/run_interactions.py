@@ -503,7 +503,10 @@ class RunInteractionService:
                     feedback=feedback,
                 )
             except KeyError:
-                pass
+                LOGGER.debug(  # pragma: no cover
+                    "Tool approval was already absent from in-memory tracking",
+                    extra={"run_id": run_id, "tool_call_id": tool_call_id},
+                )
         if self._is_running_run(run_id) or runtime is None:
             return
 
@@ -998,7 +1001,10 @@ class RunInteractionService:
                     expected_status=UserQuestionRequestStatus.REQUESTED,
                 )
             except UserQuestionStatusConflictError:
-                pass
+                LOGGER.debug(  # pragma: no cover
+                    "User question was already resolved concurrently",
+                    extra={"run_id": run_id, "question_id": record.question_id},
+                )
             if resolved_record is not None:
                 await self._event_publisher.safe_publish_run_event_async(
                     RunEvent(
