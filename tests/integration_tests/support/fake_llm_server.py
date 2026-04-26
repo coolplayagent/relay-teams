@@ -285,6 +285,8 @@ def plan_fake_response(payload: object) -> dict[str, object]:
         return _plan_hook_subagent_lifecycle_response(payload, messages)
     if _hook_shell_env_mode(messages):
         return _plan_hook_shell_env_response(payload, messages)
+    if _background_task_lifecycle_mode(messages):
+        return _plan_background_task_lifecycle_response(payload, messages)
     if _hook_deferred_followup_mode(messages):
         return _plan_hook_deferred_followup_response(payload, messages)
     if _rate_limit_retry_mode(messages):
@@ -795,6 +797,66 @@ def _plan_hook_shell_env_response(
             },
         }
     return {"kind": "text", "content": "[fake-llm] hook shell env completed"}
+
+
+def _background_task_lifecycle_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[background-task-lifecycle]")
+
+
+def _plan_background_task_lifecycle_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    available_tools = _extract_available_tools(payload)
+    required_tools = {"shell", "list_background_tasks"}
+    missing_tools = sorted(required_tools.difference(available_tools))
+    if missing_tools:
+        return {
+            "kind": "text",
+            "content": (
+                "[fake-llm] background task lifecycle tools are not available: "
+                + ", ".join(missing_tools)
+            ),
+        }
+    if not _extract_tool_call_ids(
+        messages,
+        prefix="call-background-task-lifecycle-start",
+    ):
+        return {
+            "kind": "tool_call",
+            "tool_name": "shell",
+            "tool_call_id": "call-background-task-lifecycle-start",
+            "arguments": {
+                "command": _build_background_task_lifecycle_command(),
+                "background": True,
+                "yield_time_ms": 500,
+                "timeout_ms": 60000,
+            },
+        }
+    if not _extract_tool_call_ids(
+        messages,
+        prefix="call-background-task-lifecycle-list",
+    ):
+        return {
+            "kind": "tool_call",
+            "tool_name": "list_background_tasks",
+            "tool_call_id": "call-background-task-lifecycle-list",
+            "arguments": {},
+        }
+    return {
+        "kind": "text",
+        "content": "[fake-llm] background task lifecycle ready",
+    }
+
+
+def _build_background_task_lifecycle_command() -> str:
+    code = (
+        "import time; "
+        "print('background-lifecycle-ready', flush=True); "
+        "time.sleep(30); "
+        "print('background-lifecycle-finished', flush=True)"
+    )
+    return f'"{sys.executable}" -c {json.dumps(code)}'
 
 
 def _hook_deferred_followup_mode(messages: list[object]) -> bool:
