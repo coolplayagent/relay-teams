@@ -86,7 +86,8 @@ LOGGER = get_logger(__name__)
 class _AsyncToolResultReminderService(Protocol):
     async def observe_tool_result_async(
         self, observation: ToolResultObservation
-    ) -> object: ...
+    ) -> object:
+        pass
 
 
 @runtime_checkable
@@ -99,9 +100,11 @@ class _AsyncRunRuntimeRepository(Protocol):
         root_task_id: str | None = None,
         status: RunRuntimeStatus = RunRuntimeStatus.QUEUED,
         phase: RunRuntimePhase = RunRuntimePhase.IDLE,
-    ) -> object: ...
+    ) -> object:
+        pass
 
-    async def update_async(self, run_id: str, **changes: object) -> object: ...
+    async def update_async(self, run_id: str, **changes: object) -> object:
+        pass
 
 
 # noinspection PyUnusedLocal,PyTypeHints
@@ -2034,7 +2037,8 @@ def _evaluate_tool_approval_policy(
 class _RequiresApprovalPolicy(Protocol):
     timeout_seconds: float
 
-    def requires_approval(self, tool_name: str) -> bool: ...
+    def requires_approval(self, tool_name: str) -> bool:
+        raise NotImplementedError
 
 
 # noinspection PyTypeHints

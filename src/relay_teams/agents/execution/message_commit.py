@@ -32,12 +32,14 @@ class CommitMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         messages: list[ModelRequest | ModelResponse],
-    ) -> None: ...
+    ) -> None:
+        pass
 
     def get_history_for_conversation(
         self,
         conversation_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
 
     async def append_async(
         self,
@@ -50,12 +52,14 @@ class CommitMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         messages: list[ModelRequest | ModelResponse],
-    ) -> None: ...
+    ) -> None:
+        pass
 
     async def get_history_for_conversation_async(
         self,
         conversation_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
 
 
 @runtime_checkable
@@ -71,12 +75,14 @@ class AsyncCommitMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         messages: list[ModelRequest | ModelResponse],
-    ) -> None: ...
+    ) -> None:
+        pass
 
     async def get_history_for_conversation_async(
         self,
         conversation_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
 
 
 class NormalizeCommittableMessages(Protocol):
@@ -85,7 +91,8 @@ class NormalizeCommittableMessages(Protocol):
         *,
         request: LLMRequest,
         messages: Sequence[ModelRequest | ModelResponse],
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
 
 
 class MessageCommitService:

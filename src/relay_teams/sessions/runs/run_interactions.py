@@ -48,6 +48,13 @@ from relay_teams.tools.workspace_tools.shell_approval_repo import (
 )
 from relay_teams.tools.workspace_tools.shell_policy import ShellRuntimeFamily
 
+type ShellApprovalGrantSpec = tuple[
+    str,
+    ShellRuntimeFamily,
+    ShellApprovalScope,
+    str,
+]
+
 
 def approval_action_is_approved(action: str) -> bool:
     return action in {"approve", "approve_once", "approve_exact", "approve_prefix"}
@@ -103,6 +110,39 @@ def extract_shell_grant_metadata(
     except ValueError:
         return None
     return workspace_key, resolved_runtime_family, normalized_command, prefix_candidates
+
+
+def shell_approval_grant_specs(
+    *,
+    ticket: ApprovalTicketRecord | None,
+    action: str,
+) -> tuple[ShellApprovalGrantSpec, ...]:
+    if ticket is None or ticket.status != ApprovalTicketStatus.REQUESTED:
+        return ()
+    resolved = extract_shell_grant_metadata(ticket)
+    if resolved is None:
+        return ()
+    workspace_key, runtime_family, normalized_command, prefix_candidates = resolved
+    if action == "approve_exact" and normalized_command:
+        return (
+            (
+                workspace_key,
+                runtime_family,
+                ShellApprovalScope.EXACT,
+                normalized_command,
+            ),
+        )
+    if action == "approve_prefix":
+        return tuple(
+            (
+                workspace_key,
+                runtime_family,
+                ShellApprovalScope.PREFIX,
+                candidate,
+            )
+            for candidate in prefix_candidates
+        )
+    return ()
 
 
 def validate_user_question_answers(
@@ -444,7 +484,10 @@ class RunInteractionService:
                     )
                 ) from exc
         if approval_action_requires_shell_grant(action):
-            self.persist_shell_approval_grants(ticket=ticket, action=action)
+            await self.persist_shell_approval_grants_async(
+                ticket=ticket,
+                action=action,
+            )
         if approval is not None:
             try:
                 self._tool_approval_manager.resolve_approval(
@@ -503,29 +546,38 @@ class RunInteractionService:
         action: str,
     ) -> None:
         shell_approval_repo = self._get_shell_approval_repo()
-        if ticket is None or shell_approval_repo is None:
+        if shell_approval_repo is None:
             return
-        if ticket.status != ApprovalTicketStatus.REQUESTED:
-            return
-        resolved = extract_shell_grant_metadata(ticket)
-        if resolved is None:
-            return
-        workspace_key, runtime_family, normalized_command, prefix_candidates = resolved
-        if action == "approve_exact" and normalized_command:
+        for workspace_key, runtime_family, scope, value in shell_approval_grant_specs(
+            ticket=ticket,
+            action=action,
+        ):
             shell_approval_repo.grant(
                 workspace_key=workspace_key,
                 runtime_family=runtime_family,
-                scope=ShellApprovalScope.EXACT,
-                value=normalized_command,
+                scope=scope,
+                value=value,
             )
-        if action == "approve_prefix":
-            for candidate in prefix_candidates:
-                shell_approval_repo.grant(
-                    workspace_key=workspace_key,
-                    runtime_family=runtime_family,
-                    scope=ShellApprovalScope.PREFIX,
-                    value=candidate,
-                )
+
+    async def persist_shell_approval_grants_async(
+        self,
+        *,
+        ticket: ApprovalTicketRecord | None,
+        action: str,
+    ) -> None:
+        shell_approval_repo = self._get_shell_approval_repo()
+        if shell_approval_repo is None:
+            return
+        for workspace_key, runtime_family, scope, value in shell_approval_grant_specs(
+            ticket=ticket,
+            action=action,
+        ):
+            await shell_approval_repo.grant_async(
+                workspace_key=workspace_key,
+                runtime_family=runtime_family,
+                scope=scope,
+                value=value,
+            )
 
     def list_open_tool_approvals(self, run_id: str) -> list[dict[str, str]]:
         approval_ticket_repo = self._get_approval_ticket_repo()

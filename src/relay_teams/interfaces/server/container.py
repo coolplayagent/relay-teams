@@ -242,7 +242,8 @@ LOGGER = get_logger(__name__)
 
 
 class AsyncCloseableRepository(Protocol):
-    async def close_async(self) -> None: ...
+    async def close_async(self) -> None:
+        pass
 
 
 class ServerContainer:

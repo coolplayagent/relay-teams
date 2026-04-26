@@ -1931,6 +1931,53 @@ def test_resolve_tool_approval_persists_shell_exact_grant(tmp_path: Path) -> Non
     )
 
 
+@pytest.mark.asyncio
+async def test_resolve_tool_approval_async_persists_shell_exact_grant(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_shell_approval_async.db"
+    manager = _build_manager(db_path)
+    RunRuntimeRepository(db_path).ensure(
+        run_id="run-existing",
+        session_id="session-1",
+        root_task_id="task-root-1",
+    )
+    workspace_key = str((tmp_path / "workspace").resolve())
+    await ApprovalTicketRepository(db_path).upsert_requested_async(
+        tool_call_id="call-shell-async-1",
+        run_id="run-existing",
+        session_id="session-1",
+        task_id="task-root-1",
+        instance_id="inst-1",
+        role_id="Coordinator",
+        tool_name="shell",
+        args_preview='{"command":"git status"}',
+        metadata={
+            "workspace_key": workspace_key,
+            "runtime_family": "git-bash",
+            "normalized_command": "git status",
+            "prefix_candidates": ["git status"],
+        },
+    )
+
+    await manager.resolve_tool_approval_async(
+        run_id="run-existing",
+        tool_call_id="call-shell-async-1",
+        action="approve_exact",
+    )
+
+    shell_repo = ShellApprovalRepository(db_path)
+    assert (
+        await shell_repo.get_async(
+            workspace_key=workspace_key,
+            runtime_family=ShellRuntimeFamily.GIT_BASH,
+            scope=ShellApprovalScope.EXACT,
+            value="git status",
+        )
+        is not None
+    )
+
+
 def test_resolve_tool_approval_does_not_persist_shell_grant_from_resolved_ticket(
     tmp_path: Path,
 ) -> None:

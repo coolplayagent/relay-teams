@@ -11,12 +11,14 @@ from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 
 @runtime_checkable
 class AsyncRunEventPublisher(Protocol):
-    async def publish_async(self, event: RunEvent) -> None: ...
+    async def publish_async(self, event: RunEvent) -> None:
+        pass
 
 
 @runtime_checkable
 class SyncRunEventPublisher(Protocol):
-    def publish(self, event: RunEvent) -> None: ...
+    def publish(self, event: RunEvent) -> None:
+        pass
 
 
 async def publish_run_event_async(
@@ -93,9 +95,9 @@ class RunEventHub:
         await self._acquire_publish_lock_async()
         task = asyncio.create_task(self._publish_async_with_lock(event))
         try:
-            await asyncio.shield(task)
+            _ = await asyncio.shield(task)
         except asyncio.CancelledError:
-            await task
+            _ = await task
             raise
 
     async def _publish_async_with_lock(self, event: RunEvent) -> None:
