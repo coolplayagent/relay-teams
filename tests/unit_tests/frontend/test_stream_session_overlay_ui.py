@@ -6,6 +6,370 @@ from pathlib import Path
 import subprocess
 
 
+def _write_stream_overlay_test_modules(temp_dir: Path, source: str) -> None:
+    (temp_dir / "stream.js").write_text(
+        source.replace("../../core/state.js", "./mockState.mjs")
+        .replace("./helpers.js", "./mockHelpers.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs"),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        """
+export function getRunPrimaryRoleId(runId) {
+    return runId === "run-primary" ? "main-role" : "";
+}
+
+export function isPrimaryRoleId() {
+    return false;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockHelpers.mjs").write_text(
+        """
+export function applyToolReturn() {}
+export function appendStructuredContentPart() {}
+export function appendThinkingText() { return {}; }
+export function buildPendingToolBlock() { return { querySelector() { return null; } }; }
+export function findToolBlock() { return null; }
+export function findToolBlockInContainer() { return null; }
+export function indexPendingToolBlock() {}
+export function renderMessageBlock() {
+    return {
+        wrapper: {
+            dataset: {},
+            querySelector() { return null; },
+            closest() { return null; },
+        },
+        contentEl: {
+            appendChild() {},
+            querySelector() { return null; },
+            querySelectorAll() { return []; },
+        },
+    };
+}
+export function resolvePendingToolBlock() { return null; }
+export function scrollBottom() {}
+export function setToolStatus() {}
+export function setToolValidationFailureState() {}
+export function syncStreamingCursor() {}
+export function updateThinkingText() {}
+export function updateMessageText() {}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+export function formatMessage(_key, values = {}) {
+    return JSON.stringify(values);
+}
+
+export function t(key) {
+    return key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+
+def test_stream_overlay_keeps_unpersisted_cache_after_terminal_events(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "stream_overlay_terminal"
+    temp_dir.mkdir()
+    _write_stream_overlay_test_modules(temp_dir, source)
+
+    runner = """
+import {
+  applyStreamOverlayEvent,
+  getRunStreamOverlaySnapshot,
+} from "./stream.js";
+
+applyStreamOverlayEvent(
+  "text_delta",
+  { text: "still not persisted" },
+  {
+    runId: "run-primary",
+    instanceId: "primary",
+    roleId: "main-role",
+    label: "Main Agent",
+  },
+);
+applyStreamOverlayEvent(
+  "model_step_finished",
+  {},
+  {
+    runId: "run-primary",
+    instanceId: "primary",
+    roleId: "main-role",
+    label: "Main Agent",
+  },
+);
+applyStreamOverlayEvent(
+  "run_completed",
+  {},
+  {
+    runId: "run-primary",
+    instanceId: "primary",
+    roleId: "main-role",
+    label: "Main Agent",
+  },
+);
+
+console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-primary")));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["coordinator"]["parts"] == [
+        {"kind": "text", "content": "still not persisted"}
+    ]
+    assert payload["coordinator"]["textStreaming"] is False
+
+
+def test_stream_overlay_replayed_event_ids_do_not_duplicate_parts(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "stream_overlay_replayed_event_ids"
+    temp_dir.mkdir()
+    _write_stream_overlay_test_modules(temp_dir, source)
+
+    runner = """
+import {
+  applyStreamOverlayEvent,
+  getRunStreamOverlaySnapshot,
+} from "./stream.js";
+
+const options = {
+  runId: "run-primary",
+  instanceId: "primary",
+  roleId: "main-role",
+  label: "Main Agent",
+};
+const events = [
+  ["thinking_started", { part_index: 0 }, "evt-1"],
+  ["thinking_delta", { part_index: 0, text: "plan" }, "evt-2"],
+  ["thinking_finished", { part_index: 0 }, "evt-3"],
+  [
+    "tool_call",
+    {
+      tool_name: "shell",
+      tool_call_id: "call-1",
+      args: { command: "date" },
+    },
+    "evt-4",
+  ],
+  [
+    "tool_result",
+    {
+      tool_name: "shell",
+      tool_call_id: "call-1",
+      result: { ok: true, output: "done" },
+    },
+    "evt-5",
+  ],
+];
+
+events.forEach(([type, payload, eventId]) => {
+  applyStreamOverlayEvent(type, payload, { ...options, eventId });
+});
+events.forEach(([type, payload, eventId]) => {
+  applyStreamOverlayEvent(type, payload, { ...options, eventId });
+});
+
+console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-primary").coordinator));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    overlay = json.loads(result.stdout)
+    assert [part["kind"] for part in overlay["parts"]] == ["thinking", "tool"]
+    assert overlay["parts"][0]["content"] == "plan"
+    assert overlay["parts"][1]["tool_call_id"] == "call-1"
+    assert overlay["parts"][1]["status"] == "completed"
+
+
+def test_stream_overlay_merges_out_of_order_parallel_tool_events(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "stream_overlay_parallel_tools"
+    temp_dir.mkdir()
+    _write_stream_overlay_test_modules(temp_dir, source)
+
+    runner = """
+import {
+  applyStreamOverlayEvent,
+  getRunStreamOverlaySnapshot,
+} from "./stream.js";
+
+applyStreamOverlayEvent(
+  "tool_result",
+  {
+    tool_name: "shell",
+    tool_call_id: "call-b",
+    result: { ok: true, output: "b done" },
+  },
+  {
+    runId: "run-primary",
+    instanceId: "primary",
+    roleId: "main-role",
+    label: "Main Agent",
+  },
+);
+applyStreamOverlayEvent(
+  "tool_call",
+  {
+    tool_name: "shell",
+    tool_call_id: "call-a",
+    args: { command: "echo a" },
+  },
+  {
+    runId: "run-primary",
+    instanceId: "primary",
+    roleId: "main-role",
+    label: "Main Agent",
+  },
+);
+applyStreamOverlayEvent(
+  "tool_call",
+  {
+    tool_name: "shell",
+    tool_call_id: "call-b",
+    args: { command: "echo b" },
+  },
+  {
+    runId: "run-primary",
+    instanceId: "primary",
+    roleId: "main-role",
+    label: "Main Agent",
+  },
+);
+
+console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-primary").coordinator.parts));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    parts = json.loads(result.stdout)
+    assert [part["tool_call_id"] for part in parts] == ["call-b", "call-a"]
+    assert parts[0]["status"] == "completed"
+    assert parts[0]["args"] == {"command": "echo b"}
+    assert parts[1]["status"] == "pending"
+
+
+def test_stream_overlay_normalizes_string_tool_args_and_keeps_stream_key(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "stream_overlay_string_args"
+    temp_dir.mkdir()
+    _write_stream_overlay_test_modules(temp_dir, source)
+
+    runner = """
+import {
+  applyStreamOverlayEvent,
+  getRunStreamOverlaySnapshot,
+} from "./stream.js";
+
+applyStreamOverlayEvent(
+  "tool_call",
+  {
+    tool_name: "websearch",
+    tool_call_id: "call-json",
+    args: '{"query":"Anthropic funding 2026"}',
+  },
+  {
+    runId: "run-primary",
+    instanceId: "primary",
+    roleId: "main-role",
+    label: "Main Agent",
+  },
+);
+applyStreamOverlayEvent(
+  "tool_call",
+  {
+    tool_name: "batch",
+    tool_call_id: "call-array",
+    args: '["one","two"]',
+  },
+  {
+    runId: "run-primary",
+    instanceId: "primary",
+    roleId: "main-role",
+    label: "Main Agent",
+  },
+);
+applyStreamOverlayEvent(
+  "tool_call",
+  {
+    tool_name: "raw",
+    tool_call_id: "call-raw",
+    args: "not json",
+  },
+  {
+    runId: "run-primary",
+    instanceId: "primary",
+    roleId: "main-role",
+    label: "Main Agent",
+  },
+);
+
+console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-primary").coordinator));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    overlay = json.loads(result.stdout)
+    assert overlay["streamKey"] == "primary"
+    assert overlay["parts"][0]["args"] == {"query": "Anthropic funding 2026"}
+    assert overlay["parts"][1]["args"] == {"__items": ["one", "two"]}
+    assert overlay["parts"][2]["args"] == {"__raw": "not json"}
+
+
 def test_stream_overlay_uses_run_primary_role_for_primary_key(tmp_path: Path) -> None:
     source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
         encoding="utf-8"
@@ -1170,7 +1534,7 @@ console.log(JSON.stringify({
     ]
 
 
-def test_finalize_stream_clears_overlay_without_live_stream_state(
+def test_finalize_stream_preserves_unpersisted_overlay_without_live_state(
     tmp_path: Path,
 ) -> None:
     source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
@@ -1283,13 +1647,24 @@ console.log(JSON.stringify({ before, after }));
         "inst-sub-1": {
             "instanceId": "inst-sub-1",
             "roleId": "Crafter",
+            "streamKey": "inst-sub-1",
             "label": "Crafter",
             "parts": [{"kind": "text", "content": "stale overlay"}],
             "textStreaming": True,
             "idleCursor": False,
         }
     }
-    assert payload["after"] == {"coordinator": None, "byInstance": {}}
+    assert payload["after"]["byInstance"] == {
+        "inst-sub-1": {
+            "instanceId": "inst-sub-1",
+            "roleId": "Crafter",
+            "streamKey": "inst-sub-1",
+            "label": "Crafter",
+            "parts": [{"kind": "text", "content": "stale overlay"}],
+            "textStreaming": False,
+            "idleCursor": False,
+        }
+    }
 
 
 def test_finalize_stream_turns_off_streaming_cursor_for_live_subagent_text(
@@ -1694,6 +2069,7 @@ console.log(JSON.stringify({
     assert payload["overlay"] == {
         "instanceId": "inst-1",
         "roleId": "Writer",
+        "streamKey": "inst-1",
         "label": "Writer",
         "parts": [
             {
@@ -1827,6 +2203,7 @@ console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-2")));
             "inst-2": {
                 "instanceId": "inst-2",
                 "roleId": "Researcher",
+                "streamKey": "inst-2",
                 "label": "Researcher",
                 "parts": [
                     {
@@ -1958,6 +2335,7 @@ console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-3")));
             "inst-3": {
                 "instanceId": "inst-3",
                 "roleId": "Writer",
+                "streamKey": "inst-3",
                 "label": "Writer",
                 "parts": [],
                 "textStreaming": False,

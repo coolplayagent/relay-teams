@@ -102,6 +102,14 @@ def test_live_streaming_tool_overlay_skips_processed_group_summary() -> None:
     )
     assert "const filteredOverlayEntry = filterPersistedOverlayParts(" in history_script
     assert (
+        "function normalizeCanonicalHistoryStreamKey(options = {}) {" in history_script
+    )
+    assert "options.canonicalStreamKey" in history_script
+    assert (
+        "function resolveOverlayStreamKeys(streamOverlayEntry, runId, options = {}) {"
+        in history_script
+    )
+    assert (
         "function shouldCollapseIntermediateMessages(streamOverlayEntry, options = {}) {"
         in history_script
     )
@@ -110,8 +118,13 @@ def test_live_streaming_tool_overlay_skips_processed_group_summary() -> None:
         in history_script
     )
     assert "const isLatestRound = options.isLatestRound === true;" in history_script
-    assert "if (isLatestRound && runStatus !== 'completed') {" in history_script
+    assert "const isTerminalStatus = isTerminalRunStatus(runStatus);" in history_script
+    assert "const hasFinalOutput = options.hasFinalOutput === true;" in history_script
+    assert "if (isLatestRound && !isTerminalStatus) {" in history_script
+    assert "if (!hasFinalOutput) {" in history_script
+    assert "hasFinalVisibleMessage" not in history_script
     assert "if (streamOverlayEntry.textStreaming === true) {" in history_script
+    assert "function isTerminalRunStatus(runStatus)" in history_script
     assert "status === 'pending'" in history_script
     assert "status === 'running'" in history_script
     assert "approvalStatus === 'requested'" in history_script
@@ -138,6 +151,12 @@ def test_pending_tool_block_name_fallback_does_not_merge_parallel_calls(
     temp_dir = tmp_path / "tool_block_parallel_fallback"
     temp_dir.mkdir()
     (temp_dir / "toolBlocks.js").write_text(source, encoding="utf-8")
+    (temp_dir / "toolArgs.js").write_text(
+        Path(
+            "frontend/dist/js/components/messageRenderer/helpers/toolArgs.js"
+        ).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
 
     runner = """
 import {
@@ -200,18 +219,30 @@ def test_tool_blocks_extract_effective_inputs_instead_of_footer_status() -> None
         / "helpers"
         / "toolBlocks.js"
     ).read_text(encoding="utf-8")
+    tool_args_script = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "messageRenderer"
+        / "helpers"
+        / "toolArgs.js"
+    ).read_text(encoding="utf-8")
     tools_css = (
         repo_root / "frontend" / "dist" / "css" / "components" / "tools.css"
     ).read_text(encoding="utf-8")
 
+    assert "import { normalizeToolArgs } from './toolArgs.js';" in tool_blocks_script
     assert "fields: ['command', 'cmd']" in tool_blocks_script
     assert (
         "fields: ['path', 'file_path', 'filepath', 'target_path']" in tool_blocks_script
     )
     assert "fields: ['query', 'q', 'search_query']" in tool_blocks_script
     assert "fields: ['url', 'uri']" in tool_blocks_script
-    assert "function normalizeToolArgs(args) {" in tool_blocks_script
-    assert "return { __raw: raw };" in tool_blocks_script
+    assert "export function normalizeToolArgs(args) {" in tool_args_script
+    assert "return { __items: args };" in tool_args_script
+    assert "return { __raw: raw };" in tool_args_script
     assert (
         'return `<div class="tool-input-value"><code>${escapeHtml(info.detailText)}</code></div>`;'
         in tool_blocks_script

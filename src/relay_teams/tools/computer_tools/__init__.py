@@ -1,24 +1,20 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from pydantic_ai import Agent
 
-if TYPE_CHECKING:
-    from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.runtime.context import ToolDeps
 
-_REGISTERED_AGENT_IDS: set[int] = set()
+_COMPUTER_REGISTERED_ATTR = "_agent_teams_computer_tools_registered"
 
 
 def register_computer_tools(agent: Agent[ToolDeps, str]) -> None:
-    agent_id = id(agent)
-    if agent_id in _REGISTERED_AGENT_IDS:
+    if bool(getattr(agent, _COMPUTER_REGISTERED_ATTR, False)):
         return
-    _REGISTERED_AGENT_IDS.add(agent_id)
     from relay_teams.tools.computer_tools.runtime import register as register_impl
 
     register_impl(agent)
+    setattr(agent, _COMPUTER_REGISTERED_ATTR, True)
 
 
 TOOLS = {

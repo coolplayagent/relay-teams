@@ -308,7 +308,21 @@ def test_read_tool_return_renders_media_ref_preview(tmp_path: Path) -> None:
         tool_blocks_source_path.read_text(encoding="utf-8")
         .replace("./approval.js", "./mockApproval.mjs")
         .replace("./content.js", "./content.mjs")
+        .replace("./toolArgs.js", "./toolArgs.mjs")
         .replace("../../../utils/i18n.js", "./mockI18n.mjs"),
+        encoding="utf-8",
+    )
+    (tmp_path / "toolArgs.mjs").write_text(
+        (
+            repo_root
+            / "frontend"
+            / "dist"
+            / "js"
+            / "components"
+            / "messageRenderer"
+            / "helpers"
+            / "toolArgs.js"
+        ).read_text(encoding="utf-8"),
         encoding="utf-8",
     )
 

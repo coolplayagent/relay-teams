@@ -36,7 +36,7 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
         : null;
     const pendingToolBlocks = {};
     const historyMessages = Array.isArray(messages) ? messages.slice() : [];
-    const persistedOverlayIndex = buildPersistedOverlayIndex(historyMessages, runId);
+    const persistedOverlayIndex = buildPersistedOverlayIndex(historyMessages, runId, options);
     const timelineHydration = new Map();
     let lastRenderedMessage = null;
 
@@ -73,7 +73,12 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
         const label = role === 'user' && String(options.userRoleLabel || '').trim()
             ? String(options.userRoleLabel || '').trim()
             : labelFromRole(role, msgItem.role_id, msgItem.instance_id);
-        const streamKey = resolveHistoryStreamKey(runId, msgItem.instance_id, msgItem.role_id);
+        const streamKey = resolveHistoryStreamKey(
+            runId,
+            msgItem.instance_id,
+            msgItem.role_id,
+            options,
+        );
         collectHydratedParts(timelineHydration, {
             runId,
             instanceId: String(msgItem.instance_id || '').trim(),
@@ -130,6 +135,7 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
         streamOverlayEntry,
         persistedOverlayIndex,
         runId,
+        options,
     );
 
     if (
@@ -147,6 +153,12 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
             lastRenderedMessage,
             runId,
             options,
+        );
+    } else if (streamOverlayEntry && runId) {
+        globalThis.__relayTeamsClearStreamOverlayEntry?.(
+            runId,
+            streamOverlayEntry.streamKey || streamOverlayEntry.instanceId,
+            streamOverlayEntry.roleId,
         );
     }
 
@@ -241,16 +253,30 @@ function normalizeHistoryPart(part, index) {
             part_index: index,
         };
     }
+    if (kind === 'media_ref') {
+        return {
+            kind: 'media_ref',
+            modality: String(part.modality || '').trim(),
+            mime_type: String(part.mime_type || part.mimeType || '').trim(),
+            url: String(part.url || '').trim(),
+            name: String(part.name || '').trim(),
+            part_index: index,
+        };
+    }
     if (kind === 'file') {
         return null;
     }
     return null;
 }
 
-function buildPersistedOverlayIndex(historyMessages, runId) {
+function buildPersistedOverlayIndex(historyMessages, runId, options = {}) {
     const index = {
         toolCallIds: new Set(),
+        thinkingAllByStream: new Map(),
+        thinkingAllByStreamPart: new Map(),
         thinkingTailByStream: new Map(),
+        thinkingTailByStreamPart: new Map(),
+        mediaTailByStream: new Map(),
         textTailByStream: new Map(),
     };
     (Array.isArray(historyMessages) ? historyMessages : []).forEach(msgItem => {
@@ -261,8 +287,11 @@ function buildPersistedOverlayIndex(historyMessages, runId) {
             runId,
             msgItem?.instance_id,
             msgItem?.role_id,
+            options,
         );
         const messageThinkingText = new Set();
+        const messageThinkingTextByPart = new Map();
+        const messageMedia = new Set();
         const messageText = new Set();
         parts.forEach(part => {
             if (!part || typeof part !== 'object') return;
@@ -273,39 +302,113 @@ function buildPersistedOverlayIndex(historyMessages, runId) {
             }
             if (kind === 'thinking') {
                 const text = normalizeOverlayTextSignature(part.content);
-                if (text) messageThinkingText.add(text);
+                if (text) {
+                    messageThinkingText.add(text);
+                    const partIndex = normalizeOverlayPartIndex(part.part_index ?? part.part_id ?? '');
+                    if (partIndex) {
+                        let textByPart = messageThinkingTextByPart.get(partIndex);
+                        if (!textByPart) {
+                            textByPart = new Set();
+                            messageThinkingTextByPart.set(partIndex, textByPart);
+                        }
+                        textByPart.add(text);
+                    }
+                }
             }
             if (kind === 'text') {
                 const text = normalizeOverlayTextSignature(part.content || part.text);
                 if (text) messageText.add(text);
             }
+            if (kind === 'media_ref') {
+                const mediaSignature = normalizeOverlayMediaSignature(part);
+                if (mediaSignature) messageMedia.add(mediaSignature);
+            }
         });
         if (messageThinkingText.size > 0) {
-            index.thinkingTailByStream.set(streamKey, messageThinkingText);
+            mergeOverlayTextSet(index.thinkingAllByStream, streamKey, messageThinkingText);
+            replaceOverlayTextSet(index.thinkingTailByStream, streamKey, messageThinkingText);
+            clearOverlayTextByStreamPart(index.thinkingTailByStreamPart, streamKey);
+            messageThinkingTextByPart.forEach((textSet, partIndex) => {
+                mergeOverlayTextSet(
+                    index.thinkingAllByStreamPart,
+                    overlayStreamPartKey(streamKey, partIndex),
+                    textSet,
+                );
+                replaceOverlayTextSet(
+                    index.thinkingTailByStreamPart,
+                    overlayStreamPartKey(streamKey, partIndex),
+                    textSet,
+                );
+            });
         }
         if (messageText.size > 0) {
             index.textTailByStream.set(streamKey, messageText);
         }
+        index.mediaTailByStream.set(streamKey, new Set(messageMedia));
     });
     return index;
 }
 
-function filterPersistedOverlayParts(streamOverlayEntry, persistedIndex, runId) {
+function replaceOverlayTextSet(target, key, values) {
+    if (!target || !key || !values || values.size === 0) {
+        return;
+    }
+    target.set(key, new Set(values));
+}
+
+function mergeOverlayTextSet(target, key, values) {
+    if (!target || !key || !values || values.size === 0) {
+        return;
+    }
+    let existing = target.get(key);
+    if (!existing) {
+        existing = new Set();
+        target.set(key, existing);
+    }
+    values.forEach(value => {
+        if (value) {
+            existing.add(value);
+        }
+    });
+}
+
+function clearOverlayTextByStreamPart(target, streamKey) {
+    if (!target || !streamKey) {
+        return;
+    }
+    const prefix = `${String(streamKey).trim()}::`;
+    Array.from(target.keys()).forEach(key => {
+        if (String(key || '').startsWith(prefix)) {
+            target.delete(key);
+        }
+    });
+}
+
+function filterPersistedOverlayParts(streamOverlayEntry, persistedIndex, runId, options = {}) {
     if (!streamOverlayEntry || typeof streamOverlayEntry !== 'object') {
         return null;
     }
     const parts = Array.isArray(streamOverlayEntry.parts)
         ? streamOverlayEntry.parts
         : [];
-    const streamKey = String(streamOverlayEntry.streamKey || '').trim()
-        || resolveHistoryStreamKey(
-            runId,
-            streamOverlayEntry.instanceId,
-            streamOverlayEntry.roleId,
-        );
+    const streamKeys = resolveOverlayStreamKeys(streamOverlayEntry, runId, options);
     const emptySet = new Set();
-    const persistedThinkingText = persistedIndex.thinkingTailByStream.get(streamKey) || emptySet;
-    const persistedText = persistedIndex.textTailByStream.get(streamKey) || emptySet;
+    const persistedThinkingTailText = collectPersistedOverlayText(
+        persistedIndex.thinkingTailByStream,
+        streamKeys,
+    ) || emptySet;
+    const persistedThinkingAllText = collectPersistedOverlayText(
+        persistedIndex.thinkingAllByStream,
+        streamKeys,
+    ) || emptySet;
+    const persistedText = collectPersistedOverlayText(
+        persistedIndex.textTailByStream,
+        streamKeys,
+    ) || emptySet;
+    const persistedMedia = collectPersistedOverlayText(
+        persistedIndex.mediaTailByStream,
+        streamKeys,
+    ) || emptySet;
     const filteredParts = parts.filter(part => {
         if (!part || typeof part !== 'object') return false;
         if (part.kind === 'tool') {
@@ -314,28 +417,168 @@ function filterPersistedOverlayParts(streamOverlayEntry, persistedIndex, runId) 
         }
         if (part.kind === 'thinking') {
             const text = normalizeOverlayTextSignature(part.content);
-            return !(text && persistedThinkingText.has(text));
+            if (!text) {
+                return part.finished !== true;
+            }
+            return !isPersistedThinkingOverlayPart(
+                text,
+                part,
+                persistedThinkingTailText,
+                persistedIndex.thinkingTailByStreamPart,
+                persistedThinkingAllText,
+                persistedIndex.thinkingAllByStreamPart,
+                streamKeys,
+            );
         }
         if (part.kind === 'text') {
             const text = normalizeOverlayTextSignature(part.content || part.text);
+            if (!text) {
+                return false;
+            }
             return !(text && persistedText.has(text));
+        }
+        if (part.kind === 'media_ref') {
+            const mediaSignature = normalizeOverlayMediaSignature(part);
+            return !(mediaSignature && persistedMedia.has(mediaSignature));
         }
         return true;
     });
+    const allowIdleCursor = streamOverlayEntry.idleCursor === true
+        && (
+            filteredParts.length > 0
+            || parts.length === 0
+        )
+        && !isTerminalRunStatus(options.runStatus);
     const hasRenderableState = filteredParts.length > 0
-        || streamOverlayEntry.textStreaming === true
-        || streamOverlayEntry.idleCursor === true;
+        || allowIdleCursor
+        || streamOverlayEntry.textStreaming === true;
     if (!hasRenderableState) {
         return null;
     }
     return {
         ...streamOverlayEntry,
         parts: filteredParts,
+        idleCursor: allowIdleCursor,
     };
 }
 
 function normalizeOverlayTextSignature(value) {
     return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeOverlayMediaSignature(part) {
+    if (!part || typeof part !== 'object') {
+        return '';
+    }
+    const url = String(part.url || '').trim();
+    const mimeType = String(part.mime_type || part.mimeType || '').trim();
+    const modality = String(part.modality || '').trim();
+    const name = String(part.name || part.filename || '').trim();
+    if (!url) {
+        return '';
+    }
+    return JSON.stringify({ url, mimeType, modality, name });
+}
+
+function normalizeOverlayPartIndex(value) {
+    const safeValue = String(value ?? '').trim();
+    return safeValue;
+}
+
+function overlayStreamPartKey(streamKey, partIndex) {
+    return `${String(streamKey || '').trim()}::${normalizeOverlayPartIndex(partIndex)}`;
+}
+
+function isPersistedThinkingOverlayPart(
+    text,
+    part,
+    persistedThinkingTailText,
+    persistedThinkingTailTextByPart,
+    persistedThinkingAllText,
+    persistedThinkingAllTextByPart,
+    streamKeys,
+) {
+    if (!text) {
+        return false;
+    }
+    const persistedThinkingText = part.finished === true
+        ? persistedThinkingAllText
+        : persistedThinkingTailText;
+    const persistedThinkingTextByPart = part.finished === true
+        ? persistedThinkingAllTextByPart
+        : persistedThinkingTailTextByPart;
+    if (persistedThinkingText?.has?.(text)) {
+        return true;
+    }
+    const partIndex = normalizeOverlayPartIndex(part.part_index ?? part.part_id ?? '');
+    if (partIndex) {
+        const persistedForPart = collectPersistedOverlayTextByPart(
+            persistedThinkingTextByPart,
+            streamKeys,
+            partIndex,
+        );
+        if (
+            part.finished === true
+                ? hasPersistedThinkingOverlap(text, persistedForPart)
+                : hasExactPersistedOverlayText(text, persistedForPart)
+        ) {
+            return true;
+        }
+    }
+    if (part.finished === true && hasPersistedThinkingOverlap(text, persistedThinkingText)) {
+        return true;
+    }
+    return false;
+}
+
+function collectPersistedOverlayTextByPart(textByStreamPart, streamKeys, partIndex) {
+    const values = new Set();
+    (Array.isArray(streamKeys) ? streamKeys : []).forEach(streamKey => {
+        const textSet = textByStreamPart.get(overlayStreamPartKey(streamKey, partIndex));
+        if (!textSet) return;
+        textSet.forEach(value => {
+            if (value) values.add(value);
+        });
+    });
+    return values.size > 0 ? values : null;
+}
+
+function hasExactPersistedOverlayText(text, persistedText) {
+    const candidate = normalizeOverlayTextSignature(text);
+    if (!candidate || !persistedText) {
+        return false;
+    }
+    for (const persistedValue of persistedText) {
+        if (normalizeOverlayTextSignature(persistedValue) === candidate) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function hasPersistedThinkingOverlap(text, persistedText) {
+    const candidate = normalizeOverlayTextSignature(text);
+    if (!candidate || !persistedText) {
+        return false;
+    }
+    for (const persistedValue of persistedText) {
+        const persisted = normalizeOverlayTextSignature(persistedValue);
+        if (!persisted) continue;
+        if (persisted === candidate) {
+            return true;
+        }
+        const shortestLength = Math.min(persisted.length, candidate.length);
+        if (
+            shortestLength >= 24
+            && (
+                persisted.includes(candidate)
+                || candidate.includes(persisted)
+            )
+        ) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function applyPendingApprovalsToHistory(container, approvals, runId) {
@@ -400,6 +643,7 @@ function renderStreamOverlayEntry(
         overlayRunId,
         streamOverlayEntry?.instanceId,
         streamOverlayEntry?.roleId,
+        options,
     );
     const hasLiveTextTail = streamOverlayEntry.textStreaming === true;
     const hasIdleCursor = streamOverlayEntry.idleCursor === true;
@@ -477,7 +721,10 @@ function resolveOverlayContentTarget(
     options = {},
 ) {
     const safeLabel = String(label || '').trim();
-    if (options.separateOverlayMessage === true) {
+    if (
+        options.separateOverlayMessage === true
+        || shouldRenderOverlayInSeparateMessage(streamOverlayEntry, options)
+    ) {
         return renderMessageBlock(container, 'assistant', label, [], {
             runId: runId || lastRenderedMessage?.runId || '',
             roleId: String(streamOverlayEntry?.roleId || '').trim(),
@@ -486,6 +733,7 @@ function resolveOverlayContentTarget(
                 runId || lastRenderedMessage?.runId || '',
                 streamOverlayEntry?.instanceId,
                 streamOverlayEntry?.roleId,
+                options,
             ),
         }).contentEl;
     }
@@ -494,6 +742,7 @@ function resolveOverlayContentTarget(
         runId || lastRenderedMessage?.runId || '',
         streamOverlayEntry?.instanceId,
         streamOverlayEntry?.roleId,
+        options,
     );
     if (
         wrapperMatchesOverlay(lastRenderedMessage?.wrapper, {
@@ -524,6 +773,25 @@ function resolveOverlayContentTarget(
         instanceId: String(streamOverlayEntry?.instanceId || '').trim(),
         streamKey: overlayStreamKey,
     }).contentEl;
+}
+
+function shouldRenderOverlayInSeparateMessage(streamOverlayEntry, options = {}) {
+    if (options.bindStreamOverlay === true) {
+        return false;
+    }
+    const parts = Array.isArray(streamOverlayEntry?.parts)
+        ? streamOverlayEntry.parts
+        : [];
+    return parts.some(part => {
+        if (!part || typeof part !== 'object') {
+            return false;
+        }
+        return (
+            part.kind === 'thinking'
+            || part.kind === 'tool'
+            || part.kind === 'media_ref'
+        );
+    });
 }
 
 function findLastCompatibleMessageContent(container, label, options = {}) {
@@ -590,7 +858,46 @@ function applyOverlayToolState(toolBlock, part) {
     outputEl.textContent = '';
 }
 
-function resolveHistoryStreamKey(runId, instanceId, roleId) {
+function resolveOverlayStreamKeys(streamOverlayEntry, runId, options = {}) {
+    const keys = [];
+    const addKey = value => {
+        const key = String(value || '').trim();
+        if (key && !keys.includes(key)) {
+            keys.push(key);
+        }
+    };
+    addKey(streamOverlayEntry?.streamKey);
+    addKey(resolveHistoryStreamKey(
+        runId,
+        streamOverlayEntry?.instanceId,
+        streamOverlayEntry?.roleId,
+        options,
+    ));
+    addKey(resolveHistoryStreamKey(
+        runId,
+        streamOverlayEntry?.instanceId,
+        streamOverlayEntry?.roleId,
+    ));
+    return keys;
+}
+
+function collectPersistedOverlayText(textByStream, streamKeys) {
+    const values = new Set();
+    (Array.isArray(streamKeys) ? streamKeys : []).forEach(streamKey => {
+        const textSet = textByStream.get(streamKey);
+        if (!textSet) return;
+        textSet.forEach(value => {
+            if (value) values.add(value);
+        });
+    });
+    return values.size > 0 ? values : null;
+}
+
+function resolveHistoryStreamKey(runId, instanceId, roleId, options = {}) {
+    const canonicalStreamKey = normalizeCanonicalHistoryStreamKey(options);
+    if (canonicalStreamKey) {
+        return canonicalStreamKey;
+    }
     const safeRoleId = String(roleId || '').trim();
     const safeInstanceId = String(instanceId || '').trim();
     if (!safeRoleId || safeInstanceId === 'primary' || safeInstanceId === 'coordinator') {
@@ -602,8 +909,17 @@ function resolveHistoryStreamKey(runId, instanceId, roleId) {
     return safeInstanceId || `role:${safeRoleId}`;
 }
 
+function normalizeCanonicalHistoryStreamKey(options = {}) {
+    const streamKey = String(options.canonicalStreamKey || '').trim();
+    if (!streamKey) {
+        return '';
+    }
+    return streamKey === 'coordinator' ? 'primary' : streamKey;
+}
+
 function collapseIntermediateMessages(container) {
     if (!container) return;
+    if (container.querySelector(':scope > .tool-group')) return;
     const messages = Array.from(container.querySelectorAll(':scope > .message'));
     if (messages.length === 0) return;
 
@@ -698,20 +1014,25 @@ function collapseIntermediateMessages(container) {
 function shouldCollapseIntermediateMessages(streamOverlayEntry, options = {}) {
     const runStatus = String(options.runStatus || '').trim().toLowerCase();
     const isLatestRound = options.isLatestRound === true;
-    if (isLatestRound && runStatus !== 'completed') {
+    const isTerminalStatus = isTerminalRunStatus(runStatus);
+    const hasFinalOutput = options.hasFinalOutput === true;
+    if (isLatestRound && !isTerminalStatus) {
+        return false;
+    }
+    if (!hasFinalOutput) {
         return false;
     }
     if (!streamOverlayEntry || typeof streamOverlayEntry !== 'object') {
         return true;
     }
+    const parts = Array.isArray(streamOverlayEntry.parts) ? streamOverlayEntry.parts : [];
     if (streamOverlayEntry.textStreaming === true) {
         return false;
     }
-    if (streamOverlayEntry.idleCursor === true) {
+    if (streamOverlayEntry.idleCursor === true && parts.length > 0) {
         return false;
     }
-    const parts = Array.isArray(streamOverlayEntry.parts) ? streamOverlayEntry.parts : [];
-    return !parts.some(part => {
+    const hasActiveOverlayPart = parts.some(part => {
         if (!part || typeof part !== 'object') return false;
         if (part.kind === 'thinking') {
             return part.finished !== true;
@@ -729,7 +1050,19 @@ function shouldCollapseIntermediateMessages(streamOverlayEntry, options = {}) {
             || (part.result === undefined && part.validation === undefined)
         );
     });
+    return !hasActiveOverlayPart;
 }
+
+function isTerminalRunStatus(runStatus) {
+    return [
+        'completed',
+        'stopped',
+        'failed',
+        'cancelled',
+        'canceled',
+    ].includes(String(runStatus || '').trim().toLowerCase());
+}
+
 function isApprovedApprovalStatus(value) {
     const approvalStatus = String(value || '').trim().toLowerCase();
     return (

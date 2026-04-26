@@ -202,10 +202,19 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     )
     assert "const overlayCleanupTimers = new Map();" in renderer_stream_script
     assert (
-        "scheduleOverlayEntryCleanup(runId, streamKey, roleId, cleanupDelayMs);"
-        in renderer_stream_script
+        "export function clearRunRenderedStreamState(runId)" in renderer_stream_script
     )
-    assert "scheduleRunOverlayCleanup(runId, cleanupDelayMs);" in renderer_stream_script
+    assert (
+        "scheduleOverlayEntryCleanup(runId, streamKey, roleId, cleanupDelayMs);"
+        not in renderer_stream_script
+    )
+    assert (
+        "scheduleRunOverlayCleanup(runId, cleanupDelayMs);"
+        not in renderer_stream_script
+    )
+    assert "messageRenderer.clearRunStreamState(finishedRunId);" in stream_script
+    assert "overlaySeenEventIdsByRun.delete(safeRunId);" in renderer_stream_script
+    assert "clearTimelineRun(safeRunId);" in renderer_stream_script
     assert "st = createStreamState({" in renderer_stream_script
     assert "function findReusableStreamState({" in renderer_stream_script
     assert (

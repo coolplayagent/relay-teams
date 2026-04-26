@@ -7,6 +7,7 @@ import {
     timelinePartId,
     timelineStreamId,
 } from './keys.js';
+import { normalizeToolArgs } from '../messageRenderer/helpers/toolArgs.js';
 
 const streams = new Map();
 const seenEventsByRun = new Map();
@@ -155,6 +156,7 @@ function ensureStream(scope) {
             updatedAt: Date.now(),
             source: 'live',
             activeThinkingByPart: new Map(),
+            thinkingSequence: 0,
             textSequence: 0,
             mediaSequence: 0,
             toolSequence: 0,
@@ -162,6 +164,7 @@ function ensureStream(scope) {
         streams.set(streamId, stream);
     } else {
         stream.scope = { ...stream.scope, ...normalized };
+        if (typeof stream.thinkingSequence !== 'number') stream.thinkingSequence = 0;
         if (typeof stream.textSequence !== 'number') stream.textSequence = 0;
         if (typeof stream.mediaSequence !== 'number') stream.mediaSequence = 0;
         if (typeof stream.toolSequence !== 'number') stream.toolSequence = 0;
@@ -222,16 +225,36 @@ function appendOutputParts(stream, scope, outputParts, action) {
 function startThinkingPart(stream, scope, action) {
     finishTextTail(stream);
     const partIndex = String(action.partIndex ?? action.part_index ?? 0);
-    const id = timelinePartId(scope, { kind: 'thinking', partIndex });
-    const part = {
-        id,
+    const existingActiveId = stream.activeThinkingByPart.get(partIndex);
+    const existingActivePart = stream.parts.find(item => item.id === existingActiveId);
+    if (existingActivePart && existingActivePart.finished !== true) {
+        existingActivePart.streaming = true;
+        stream.textStreaming = false;
+        stream.idleCursor = false;
+        return;
+    }
+    const eventId = String(action.eventId || action.event_id || '').trim();
+    const uniquePartIndex = eventId ? '' : `thinking-${partIndex}-${stream.thinkingSequence++}`;
+    const id = timelinePartId(scope, {
         kind: 'thinking',
-        part_index: Number(partIndex),
-        content: '',
-        streaming: true,
-        finished: false,
-    };
-    stream.parts.push(part);
+        eventId,
+        partIndex: uniquePartIndex,
+    });
+    let part = stream.parts.find(item => item.id === id);
+    if (!part) {
+        part = {
+            id,
+            kind: 'thinking',
+            part_index: Number(partIndex),
+            content: '',
+            streaming: true,
+            finished: false,
+        };
+        stream.parts.push(part);
+    } else {
+        part.streaming = true;
+        part.finished = false;
+    }
     stream.activeThinkingByPart.set(partIndex, id);
     stream.textStreaming = false;
     stream.idleCursor = false;
@@ -300,14 +323,27 @@ function upsertToolPart(stream, scope, action, updates = {}) {
             tool_call_id: toolCallId,
             local_tool_key: localToolKey,
             tool_name: toolName,
-            args: normalizeObject(action.args || action.payload?.args),
+            args: normalizeToolArgs(readToolArgs(action)),
             status: 'pending',
         };
         stream.parts.push(part);
     }
     if (toolName && part.tool_name === 'unknown_tool') part.tool_name = toolName;
-    if (action.args || action.payload?.args) {
-        part.args = normalizeObject(action.args || action.payload?.args);
+    if (hasToolArgs(action)) {
+        part.args = normalizeToolArgs(readToolArgs(action));
+    }
+    if (
+        updates.status === 'pending'
+        && ['completed', 'error', 'validation_failed'].includes(
+            String(part.status || '').trim().toLowerCase(),
+        )
+    ) {
+        const safeUpdates = { ...updates };
+        delete safeUpdates.status;
+        Object.assign(part, safeUpdates);
+        stream.textStreaming = false;
+        stream.idleCursor = part.status === 'completed' || part.status === 'error';
+        return;
     }
     Object.assign(part, updates);
     stream.textStreaming = false;
@@ -337,19 +373,57 @@ function finishTextTail(stream) {
 }
 
 function normalizeHydratedParts(scope, parts) {
-    return (Array.isArray(parts) ? parts : []).map((part, index) => ({
-        id: part.id || timelinePartId(scope, {
-            kind: part.kind || part.part_kind || 'part',
-            partIndex: part.part_index ?? index,
-            toolCallId: part.tool_call_id,
-            messageId: part.message_id,
-        }),
-        ...part,
-    }));
+    return (Array.isArray(parts) ? parts : []).map((part, index) => {
+        const normalized = {
+            id: part.id || timelinePartId(scope, {
+                kind: part.kind || part.part_kind || 'part',
+                partIndex: part.part_index ?? index,
+                toolCallId: part.tool_call_id,
+                messageId: part.message_id,
+            }),
+            ...part,
+        };
+        if (isToolLikePart(normalized)) {
+            normalized.args = normalizeToolArgs(normalized.args);
+        }
+        return normalized;
+    });
 }
 
-function normalizeObject(value) {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+function isToolLikePart(part) {
+    if (!part || typeof part !== 'object') {
+        return false;
+    }
+    const kind = String(part.kind || part.part_kind || '').trim();
+    return kind === 'tool' || kind === 'tool-call' || !!part.tool_name;
+}
+
+function hasToolArgs(action) {
+    if (!action || typeof action !== 'object') {
+        return false;
+    }
+    if (Object.prototype.hasOwnProperty.call(action, 'args')) {
+        return true;
+    }
+    return !!(
+        action.payload
+        && typeof action.payload === 'object'
+        && Object.prototype.hasOwnProperty.call(action.payload, 'args')
+    );
+}
+
+function readToolArgs(action) {
+    if (Object.prototype.hasOwnProperty.call(action, 'args')) {
+        return action.args;
+    }
+    if (
+        action.payload
+        && typeof action.payload === 'object'
+        && Object.prototype.hasOwnProperty.call(action.payload, 'args')
+    ) {
+        return action.payload.args;
+    }
+    return {};
 }
 
 function isDuplicateEvent(action) {

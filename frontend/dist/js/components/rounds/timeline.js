@@ -1169,9 +1169,11 @@ function renderRoundSection(round, index) {
             runId: round.run_id,
             runStatus: round.run_status,
             runPhase: round.run_phase,
+            hasFinalOutput: round.has_final_output === true,
             isLatestRound,
             streamOverlayEntry: coordinatorOverlay,
             timelineView: 'main',
+            canonicalStreamKey: 'primary',
         });
     } else if (pendingCoordinatorApprovals.length > 0 || coordinatorOverlay) {
         renderHistoricalMessageList(section, [], {
@@ -1181,9 +1183,11 @@ function renderRoundSection(round, index) {
             runId: round.run_id,
             runStatus: round.run_status,
             runPhase: round.run_phase,
+            hasFinalOutput: round.has_final_output === true,
             isLatestRound,
             streamOverlayEntry: coordinatorOverlay,
             timelineView: 'main',
+            canonicalStreamKey: 'primary',
         });
     } else if (!round.has_user_messages) {
         const empty = document.createElement('div');

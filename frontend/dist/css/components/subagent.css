@@ -231,6 +231,12 @@
     display: flex;
     flex-direction: column;
     gap: 0.9rem;
+    width: min(1264px, 100%);
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    margin-left: auto;
+    margin-right: auto;
     padding: 0.9rem 0 1.25rem;
 }
 
@@ -287,6 +293,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    min-width: 0;
 }
 
 .projects-list .project-session-visibility-btn:hover {

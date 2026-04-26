@@ -99,9 +99,13 @@ jobs:
           --diff-file .tmp/diff-cover-copy-aware.diff
 
       - name: Install Playwright Chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
         run: uv run --extra dev python -m playwright install --with-deps chromium
 
       - name: Integration tests
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers
         run: uv run --extra dev pytest -q tests/integration_tests
 
       - name: Verify repository is unchanged after checks

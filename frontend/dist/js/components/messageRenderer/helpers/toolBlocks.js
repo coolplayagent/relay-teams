@@ -4,6 +4,7 @@
  */
 import { syncApprovalStateFromEnvelope } from './approval.js';
 import { appendStructuredContentPart, renderRichContent } from './content.js';
+import { normalizeToolArgs } from './toolArgs.js';
 import { t, formatMessage } from '../../../utils/i18n.js';
 
 const TOOL_SUMMARY_MAP = {
@@ -56,37 +57,6 @@ function classifyTool(toolName, args) {
         detailKind: 'json',
         args: normalizedArgs,
     };
-}
-
-function normalizeToolArgs(args) {
-    if (!args) return {};
-    if (typeof args === 'object') return args;
-    const raw = String(args || '').trim();
-    if (!raw) return {};
-    try {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-            return parsed;
-        }
-        return { __raw: String(parsed ?? '') };
-    } catch (_) {
-        // Fallback: try to extract a JSON object or array from the string
-        const objMatch = raw.match(/(\{[\s\S]*\})/);
-        if (objMatch) {
-            try {
-                const extracted = JSON.parse(objMatch[1]);
-                if (extracted && typeof extracted === 'object') return extracted;
-            } catch (_e) { /* ignore */ }
-        }
-        const arrMatch = raw.match(/(\[[\s\S]*\])/);
-        if (arrMatch) {
-            try {
-                const extracted = JSON.parse(arrMatch[1]);
-                if (Array.isArray(extracted)) return { __items: extracted };
-            } catch (_e) { /* ignore */ }
-        }
-        return { __raw: raw };
-    }
 }
 
 function pickToolFieldValue(args, fields = []) {

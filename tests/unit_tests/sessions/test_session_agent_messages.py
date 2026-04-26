@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
-from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.sessions.runs.event_stream import RunEventHub
@@ -69,6 +76,90 @@ def test_get_agent_messages_includes_role_id(tmp_path: Path) -> None:
     assert len(messages) == 1
     assert messages[0]["entry_type"] == "message"
     assert messages[0]["role_id"] == "time"
+
+
+def test_get_agent_messages_preserves_parallel_tool_calls_and_args(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_agent_messages_tool_parts.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="subagent_run_1",
+        trace_id="subagent_run_1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="researcher",
+        workspace_id="default",
+        status=InstanceStatus.COMPLETED,
+    )
+
+    message_repo = MessageRepository(db_path)
+    message_repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="subagent_run_1",
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="websearch",
+                        args={"query": "Anthropic funding 2026"},
+                        tool_call_id="call-search-1",
+                    ),
+                    ToolCallPart(
+                        tool_name="webfetch",
+                        args={"url": "https://www.anthropic.com/news"},
+                        tool_call_id="call-fetch-1",
+                    ),
+                ]
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="websearch",
+                        tool_call_id="call-search-1",
+                        content={"ok": True, "data": ["result"]},
+                    ),
+                    ToolReturnPart(
+                        tool_name="webfetch",
+                        tool_call_id="call-fetch-1",
+                        content={"ok": True, "data": "<html></html>"},
+                    ),
+                ]
+            ),
+        ],
+    )
+
+    timeline = service.get_agent_messages("session-1", "inst-1")
+
+    assert len(timeline) == 2
+    response_message = cast(dict[str, object], timeline[0]["message"])
+    result_message = cast(dict[str, object], timeline[1]["message"])
+    response_parts = cast(list[dict[str, object]], response_message["parts"])
+    result_parts = cast(list[dict[str, object]], result_message["parts"])
+    assert [part["part_kind"] for part in response_parts] == [
+        "tool-call",
+        "tool-call",
+    ]
+    assert [part["tool_call_id"] for part in response_parts] == [
+        "call-search-1",
+        "call-fetch-1",
+    ]
+    assert response_parts[0]["args"] == {"query": "Anthropic funding 2026"}
+    assert response_parts[1]["args"] == {"url": "https://www.anthropic.com/news"}
+    assert [part["part_kind"] for part in result_parts] == [
+        "tool-return",
+        "tool-return",
+    ]
+    assert [part["tool_call_id"] for part in result_parts] == [
+        "call-search-1",
+        "call-fetch-1",
+    ]
 
 
 def test_get_agent_messages_returns_hidden_history_and_compaction_marker(
