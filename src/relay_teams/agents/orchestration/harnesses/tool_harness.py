@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic_ai.toolsets.function import FunctionToolset
 
 from relay_teams.agents.execution.coordination_agent_builder import (
     build_coordination_agent,
@@ -70,27 +71,30 @@ class TaskToolHarness(BaseModel):
         )
         local_tools: list[RuntimeToolSnapshotEntry] = []
         skill_tools: list[RuntimeToolSnapshotEntry] = []
-        for tool in tool_agent._function_toolset.tools.values():
-            entry = self.tool_entry_from_definition(
-                source=cast(
-                    Literal["local", "skill", "mcp"],
-                    "skill" if tool.name in skill_tool_names else "local",
-                ),
-                name=tool.tool_def.name,
-                description=tool.tool_def.description or "",
-                kind=self.normalize_tool_kind(tool.tool_def.kind),
-                strict=tool.tool_def.strict,
-                sequential=tool.tool_def.sequential,
-                parameters_json_schema=(
-                    dict(tool.tool_def.parameters_json_schema)
-                    if isinstance(tool.tool_def.parameters_json_schema, dict)
-                    else {}
-                ),
-            )
-            if entry.source == "skill":
-                skill_tools.append(entry)
-            else:
-                local_tools.append(entry)
+        for toolset in tool_agent.toolsets:
+            if not isinstance(toolset, FunctionToolset):
+                continue
+            for tool in toolset.tools.values():
+                source: Literal["local", "skill"] = (
+                    "skill" if tool.name in skill_tool_names else "local"
+                )
+                entry = self.tool_entry_from_definition(
+                    source=source,
+                    name=tool.tool_def.name,
+                    description=tool.tool_def.description or "",
+                    kind=self.normalize_tool_kind(tool.tool_def.kind),
+                    strict=tool.tool_def.strict,
+                    sequential=tool.tool_def.sequential,
+                    parameters_json_schema=(
+                        dict(tool.tool_def.parameters_json_schema)
+                        if isinstance(tool.tool_def.parameters_json_schema, dict)
+                        else {}
+                    ),
+                )
+                if entry.source == "skill":
+                    skill_tools.append(entry)
+                else:
+                    local_tools.append(entry)
 
         mcp_tools: list[RuntimeToolSnapshotEntry] = []
         for server_name in self.mcp_registry.resolve_server_names(
@@ -124,8 +128,8 @@ class TaskToolHarness(BaseModel):
             mcp_tools=tuple(mcp_tools),
         )
 
+    @staticmethod
     def tool_entry_from_definition(
-        self,
         *,
         source: Literal["local", "skill", "mcp"],
         name: str,
@@ -147,13 +151,16 @@ class TaskToolHarness(BaseModel):
             parameters_json_schema=dict(parameters_json_schema),
         )
 
+    @staticmethod
     def normalize_tool_kind(
-        self,
         kind: str,
     ) -> Literal["function", "output", "external", "unapproved"]:
-        if kind in {"function", "output", "external", "unapproved"}:
-            return cast(
-                Literal["function", "output", "external", "unapproved"],
-                kind,
-            )
+        if kind == "function":
+            return "function"
+        if kind == "output":
+            return "output"
+        if kind == "external":
+            return "external"
+        if kind == "unapproved":
+            return "unapproved"
         return "function"

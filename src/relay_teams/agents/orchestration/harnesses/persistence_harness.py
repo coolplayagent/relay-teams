@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -263,7 +264,7 @@ class TaskPersistenceHarness(BaseModel):
             "conversation_id": conversation_id,
             "instance_id": instance_id,
             "lifecycle": lifecycle,
-            "result_excerpt": _truncate_task_memory_result(result),
+            "result_excerpt": truncate_task_memory_result(result),
             "completed_at": datetime.now(tz=timezone.utc).isoformat(),
         }
         try:
@@ -277,7 +278,7 @@ class TaskPersistenceHarness(BaseModel):
                     value_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
                 )
             )
-        except Exception:
+        except (AttributeError, RuntimeError, sqlite3.Error):
             LOGGER.warning(
                 "Failed to persist completed task memory",
                 extra={
@@ -310,7 +311,7 @@ class TaskPersistenceHarness(BaseModel):
             "conversation_id": conversation_id,
             "instance_id": instance_id,
             "lifecycle": lifecycle,
-            "result_excerpt": _truncate_task_memory_result(result),
+            "result_excerpt": truncate_task_memory_result(result),
             "completed_at": datetime.now(tz=timezone.utc).isoformat(),
         }
         try:
@@ -324,7 +325,7 @@ class TaskPersistenceHarness(BaseModel):
                     value_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
                 )
             )
-        except Exception:
+        except (AttributeError, RuntimeError, sqlite3.Error):
             LOGGER.warning(
                 "Failed to persist completed task memory",
                 extra={
@@ -666,8 +667,11 @@ class TaskPersistenceHarness(BaseModel):
         return False
 
 
-def _truncate_task_memory_result(result: str) -> str:
+def truncate_task_memory_result(result: str) -> str:
     normalized = " ".join(result.strip().split())
     if len(normalized) <= TASK_MEMORY_RESULT_EXCERPT_CHARS:
         return normalized
     return normalized[:TASK_MEMORY_RESULT_EXCERPT_CHARS].rstrip() + "..."
+
+
+_truncate_task_memory_result = truncate_task_memory_result

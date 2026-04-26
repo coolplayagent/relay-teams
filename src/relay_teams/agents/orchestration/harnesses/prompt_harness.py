@@ -197,27 +197,23 @@ class TaskPromptHarness(BaseModel):
             skill_instructions=skill_instructions,
         )
 
+    @staticmethod
     def compose_runtime_system_prompt(
-        self,
         *,
-        role: RoleDefinition,
         runtime_prompt_sections: RuntimePromptSections,
         skill_instructions: tuple[PromptSkillInstruction, ...],
     ) -> str:
-        del role
         return compose_runtime_system_prompt(
             runtime_prompt_sections,
             skill_instructions=skill_instructions,
         )
 
+    @staticmethod
     def compose_provider_system_prompt(
-        self,
         *,
-        role: RoleDefinition,
         runtime_prompt_sections: RuntimePromptSections,
         skill_instructions: tuple[PromptSkillInstruction, ...],
     ) -> str:
-        del role
         return compose_provider_system_prompt(
             runtime_prompt_sections,
             skill_instructions=skill_instructions,
@@ -479,8 +475,8 @@ class TaskPromptHarness(BaseModel):
             ),
         )
 
+    @staticmethod
     def to_prompt_skill_instructions(
-        self,
         entries: tuple[SkillInstructionEntry, ...],
     ) -> tuple[PromptSkillInstruction, ...]:
         return tuple(
@@ -488,26 +484,27 @@ class TaskPromptHarness(BaseModel):
             for entry in entries
         )
 
+    @staticmethod
     def merge_provider_prompt_content(
-        self,
         *,
         provider_content: ProviderUserPromptContent,
         user_prompt_text: str,
     ) -> ProviderUserPromptContent:
-        appendix = self.user_prompt_skill_appendix(user_prompt_text)
+        appendix = TaskPromptHarness.user_prompt_skill_appendix(user_prompt_text)
         if not appendix:
             return provider_content
         return merge_user_prompt_content(provider_content, appendix)
 
-    def user_prompt_skill_appendix(self, user_prompt_text: str) -> str:
+    @staticmethod
+    def user_prompt_skill_appendix(user_prompt_text: str) -> str:
         prompt = user_prompt_text.strip()
         heading = "## Skill Candidates"
         if heading not in prompt:
             return ""
         return prompt[prompt.index(heading) :].strip()
 
+    @staticmethod
     def resolve_turn_objective(
-        self,
         *,
         task: TaskEnvelope,
         user_prompt_override: str | None,

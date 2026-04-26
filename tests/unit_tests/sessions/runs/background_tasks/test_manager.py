@@ -478,6 +478,61 @@ async def test_background_task_manager_completes_and_publishes_events(
 
 
 @pytest.mark.asyncio
+async def test_background_task_manager_finalizes_runtime_when_listener_fails(
+    tmp_path: Path,
+) -> None:
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-listener.db")
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    record = repo.upsert(
+        BackgroundTaskRecord(
+            background_task_id="exec-1",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            command="printf ready",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.RUNNING,
+            log_path=str(tmp_path / "exec-1.log"),
+        )
+    )
+    runtime = manager_module._BackgroundTaskRuntime(
+        record=record,
+        transport=cast(
+            manager_module._BackgroundTaskTransport,
+            _FakeTransport(returncode=0),
+        ),
+        log_file_path=tmp_path / "exec-1.log",
+        queue=asyncio.Queue(),
+    )
+    manager._runtimes[record.background_task_id] = runtime
+
+    async def _failing_listener(record: BackgroundTaskRecord) -> None:
+        _ = record
+        raise RuntimeError("listener failed")
+
+    manager.set_completion_listener(_failing_listener)
+
+    try:
+        with pytest.raises(RuntimeError, match="listener failed"):
+            await manager._finalize_runtime(runtime, timed_out=False)
+        waited, completed = await manager.wait_for_run(
+            run_id="run-1",
+            background_task_id=record.background_task_id,
+        )
+    finally:
+        await manager.close()
+
+    assert completed is True
+    assert waited.status == BackgroundTaskStatus.COMPLETED
+    assert runtime.completed.is_set()
+    assert record.background_task_id not in manager._runtimes
+
+
+@pytest.mark.asyncio
 async def test_background_task_manager_writes_logs_via_dedicated_executor(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

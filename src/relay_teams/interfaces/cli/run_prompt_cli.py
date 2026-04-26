@@ -246,7 +246,7 @@ def _request_run_stop_after_interrupt(*, base_url: str, run_id: str) -> bool:
         )
     except KeyboardInterrupt:
         raise
-    except Exception:
+    except (RuntimeError, httpx.HTTPError):
         return False
 
 

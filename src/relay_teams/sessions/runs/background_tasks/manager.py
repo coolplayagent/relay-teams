@@ -1367,23 +1367,25 @@ class BackgroundTaskManager:
                     extra={"background_task_id": runtime.record.background_task_id},
                     exc_info=True,
                 )
-            await self._mark_runtime_changed(runtime)
-            self._publish_background_task_event(
-                event_type=(
-                    RunEventType.BACKGROUND_TASK_STOPPED
-                    if status == BackgroundTaskStatus.STOPPED
-                    else RunEventType.BACKGROUND_TASK_COMPLETED
-                ),
-                record=runtime.record,
-            )
-            self._emit_monitor_state_event(
-                record=runtime.record,
-                event_name=_background_task_state_event_name(status),
-            )
-            if self._completion_listener is not None:
-                await self._completion_listener(runtime.record)
-            self._runtimes.pop(runtime.record.background_task_id, None)
-            runtime.completed.set()
+            try:
+                await self._mark_runtime_changed(runtime)
+                self._publish_background_task_event(
+                    event_type=(
+                        RunEventType.BACKGROUND_TASK_STOPPED
+                        if status == BackgroundTaskStatus.STOPPED
+                        else RunEventType.BACKGROUND_TASK_COMPLETED
+                    ),
+                    record=runtime.record,
+                )
+                self._emit_monitor_state_event(
+                    record=runtime.record,
+                    event_name=_background_task_state_event_name(status),
+                )
+                if self._completion_listener is not None:
+                    await self._completion_listener(runtime.record)
+            finally:
+                self._runtimes.pop(runtime.record.background_task_id, None)
+                runtime.completed.set()
 
     async def _signal_runtime_stop(self, runtime: _BackgroundTaskRuntime) -> None:
         for _ in range(runtime.stream_count):

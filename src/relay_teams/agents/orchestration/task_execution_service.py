@@ -29,7 +29,7 @@ from relay_teams.agents.orchestration.harnesses import (
     TaskPersistenceHarness,
     TaskPromptHarness,
     TaskToolHarness,
-    _truncate_task_memory_result,
+    truncate_task_memory_result,
 )
 from relay_teams.agents.orchestration.harnesses.prompt_harness import (
     ProviderUserPromptContent,
@@ -79,7 +79,10 @@ __all__ = [
     "TASK_MEMORY_RESULT_EXCERPT_CHARS",
     "TaskExecutionService",
     "_truncate_task_memory_result",
+    "truncate_task_memory_result",
 ]
+
+_truncate_task_memory_result = truncate_task_memory_result
 
 
 class TaskExecutionService(BaseModel):
@@ -258,7 +261,6 @@ class TaskExecutionService(BaseModel):
             runtime_prompt_sections = prepared_runtime_snapshot.prompt_sections
             runtime_tools_json = prepared_runtime_snapshot.runtime_tools_json
             runtime_system_prompt = self._compose_runtime_system_prompt(
-                role=role_for_run,
                 runtime_prompt_sections=runtime_prompt_sections,
                 skill_instructions=prepared_runtime_snapshot.skill_instructions,
             )
@@ -268,7 +270,6 @@ class TaskExecutionService(BaseModel):
                 runtime_tools_json=runtime_tools_json,
             )
             provider_system_prompt = self._compose_provider_system_prompt(
-                role=role_for_run,
                 runtime_prompt_sections=runtime_prompt_sections,
                 skill_instructions=prepared_runtime_snapshot.skill_instructions,
             )
@@ -786,28 +787,24 @@ class TaskExecutionService(BaseModel):
             objective=objective,
         )
 
+    @staticmethod
     def _compose_runtime_system_prompt(
-        self,
         *,
-        role: RoleDefinition,
         runtime_prompt_sections: RuntimePromptSections,
         skill_instructions: tuple[PromptSkillInstruction, ...],
     ) -> str:
         return TaskPromptHarness.model_construct().compose_runtime_system_prompt(
-            role=role,
             runtime_prompt_sections=runtime_prompt_sections,
             skill_instructions=skill_instructions,
         )
 
+    @staticmethod
     def _compose_provider_system_prompt(
-        self,
         *,
-        role: RoleDefinition,
         runtime_prompt_sections: RuntimePromptSections,
         skill_instructions: tuple[PromptSkillInstruction, ...],
     ) -> str:
         return TaskPromptHarness.model_construct().compose_provider_system_prompt(
-            role=role,
             runtime_prompt_sections=runtime_prompt_sections,
             skill_instructions=skill_instructions,
         )
@@ -822,8 +819,8 @@ class TaskExecutionService(BaseModel):
             task=task,
         )
 
+    @staticmethod
     def _tool_entry_from_definition(
-        self,
         *,
         source: Literal["local", "skill", "mcp"],
         name: str,
@@ -845,8 +842,8 @@ class TaskExecutionService(BaseModel):
             server_name=server_name,
         )
 
+    @staticmethod
     def _normalize_tool_kind(
-        self,
         kind: str,
     ) -> Literal["function", "output", "external", "unapproved"]:
         return TaskToolHarness.model_construct().normalize_tool_kind(kind)
@@ -1145,14 +1142,14 @@ class TaskExecutionService(BaseModel):
             skill_names=skill_names,
         )
 
+    @staticmethod
     def _to_prompt_skill_instructions(
-        self,
         entries: tuple[SkillInstructionEntry, ...],
     ) -> tuple[PromptSkillInstruction, ...]:
         return TaskPromptHarness.model_construct().to_prompt_skill_instructions(entries)
 
+    @staticmethod
     def _merge_provider_prompt_content(
-        self,
         *,
         provider_content: ProviderUserPromptContent,
         user_prompt_text: str,
@@ -1162,13 +1159,14 @@ class TaskExecutionService(BaseModel):
             user_prompt_text=user_prompt_text,
         )
 
-    def _user_prompt_skill_appendix(self, user_prompt_text: str) -> str:
+    @staticmethod
+    def _user_prompt_skill_appendix(user_prompt_text: str) -> str:
         return TaskPromptHarness.model_construct().user_prompt_skill_appendix(
             user_prompt_text
         )
 
+    @staticmethod
     def _resolve_turn_objective(
-        self,
         *,
         task: TaskEnvelope,
         user_prompt_override: str | None,
