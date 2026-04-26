@@ -403,11 +403,15 @@ async def get_session_token_usage(
                 "role_id": agent.role_id,
                 "input_tokens": agent.input_tokens,
                 "cached_input_tokens": agent.cached_input_tokens,
+                "latest_input_tokens": agent.latest_input_tokens,
+                "max_input_tokens": agent.max_input_tokens,
                 "output_tokens": agent.output_tokens,
                 "reasoning_output_tokens": agent.reasoning_output_tokens,
                 "total_tokens": agent.total_tokens,
                 "requests": agent.requests,
                 "tool_calls": agent.tool_calls,
+                "context_window": agent.context_window,
+                "model_profile": agent.model_profile,
             }
             for role_id, agent in summary.by_role.items()
         },
@@ -437,11 +441,15 @@ async def get_run_token_usage(
                 "role_id": a.role_id,
                 "input_tokens": a.input_tokens,
                 "cached_input_tokens": a.cached_input_tokens,
+                "latest_input_tokens": a.latest_input_tokens,
+                "max_input_tokens": a.max_input_tokens,
                 "output_tokens": a.output_tokens,
                 "reasoning_output_tokens": a.reasoning_output_tokens,
                 "total_tokens": a.total_tokens,
                 "requests": a.requests,
                 "tool_calls": a.tool_calls,
+                "context_window": a.context_window,
+                "model_profile": a.model_profile,
             }
             for a in usage.by_agent
         ],
