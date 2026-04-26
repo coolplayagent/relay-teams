@@ -92,7 +92,8 @@ class PromptContentPersistenceService(Protocol):
             TextContentPart | MediaRefContentPart | InlineMediaContentPart,
             ...,
         ],
-    ) -> UserPromptContent: ...
+    ) -> UserPromptContent:
+        raise NotImplementedError
 
 
 @runtime_checkable
@@ -101,7 +102,8 @@ class PromptContentHydrationService(Protocol):
         self,
         *,
         content: UserPromptContent,
-    ) -> UserPromptContent: ...
+    ) -> UserPromptContent:
+        raise NotImplementedError
 
 
 @runtime_checkable
@@ -113,7 +115,8 @@ class PromptContentProviderService(Protocol):
             TextContentPart | MediaRefContentPart | InlineMediaContentPart,
             ...,
         ],
-    ) -> UserPromptContent: ...
+    ) -> UserPromptContent:
+        raise NotImplementedError
 
 
 # noinspection PyShadowingNames
@@ -121,18 +124,21 @@ class PromptHistoryMessageRepository(Protocol):
     def get_history_for_conversation(
         self,
         conversation_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
 
     def get_history_for_conversation_task(
         self,
         conversation_id: str,
         task_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
 
     def prune_conversation_history_to_safe_boundary(
         self,
         conversation_id: str,
-    ) -> None: ...
+    ) -> None:
+        pass
 
     def append(
         self,
@@ -145,7 +151,8 @@ class PromptHistoryMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         messages: list[ModelRequest | ModelResponse],
-    ) -> None: ...
+    ) -> None:
+        pass
 
     def append_system_prompt_if_missing(
         self,
@@ -158,7 +165,8 @@ class PromptHistoryMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         content: str,
-    ) -> None: ...
+    ) -> None:
+        pass
 
     def replace_pending_user_prompt(
         self,
@@ -171,23 +179,27 @@ class PromptHistoryMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         content: UserPromptContent,
-    ) -> bool: ...
+    ) -> bool:
+        raise NotImplementedError
 
     async def get_history_for_conversation_async(
         self,
         conversation_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
 
     async def get_history_for_conversation_task_async(
         self,
         conversation_id: str,
         task_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
 
     async def prune_conversation_history_to_safe_boundary_async(
         self,
         conversation_id: str,
-    ) -> None: ...
+    ) -> None:
+        pass
 
     async def append_async(
         self,
@@ -200,7 +212,8 @@ class PromptHistoryMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         messages: list[ModelRequest | ModelResponse],
-    ) -> None: ...
+    ) -> None:
+        pass
 
     async def append_system_prompt_if_missing_async(
         self,
@@ -213,7 +226,8 @@ class PromptHistoryMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         content: str,
-    ) -> None: ...
+    ) -> None:
+        pass
 
     async def replace_pending_user_prompt_async(
         self,
@@ -226,7 +240,8 @@ class PromptHistoryMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         content: UserPromptContent,
-    ) -> bool: ...
+    ) -> bool:
+        raise NotImplementedError
 
 
 # noinspection PyShadowingNames
@@ -235,18 +250,21 @@ class AsyncPromptHistoryMessageRepository(Protocol):
     async def get_history_for_conversation_async(
         self,
         conversation_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
 
     async def get_history_for_conversation_task_async(
         self,
         conversation_id: str,
         task_id: str,
-    ) -> list[ModelRequest | ModelResponse]: ...
+    ) -> list[ModelRequest | ModelResponse]:
+        raise NotImplementedError
 
     async def prune_conversation_history_to_safe_boundary_async(
         self,
         conversation_id: str,
-    ) -> None: ...
+    ) -> None:
+        pass
 
     async def append_async(
         self,
@@ -259,7 +277,8 @@ class AsyncPromptHistoryMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         messages: list[ModelRequest | ModelResponse],
-    ) -> None: ...
+    ) -> None:
+        pass
 
     async def append_system_prompt_if_missing_async(
         self,
@@ -272,7 +291,8 @@ class AsyncPromptHistoryMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         content: str,
-    ) -> None: ...
+    ) -> None:
+        pass
 
     async def replace_pending_user_prompt_async(
         self,
@@ -285,7 +305,8 @@ class AsyncPromptHistoryMessageRepository(Protocol):
         task_id: str,
         trace_id: str,
         content: UserPromptContent,
-    ) -> bool: ...
+    ) -> bool:
+        raise NotImplementedError
 
 
 @runtime_checkable
@@ -295,7 +316,8 @@ class AsyncRunIntentRepository(Protocol):
         run_id: str,
         *,
         fallback_session_id: str | None = None,
-    ) -> object: ...
+    ) -> object:
+        raise NotImplementedError
 
 
 @runtime_checkable
@@ -305,7 +327,8 @@ class PromptHookService(Protocol):
         *,
         event_input: UserPromptSubmitInput | PreCompactInput | PostCompactInput,
         run_event_hub: object,
-    ) -> HookDecisionBundle: ...
+    ) -> HookDecisionBundle:
+        raise NotImplementedError
 
 
 class PreparedPromptContext(BaseModel):
