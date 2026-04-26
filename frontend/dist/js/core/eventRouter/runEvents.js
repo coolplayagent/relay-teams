@@ -135,6 +135,7 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
                 instanceId: 'primary',
                 roleId: primaryRoleId,
                 label,
+                eventId: eventMeta?.event_id || '',
             });
             return;
         }
@@ -151,6 +152,7 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
                 instanceId,
                 roleId,
                 label,
+                eventId: eventMeta?.event_id || '',
             });
             return;
         }
@@ -174,16 +176,13 @@ export function handleOutputDelta(payload, eventMeta, instanceId, roleId) {
 
     if (isPrimary) {
         if (state.activeSubagentSession) {
-            for (const part of output) {
-                if (part?.kind === 'text') {
-                    applyStreamOverlayEvent('text_delta', { text: String(part.text || '') }, {
-                        runId,
-                        instanceId: 'primary',
-                        roleId: primaryRoleId,
-                        label,
-                    });
-                }
-            }
+            applyStreamOverlayEvent('output_delta', payload, {
+                runId,
+                instanceId: 'primary',
+                roleId: primaryRoleId,
+                label,
+                eventId: eventMeta?.event_id || '',
+            });
             return;
         }
         const container = coordinatorContainerFor(eventMeta);
@@ -201,16 +200,13 @@ export function handleOutputDelta(payload, eventMeta, instanceId, roleId) {
         ? getActiveSubagentSessionStreamContainer(instanceId)
         : getPanelScrollContainer(instanceId, roleId);
     if (normalModeSubagent && !container) {
-        for (const part of output) {
-            if (part?.kind === 'text') {
-                applyStreamOverlayEvent('text_delta', { text: String(part.text || '') }, {
-                    runId,
-                    instanceId,
-                    roleId,
-                    label,
-                });
-            }
-        }
+        applyStreamOverlayEvent('output_delta', payload, {
+            runId,
+            instanceId,
+            roleId,
+            label,
+            eventId: eventMeta?.event_id || '',
+        });
         return;
     }
     if (!normalModeSubagent && !getActiveInstanceId()) {
@@ -257,6 +253,7 @@ export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
                 instanceId: 'primary',
                 roleId: primaryRoleId,
                 label,
+                eventId: eventMeta?.event_id || '',
             });
             return;
         }
@@ -281,6 +278,7 @@ export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
             instanceId,
             roleId,
             label,
+            eventId: eventMeta?.event_id || '',
         });
         return;
     }
@@ -312,6 +310,7 @@ export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
                 instanceId: 'primary',
                 roleId: primaryRoleId,
                 label,
+                eventId: eventMeta?.event_id || '',
             });
             return;
         }
@@ -336,6 +335,7 @@ export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
             instanceId,
             roleId,
             label,
+            eventId: eventMeta?.event_id || '',
         });
         return;
     }
@@ -363,6 +363,7 @@ export function handleThinkingFinished(payload, eventMeta, instanceId, roleId) {
             runId,
             instanceId: 'primary',
             roleId: primaryRoleId,
+            eventId: eventMeta?.event_id || '',
         });
         return;
     }
@@ -371,6 +372,7 @@ export function handleThinkingFinished(payload, eventMeta, instanceId, roleId) {
             runId,
             instanceId,
             roleId,
+            eventId: eventMeta?.event_id || '',
         });
         return;
     }
@@ -382,8 +384,8 @@ export function handleThinkingFinished(payload, eventMeta, instanceId, roleId) {
     });
 }
 
-export function handleModelStepFinished(eventMeta, instanceId) {
-    const roleId = state.instanceRoleMap?.[instanceId] || '';
+export function handleModelStepFinished(eventMeta, instanceId, roleIdOverride = '') {
+    const roleId = String(roleIdOverride || state.instanceRoleMap?.[instanceId] || '').trim();
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     const isPrimary = !instanceId || (!roleId && instanceId === 'primary') || isRunPrimaryRoleId(roleId, runId);
     const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
@@ -393,6 +395,7 @@ export function handleModelStepFinished(eventMeta, instanceId) {
             instanceId: 'primary',
             roleId: getRunPrimaryRoleId(runId),
             cleanupDelayMs: 1200,
+            eventId: eventMeta?.event_id || '',
         });
         return;
     }
@@ -405,6 +408,7 @@ export function handleModelStepFinished(eventMeta, instanceId) {
                 instanceId,
                 roleId,
                 cleanupDelayMs: 1200,
+                eventId: eventMeta?.event_id || '',
             });
             return;
         }
@@ -463,7 +467,7 @@ export function handleRunCompleted(eventMeta) {
             els.promptInput.focus();
         }
     }
-    finalizeStream('primary', getRunPrimaryRoleId(runId));
+    finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
     clearRunPrimaryRole(runId);
 }
 
@@ -496,7 +500,7 @@ export function handleRunStopped(eventMeta, payload) {
             els.promptInput.focus();
         }
     }
-    finalizeStream('primary', getRunPrimaryRoleId(runId));
+    finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
     clearRunPrimaryRole(runId);
 }
 
@@ -523,6 +527,7 @@ export function handleRunFailed(eventMeta, payload) {
         els.stopBtn.style.display = 'none';
     }
     if (els.promptInput) els.promptInput.disabled = !!state.activeSubagentSession;
+    finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
     clearRunPrimaryRole(runId);
 }
 

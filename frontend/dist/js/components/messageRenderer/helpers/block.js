@@ -82,7 +82,7 @@ export function renderParts(contentEl, parts, pendingToolBlocks, options = {}) {
     };
 
     parts.forEach(part => {
-        const kind = part.part_kind;
+        const kind = part.part_kind || part.kind;
 
         if (kind === 'text') {
             combinedText += (part.content || '') + '\n\n';
@@ -104,6 +104,9 @@ export function renderParts(contentEl, parts, pendingToolBlocks, options = {}) {
             if (structuredPart) {
                 appendStructuredContentPart(contentEl, structuredPart);
             }
+        } else if (kind === 'media_ref') {
+            flushText();
+            appendStructuredContentPart(contentEl, normalizeMediaRefPart(part));
         } else if (kind === 'tool-call' || (part.tool_name && part.args !== undefined)) {
             flushText();
             const tb = buildToolBlock(part.tool_name, part.args, part.tool_call_id);
@@ -140,6 +143,16 @@ export function renderParts(contentEl, parts, pendingToolBlocks, options = {}) {
     });
 
     flushText();
+}
+
+function normalizeMediaRefPart(part) {
+    return {
+        kind: 'media_ref',
+        modality: String(part?.modality || '').trim(),
+        mime_type: String(part?.mime_type || part?.mimeType || '').trim(),
+        url: String(part?.url || '').trim(),
+        name: String(part?.name || '').trim(),
+    };
 }
 
 function userPromptItemToStructuredPart(item) {

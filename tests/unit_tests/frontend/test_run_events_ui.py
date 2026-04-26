@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+from typing import cast
 
 
 def test_model_step_started_refreshes_subagent_runtime_snapshot(
@@ -137,6 +138,55 @@ console.log(JSON.stringify({
             ],
         }
     ]
+
+
+def test_route_event_prunes_dedupe_state_after_terminal_run_event(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+
+routeEvent('text_delta', { text: 'first' }, {
+    run_id: 'run-1',
+    trace_id: 'run-1',
+    event_id: 'evt-1',
+});
+routeEvent('text_delta', { text: 'duplicate' }, {
+    run_id: 'run-1',
+    trace_id: 'run-1',
+    event_id: 'evt-1',
+});
+routeEvent('run_completed', {}, {
+    run_id: 'run-1',
+    trace_id: 'run-1',
+    event_id: 'evt-2',
+});
+routeEvent('text_delta', { text: 'new lifecycle' }, {
+    run_id: 'run-1',
+    trace_id: 'run-1',
+    event_id: 'evt-1',
+});
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    runEventCalls: globalThis.__runEventCalls,
+}));
+""".strip(),
+    )
+
+    run_event_calls = cast(list[dict[str, object]], payload["runEventCalls"])
+    assert [item["name"] for item in run_event_calls] == [
+        "handleTextDelta",
+        "handleRunCompleted",
+        "handleTextDelta",
+    ]
+    first_args = cast(list[object], run_event_calls[0]["args"])
+    last_args = cast(list[object], run_event_calls[2]["args"])
+    assert first_args[0] == {"text": "first"}
+    assert last_args[0] == {"text": "new lifecycle"}
 
 
 def test_route_event_refreshes_recovery_for_subagent_user_question_events(
@@ -367,6 +417,49 @@ globalThis.__activeSubagentSessionStreamContainer = {};
 handleModelStepFinished(
     { run_id: 'subagent_run_deadbeef', trace_id: 'subagent_run_deadbeef' },
     'writer-1',
+);
+
+console.log(JSON.stringify({
+    finalizeCalls: globalThis.__finalizeStreamCalls,
+    statusCalls: globalThis.__updateNormalModeSubagentSessionStatusCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["finalizeCalls"] == [
+        {
+            "instanceId": "writer-1",
+            "roleId": "writer",
+            "options": {"runId": "subagent_run_deadbeef"},
+        }
+    ]
+    assert payload["statusCalls"] == [
+        {
+            "sessionId": "session-1",
+            "instanceId": "writer-1",
+            "status": "completed",
+        }
+    ]
+
+
+def test_handle_model_step_finished_uses_event_role_when_role_map_missing(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleModelStepFinished } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.currentSessionMode = 'normal';
+state.mainAgentRoleId = 'MainAgent';
+globalThis.__activeSubagentSessionStreamContainer = {};
+
+handleModelStepFinished(
+    { run_id: 'subagent_run_deadbeef', trace_id: 'subagent_run_deadbeef' },
+    'writer-1',
+    'writer',
 );
 
 console.log(JSON.stringify({

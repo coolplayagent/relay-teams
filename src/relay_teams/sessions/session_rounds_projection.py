@@ -15,6 +15,7 @@ from relay_teams.media import normalize_user_prompt_content
 from relay_teams.media import text_part
 from relay_teams.media import user_prompt_content_to_text
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRecord
+from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRecord
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
@@ -116,7 +117,7 @@ def build_session_rounds(
 
     retry_events_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
     fallback_events_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
-    completed_output_by_run: dict[str, dict[str, str]] = {}
+    final_output_by_run = _project_terminal_final_outputs(session_events)
     microcompact_by_run: dict[str, dict[str, object]] = {}
     retry_clear_events = {
         RunEventType.MODEL_STEP_STARTED.value,
@@ -214,14 +215,6 @@ def build_session_rounds(
                 }
             )
             continue
-        if event_type == RunEventType.RUN_COMPLETED.value:
-            payload = _parse_event_payload(event.get("payload_json"))
-            output = extract_terminal_output(payload)
-            if output:
-                completed_output_by_run[run_id] = {
-                    "output": output,
-                    "occurred_at": str(event.get("occurred_at") or ""),
-                }
         if event_type in {
             RunEventType.MODEL_STEP_STARTED.value,
             RunEventType.MODEL_STEP_FINISHED.value,
@@ -252,7 +245,7 @@ def build_session_rounds(
     run_ids = set(root_task_by_run.keys())
     run_ids.update(messages_by_run.keys())
     run_ids.update(retry_events_by_run.keys())
-    run_ids.update(completed_output_by_run.keys())
+    run_ids.update(final_output_by_run.keys())
     run_ids.update(delegated_tasks_by_run.keys())
     run_ids.update(run_runtime.keys())
     if excluded_run_ids:
@@ -290,7 +283,7 @@ def build_session_rounds(
                 root_task=root_task,
                 coordinator_role_id=coordinator_role_id,
                 role_instance_map=role_instance_by_run.get(run_id, {}),
-                output_event=completed_output_by_run.get(run_id),
+                output_event=final_output_by_run.get(run_id),
             )
             if reconstructed is not None:
                 coordinator_messages = [reconstructed]
@@ -320,6 +313,7 @@ def build_session_rounds(
             "pending_tool_approval_count": len(pending_approvals),
             "run_status": runtime.status.value if runtime is not None else None,
             "run_phase": runtime.phase.value if runtime is not None else None,
+            "has_final_output": run_id in final_output_by_run,
             "is_recoverable": runtime.is_recoverable if runtime is not None else False,
             "clear_marker_before": None,
             "compaction_marker_before": None,
@@ -365,6 +359,7 @@ def build_session_timeline_rounds(
     retry_events_by_run, microcompact_by_run = _project_timeline_event_overlays(
         session_events
     )
+    final_output_by_run = _project_terminal_final_outputs(session_events)
 
     root_task_by_run: dict[str, object] = {}
     primary_role_by_run: dict[str, str] = {}
@@ -385,6 +380,7 @@ def build_session_timeline_rounds(
     run_ids = set(root_task_by_run.keys())
     run_ids.update(messages_by_run.keys())
     run_ids.update(retry_events_by_run.keys())
+    run_ids.update(final_output_by_run.keys())
     run_ids.update(run_runtime.keys())
     if excluded_run_ids:
         run_ids.difference_update(excluded_run_ids)
@@ -417,6 +413,7 @@ def build_session_timeline_rounds(
                 "pending_tool_approval_count": len(pending_approvals),
                 "run_status": runtime.status.value if runtime is not None else None,
                 "run_phase": runtime.phase.value if runtime is not None else None,
+                "has_final_output": run_id in final_output_by_run,
                 "is_recoverable": (
                     runtime.is_recoverable if runtime is not None else False
                 ),
@@ -589,6 +586,55 @@ def _project_timeline_event_overlays(
     return dict(retry_events_by_run), microcompact_by_run
 
 
+def _project_terminal_final_outputs(
+    session_events: list[dict[str, object]],
+) -> dict[str, dict[str, str]]:
+    final_output_by_run: dict[str, dict[str, str]] = {}
+    sorted_session_events = sorted(
+        session_events,
+        key=lambda item: str(item.get("occurred_at") or ""),
+    )
+    for event in sorted_session_events:
+        event_type = str(event.get("event_type") or "")
+        if event_type not in {
+            RunEventType.RUN_COMPLETED.value,
+            RunEventType.RUN_FAILED.value,
+        }:
+            continue
+        run_id = str(event.get("trace_id") or "")
+        if not run_id:
+            continue
+        payload = _parse_event_payload(event.get("payload_json"))
+        output = extract_terminal_output(payload).strip()
+        if not _event_has_final_output(
+            event_type=event_type,
+            payload=payload,
+            output=output,
+        ):
+            continue
+        final_output_by_run[run_id] = {
+            "output": output,
+            "occurred_at": str(event.get("occurred_at") or ""),
+        }
+    return final_output_by_run
+
+
+def _event_has_final_output(
+    *,
+    event_type: str,
+    payload: dict[str, object],
+    output: str,
+) -> bool:
+    if not output:
+        return False
+    if event_type == RunEventType.RUN_COMPLETED.value:
+        return True
+    if event_type != RunEventType.RUN_FAILED.value:
+        return False
+    completion_reason = str(payload.get("completion_reason") or "").strip().lower()
+    return completion_reason == RunCompletionReason.ASSISTANT_RESPONSE.value
+
+
 def _should_clear_active_retry_event(
     active_event: dict[str, object],
     *,
@@ -613,6 +659,7 @@ _TIMELINE_ROUND_KEYS = (
     "pending_tool_approval_count",
     "run_status",
     "run_phase",
+    "has_final_output",
     "is_recoverable",
     "clear_marker_before",
     "compaction_marker_before",
@@ -937,7 +984,7 @@ def _parse_event_payload(payload_json: object) -> dict[str, object]:
 def _reconstruct_completed_output_message(
     *,
     run_id: str,
-    root_task: object,
+    root_task: object | None,
     coordinator_role_id: str | None,
     role_instance_map: dict[str, str],
     output_event: dict[str, str] | None,

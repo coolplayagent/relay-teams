@@ -31,6 +31,8 @@ export {
     finalizeStream,
     clearStreamState,
     clearRunStreamState,
+    clearStreamOverlayEntry,
+    clearRunRenderedStreamState,
     clearRenderedStreamState,
     clearAllStreamState,
     getCoordinatorStreamOverlay,

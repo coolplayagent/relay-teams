@@ -53,6 +53,7 @@ export function handleToolCall(payload, eventMeta, instanceId, roleId) {
             instanceId: isPrimary ? 'primary' : instanceId,
             roleId: isPrimary ? primaryRoleId : roleId,
             label,
+            eventId: eventMeta?.event_id || '',
         });
         return;
     }
@@ -85,6 +86,7 @@ export function handleToolInputValidationFailed(payload, instanceId, eventMeta =
             runId,
             instanceId: isPrimary ? 'primary' : instanceId,
             roleId,
+            eventId: eventMeta?.event_id || '',
         });
         return;
     }
@@ -119,6 +121,7 @@ export function handleToolResult(payload, instanceId, eventMeta = null, roleId =
             instanceId: isPrimary ? 'primary' : instanceId,
             roleId: isPrimary ? primaryRoleId : roleId,
             label,
+            eventId: eventMeta?.event_id || '',
         });
         return;
     }
@@ -166,6 +169,7 @@ export function handleToolApprovalRequested(payload, eventMeta, instanceId) {
             runId,
             instanceId: isPrimary ? 'primary' : instanceId,
             roleId,
+            eventId: eventMeta?.event_id || '',
         });
         return;
     }
@@ -190,6 +194,7 @@ export function handleToolApprovalResolved(payload, instanceId, eventMeta = null
             runId,
             instanceId: isPrimary ? 'primary' : instanceId,
             roleId,
+            eventId: eventMeta?.event_id || '',
         });
         return;
     }

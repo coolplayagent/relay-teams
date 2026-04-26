@@ -45,9 +45,14 @@ import {
 import { handleNotificationRequested } from './notificationEvents.js';
 
 const BACKGROUND_TASK_UPDATE_REFRESH_DELAY_MS = 250;
+const seenEventIdsByRun = new Map();
+const MAX_SEEN_EVENT_IDS_PER_RUN = 2000;
 
 export function routeEvent(evType, payload, eventMeta) {
     const eventRunId = String(eventMeta?.run_id || eventMeta?.trace_id || '').trim();
+    if (isDuplicateRunEvent(eventRunId, eventMeta?.event_id)) {
+        return;
+    }
     const isSubagentRun = eventRunId.startsWith('subagent_run_');
     if (isSubagentRun && evType === 'token_usage') {
         scheduleSessionTokenUsageRefresh({ immediate: true });
@@ -96,7 +101,7 @@ export function routeEvent(evType, payload, eventMeta) {
         } else if (evType === 'thinking_finished') {
             handleThinkingFinished(payload, eventMeta, instanceId, roleId);
         } else if (evType === 'model_step_finished') {
-            handleModelStepFinished(eventMeta, instanceId);
+            handleModelStepFinished(eventMeta, instanceId, roleId);
         } else if (evType === 'tool_call') {
             handleToolCall(payload, eventMeta, instanceId, roleId);
         } else if (evType === 'tool_input_validation_failed') {
@@ -114,6 +119,7 @@ export function routeEvent(evType, payload, eventMeta) {
         } else if (evType === 'run_stopped') {
             handleSubagentRunTerminal(instanceId, 'stopped', eventMeta, roleId);
         }
+        clearSeenRunEventsForTerminal(evType, eventRunId);
         return;
     }
     if (evType === 'run_started') {
@@ -145,7 +151,7 @@ export function routeEvent(evType, payload, eventMeta) {
     } else if (evType === 'thinking_finished') {
         handleThinkingFinished(payload, eventMeta, instanceId, roleId);
     } else if (evType === 'model_step_finished') {
-        handleModelStepFinished(eventMeta, instanceId);
+        handleModelStepFinished(eventMeta, instanceId, roleId);
     } else if (evType === 'run_completed') {
         handleRunCompleted(eventMeta);
         syncRoundTodoVisibility();
@@ -194,6 +200,39 @@ export function routeEvent(evType, payload, eventMeta) {
     } else {
         sysLog(`[evt] ${evType}`, 'log-info');
     }
+    clearSeenRunEventsForTerminal(evType, eventRunId);
+}
+
+function isDuplicateRunEvent(runId, eventId) {
+    const safeRunId = String(runId || '').trim();
+    const safeEventId = String(eventId || '').trim();
+    if (!safeRunId || !safeEventId) return false;
+    let seen = seenEventIdsByRun.get(safeRunId);
+    if (!seen) {
+        seen = new Set();
+        seenEventIdsByRun.set(safeRunId, seen);
+    }
+    if (seen.has(safeEventId)) return true;
+    seen.add(safeEventId);
+    if (seen.size > MAX_SEEN_EVENT_IDS_PER_RUN) {
+        const overflow = seen.size - MAX_SEEN_EVENT_IDS_PER_RUN;
+        Array.from(seen).slice(0, overflow).forEach(id => seen.delete(id));
+    }
+    return false;
+}
+
+function clearSeenRunEventsForTerminal(evType, runId) {
+    if (!isTerminalRunEvent(evType)) {
+        return;
+    }
+    const safeRunId = String(runId || '').trim();
+    if (safeRunId) {
+        seenEventIdsByRun.delete(safeRunId);
+    }
+}
+
+function isTerminalRunEvent(evType) {
+    return evType === 'run_completed' || evType === 'run_failed' || evType === 'run_stopped';
 }
 
 function scheduleContinuityRefreshForEvent(evType) {
