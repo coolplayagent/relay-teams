@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 import signal
 import os
+import subprocess
 
 import pytest
 
@@ -441,6 +442,39 @@ def test_kill_process_tree_by_pid_requires_posix_exit_after_sigkill(
     assert kill_process_tree_by_pid(3210) is False
     assert signals == [signal.SIGTERM, runtime_module._SIGKILL_SIGNAL]
     assert wait_calls == [runtime_module._SIGKILL_GRACE_SECONDS, 2]
+
+
+def test_kill_process_tree_by_pid_treats_missing_posix_group_as_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_module, "_is_windows", lambda: False)
+    monkeypatch.setattr(
+        runtime_module,
+        "_signal_process_group",
+        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError(pid)),
+    )
+
+    assert kill_process_tree_by_pid(3210) is True
+
+
+def test_kill_process_tree_by_pid_treats_missing_windows_process_as_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    taskkill_calls: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        taskkill_calls.append(command)
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(runtime_module, "_is_windows", lambda: True)
+    monkeypatch.setattr(runtime_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(runtime_module, "_windows_process_exists", lambda pid: False)
+
+    assert kill_process_tree_by_pid(3210) is True
+    assert taskkill_calls == [["taskkill", "/f", "/t", "/pid", "3210"]]
 
 
 @pytest.mark.asyncio

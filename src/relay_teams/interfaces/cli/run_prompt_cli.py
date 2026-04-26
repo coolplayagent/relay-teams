@@ -194,13 +194,21 @@ def execute_prompt(
 
 
 def stream_events(base_url: str, run_id: str, debug: bool) -> None:
-    asyncio.run(
-        stream_events_async(
-            base_url=base_url,
-            run_id=run_id,
-            debug=debug,
+    try:
+        asyncio.run(
+            stream_events_async(
+                base_url=base_url,
+                run_id=run_id,
+                debug=debug,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        stopped = _request_run_stop_after_interrupt(base_url=base_url, run_id=run_id)
+        if stopped:
+            typer.echo("\nRun stop requested.", err=True)
+        else:
+            typer.echo("\nInterrupted; failed to request run stop.", err=True)
+        raise typer.Exit(code=130) from None
 
 
 async def stream_events_async(base_url: str, run_id: str, debug: bool) -> None:
@@ -226,6 +234,44 @@ async def stream_events_async(base_url: str, run_id: str, debug: bool) -> None:
         ) from exc
     except httpx.RequestError as exc:
         raise RuntimeError(f"Failed to stream run {run_id}: {exc}") from exc
+
+
+def _request_run_stop_after_interrupt(*, base_url: str, run_id: str) -> bool:
+    try:
+        return asyncio.run(
+            _request_run_stop_after_interrupt_async(
+                base_url=base_url,
+                run_id=run_id,
+            )
+        )
+    except KeyboardInterrupt:
+        raise
+    except Exception:
+        return False
+
+
+async def _request_run_stop_after_interrupt_async(
+    *,
+    base_url: str,
+    run_id: str,
+) -> bool:
+    try:
+        async with create_async_http_client(
+            proxy_config=load_proxy_env_config(),
+            timeout_seconds=10.0,
+            connect_timeout_seconds=5.0,
+        ) as client:
+            response = await client.post(
+                f"{base_url.rstrip('/')}/api/runs/{run_id}/stop",
+                headers={"Accept": "application/json"},
+                json={"scope": "main"},
+            )
+            if response.status_code == 404:
+                return False
+            response.raise_for_status()
+            return True
+    except httpx.RequestError:
+        return False
 
 
 def _handle_stream_line(line: str, *, debug: bool) -> bool:

@@ -7,6 +7,7 @@ from types import TracebackType
 
 import httpx
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from relay_teams.interfaces.cli import app as cli_app
@@ -60,6 +61,7 @@ class _FakePromptHttpClient:
         self._lines = lines
         self._error_response = error_response
         self.streams: list[tuple[str, str, dict[str, str]]] = []
+        self.posts: list[tuple[str, dict[str, str], dict[str, object]]] = []
 
     async def __aenter__(self) -> _FakePromptHttpClient:
         return self
@@ -84,6 +86,16 @@ class _FakePromptHttpClient:
             self._lines,
             error_response=self._error_response,
         )
+
+    async def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+    ) -> httpx.Response:
+        self.posts.append((url, headers, json))
+        return httpx.Response(200, request=httpx.Request("POST", url))
 
 
 class _FakeAsyncByteStream(httpx.AsyncByteStream):
@@ -365,3 +377,51 @@ async def test_run_prompt_stream_events_async_reports_http_errors(monkeypatch) -
             run_id="run-1",
             debug=False,
         )
+
+
+def test_run_prompt_stream_events_requests_stop_on_keyboard_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    fake_client = _FakePromptHttpClient([])
+
+    async def fake_stream_events_async(
+        *,
+        base_url: str,
+        run_id: str,
+        debug: bool,
+    ) -> None:
+        _ = (base_url, run_id, debug)
+        raise KeyboardInterrupt
+
+    def fake_create_async_http_client(**kwargs: object) -> _FakePromptHttpClient:
+        _ = kwargs
+        return fake_client
+
+    monkeypatch.setattr(
+        prompt_cli,
+        "stream_events_async",
+        fake_stream_events_async,
+    )
+    monkeypatch.setattr(
+        prompt_cli,
+        "create_async_http_client",
+        fake_create_async_http_client,
+    )
+
+    with pytest.raises(typer.Exit) as exc_info:
+        prompt_cli.stream_events(
+            base_url="http://127.0.0.1:8000/",
+            run_id="run-1",
+            debug=False,
+        )
+
+    assert exc_info.value.exit_code == 130
+    assert fake_client.posts == [
+        (
+            "http://127.0.0.1:8000/api/runs/run-1/stop",
+            {"Accept": "application/json"},
+            {"scope": "main"},
+        )
+    ]
+    assert "Run stop requested." in capsys.readouterr().err
