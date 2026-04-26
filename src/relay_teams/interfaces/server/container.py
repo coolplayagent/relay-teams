@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+import logging
 from pathlib import Path
 from typing import FrozenSet, List, Optional, Protocol, Tuple
 
@@ -87,7 +88,7 @@ from relay_teams.gateway.im.service import ImToolService
 from relay_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
 from relay_teams.gateway.session_ingress_service import GatewaySessionIngressService
-from relay_teams.logger import get_logger
+from relay_teams.logger import get_logger, log_event
 from relay_teams.interfaces.server.config_status_service import ConfigStatusService
 from relay_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from relay_teams.mcp.mcp_config_manager import McpConfigManager
@@ -1208,6 +1209,15 @@ class ServerContainer:
         self.feishu_subscription_service.stop()
         self.wechat_gateway_service.stop()
         self.localhost_run_tunnel_service.stop()
+        stopped_runs = await self.run_service.stop_active_runs_for_shutdown_async()
+        if stopped_runs:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="app.shutdown.active_runs_stopped",
+                message="Requested active runs to stop during server shutdown",
+                payload={"stopped_run_count": stopped_runs},
+            )
         await self.external_acp_session_manager.close()
         await self.background_task_manager.close()
         await self._close_async_repositories()

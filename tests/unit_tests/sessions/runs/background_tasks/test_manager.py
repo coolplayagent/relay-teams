@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import threading
 import time
 from typing import Callable, cast
 
@@ -255,6 +257,18 @@ class _CloseFailingWaitableTransport(_WaitableTransport):
         raise RuntimeError("close failed")
 
 
+class _BlockingCloseTransport(_FakeTransport):
+    def __init__(self) -> None:
+        super().__init__(returncode=0)
+        self.close_started = asyncio.Event()
+        self.close_release = asyncio.Event()
+
+    async def close(self) -> None:
+        self.close_started.set()
+        await self.close_release.wait()
+        self.closed = True
+
+
 class _FakeMonitorSink:
     def __init__(self) -> None:
         self.body_texts: list[str] = []
@@ -476,7 +490,117 @@ async def test_background_task_manager_completes_and_publishes_events(
 
 
 @pytest.mark.asyncio
-async def test_background_task_manager_writes_logs_via_to_thread(
+async def test_background_task_manager_finalizes_runtime_when_listener_fails(
+    tmp_path: Path,
+) -> None:
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-listener.db")
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    record = repo.upsert(
+        BackgroundTaskRecord(
+            background_task_id="exec-1",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            command="printf ready",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.RUNNING,
+            log_path=str(tmp_path / "exec-1.log"),
+        )
+    )
+    runtime = manager_module._BackgroundTaskRuntime(
+        record=record,
+        transport=cast(
+            manager_module._BackgroundTaskTransport,
+            _FakeTransport(returncode=0),
+        ),
+        log_file_path=tmp_path / "exec-1.log",
+        queue=asyncio.Queue(),
+    )
+    manager._runtimes[record.background_task_id] = runtime
+
+    async def _failing_listener(record: BackgroundTaskRecord) -> None:
+        _ = record
+        raise RuntimeError("listener failed")
+
+    manager.set_completion_listener(_failing_listener)
+
+    try:
+        with pytest.raises(RuntimeError, match="listener failed"):
+            await manager._finalize_runtime(runtime, timed_out=False)
+        waited, completed = await manager.wait_for_run(
+            run_id="run-1",
+            background_task_id=record.background_task_id,
+        )
+    finally:
+        await manager.close()
+
+    assert completed is True
+    assert waited.status == BackgroundTaskStatus.COMPLETED
+    assert runtime.completed.is_set()
+    assert record.background_task_id not in manager._runtimes
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_signals_completion_before_transport_close(
+    tmp_path: Path,
+) -> None:
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-blocking-close.db")
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    record = repo.upsert(
+        BackgroundTaskRecord(
+            background_task_id="exec-1",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            command="printf ready",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.RUNNING,
+            log_path=str(tmp_path / "exec-1.log"),
+        )
+    )
+    transport = _BlockingCloseTransport()
+    runtime = manager_module._BackgroundTaskRuntime(
+        record=record,
+        transport=cast(manager_module._BackgroundTaskTransport, transport),
+        log_file_path=tmp_path / "exec-1.log",
+        queue=asyncio.Queue(),
+    )
+    manager._runtimes[record.background_task_id] = runtime
+    finalize_task = asyncio.create_task(
+        manager._finalize_runtime(runtime, timed_out=False)
+    )
+
+    try:
+        await asyncio.wait_for(transport.close_started.wait(), timeout=1.0)
+        waited, completed = await asyncio.wait_for(
+            manager.wait_for_run(
+                run_id="run-1",
+                background_task_id=record.background_task_id,
+            ),
+            timeout=1.0,
+        )
+    finally:
+        transport.close_release.set()
+        await asyncio.wait_for(finalize_task, timeout=1.0)
+        await manager.close()
+
+    assert completed is True
+    assert waited.status == BackgroundTaskStatus.COMPLETED
+    assert runtime.completed.is_set()
+    assert record.background_task_id not in manager._runtimes
+    assert transport.closed is True
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_writes_logs_via_dedicated_executor(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -504,15 +628,15 @@ async def test_background_task_manager_writes_logs_via_to_thread(
     )
     calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
 
-    async def _fake_to_thread(
+    async def _fake_run_blocking(
         func: Callable[..., object],
         *args: object,
         **kwargs: object,
-    ) -> None:
+    ) -> object:
         calls.append((func, args, kwargs))
-        func(*args, **kwargs)
+        return func(*args, **kwargs)
 
-    monkeypatch.setattr(manager_module.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(manager, "_run_blocking", _fake_run_blocking)
 
     await manager._handle_output_chunk(
         runtime,
@@ -522,6 +646,47 @@ async def test_background_task_manager_writes_logs_via_to_thread(
 
     assert calls
     assert runtime.log_file_path.read_text(encoding="utf-8") == "hello\n"
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_control_executor_runs_when_pty_executor_busy(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-pty-executor.db")
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    manager._pty_executor.shutdown(wait=False, cancel_futures=True)
+    manager._pty_executor = ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="test-pty",
+    )
+    loop = asyncio.get_running_loop()
+    pty_started = threading.Event()
+    pty_release = threading.Event()
+
+    def _block_pty_executor() -> bool:
+        pty_started.set()
+        return pty_release.wait(timeout=5.0)
+
+    pty_blocker = loop.run_in_executor(manager._pty_executor, _block_pty_executor)
+
+    try:
+        for _ in range(50):
+            if pty_started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert pty_started.is_set() is True
+
+        result = await asyncio.wait_for(
+            manager._run_blocking(lambda: "control-ready"),
+            timeout=1.0,
+        )
+
+        assert result == "control-ready"
+    finally:
+        pty_release.set()
+        await asyncio.wait_for(pty_blocker, timeout=1.0)
+        await manager.close()
 
 
 @pytest.mark.asyncio
@@ -701,13 +866,13 @@ async def test_background_task_manager_stop_falls_back_to_pid_without_runtime(
     )
     killed_pids: list[int] = []
 
-    async def _fake_kill_process_tree_by_pid(pid: int) -> bool:
+    def _fake_kill_process_tree_by_pid(pid: int) -> bool:
         killed_pids.append(pid)
         return True
 
     monkeypatch.setattr(
         manager_module,
-        "_kill_process_tree_by_pid",
+        "kill_process_tree_by_pid",
         _fake_kill_process_tree_by_pid,
     )
 
@@ -759,13 +924,13 @@ async def test_background_task_manager_stop_preserves_active_record_when_pid_fal
         )
     )
 
-    async def _fake_kill_process_tree_by_pid(pid: int) -> bool:
+    def _fake_kill_process_tree_by_pid(pid: int) -> bool:
         _ = pid
         return False
 
     monkeypatch.setattr(
         manager_module,
-        "_kill_process_tree_by_pid",
+        "kill_process_tree_by_pid",
         _fake_kill_process_tree_by_pid,
     )
 
@@ -1051,8 +1216,9 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
         env_commands.append(command)
         return dict(env or {})
 
-    async def _fake_kill_process_tree_by_pid(pid: int) -> None:
+    def _fake_kill_process_tree_by_pid(pid: int) -> bool:
         assert pid == fake_process.pid
+        return True
 
     monkeypatch.setattr(manager_module, "_posix_pty_supported", lambda: False)
     monkeypatch.setattr(manager_module, "_windows_tty_supported", lambda: True)
@@ -1076,7 +1242,7 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
     )
     monkeypatch.setattr(
         manager_module,
-        "_kill_process_tree_by_pid",
+        "kill_process_tree_by_pid",
         _fake_kill_process_tree_by_pid,
     )
 
@@ -1128,6 +1294,111 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
     assert resolved_commands == ["powershell interactive"]
     assert env_commands == ["powershell interactive"]
     assert stopped.status == BackgroundTaskStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_windows_tty_uses_dedicated_blocking_executor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+    from relay_teams.sessions.runs.background_tasks.command_runtime import (
+        CommandRuntimeKind,
+        ResolvedCommandRuntime,
+    )
+
+    repo = BackgroundTaskRepository(tmp_path / "exec-session-winpty-executor.db")
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    workspace = _build_workspace_handle(tmp_path)
+    fake_process = _FakeWindowsPtyProcess()
+    loop = asyncio.get_running_loop()
+    default_executor = ThreadPoolExecutor(max_workers=1)
+    default_executor_started = threading.Event()
+    default_executor_release = threading.Event()
+    loop.set_default_executor(default_executor)
+
+    def _block_default_executor() -> bool:
+        default_executor_started.set()
+        return default_executor_release.wait(timeout=5.0)
+
+    default_blocker = loop.run_in_executor(None, _block_default_executor)
+
+    async def _fake_build_command_env(
+        env: dict[str, str] | None = None,
+        *,
+        runtime: ResolvedCommandRuntime | None = None,
+        command: str | None = None,
+    ) -> dict[str, str]:
+        _ = (runtime, command)
+        return dict(env or {})
+
+    def _fake_kill_process_tree_by_pid(pid: int) -> bool:
+        assert pid == fake_process.pid
+        return True
+
+    monkeypatch.setattr(manager_module, "_posix_pty_supported", lambda: False)
+    monkeypatch.setattr(manager_module, "_windows_tty_supported", lambda: True)
+    monkeypatch.setattr(
+        manager_module,
+        "resolve_command_runtime",
+        lambda *, command=None: ResolvedCommandRuntime(
+            kind=CommandRuntimeKind.POWERSHELL,
+            executable="powershell.exe",
+            display_name="PowerShell",
+        ),
+    )
+    monkeypatch.setattr(manager_module, "build_command_env", _fake_build_command_env)
+    monkeypatch.setattr(
+        manager_module,
+        "_spawn_windows_pty_process",
+        lambda **kwargs: fake_process,
+    )
+    monkeypatch.setattr(
+        manager_module,
+        "kill_process_tree_by_pid",
+        _fake_kill_process_tree_by_pid,
+    )
+
+    try:
+        for _ in range(50):
+            if default_executor_started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert default_executor_started.is_set() is True
+
+        started = await manager.start_session(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            workspace=workspace,
+            command="powershell interactive",
+            cwd=workspace.execution_root,
+            timeout_ms=5000,
+            env={"AGENT_TEAMS_CURRENT_ROLE_ID": "writer"},
+            tty=True,
+        )
+
+        updated, completed = await asyncio.wait_for(
+            manager.interact_for_run(
+                run_id="run-1",
+                background_task_id=started.background_task_id,
+                chars="hello\r\n",
+                yield_time_ms=5000,
+            ),
+            timeout=1.0,
+        )
+    finally:
+        default_executor_release.set()
+        await asyncio.wait_for(default_blocker, timeout=1.0)
+        await manager.close()
+        default_executor.shutdown(wait=True)
+
+    assert completed is False
+    assert updated.recent_output == ("ready",)
+    assert fake_process.writes == ["hello\r\n"]
 
 
 @pytest.mark.asyncio
@@ -1359,13 +1630,13 @@ async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
 
     killed_pids: list[int] = []
 
-    async def _fake_kill_process_tree_by_pid(pid: int) -> bool:
+    def _fake_kill_process_tree_by_pid(pid: int) -> bool:
         killed_pids.append(pid)
         return True
 
     monkeypatch.setattr(
         manager_module,
-        "_kill_process_tree_by_pid",
+        "kill_process_tree_by_pid",
         _fake_kill_process_tree_by_pid,
     )
 
@@ -1412,13 +1683,13 @@ async def test_prune_sessions_if_needed_keeps_active_records_when_stop_fails(
     manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
     created_at = datetime.now(tz=timezone.utc) - timedelta(hours=2)
 
-    async def _fake_kill_process_tree_by_pid(pid: int) -> bool:
+    def _fake_kill_process_tree_by_pid(pid: int) -> bool:
         _ = pid
         return False
 
     monkeypatch.setattr(
         manager_module,
-        "_kill_process_tree_by_pid",
+        "kill_process_tree_by_pid",
         _fake_kill_process_tree_by_pid,
     )
 

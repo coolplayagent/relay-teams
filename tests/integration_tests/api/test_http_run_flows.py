@@ -134,6 +134,75 @@ def test_ai_run_persists_todo_snapshot_and_projects_it(
     assert round_payload.get("todo") == todo
 
 
+def test_ai_run_background_task_lifecycle_can_be_stopped(
+    api_client: httpx.Client,
+) -> None:
+    session_id = create_session(
+        api_client,
+        session_id=new_session_id("session-background-task"),
+    )
+    run_id = create_run(
+        api_client,
+        session_id=session_id,
+        intent="[background-task-lifecycle] 启动一个后台任务，确认它已创建后把控制权交还给用户。",
+        execution_mode="ai",
+        yolo=True,
+    )
+
+    events = stream_run_until_terminal(api_client, run_id=run_id)
+    event_types = [str(event.get("event_type") or "") for event in events]
+
+    assert event_types[-1] == "run_completed"
+    assert "background_task_started" in event_types
+    assert "run_failed" not in event_types
+
+    persisted_events = _wait_for_session_run_events(
+        api_client,
+        session_id=session_id,
+        run_id=run_id,
+        expected_event_counts={
+            "tool_call": 2,
+            "tool_result": 2,
+            "background_task_started": 1,
+        },
+    )
+    background_task_id = _background_task_id_from_list_tool_result(persisted_events)
+
+    list_response = api_client.get(f"/api/runs/{run_id}/background-tasks")
+    list_response.raise_for_status()
+    list_payload = list_response.json()
+    items = list_payload.get("items")
+    assert isinstance(items, list)
+    api_task = _find_background_task(items, background_task_id)
+    assert api_task.get("status") == "running"
+
+    stop_response = api_client.post(
+        f"/api/runs/{run_id}/background-tasks/{background_task_id}:stop"
+    )
+    stop_response.raise_for_status()
+    stopped_payload = stop_response.json()
+    stopped_task = stopped_payload.get("background_task")
+    assert isinstance(stopped_task, dict)
+    assert stopped_task.get("background_task_id") == background_task_id
+    assert stopped_task.get("status") == "stopped"
+
+    _ = _wait_for_session_run_events(
+        api_client,
+        session_id=session_id,
+        run_id=run_id,
+        expected_event_counts={"background_task_stopped": 1},
+    )
+
+    get_response = api_client.get(
+        f"/api/runs/{run_id}/background-tasks/{background_task_id}"
+    )
+    get_response.raise_for_status()
+    get_payload = get_response.json()
+    final_task = get_payload.get("background_task")
+    assert isinstance(final_task, dict)
+    assert final_task.get("status") == "stopped"
+
+
 def test_ai_run_continues_after_invalid_tool_args_validation_failure(
     api_client: httpx.Client,
 ) -> None:
@@ -777,6 +846,56 @@ def _wait_for_role_tools(
     raise AssertionError(
         f"Role {role_id} did not expose expected tools within {timeout_seconds}s: {sorted(expected_tools)}"
     )
+
+
+def _background_task_id_from_list_tool_result(
+    events: list[dict[str, object]],
+) -> str:
+    tool_results = [
+        json.loads(str(event["payload_json"]))
+        for event in events
+        if str(event.get("event_type") or "") == "tool_result"
+    ]
+    list_results = [
+        payload
+        for payload in tool_results
+        if payload.get("tool_name") == "list_background_tasks"
+    ]
+    assert len(list_results) == 1
+    list_result = list_results[0].get("result")
+    assert isinstance(list_result, dict)
+    data = list_result.get("data")
+    assert isinstance(data, dict)
+    items = data.get("items")
+    assert isinstance(items, list)
+    running_items = [
+        item
+        for item in items
+        if isinstance(item, dict) and item.get("status") == "running"
+    ]
+    assert len(running_items) == 1
+    recent_output = json.dumps(
+        running_items[0].get("recent_output", []),
+        ensure_ascii=False,
+    )
+    assert "background-lifecycle-ready" in recent_output
+    background_task_id = running_items[0].get("background_task_id")
+    assert isinstance(background_task_id, str)
+    assert background_task_id
+    return background_task_id
+
+
+def _find_background_task(
+    items: list[object],
+    background_task_id: str,
+) -> dict[str, object]:
+    for item in items:
+        if (
+            isinstance(item, dict)
+            and item.get("background_task_id") == background_task_id
+        ):
+            return item
+    raise AssertionError(f"Background task {background_task_id} was not listed")
 
 
 def _get_fake_llm_call_count(integration_env: IntegrationEnvironment) -> int:

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import contextlib
 from enum import Enum
 import importlib.util
+from io import StringIO
 import os
 import re
 from pathlib import Path
@@ -544,18 +546,21 @@ def kill_process_tree_by_pid(pid: int) -> bool:
         try:
             completed = subprocess.run(
                 ["taskkill", "/f", "/t", "/pid", str(pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
                 timeout=_SIGKILL_GRACE_SECONDS,
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
             return False
-        return completed.returncode == 0
+        return completed.returncode == 0 or not _windows_process_exists(pid)
 
     try:
         _signal_process_group(pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
+    except ProcessLookupError:
+        return True
+    except PermissionError:
         return False
     if _wait_for_process_group_exit(pid, timeout_seconds=_SIGKILL_GRACE_SECONDS):
         return True
@@ -566,6 +571,26 @@ def kill_process_tree_by_pid(pid: int) -> bool:
     except PermissionError:
         return False
     return _wait_for_process_group_exit(pid, timeout_seconds=2)
+
+
+def _windows_process_exists(pid: int) -> bool:
+    try:
+        completed = subprocess.run(
+            ["tasklist", "/fi", f"PID eq {pid}", "/fo", "csv", "/nh"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=_SIGKILL_GRACE_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+    if completed.returncode != 0:
+        return True
+    for row in csv.reader(StringIO(completed.stdout)):
+        if len(row) >= 2 and row[1].strip() == str(pid):
+            return True
+    return False
 
 
 async def _kill_process_tree_by_pid(pid: int) -> bool:

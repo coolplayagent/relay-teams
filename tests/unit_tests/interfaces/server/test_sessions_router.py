@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+import threading
+import time
+from types import SimpleNamespace
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import httpx
 
 import pytest
 
 from relay_teams.interfaces.server.deps import get_session_service
-from relay_teams.interfaces.server.routers import sessions
+from relay_teams.interfaces.server.routers import sessions, system
 from relay_teams.providers import AgentTokenSummary, RunTokenUsage, SessionTokenUsage
 from relay_teams.roles import SystemRolesUnavailableError
 from relay_teams.sessions.session_models import (
@@ -290,11 +298,51 @@ class _FakeSessionService:
         }
 
 
+class _SleepingRecoveryService(_FakeSessionService):
+    def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
+        time.sleep(0.2)
+        return {"session_id": session_id, "runs": []}
+
+
+class _BlockingRecoveryService(_FakeSessionService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
+        self.started.set()
+        _ = self.release.wait(timeout=5.0)
+        return {"session_id": session_id, "runs": []}
+
+
 def _create_client(fake_service: _FakeSessionService) -> TestClient:
     app = FastAPI()
     app.include_router(sessions.router, prefix="/api")
     app.dependency_overrides[get_session_service] = lambda: fake_service
     return TestClient(app)
+
+
+def _create_sessions_and_system_app(fake_service: _FakeSessionService) -> FastAPI:
+    app = FastAPI()
+    app.include_router(sessions.router, prefix="/api")
+    app.include_router(system.router, prefix="/api")
+    app.dependency_overrides[get_session_service] = lambda: fake_service
+    app.state.container = SimpleNamespace(
+        config_dir=Path("/tmp/config"),
+        role_registry=None,
+        skill_registry=None,
+        tool_registry=None,
+    )
+    return app
+
+
+async def _wait_for_threading_event(event: threading.Event) -> bool:
+    for _ in range(50):
+        if event.is_set():
+            return True
+        await asyncio.sleep(0.02)
+    return event.is_set()
 
 
 def test_update_session_route_accepts_metadata_payload() -> None:
@@ -390,6 +438,52 @@ def test_session_routes_call_service() -> None:
     ]
 
     assert [response.status_code for response in requests] == [200] * len(requests)
+
+
+def test_session_recovery_times_out_when_snapshot_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sessions, "SESSION_RECOVERY_TIMEOUT_SECONDS", 0.01)
+    client = _create_client(_SleepingRecoveryService())
+
+    response = client.get("/api/sessions/session-1/recovery")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Session recovery snapshot timed out"
+
+
+@pytest.mark.asyncio
+async def test_health_responds_while_recovery_uses_default_threadpool() -> None:
+    service = _BlockingRecoveryService()
+    executor = ThreadPoolExecutor(max_workers=1)
+    asyncio.get_running_loop().set_default_executor(executor)
+    app = _create_sessions_and_system_app(service)
+    transport = httpx.ASGITransport(app=app)
+
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            timeout=None,
+        ) as client:
+            recovery_task = asyncio.create_task(
+                client.get("/api/sessions/session-1/recovery")
+            )
+            assert await _wait_for_threading_event(service.started) is True
+
+            health_response = await asyncio.wait_for(
+                client.get("/api/system/health"),
+                timeout=1.0,
+            )
+
+            assert health_response.status_code == 200
+            assert health_response.json()["status"] == "ok"
+            service.release.set()
+            recovery_response = await asyncio.wait_for(recovery_task, timeout=1.0)
+            assert recovery_response.status_code == 200
+    finally:
+        service.release.set()
+        executor.shutdown(wait=True)
 
 
 def test_create_session_route_accepts_explicit_metadata_payload() -> None:

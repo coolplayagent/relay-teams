@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 import signal
 import os
+import subprocess
 
 import pytest
 
@@ -441,6 +442,158 @@ def test_kill_process_tree_by_pid_requires_posix_exit_after_sigkill(
     assert kill_process_tree_by_pid(3210) is False
     assert signals == [signal.SIGTERM, runtime_module._SIGKILL_SIGNAL]
     assert wait_calls == [runtime_module._SIGKILL_GRACE_SECONDS, 2]
+
+
+def test_kill_process_tree_by_pid_treats_missing_posix_group_as_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_module, "_is_windows", lambda: False)
+    monkeypatch.setattr(
+        runtime_module,
+        "_signal_process_group",
+        lambda pid, sig: (_ for _ in ()).throw(ProcessLookupError(pid)),
+    )
+
+    assert kill_process_tree_by_pid(3210) is True
+
+
+def test_kill_process_tree_by_pid_returns_false_on_posix_permission_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def deny_signal(pid: int, sig: signal.Signals | int) -> None:
+        _ = (pid, sig)
+        raise PermissionError
+
+    monkeypatch.setattr(runtime_module, "_is_windows", lambda: False)
+    monkeypatch.setattr(runtime_module, "_signal_process_group", deny_signal)
+
+    assert kill_process_tree_by_pid(3210) is False
+
+
+def test_kill_process_tree_by_pid_treats_missing_windows_process_as_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    taskkill_calls: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        taskkill_calls.append(command)
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(runtime_module, "_is_windows", lambda: True)
+    monkeypatch.setattr(runtime_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(runtime_module, "_windows_process_exists", lambda pid: False)
+
+    assert kill_process_tree_by_pid(3210) is True
+    assert taskkill_calls == [["taskkill", "/f", "/t", "/pid", "3210"]]
+
+
+def test_windows_process_exists_parses_tasklist_pid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(
+        command: list[str],
+        *,
+        stdout: int,
+        stderr: int,
+        text: bool,
+        timeout: float,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (stdout, stderr, text, timeout, check)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='"Image Name","PID"\n"cmd.exe","3210"\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(runtime_module.subprocess, "run", fake_run)
+
+    assert runtime_module._windows_process_exists(3210) is True
+
+
+def test_windows_process_exists_returns_false_when_tasklist_omits_pid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(
+        command: list[str],
+        *,
+        stdout: int,
+        stderr: int,
+        text: bool,
+        timeout: float,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (stdout, stderr, text, timeout, check)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='"Image Name","PID"\n"cmd.exe","9999"\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(runtime_module.subprocess, "run", fake_run)
+
+    assert runtime_module._windows_process_exists(3210) is False
+
+
+def test_windows_process_exists_assumes_present_on_tasklist_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(
+        command: list[str],
+        *,
+        stdout: int,
+        stderr: int,
+        text: bool,
+        timeout: float,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (stdout, stderr, text, timeout, check)
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
+
+    monkeypatch.setattr(runtime_module.subprocess, "run", fake_run)
+
+    assert runtime_module._windows_process_exists(3210) is True
+
+
+def test_windows_process_exists_assumes_present_on_tasklist_os_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(
+        command: list[str],
+        *,
+        stdout: int,
+        stderr: int,
+        text: bool,
+        timeout: float,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (command, stdout, stderr, text, timeout, check)
+        raise OSError("tasklist missing")
+
+    monkeypatch.setattr(runtime_module.subprocess, "run", fake_run)
+
+    assert runtime_module._windows_process_exists(3210) is True
+
+
+@pytest.mark.asyncio
+async def test_kill_process_tree_by_pid_async_delegates_to_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    killed: list[int] = []
+
+    def fake_kill(pid: int) -> bool:
+        killed.append(pid)
+        return True
+
+    monkeypatch.setattr(runtime_module, "kill_process_tree_by_pid", fake_kill)
+
+    assert await runtime_module._kill_process_tree_by_pid(3210) is True
+    assert killed == [3210]
 
 
 @pytest.mark.asyncio

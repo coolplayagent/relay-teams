@@ -944,7 +944,7 @@ def test_health_check_builds_payload_in_worker_thread(
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
+    monkeypatch.setattr(system, "call_maybe_async_in_isolated_thread", fake_to_thread)
     client = _create_test_client(_FakeSystemService())
     app = cast(FastAPI, client.app)
     app.state.container = SimpleNamespace(

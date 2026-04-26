@@ -308,6 +308,67 @@ def test_worker_finalization_only_stops_foreground_background_tasks() -> None:
     assert background_task_manager.calls == [("run-1", "run_finalized", "foreground")]
 
 
+def test_stop_active_runs_for_shutdown_requests_running_run_stop() -> None:
+    control = RunControlManager()
+    manager = _make_run_service(control)
+
+    async def never_complete() -> None:
+        await asyncio.Event().wait()
+
+    async def scenario() -> None:
+        task = asyncio.create_task(never_complete())
+        control.register_run_task(
+            run_id="run-1",
+            session_id="session-1",
+            task=task,
+        )
+        manager._running_run_ids.add("run-1")
+
+        stopped = await manager.stop_active_runs_for_shutdown_async()
+
+        assert stopped == 1
+        assert control.is_run_stop_requested("run-1") is True
+        await asyncio.gather(task, return_exceptions=True)
+        assert task.cancelled() is True
+
+    asyncio.run(scenario())
+
+
+def test_stop_active_runs_for_shutdown_skips_missing_and_failed_stops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control = RunControlManager()
+    manager = _make_run_service(control)
+    stopped_run_ids: list[str] = []
+    manager._running_run_ids.update({"ok-run", "missing-run"})
+    manager._pending_runs["ok-run"] = IntentInput(
+        session_id="session-1",
+        input=content_parts_from_text("hello"),
+    )
+    manager._pending_runs["broken-run"] = IntentInput(
+        session_id="session-1",
+        input=content_parts_from_text("hello"),
+    )
+
+    async def fake_stop_run_local_async(run_id: str) -> None:
+        stopped_run_ids.append(run_id)
+        if run_id == "missing-run":
+            raise KeyError(run_id)
+        if run_id == "broken-run":
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        manager,
+        "_stop_run_local_async",
+        fake_stop_run_local_async,
+    )
+
+    stopped_count = asyncio.run(manager.stop_active_runs_for_shutdown_async())
+
+    assert stopped_count == 1
+    assert set(stopped_run_ids) == {"ok-run", "missing-run", "broken-run"}
+
+
 def test_completed_notification_uses_final_run_output() -> None:
     control = RunControlManager()
     hub = RunEventHub()
